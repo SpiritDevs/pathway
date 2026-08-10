@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIcon, GitPullRequestIcon, SettingsIcon } from "lucide-react";
+import { GitPullRequestIcon, SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
@@ -78,7 +78,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
         "sidebar-brand relative z-10 ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2",
         onBackdrop ? "text-white" : "text-foreground",
       )}
-      to="/"
+      to="/threads"
     >
       <T3Wordmark />
       <span
@@ -129,18 +129,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
-  const handleUsageClick = useCallback(() => {
-    if (isMobile) {
-      setOpenMobile(false);
-    }
-    void navigate({ to: "/usage" });
-  }, [isMobile, navigate, setOpenMobile]);
-
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
-      <SidebarMenu>
+      <SidebarMenu className="md:hidden">
         {pullRequestsSupported ? (
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handlePullRequestsClick}>
@@ -149,12 +142,6 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
             </SidebarMenuButton>
           </SidebarMenuItem>
         ) : null}
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={handleUsageClick}>
-            <ChartNoAxesColumnIcon />
-            <span>Usage</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleSettingsClick}>
             <SettingsIcon />

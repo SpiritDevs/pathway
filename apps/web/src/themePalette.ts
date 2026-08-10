@@ -11,10 +11,10 @@ export const EMBER_THEME_LABEL = "Ember";
 export const IRIS_THEME_ID = "iris" as const;
 export const IRIS_THEME_LABEL = "Iris";
 export const THEME_FILE_VERSION = 1 as const;
-export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
-export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
-export const THEME_APPEARANCE_MODE_STORAGE_KEY = "t3code:theme-appearance-mode";
-export const THEME_HALVES_STORAGE_KEY = "t3code:theme-halves:v1";
+export const CUSTOM_THEMES_STORAGE_KEY = "pathway:themes:v1";
+export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "pathway:theme-follow-system";
+export const THEME_APPEARANCE_MODE_STORAGE_KEY = "pathway:theme-appearance-mode";
+export const THEME_HALVES_STORAGE_KEY = "pathway:theme-halves:v1";
 
 const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
 
@@ -328,7 +328,7 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
 // Foreground pairs deviate where necessary to keep normal text at WCAG AA.
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   canvas: "#fdf7fd",
-  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // Pathway's workspace header belongs to the chat panel, so keep it seamless
   // with the light chat canvas rather than mapping it to T3 Chat's outer shell.
   chrome: "#fdf7fd",
   toolbar: "#fdf7fd",
@@ -373,7 +373,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   messageActionForeground: "#ffffff",
   messageActionHover: "#c12269",
   // T3 Chat uses a light lavender code surface in light mode. Keeping the
-  // dark plum pair here also leaked the dark palette into T3 Code's diffs.
+  // dark plum pair here also leaked the dark palette into Pathway's diffs.
   codeBackground: "#f5ecf9",
   codeForeground: "#673c8b",
   // The live sidebar is transparent over T3 Chat's outer shell. Use that
@@ -396,7 +396,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
 
 const T3_CHAT_DARK_COLORS: ThemeColors = {
   canvas: "#1f1a24",
-  // T3 Code's workspace header belongs to the chat panel, so keep it seamless
+  // Pathway's workspace header belongs to the chat panel, so keep it seamless
   // with the canvas rather than mapping it to T3 Chat's outer shell.
   chrome: "#1f1a24",
   toolbar: "#1f1a24",
@@ -442,7 +442,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   messageAction: "#a3004c",
   messageActionForeground: "#fbd0e8",
   messageActionHover: "#a2004c",
-  // Diffs and file previews are full workspace surfaces in T3 Code. Keep them
+  // Diffs and file previews are full workspace surfaces in Pathway. Keep them
   // continuous with the themed canvas instead of dropping to near-black.
   codeBackground: "#1f1a24",
   codeForeground: "#d8c3ef",
@@ -468,7 +468,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
 };
 
 /**
- * The palette T3 Code wears with no theme installed, captured from the app's
+ * The palette Pathway wears with no theme installed, captured from the app's
  * stock tokens (index.css) so a draft seeded from the default look paints the
  * pixels the user is already seeing. Alpha-bearing tokens are flattened over
  * their real backdrops (canvas, or the sidebar for its rows) because theme
@@ -595,7 +595,7 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
 };
 
 /**
- * The standard T3 Code look as a theme palette, for seeding a new theme when
+ * The standard Pathway look as a theme palette, for seeding a new theme when
  * no theme is installed. Distinct from {@link getDefaultThemeColors}, which
  * carries the flagship T3 Chat palette used to fill roles omitted by theme
  * files.
@@ -813,7 +813,7 @@ function solveOklchLightness(
 }
 
 /**
- * The status colors T3 Code shows without a theme, read from the app's own
+ * The status colors Pathway shows without a theme, read from the app's own
  * tokens (red-500 / amber-500 families). Generated palettes fall back to
  * these instead of the flagship theme's, so an imported or created theme
  * never inherits a brand tint on destructive buttons and warnings.

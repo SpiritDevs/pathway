@@ -391,7 +391,7 @@ export function useThreadActions() {
             }
           } else {
             const navigationResult = await settlePromise(() =>
-              router.navigate({ to: "/", replace: true }),
+              router.navigate({ to: "/threads", replace: true }),
             );
             if (navigationResult._tag === "Failure") {
               return navigationResult;
@@ -399,7 +399,7 @@ export function useThreadActions() {
           }
         } else {
           const navigationResult = await settlePromise(() =>
-            router.navigate({ to: "/", replace: true }),
+            router.navigate({ to: "/threads", replace: true }),
           );
           if (navigationResult._tag === "Failure") {
             return navigationResult;

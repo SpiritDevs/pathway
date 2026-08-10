@@ -11,6 +11,7 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
+  ChartNoAxesColumnIcon,
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
@@ -52,6 +53,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
   "/settings/archived": ArchiveIcon,
+  "/settings/usage": ChartNoAxesColumnIcon,
 };
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{

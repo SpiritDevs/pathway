@@ -133,7 +133,7 @@ function NoProjectsHero() {
   );
 }
 
-export const Route = createFileRoute("/_chat/")({
+export const Route = createFileRoute("/_chat/threads")({
   component: ChatIndexRouteView,
 });
 

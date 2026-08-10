@@ -63,7 +63,7 @@ function ChatThreadRouteView() {
     }
 
     if (renderState === "missing" && environmentHasAnyThreads) {
-      void navigate({ to: "/", replace: true });
+      void navigate({ to: "/threads", replace: true });
     }
   }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
 

@@ -13,22 +13,22 @@ import {
 describe("normalizeGitRemoteUrl", () => {
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
     expect(normalizeGitRemoteUrl("git@github.com:T3Tools/T3Code.git")).toBe(
-      "github.com/t3tools/t3code",
+      "github.com/coreybain/pathway",
     );
     expect(normalizeGitRemoteUrl("https://github.com/T3Tools/T3Code.git")).toBe(
-      "github.com/t3tools/t3code",
+      "github.com/coreybain/pathway",
     );
     expect(normalizeGitRemoteUrl("ssh://git@github.com/T3Tools/T3Code")).toBe(
-      "github.com/t3tools/t3code",
+      "github.com/coreybain/pathway",
     );
   });
 
   it("preserves nested group paths for providers like GitLab", () => {
     expect(normalizeGitRemoteUrl("git@gitlab.com:T3Tools/platform/T3Code.git")).toBe(
-      "gitlab.com/t3tools/platform/t3code",
+      "gitlab.com/t3tools/platform/pathway",
     );
     expect(normalizeGitRemoteUrl("https://gitlab.com/T3Tools/platform/T3Code.git")).toBe(
-      "gitlab.com/t3tools/platform/t3code",
+      "gitlab.com/t3tools/platform/pathway",
     );
   });
 

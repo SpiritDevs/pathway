@@ -85,4 +85,11 @@ describe("searchSettings", () => {
       targetId: "appearance",
     });
   });
+
+  it("routes usage analytics to its Settings section", () => {
+    expect(searchSettings("usage analytics")[0]).toMatchObject({
+      id: "usage",
+      to: "/settings/usage",
+    });
+  });
 });

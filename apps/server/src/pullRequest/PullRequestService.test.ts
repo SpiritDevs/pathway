@@ -173,7 +173,12 @@ it.effect("reads nothing from a host with no implementation, but reports it", ()
     const listed: string[] = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "notes", workspaceRoot: "/b" }),
         project({
           id: "p3",
@@ -199,7 +204,7 @@ it.effect("reads nothing from a host with no implementation, but reports it", ()
 
     const result = yield* service.list({ state: "open" });
 
-    assert.deepStrictEqual(listed, ["pingdotgg/t3code"]);
+    assert.deepStrictEqual(listed, ["coreybain/pathway"]);
     assert.strictEqual(result.entries[0]?.provider, "github");
     // The GitLab project is explained rather than quietly missing from the page.
     assert.deepStrictEqual(
@@ -221,7 +226,12 @@ it.effect("asks for a whole page of a host, and for the reader's own size when g
     const limits: number[] = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -246,7 +256,12 @@ it.effect("says where each repository carries on, and from nothing it has run ou
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
       ],
       providers: [
@@ -254,7 +269,7 @@ it.effect("says where each repository carries on, and from nothing it has run ou
           listChangeRequests: ({ repository }) =>
             Effect.succeed({
               items: [changeRequest(1, "2026-07-02T00:00:00Z")],
-              truncated: repository === "pingdotgg/t3code",
+              truncated: repository === "coreybain/pathway",
               continues: true,
             }),
         }),
@@ -266,7 +281,7 @@ it.effect("says where each repository carries on, and from nothing it has run ou
     // The instant of the oldest row, how many rows have gone, and the row already sent at that
     // instant. The repository that had nothing more is simply not in it.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|1|1",
+      "github.com coreybain/pathway": "2026-07-02T00:00:00Z|1|1",
     });
   }),
 );
@@ -275,7 +290,12 @@ it.effect("offers no continuation for a host that cannot be carried on from", ()
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -337,7 +357,12 @@ it.effect("reads only the repositories it was asked to carry on with", () =>
     const cursors: Array<unknown> = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
       ],
       providers: [
@@ -369,7 +394,12 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -392,7 +422,7 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|1|7" },
+      cursors: { "github.com coreybain/pathway": "2026-07-02T00:00:00Z|1|7" },
     });
 
     assert.deepStrictEqual(
@@ -400,7 +430,7 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
       [8, 9],
     );
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com pingdotgg/t3code": "2026-07-01T00:00:00Z|3|9",
+      "github.com coreybain/pathway": "2026-07-01T00:00:00Z|3|9",
     });
   }),
 );
@@ -409,7 +439,12 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -428,7 +463,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|1|6" },
+      cursors: { "github.com coreybain/pathway": "2026-07-02T00:00:00Z|1|6" },
     });
 
     // Eight rows can share one second, so a whole slice inside one is ordinary. The next read
@@ -438,7 +473,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
       [7, 8],
     );
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|3|6,7,8",
+      "github.com coreybain/pathway": "2026-07-02T00:00:00Z|3|6,7,8",
     });
   }),
 );
@@ -447,7 +482,12 @@ it.effect("refuses a continuation it did not issue, before asking any host anyth
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", { listChangeRequests: () => Effect.die("should not be read") }),
@@ -455,7 +495,7 @@ it.effect("refuses a continuation it did not issue, before asking any host anyth
     });
 
     const error = yield* Effect.flip(
-      service.list({ state: "open", cursors: { "github.com pingdotgg/t3code": "yesterday" } }),
+      service.list({ state: "open", cursors: { "github.com coreybain/pathway": "yesterday" } }),
     );
 
     assert.strictEqual(error._tag, "PullRequestOperationError");
@@ -470,7 +510,12 @@ it.effect("calls a transient viewer failure a failed operation, not a signed-out
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -498,7 +543,12 @@ it.effect("reports an unusable host over a merely failing one", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
           title: "on gitlab",
@@ -536,7 +586,12 @@ it.effect("lists every host that has an implementation", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
           title: "on gitlab",
@@ -584,7 +639,12 @@ it.effect("narrows the listing to one host when asked", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
           title: "on gitlab",
@@ -663,7 +723,12 @@ it.effect("keeps one host listed when another is not set up", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
           title: "on gitlab",
@@ -707,7 +772,12 @@ it.effect("fails as unavailable only when no host can be read", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -731,10 +801,15 @@ it.effect("reads a repository once when several worktrees share it", () =>
     let calls = 0;
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
-          title: "t3code worktree",
+          title: "pathway worktree",
           workspaceRoot: "/b",
           repository: "PingDotGG/T3Code",
         }),
@@ -764,7 +839,12 @@ it.effect("keeps healthy repositories when one of them cannot be read", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "broken", workspaceRoot: "/b", repository: "pingdotgg/broken" }),
       ],
       providers: [
@@ -1094,7 +1174,12 @@ it.effect("flags a review request for the viewer but not on their own change req
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -1128,7 +1213,12 @@ it.effect("refuses a repository that does not belong to the requested project", 
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [fakeProvider("github")],
     });
@@ -1181,7 +1271,12 @@ it.effect("rejects an empty comment before reaching the host", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [fakeProvider("github", { comment: () => Effect.die("must not be called") })],
     });
@@ -1189,7 +1284,7 @@ it.effect("rejects an empty comment before reaching the host", () =>
     const error = yield* service
       .comment({
         projectId: "p1" as ProjectId,
-        repository: "pingdotgg/t3code",
+        repository: "coreybain/pathway",
         number: 1,
         body: "   ",
       })
@@ -1257,7 +1352,12 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -1278,7 +1378,7 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
     const error = yield* Effect.flip(
       service.submitReview({
         projectId: "p1" as ProjectId,
-        repository: "pingdotgg/t3code",
+        repository: "coreybain/pathway",
         number: 1,
         verdict: "comment",
         body: "",
@@ -1299,9 +1399,9 @@ it.effect(
         projects: [
           project({
             id: "p1",
-            title: "t3code",
+            title: "pathway",
             workspaceRoot: "/a",
-            repository: "pingdotgg/t3code",
+            repository: "coreybain/pathway",
           }),
         ],
         providers: [
@@ -1315,7 +1415,7 @@ it.effect(
       });
       const reference = {
         projectId: "p1" as ProjectId,
-        repository: "pingdotgg/t3code",
+        repository: "coreybain/pathway",
         number: 1,
       };
 
@@ -1334,7 +1434,12 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -1354,7 +1459,7 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
     });
     const reference = {
       projectId: "p1" as ProjectId,
-      repository: "pingdotgg/t3code",
+      repository: "coreybain/pathway",
       number: 1,
     };
 
@@ -1374,7 +1479,12 @@ it.effect("refuses an empty reply before it reaches the host", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", { replyToThread: () => Effect.die("must not be called") }),
@@ -1384,7 +1494,7 @@ it.effect("refuses an empty reply before it reaches the host", () =>
     const error = yield* Effect.flip(
       service.replyToThread({
         projectId: "p1" as ProjectId,
-        repository: "pingdotgg/t3code",
+        repository: "coreybain/pathway",
         number: 1,
         threadId: "t1",
         body: "   ",
@@ -1400,7 +1510,12 @@ it.effect("refuses a merge strategy the host does not offer", () =>
     let ranWith: string | null = null;
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -1423,7 +1538,7 @@ it.effect("refuses a merge strategy the host does not offer", () =>
     });
     const reference = {
       projectId: "p1" as ProjectId,
-      repository: "pingdotgg/t3code",
+      repository: "coreybain/pathway",
       number: 1,
     };
 
@@ -1480,7 +1595,12 @@ it.effect("asks every host the reader's search, rather than filtering what came 
     };
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({
           id: "p2",
           title: "on gitlab",
@@ -1508,7 +1628,12 @@ it.effect("asks for no search when the reader has typed nothing", () =>
     const asked: Array<string | undefined> = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
       ],
       providers: [
         fakeProvider("github", {
@@ -1535,15 +1660,15 @@ it.effect("asks another checkout who is signed in when the first one cannot answ
         // two places to ask.
         project({
           id: "p1",
-          title: "t3code (stale worktree)",
+          title: "pathway (stale worktree)",
           workspaceRoot: "/gone",
-          repository: "pingdotgg/t3code",
+          repository: "coreybain/pathway",
         }),
         project({
           id: "p2",
-          title: "t3code",
+          title: "pathway",
           workspaceRoot: "/healthy",
-          repository: "pingdotgg/t3code",
+          repository: "coreybain/pathway",
         }),
       ],
       providers: [
@@ -1886,7 +2011,12 @@ it.effect("reads a host's repositories in one search, and files the rows back un
     const separately: string[] = [];
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
         project({
           id: "p3",
@@ -1907,7 +2037,7 @@ it.effect("reads a host's repositories in one search, and files the rows back un
             return Effect.succeed({
               items: [
                 batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z"),
-                batchedChangeRequest(2, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
+                batchedChangeRequest(2, "coreybain/pathway", "2026-07-02T00:00:00Z"),
               ],
               truncated: false,
             });
@@ -1929,7 +2059,7 @@ it.effect("reads a host's repositories in one search, and files the rows back un
 
     const result = yield* service.list({ state: "open" });
 
-    assert.deepStrictEqual(asked, [["pingdotgg/t3code", "acme/web"]]);
+    assert.deepStrictEqual(asked, [["coreybain/pathway", "acme/web"]]);
     assert.deepStrictEqual(separately, ["group/project"]);
     // Ordered by update across every host, and each row under the project whose repository it
     // came from.
@@ -1947,7 +2077,12 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p1",
+          title: "pathway",
+          workspaceRoot: "/a",
+          repository: "coreybain/pathway",
+        }),
         project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
         project({ id: "p3", title: "docs", workspaceRoot: "/c", repository: "acme/docs" }),
       ],
@@ -1957,7 +2092,7 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
             Effect.succeed({
               items: [
                 batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z"),
-                batchedChangeRequest(2, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
+                batchedChangeRequest(2, "coreybain/pathway", "2026-07-02T00:00:00Z"),
                 batchedChangeRequest(3, "acme/web", "2026-07-02T00:00:00Z"),
               ],
               truncated: true,
@@ -1974,7 +2109,7 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     // read on its own, and that read is what says whether it has anything at all.
     assert.isTrue(result.truncated);
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|1|2",
+      "github.com coreybain/pathway": "2026-07-02T00:00:00Z|1|2",
       "github.com acme/web": "2026-07-02T00:00:00Z|2|3",
     });
   }),

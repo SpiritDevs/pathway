@@ -736,7 +736,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
       // The project's settings page just deleted itself; there is no projects
       // listing to fall back to, so leave settings entirely.
       if (isWholeGroup) {
-        void navigate({ to: "/", replace: true });
+        void navigate({ to: "/threads", replace: true });
       }
     },
     [

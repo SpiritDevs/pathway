@@ -76,24 +76,24 @@ describe("buildHomeThreadGroups", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
     };
     const projects = [
       makeProject({
         environmentId: localEnvironmentId,
         id: ProjectId.make("project-local"),
-        title: "t3code",
+        title: "pathway",
         repositoryIdentity,
       }),
       makeProject({
         environmentId: remoteEnvironmentId,
         id: ProjectId.make("project-remote"),
-        title: "t3code",
+        title: "pathway",
         repositoryIdentity,
       }),
     ];
@@ -105,7 +105,7 @@ describe("buildHomeThreadGroups", () => {
     });
 
     expect(scopes).toHaveLength(1);
-    expect(scopes[0]?.title).toBe("t3code");
+    expect(scopes[0]?.title).toBe("pathway");
     expect(scopes[0]?.projects).toEqual(projects);
     expect(scopes[0]?.projectRefs).toEqual(
       projects.map((project) => ({
@@ -119,32 +119,32 @@ describe("buildHomeThreadGroups", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
     };
     const local = makeProject({
       id: ProjectId.make("project-local"),
       environmentId: localEnvironmentId,
-      title: "t3code",
-      workspaceRoot: "/workspaces/t3code",
+      title: "pathway",
+      workspaceRoot: "/workspaces/pathway",
       repositoryIdentity,
     });
     const stale = makeProject({
       environmentId: remoteEnvironmentId,
       id: ProjectId.make("project-stale"),
-      title: "t3code",
-      workspaceRoot: "/remote/t3code",
+      title: "pathway",
+      workspaceRoot: "/remote/pathway",
       updatedAt: "2026-06-01T00:00:00.000Z",
     });
     const canonicalRemote = makeProject({
       environmentId: remoteEnvironmentId,
       id: ProjectId.make("project-canonical-remote"),
-      title: "t3code",
-      workspaceRoot: "/remote/t3code/",
+      title: "pathway",
+      workspaceRoot: "/remote/pathway/",
       repositoryIdentity,
       updatedAt: "2026-06-02T00:00:00.000Z",
     });
@@ -183,33 +183,33 @@ describe("buildHomeThreadGroups", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
     };
     const projects = [
       makeProject({
         environmentId: localEnvironmentId,
         id: ProjectId.make("project-local"),
-        title: "t3code",
+        title: "pathway",
         repositoryIdentity,
       }),
       makeProject({
         environmentId: remoteEnvironmentId,
         id: ProjectId.make("project-remote-with-identity"),
-        title: "t3code",
-        workspaceRoot: "/remote/t3code",
+        title: "pathway",
+        workspaceRoot: "/remote/pathway",
         repositoryIdentity,
         updatedAt: "2026-06-01T00:00:00.000Z",
       }),
       makeProject({
         environmentId: remoteEnvironmentId,
         id: ProjectId.make("project-remote-fresh"),
-        title: "t3code",
-        workspaceRoot: "/remote/t3code/",
+        title: "pathway",
+        workspaceRoot: "/remote/pathway/",
         updatedAt: "2026-06-02T00:00:00.000Z",
       }),
     ];
@@ -305,24 +305,24 @@ describe("buildHomeThreadGroups", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
     };
     const olderMember = makeProject({
       environmentId: localEnvironmentId,
       id: ProjectId.make("project-older-member"),
-      title: "t3code",
+      title: "pathway",
       updatedAt: "2026-06-01T00:00:00.000Z",
       repositoryIdentity,
     });
     const newerMember = makeProject({
       environmentId: remoteEnvironmentId,
       id: ProjectId.make("project-newer-member"),
-      title: "t3code",
+      title: "pathway",
       updatedAt: "2026-06-03T00:00:00.000Z",
       repositoryIdentity,
     });
@@ -381,12 +381,12 @@ describe("buildHomeThreadGroups", () => {
       id: ProjectId.make("project-1"),
       title: "local-worktree-name",
       repositoryIdentity: {
-        canonicalKey: "github.com/pingdotgg/t3code",
+        canonicalKey: "github.com/coreybain/pathway",
         displayName: "codething-mvp",
         locator: {
           source: "git-remote" as const,
           remoteName: "origin",
-          remoteUrl: "git@github.com:pingdotgg/t3code.git",
+          remoteUrl: "git@github.com:coreybain/pathway.git",
         },
       },
     });
@@ -417,7 +417,7 @@ describe("buildHomeThreadGroups", () => {
     const project = makeProject({
       environmentId,
       id: ProjectId.make("project-1"),
-      title: "T3 Code",
+      title: "Pathway",
     });
     const threads = [
       makeThread({
@@ -527,31 +527,31 @@ describe("buildHomeThreadGroups", () => {
   it("matches web repository, repository-path, and separate grouping modes", () => {
     const environmentId = EnvironmentId.make("environment-1");
     const repositoryIdentity = {
-      canonicalKey: "github.com/t3tools/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:t3tools/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
       provider: "github",
       owner: "t3tools",
-      name: "t3code",
-      displayName: "T3 Code",
-      rootPath: "/workspaces/t3code",
+      name: "pathway",
+      displayName: "Pathway",
+      rootPath: "/workspaces/pathway",
     };
     const projects = [
       makeProject({
         environmentId,
         id: ProjectId.make("project-web"),
         title: "Web",
-        workspaceRoot: "/workspaces/t3code/apps/web",
+        workspaceRoot: "/workspaces/pathway/apps/web",
         repositoryIdentity,
       }),
       makeProject({
         environmentId,
         id: ProjectId.make("project-mobile"),
         title: "Mobile",
-        workspaceRoot: "/workspaces/t3code/apps/mobile",
+        workspaceRoot: "/workspaces/pathway/apps/mobile",
         repositoryIdentity,
       }),
     ];
@@ -582,7 +582,7 @@ describe("buildHomeThreadGroups", () => {
     const project = makeProject({
       environmentId,
       id: ProjectId.make("project-1"),
-      title: "T3 Code",
+      title: "Pathway",
     });
     const threads = [
       makeThread({
@@ -620,7 +620,7 @@ describe("buildHomeThreadGroups", () => {
     const project = makeProject({
       environmentId,
       id: ProjectId.make("project-1"),
-      title: "T3 Code",
+      title: "Pathway",
     });
     const threads = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"].map(
       (day, index) =>
@@ -647,7 +647,7 @@ describe("buildHomeThreadGroups", () => {
     const project = makeProject({
       environmentId,
       id: ProjectId.make("project-1"),
-      title: "T3 Code",
+      title: "Pathway",
     });
     const threads = ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"].map(
       (day, index) =>
@@ -660,7 +660,7 @@ describe("buildHomeThreadGroups", () => {
         }),
     );
 
-    const group = buildGroups([project], threads, { searchQuery: "T3 Code" })[0];
+    const group = buildGroups([project], threads, { searchQuery: "Pathway" })[0];
     // Search reaches the full history rather than the 3-thread fallback.
     expect(group?.recentThreads).toHaveLength(5);
     expect(group?.recentThreads.map((thread) => thread.id)).toEqual(
@@ -673,7 +673,7 @@ describe("buildHomeThreadGroups", () => {
     const project = makeProject({
       environmentId,
       id: ProjectId.make("project-1"),
-      title: "T3 Code",
+      title: "Pathway",
     });
     const thread = makeThread({
       environmentId,
@@ -699,23 +699,23 @@ describe("buildHomeThreadGroups", () => {
     const laptopEnv = EnvironmentId.make("environment-laptop");
     const desktopEnv = EnvironmentId.make("environment-desktop");
     const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/coreybain/pathway",
       locator: {
         source: "git-remote" as const,
         remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
+        remoteUrl: "git@github.com:coreybain/pathway.git",
       },
     };
     const laptopProject = makeProject({
       environmentId: laptopEnv,
       id: ProjectId.make("project-laptop"),
-      title: "t3code",
+      title: "pathway",
       repositoryIdentity,
     });
     const desktopProject = makeProject({
       environmentId: desktopEnv,
       id: ProjectId.make("project-desktop"),
-      title: "t3code",
+      title: "pathway",
       repositoryIdentity,
     });
     const threads = [

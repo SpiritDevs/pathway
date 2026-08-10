@@ -2318,7 +2318,7 @@ export default function Sidebar() {
         : shell
           ? () =>
               void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, shell.projectId))
-          : () => void router.navigate({ to: "/" });
+          : () => void router.navigate({ to: "/threads" });
     },
     [navigateToThread, router],
   );

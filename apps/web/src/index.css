@@ -118,6 +118,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   );
 }
 
+@media (min-width: 768px) {
+  [data-app-content-frame] > [data-slot="sidebar-inset"] {
+    height: 100%;
+    min-height: 0;
+  }
+}
+
 .wco {
   --workspace-topbar-height: env(titlebar-area-height, 52px);
   --workspace-controls-top: env(titlebar-area-y, 0px);

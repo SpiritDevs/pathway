@@ -12,9 +12,15 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
+import { Route as OrchestratorRouteImport } from './routes/orchestrator'
+import { Route as IssuesRouteImport } from './routes/issues'
+import { Route as EmailRouteImport } from './routes/email'
+import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ConnectRouteImport } from './routes/connect'
+import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as ChatRouteImport } from './routes/_chat'
-import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
@@ -25,6 +31,7 @@ import { Route as SettingsArchivedRouteImport } from './routes/settings.archived
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
+import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -44,19 +51,49 @@ const PairRoute = PairRouteImport.update({
   path: '/pair',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OrchestratorRoute = OrchestratorRouteImport.update({
+  id: '/orchestrator',
+  path: '/orchestrator',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IssuesRoute = IssuesRouteImport.update({
+  id: '/issues',
+  path: '/issues',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailRoute = EmailRouteImport.update({
+  id: '/email',
+  path: '/email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectRoute = ConnectRouteImport.update({
   id: '/connect',
   path: '/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CalendarRoute = CalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ChatIndexRoute = ChatIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => ChatRoute,
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsUsageRoute = SettingsUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
   id: '/source-control',
@@ -108,6 +145,11 @@ const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
   path: '/connect/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ChatThreadsRoute = ChatThreadsRouteImport.update({
+  id: '/threads',
+  path: '/threads',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -126,12 +168,18 @@ const ChatEnvironmentIdThreadIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof ChatIndexRoute
+  '/': typeof IndexRoute
+  '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -142,15 +190,23 @@ export interface FileRoutesByFullPath {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof IndexRoute
+  '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -161,18 +217,25 @@ export interface FileRoutesByTo {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
-  '/': typeof ChatIndexRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/_chat': typeof ChatRouteWithChildren
+  '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/dashboard': typeof DashboardRoute
+  '/email': typeof EmailRoute
+  '/issues': typeof IssuesRoute
+  '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/_chat/threads': typeof ChatThreadsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
@@ -183,7 +246,7 @@ export interface FileRoutesById {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
-  '/_chat/': typeof ChatIndexRoute
+  '/settings/usage': typeof SettingsUsageRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
@@ -191,11 +254,17 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/calendar'
     | '/connect'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/orchestrator'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/pull-requests'
+    | '/threads'
     | '/connect/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -206,15 +275,23 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
+    | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
+    | '/calendar'
     | '/connect'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/orchestrator'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/pull-requests'
+    | '/threads'
     | '/connect/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -225,17 +302,24 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
-    | '/'
+    | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   id:
     | '__root__'
+    | '/'
     | '/_chat'
+    | '/calendar'
     | '/connect'
+    | '/dashboard'
+    | '/email'
+    | '/issues'
+    | '/orchestrator'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/_chat/pull-requests'
+    | '/_chat/threads'
     | '/connect_/callback'
     | '/projects/$projectKey'
     | '/settings/appearance'
@@ -246,14 +330,20 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
-    | '/_chat/'
+    | '/settings/usage'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   ChatRoute: typeof ChatRouteWithChildren
+  CalendarRoute: typeof CalendarRoute
   ConnectRoute: typeof ConnectRoute
+  DashboardRoute: typeof DashboardRoute
+  EmailRoute: typeof EmailRoute
+  IssuesRoute: typeof IssuesRoute
+  OrchestratorRoute: typeof OrchestratorRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
@@ -284,11 +374,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PairRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/orchestrator': {
+      id: '/orchestrator'
+      path: '/orchestrator'
+      fullPath: '/orchestrator'
+      preLoaderRoute: typeof OrchestratorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/issues': {
+      id: '/issues'
+      path: '/issues'
+      fullPath: '/issues'
+      preLoaderRoute: typeof IssuesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email': {
+      id: '/email'
+      path: '/email'
+      fullPath: '/email'
+      preLoaderRoute: typeof EmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect': {
       id: '/connect'
       path: '/connect'
       fullPath: '/connect'
       preLoaderRoute: typeof ConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calendar': {
+      id: '/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof CalendarRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -298,12 +423,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_chat/': {
-      id: '/_chat/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof ChatIndexRouteImport
-      parentRoute: typeof ChatRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/usage': {
+      id: '/settings/usage'
+      path: '/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/settings/source-control': {
       id: '/settings/source-control'
@@ -375,6 +507,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_chat/threads': {
+      id: '/_chat/threads'
+      path: '/threads'
+      fullPath: '/threads'
+      preLoaderRoute: typeof ChatThreadsRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -401,14 +540,14 @@ declare module '@tanstack/react-router' {
 
 interface ChatRouteChildren {
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
-  ChatIndexRoute: typeof ChatIndexRoute
+  ChatThreadsRoute: typeof ChatThreadsRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
   ChatPullRequestsRoute: ChatPullRequestsRoute,
-  ChatIndexRoute: ChatIndexRoute,
+  ChatThreadsRoute: ChatThreadsRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
 }
@@ -424,6 +563,7 @@ interface SettingsRouteChildren {
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
+  SettingsUsageRoute: typeof SettingsUsageRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -435,6 +575,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
+  SettingsUsageRoute: SettingsUsageRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
@@ -442,8 +583,14 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 )
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   ChatRoute: ChatRouteWithChildren,
+  CalendarRoute: CalendarRoute,
   ConnectRoute: ConnectRoute,
+  DashboardRoute: DashboardRoute,
+  EmailRoute: EmailRoute,
+  IssuesRoute: IssuesRoute,
+  OrchestratorRoute: OrchestratorRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,

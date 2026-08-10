@@ -63,7 +63,7 @@ function DraftChatThreadRouteView() {
     if (draftSession || canonicalThreadRef) {
       return;
     }
-    void navigate({ to: "/", replace: true });
+    void navigate({ to: "/threads", replace: true });
   }, [canonicalThreadRef, draftSession, navigate]);
 
   if (!draftSession) {

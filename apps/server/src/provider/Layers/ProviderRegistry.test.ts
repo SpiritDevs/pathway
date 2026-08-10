@@ -62,7 +62,7 @@ const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
   enabled: false,
 });
 
-process.env.T3CODE_CURSOR_ENABLED = "1";
+process.env.PATHWAY_CURSOR_ENABLED = "1";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -1428,7 +1428,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       // assertions below fail.
       it.effect("propagates real Codex probe failures to the aggregator at boot", () =>
         Effect.gen(function* () {
-          const missingBinary = `t3code_codex_missing_`;
+          const missingBinary = `pathway_codex_missing_`;
           const serverSettings = yield* makeMutableServerSettingsService(
             decodeServerSettings(
               deepMerge(encodedDefaultServerSettings, {
@@ -1450,7 +1450,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 // accepts + decodes them. Cast the patch to `unknown` so
                 // the `Schema.decodeSync` below does the real validation.
                 providerInstances: {
-                  // Matches the shape the user had in `.t3/dev/settings.json`
+                  // Matches the shape the user had in `.pathway/dev/settings.json`
                   // when the bug was reported: a custom enabled Codex instance
                   // pointing at a binary the server has to actually spawn.
                   codex_personal: {
@@ -1543,8 +1543,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       //
       it.effect("re-probes when settings change the codex binaryPath", () =>
         Effect.gen(function* () {
-          const firstMissing = `t3code_codex_first_`;
-          const secondMissing = `t3code_codex_second_`;
+          const firstMissing = `pathway_codex_first_`;
+          const secondMissing = `pathway_codex_second_`;
           const spawnedCommands: Array<string> = [];
           const serverSettings = yield* makeMutableServerSettingsService(
             decodeServerSettings(
@@ -1813,7 +1813,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.strictEqual(cursorProvider?.status, "disabled");
               assert.strictEqual(
                 cursorProvider?.message,
-                "Cursor is disabled in T3 Code settings.",
+                "Cursor is disabled in Pathway settings.",
               );
               assert.strictEqual(cursorSpawned, false);
             }).pipe(Effect.provide(runtimeServices));
@@ -1828,7 +1828,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.enabled, false);
           assert.strictEqual(status.status, "disabled");
           assert.strictEqual(status.installed, false);
-          assert.strictEqual(status.message, "Codex is disabled in T3 Code settings.");
+          assert.strictEqual(status.message, "Codex is disabled in Pathway settings.");
         }),
       );
     });
@@ -2170,7 +2170,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
       );
 
       it.effect("runs Claude status probes with the configured CLAUDE_CONFIG_DIR", () => {
-        const claudeConfigDir = "/tmp/t3code-claude-home";
+        const claudeConfigDir = "/tmp/pathway-claude-home";
         const recorded = recordingMockSpawnerLayer((args) => {
           const joined = args.join(" ");
           if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };

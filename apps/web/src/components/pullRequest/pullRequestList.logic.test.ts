@@ -24,10 +24,10 @@ function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEn
     provider: "github",
     host: "github.com",
     projectId: "project-1",
-    projectTitle: "t3code",
-    repository: "pingdotgg/t3code",
+    projectTitle: "pathway",
+    repository: "coreybain/pathway",
     title: "Add the pull requests page",
-    url: `https://github.com/pingdotgg/t3code/pull/${overrides.number}`,
+    url: `https://github.com/coreybain/pathway/pull/${overrides.number}`,
     author: { login: "octocat", name: null, avatarUrl: null },
     headBranch: `feat/branch-${overrides.number}`,
     baseBranch: "main",
@@ -397,7 +397,7 @@ describe("the list snapshot across a reload", () => {
     providers: [],
     errors: [{ projectId: "project-1", message: "boom" }],
     truncated: true,
-    nextCursors: { "pingdotgg/t3code": "cursor-1" },
+    nextCursors: { "coreybain/pathway": "cursor-1" },
   } as never;
 
   it("hydrates the retained rows so ghosts never replace them", () => {

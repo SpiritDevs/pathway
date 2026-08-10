@@ -1656,7 +1656,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
         scope: "orchestration:read orchestration:operate terminal:operate review:write",
         clientMetadata: {
-          label: "T3 Code Mobile",
+          label: "Pathway Mobile",
           deviceType: "mobile",
           os: "iOS",
         },
@@ -1683,7 +1683,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 200);
       assert.equal(clientsResponse.status, 200);
       assert.deepInclude(mobileClient?.client, {
-        label: "T3 Code Mobile",
+        label: "Pathway Mobile",
         deviceType: "mobile",
         os: "iOS",
         ipAddress: "127.0.0.1",
@@ -3525,7 +3525,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  for (const desktopOrigin of ["t3code://app", "t3code-dev://app"]) {
+  for (const desktopOrigin of ["pathway://app", "pathway-dev://app"]) {
     it.effect(`allows credentialed preflights from ${desktopOrigin} in development`, () =>
       Effect.gen(function* () {
         yield* buildAppUnderTest({
@@ -7301,7 +7301,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             isRepo: true,
             hasPrimaryRemote: true,
             isDefaultRef: false,
-            refName: "t3code/bootstrap-refName",
+            refName: "pathway/bootstrap-refName",
             hasWorkingTreeChanges: false,
             workingTree: {
               files: [],
@@ -7344,7 +7344,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               bootstrapGitOperations.push("create-worktree");
               return {
                 worktree: {
-                  refName: "t3code/bootstrap-refName",
+                  refName: "pathway/bootstrap-refName",
                   path: "/tmp/bootstrap-worktree",
                 },
               };
@@ -7421,7 +7421,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
+                  branch: "pathway/bootstrap-refName",
                   startFromOrigin: true,
                 },
                 runSetupScript: true,
@@ -7445,7 +7445,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: fetchedOriginCommit,
-          newRefName: "t3code/bootstrap-refName",
+          newRefName: "pathway/bootstrap-refName",
           baseRefName: "main",
           path: null,
         });
@@ -7511,7 +7511,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
             Effect.succeed({
               worktree: {
-                refName: "t3code/bootstrap-refName",
+                refName: "pathway/bootstrap-refName",
                 path: "/tmp/bootstrap-worktree",
               },
             }),
@@ -7567,7 +7567,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
+                  branch: "pathway/bootstrap-refName",
                   startFromOrigin: true,
                 },
               },
@@ -7585,7 +7585,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: "main",
-          newRefName: "t3code/bootstrap-refName",
+          newRefName: "pathway/bootstrap-refName",
           baseRefName: "main",
           path: null,
         });
@@ -7599,7 +7599,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
             worktree: {
-              refName: "t3code/bootstrap-refName",
+              refName: "pathway/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
             },
           }),
@@ -7670,7 +7670,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "pathway/bootstrap-refName",
               },
               runSetupScript: true,
             },
@@ -7704,7 +7704,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
           Effect.succeed({
             worktree: {
-              refName: "t3code/bootstrap-refName",
+              refName: "pathway/bootstrap-refName",
               path: "/tmp/bootstrap-worktree",
             },
           }),
@@ -7791,7 +7791,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "pathway/bootstrap-refName",
               },
               runSetupScript: true,
             },
@@ -7875,7 +7875,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               prepareWorktree: {
                 projectCwd: "/tmp/project",
                 baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+                branch: "pathway/bootstrap-refName",
               },
               runSetupScript: false,
             },
@@ -8165,14 +8165,14 @@ it.live(
 
       const report = formatTransferBudgetReport(runs);
       yield* Effect.logInfo(`\n${report}`);
-      const reportPath = yield* Config.string("T3CODE_TRANSFER_BUDGET_REPORT_PATH").pipe(
+      const reportPath = yield* Config.string("PATHWAY_TRANSFER_BUDGET_REPORT_PATH").pipe(
         Config.option,
       );
       if (Option.isSome(reportPath)) {
         const fileSystem = yield* FileSystem.FileSystem;
         yield* fileSystem.writeFileString(reportPath.value, report);
       }
-      const resultPath = yield* Config.string("T3CODE_TRANSFER_BUDGET_RESULT_PATH").pipe(
+      const resultPath = yield* Config.string("PATHWAY_TRANSFER_BUDGET_RESULT_PATH").pipe(
         Config.option,
       );
       if (Option.isSome(resultPath)) {
