@@ -282,7 +282,7 @@ export function useNewThreadHandler() {
             return opened;
           }
           await router.navigate({
-            to: "/draft/$draftId",
+            to: "/threads/draft/$draftId",
             params: { draftId: emptyStoredDraftThread.draftId },
             replace: options?.replace ?? false,
           });
@@ -355,7 +355,7 @@ export function useNewThreadHandler() {
             ...pickExplicitWorkspaceOptions(options),
           });
           await router.navigate({
-            to: "/draft/$draftId",
+            to: "/threads/draft/$draftId",
             params: { draftId: racedDraft.draftId },
             replace: options?.replace ?? false,
           });
@@ -387,7 +387,7 @@ export function useNewThreadHandler() {
         }
 
         await router.navigate({
-          to: "/draft/$draftId",
+          to: "/threads/draft/$draftId",
           params: { draftId },
           replace: options?.replace ?? false,
         });

@@ -379,7 +379,7 @@ export function useThreadActions() {
           if (fallbackThread) {
             const navigationResult = await settlePromise(() =>
               router.navigate({
-                to: "/$environmentId/$threadId",
+                to: "/threads/$environmentId/$threadId",
                 params: buildThreadRouteParams(
                   scopeThreadRef(fallbackThread.environmentId, fallbackThread.id),
                 ),

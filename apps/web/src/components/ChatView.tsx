@@ -1930,7 +1930,7 @@ function ChatViewContent(props: ChatViewProps) {
         );
         if (routeKind !== "draft" || draftId !== storedDraftSession.draftId) {
           await navigate({
-            to: "/draft/$draftId",
+            to: "/threads/draft/$draftId",
             params: buildDraftThreadRouteParams(storedDraftSession.draftId),
           });
         }
@@ -1964,7 +1964,7 @@ function ChatViewContent(props: ChatViewProps) {
         ...input,
       });
       await navigate({
-        to: "/draft/$draftId",
+        to: "/threads/draft/$draftId",
         params: buildDraftThreadRouteParams(nextDraftId),
       });
       return nextThreadId;
@@ -5774,7 +5774,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (failure === null) {
       const navigateResult = await settlePromise(() =>
         navigate({
-          to: "/$environmentId/$threadId",
+          to: "/threads/$environmentId/$threadId",
           params: {
             environmentId: activeThread.environmentId,
             threadId: nextThreadId,

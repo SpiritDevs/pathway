@@ -417,7 +417,7 @@ function SortablePinnedThreadRow(props: {
 // One unsent draft session the user has invested content in. Two lines,
 // nothing else: project name, then the typed prompt. All the draft's
 // settings (model, env mode, branch, worktree) still travel with it —
-// clicking is a plain navigation to /draft/$draftId, which touches nothing.
+// clicking is a plain navigation to /threads/draft/$draftId, which touches nothing.
 // While the draft is open the row renders a frozen snapshot (see
 // SidebarDraftBlock); memoized so per-keystroke block re-renders skip it
 // entirely.
@@ -603,7 +603,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   ]);
   const handleDiscard = useCallback(
     (draftId: DraftId) => {
-      // The /draft/$draftId route redirects home on its own when the draft
+      // The /threads/draft/$draftId route redirects home on its own when the draft
       // it renders disappears, so discarding the open draft needs no
       // special-casing here.
       clearDraftThread(draftId);
@@ -2159,7 +2159,7 @@ export default function Sidebar() {
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/$environmentId/$threadId",
+        to: "/threads/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),
       });
     },
@@ -2176,7 +2176,7 @@ export default function Sidebar() {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void router.navigate({ to: "/draft/$draftId", params: { draftId } });
+      void router.navigate({ to: "/threads/draft/$draftId", params: { draftId } });
     },
     [clearSelection, isMobile, router, setOpenMobile],
   );

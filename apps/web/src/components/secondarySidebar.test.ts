@@ -6,8 +6,8 @@ describe("resolveSecondarySidebarKind", () => {
   it.each([
     ["/", null],
     ["/threads", "threads"],
-    ["/draft/new", "threads"],
-    ["/environment/thread", "threads"],
+    ["/threads/draft/new", "threads"],
+    ["/threads/environment/thread", "threads"],
     ["/issues", "issues"],
     ["/issues/assigned", "issues"],
     ["/settings", "settings"],

@@ -1714,7 +1714,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/$environmentId/$threadId",
+        to: "/threads/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),
       });
     },
@@ -1760,7 +1760,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/$environmentId/$threadId",
+        to: "/threads/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),
       });
     },
@@ -3216,7 +3216,7 @@ export default function LegacySidebar() {
         setOpenMobile(false);
       }
       void navigate({
-        to: "/$environmentId/$threadId",
+        to: "/threads/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),
       });
     },

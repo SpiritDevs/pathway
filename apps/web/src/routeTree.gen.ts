@@ -35,6 +35,8 @@ import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatThreadsDraftDraftIdRouteImport } from './routes/_chat.threads_.draft.$draftId'
+import { Route as ChatThreadsEnvironmentIdThreadIdRouteImport } from './routes/_chat.threads_.$environmentId.$threadId'
 
 const UsageRoute = UsageRouteImport.update({
   id: '/usage',
@@ -166,6 +168,17 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatThreadsDraftDraftIdRoute = ChatThreadsDraftDraftIdRouteImport.update({
+  id: '/threads_/draft/$draftId',
+  path: '/threads/draft/$draftId',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatThreadsEnvironmentIdThreadIdRoute =
+  ChatThreadsEnvironmentIdThreadIdRouteImport.update({
+    id: '/threads_/$environmentId/$threadId',
+    path: '/threads/$environmentId/$threadId',
+    getParentRoute: () => ChatRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -193,6 +206,8 @@ export interface FileRoutesByFullPath {
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -220,6 +235,8 @@ export interface FileRoutesByTo {
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -249,6 +266,8 @@ export interface FileRoutesById {
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
+  '/_chat/threads_/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -278,6 +297,8 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/threads/$environmentId/$threadId'
+    | '/threads/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -305,6 +326,8 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/threads/$environmentId/$threadId'
+    | '/threads/draft/$draftId'
   id:
     | '__root__'
     | '/'
@@ -333,6 +356,8 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/_chat/threads_/$environmentId/$threadId'
+    | '/_chat/threads_/draft/$draftId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -535,6 +560,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/threads_/draft/$draftId': {
+      id: '/_chat/threads_/draft/$draftId'
+      path: '/threads/draft/$draftId'
+      fullPath: '/threads/draft/$draftId'
+      preLoaderRoute: typeof ChatThreadsDraftDraftIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/threads_/$environmentId/$threadId': {
+      id: '/_chat/threads_/$environmentId/$threadId'
+      path: '/threads/$environmentId/$threadId'
+      fullPath: '/threads/$environmentId/$threadId'
+      preLoaderRoute: typeof ChatThreadsEnvironmentIdThreadIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
   }
 }
 
@@ -543,6 +582,8 @@ interface ChatRouteChildren {
   ChatThreadsRoute: typeof ChatThreadsRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
+  ChatThreadsEnvironmentIdThreadIdRoute: typeof ChatThreadsEnvironmentIdThreadIdRoute
+  ChatThreadsDraftDraftIdRoute: typeof ChatThreadsDraftDraftIdRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
@@ -550,6 +591,8 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadsRoute: ChatThreadsRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
+  ChatThreadsEnvironmentIdThreadIdRoute: ChatThreadsEnvironmentIdThreadIdRoute,
+  ChatThreadsDraftDraftIdRoute: ChatThreadsDraftDraftIdRoute,
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
