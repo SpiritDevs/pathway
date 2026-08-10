@@ -1,59 +1,36 @@
 # Design QA
 
-- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/e1b548f1-c4e6-437e-a465-5adae7d68ba7-4db4d414-54b3-408d-9cf6-6f6d737dcf25.png`, supplied for the pull-request search placement request.
-- Implementation screenshot: unavailable; the attached collaborative preview reports as automation-capable, but navigation and snapshot capture failed.
-- Viewport: implementation preview reports 1280 x 800 CSS px.
-- Source pixels: 2084 x 724 px. Implementation pixels and density are unavailable, so density normalization could not be performed.
-- State: desktop web, light mode, Dev artwork identification, `/pull-requests?involvement=all&state=open`, expanded Source Control sidebar.
-- Requested outcome: replace the main-pane `Pull Requests` title with the functional search and filter controls and remove the duplicate search row below it.
+- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/e1b548f1-c4e6-437e-a465-5adae7d68ba7-6c937380-e513-4524-96a0-dce62bfd612b.png`.
+- Source pixels: 2354 x 1922 px.
+- Implementation viewport: 1280 x 800 CSS px.
+- State: desktop web, light mode, detached terminal card open below the main thread card.
+- Requested outcome: center a horizontal resize indicator in the 8 px gutter and animate the terminal card as it opens and closes.
 
-## Full-view comparison evidence
+## Comparison evidence
 
-Blocked. The source crop was opened and inspected, but the revised implementation could not be captured for a combined source-and-implementation comparison.
+Blocked. The supplied source was inspected at original resolution, but the collaborative preview snapshot failed twice after implementation, so rendered comparison evidence is unavailable.
 
-## Focused region comparison evidence
+## Implementation evidence
 
-Blocked. Code inspection confirms that the existing `PullRequestSearchInput` and `PullRequestFiltersMenu` now render directly in the workspace top bar before the refresh and panel controls. The former breadcrumb title and in-flow duplicate control row are removed. A rendered top-bar crop is unavailable.
+- The terminal resize hit area now occupies the full 8 px gutter above the detached card.
+- Its one-pixel horizontal indicator is positioned at 50% of that gutter and appears on hover or active drag.
+- The handle remains outside the rounded card's clipped surface so the indicator is not hidden.
+- Terminal entry uses a 240 ms upward fade and terminal exit uses a 180 ms downward fade.
+- Exit presence is retained for the full transition before the terminal is unmounted and the main card reclaims its height.
+- Motion uses transform and opacity only, and reduced-motion users receive immediate state changes.
 
-## Findings
+## Checks
 
-- [P1] Post-fix visual confirmation is unavailable.
-  - Location: Source Control main-pane top bar.
-  - Evidence: collaborative preview navigation and snapshot calls failed after implementation.
-  - Impact: search width, vertical centering, filter alignment, and coexistence with the right-side controls cannot be confirmed against the supplied source.
-  - Fix: reconnect the collaborative preview and capture the Source Control view with the sidebar expanded and collapsed.
+- Focused web typecheck: passed.
+- Thread terminal, preview shell, and secondary-sidebar tests: 29 passed.
+- Focused lint, formatting, and diff validation: passed.
+- Rendered handle centering, live dragging, and motion timing: blocked by preview snapshot failure.
 
-## Required fidelity surfaces
+## Follow-up verification
 
-- Fonts and typography: the title is removed; the existing search placeholder and input typography are reused unchanged. Rendered baseline and antialiasing remain unverified.
-- Spacing and layout rhythm: search and filter controls occupy the flexible top-bar region while refresh and panel controls remain right-aligned. The duplicate body row is removed. Rendered width and vertical alignment remain unverified.
-- Colors and visual tokens: the existing input, filter, hover, focus, and active-filter tokens are unchanged. Rendered contrast remains unverified.
-- Image quality and asset fidelity: no new image assets were introduced; existing Lucide search, filter, refresh, and panel icons are reused.
-- Copy and content: the `Pull Requests` page title is removed from the main top bar; the accessible search and filter labels remain domain-specific.
-
-## Primary interactions tested
-
-- Contextual-sidebar and primary-navigation route resolution: 38 tests passed.
-- Focused web typecheck, lint, formatting, and diff validation: passed.
-- Mod/Ctrl+F now focuses and selects the persistent top-bar search input.
-- Search typing, filter menu interaction, focus styling, sidebar collapse, and responsive layout: blocked by preview automation failure.
-- Browser console errors: unavailable because the preview could not be inspected.
-
-## Comparison history
-
-1. The source crop identified the body search/filter row and the `Pull Requests` top-bar title.
-2. The functional search and filter nodes were moved into the flexible top-bar region.
-3. The breadcrumb title, scroll observer, compact duplicate filters, expandable duplicate search, and body control row were removed.
-4. The keyboard search shortcut was simplified to target the single persistent input.
-5. Post-fix capture failed before a visual comparison could be completed.
-
-## Implementation checklist
-
-- Reconnect the collaborative preview.
-- Confirm the search replaces the title and fills the available top-bar width.
-- Confirm the filter, refresh, and panel controls align vertically and remain clickable.
-- Confirm Mod/Ctrl+F focuses the search.
-- Confirm the body no longer renders a duplicate control row.
-- Confirm expanded and collapsed sidebar layouts remain usable.
+- Hover the gutter and confirm the horizontal line appears halfway between both cards.
+- Drag the line and confirm terminal height changes without moving the line off-center.
+- Toggle the terminal twice and confirm both entry and exit complete without flashing or clipping.
+- Enable reduced motion and confirm the terminal changes state immediately.
 
 final result: blocked

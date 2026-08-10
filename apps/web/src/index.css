@@ -123,6 +123,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     height: 100%;
     min-height: 0;
   }
+
+  [data-app-workspace-row]:has([data-inline-right-panel-fill="true"]) > [data-app-primary-column] {
+    width: 0;
+    flex: 0 0 0;
+    overflow: hidden;
+  }
+
+  [data-sidebar-state="expanded"] [data-terminal-card] {
+    margin-left: var(--sidebar-width);
+  }
 }
 
 .wco {

@@ -148,6 +148,8 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import { InlineRightPanelPortal } from "./preview/InlineRightPanelPresence";
+import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { AgentsPanel } from "./AgentsPanel";
 import {
   deriveAgentPanelModel,
@@ -628,6 +630,7 @@ function serverTerminalIdsStrictSubsetOfClient(
 interface PersistentThreadTerminalDrawerProps {
   threadRef: { environmentId: EnvironmentId; threadId: ThreadId };
   threadId: ThreadId;
+  active: boolean;
   visible: boolean;
   launchContext: PersistentTerminalLaunchContext | null;
   focusRequestId: number;
@@ -637,11 +640,13 @@ interface PersistentThreadTerminalDrawerProps {
   closeShortcutLabel: string | undefined;
   keybindings: ResolvedKeybindingsConfig;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  detached: boolean;
 }
 
 const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDrawer({
   threadRef,
   threadId,
+  active,
   visible,
   launchContext,
   focusRequestId,
@@ -651,6 +656,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   closeShortcutLabel,
   keybindings,
   onAddTerminalContext,
+  detached,
 }: PersistentThreadTerminalDrawerProps) {
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
@@ -950,13 +956,49 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [onAddTerminalContext, visible],
   );
 
-  if (!project || !terminalUiState.terminalOpen || !cwd) {
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const [presenceMounted, setPresenceMounted] = useState(terminalUiState.terminalOpen);
+  const [presenceVisible, setPresenceVisible] = useState(false);
+
+  useEffect(() => {
+    if (terminalUiState.terminalOpen) {
+      setPresenceMounted(true);
+      if (prefersReducedMotion) {
+        setPresenceVisible(true);
+        return;
+      }
+      const frame = window.requestAnimationFrame(() => setPresenceVisible(true));
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    setPresenceVisible(false);
+    if (prefersReducedMotion) {
+      setPresenceMounted(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setPresenceMounted(false), 180);
+    return () => window.clearTimeout(timeout);
+  }, [prefersReducedMotion, terminalUiState.terminalOpen]);
+
+  if (!project || !presenceMounted || !cwd) {
     return null;
   }
 
   return (
-    <div className={visible ? undefined : "hidden"}>
+    <div
+      aria-hidden={!terminalUiState.terminalOpen}
+      className={cn(
+        "min-w-0 shrink-0 transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:translate-y-0 motion-reduce:transition-none",
+        !active && "hidden",
+        presenceVisible
+          ? "translate-y-0 opacity-100 duration-[240ms]"
+          : "pointer-events-none translate-y-3 opacity-0 duration-[180ms]",
+      )}
+      data-terminal-card={detached ? "" : undefined}
+      data-terminal-card-presence={presenceVisible ? "open" : "closing"}
+    >
       <ThreadTerminalDrawer
+        mode={detached ? "card" : "drawer"}
         threadRef={threadRef}
         threadId={threadId}
         cwd={cwd}
@@ -1651,19 +1693,28 @@ function ChatViewContent(props: ChatViewProps) {
     serverThread?.latestTurn?.completedAt,
   ]);
   useEffect(() => {
-    setMountedTerminalThreadKeys((currentThreadIds) => {
-      const nextThreadIds = reconcileMountedTerminalThreadIds({
-        currentThreadIds,
-        openThreadIds: existingOpenTerminalThreadKeys,
-        activeThreadId: activeThreadKey,
-        activeThreadTerminalOpen: Boolean(activeThreadKey && terminalUiState.terminalOpen),
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+    const reconcile = () => {
+      setMountedTerminalThreadKeys((currentThreadIds) => {
+        const nextThreadIds = reconcileMountedTerminalThreadIds({
+          currentThreadIds,
+          openThreadIds: existingOpenTerminalThreadKeys,
+          activeThreadId: activeThreadKey,
+          activeThreadTerminalOpen: Boolean(activeThreadKey && terminalUiState.terminalOpen),
+          maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+        });
+        return currentThreadIds.length === nextThreadIds.length &&
+          currentThreadIds.every((nextThreadId, index) => nextThreadId === nextThreadIds[index])
+          ? currentThreadIds
+          : nextThreadIds;
       });
-      return currentThreadIds.length === nextThreadIds.length &&
-        currentThreadIds.every((nextThreadId, index) => nextThreadId === nextThreadIds[index])
-        ? currentThreadIds
-        : nextThreadIds;
-    });
+    };
+
+    if (activeThreadKey && !terminalUiState.terminalOpen) {
+      const timeout = window.setTimeout(reconcile, 180);
+      return () => window.clearTimeout(timeout);
+    }
+
+    reconcile();
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectRef = activeThread
@@ -5987,6 +6038,15 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  const inlineRightPanelControls = (
+    <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+      <RightPanelMaximizeControl
+        maximized={rightPanelMaximized}
+        onToggle={toggleRightPanelMaximized}
+      />
+      {panelToggleControls}
+    </div>
+  );
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
@@ -6090,7 +6150,6 @@ function ChatViewContent(props: ChatViewProps) {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-      {rightPanelOpen && !shouldUseRightPanelSheet ? panelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -6461,58 +6520,74 @@ function ChatViewContent(props: ChatViewProps) {
         </div>
         {/* end horizontal flex container */}
 
-        {mountedTerminalThreadRefs.map(({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
-          <PersistentThreadTerminalDrawer
-            key={mountedThreadKey}
-            threadRef={mountedThreadRef}
-            threadId={mountedThreadRef.threadId}
-            visible={mountedThreadKey === activeThreadKey && terminalUiState.terminalOpen}
-            launchContext={
-              mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
-            }
-            focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
-            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-            splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
-            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-            keybindings={keybindings}
-            onAddTerminalContext={addTerminalContextToDraft}
-          />
-        ))}
+        <TerminalCardPortal detached={!shouldUseRightPanelSheet}>
+          {mountedTerminalThreadRefs.map(
+            ({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
+              <PersistentThreadTerminalDrawer
+                key={mountedThreadKey}
+                threadRef={mountedThreadRef}
+                threadId={mountedThreadRef.threadId}
+                active={mountedThreadKey === activeThreadKey}
+                visible={mountedThreadKey === activeThreadKey && terminalUiState.terminalOpen}
+                launchContext={
+                  mountedThreadKey === activeThreadKey
+                    ? (activeTerminalLaunchContext ?? null)
+                    : null
+                }
+                focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
+                splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+                splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
+                newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+                closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+                keybindings={keybindings}
+                onAddTerminalContext={addTerminalContextToDraft}
+                detached={!shouldUseRightPanelSheet}
+              />
+            ),
+          )}
+        </TerminalCardPortal>
       </div>
 
-      {!shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelTabs
-          mode="inline"
-          maximized={rightPanelMaximized}
-          surfaces={rightPanelState.surfaces}
-          activeSurfaceId={activeRightPanelSurface?.id ?? null}
-          pendingSurfaceIds={pendingFileSurfaceIds}
-          previewSessions={activePreviewState.sessions}
-          terminalLabelsById={activeTerminalLabelsById}
-          onActivate={activateRightPanelSurface}
-          onCloseSurface={closeRightPanelSurface}
-          onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
-          onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
-          onCloseAllSurfaces={closeAllRightPanelSurfaces}
-          onCopyFilePath={copyRightPanelFilePath}
-          onAddBrowser={createBrowserSurface}
-          onAddTerminal={addTerminalSurface}
-          onAddDiff={addDiffSurface}
-          onAddFiles={addFilesSurface}
-          onAddPullRequest={addPullRequestSurface}
-          onAddAgents={addAgentsSurface}
-          browserAvailable={isPreviewSupportedInRuntime()}
-          terminalAvailable={activeProject !== null}
-          diffAvailable={isServerThread && isGitRepo}
-          filesAvailable={activeProject !== null}
-          pullRequestAvailable={pullRequestSurfaceAvailable}
-          agentsAvailable
-          pullRequestStatuses={pullRequestTabStatuses}
-          liveAgentCount={agentPanelModel.liveCount}
+      {!shouldUseRightPanelSheet ? (
+        <InlineRightPanelPortal
+          fill={rightPanelMaximized}
+          open={rightPanelOpen && activeThreadRef !== null}
         >
-          {rightPanelContent}
-        </RightPanelTabs>
+          {activeThreadRef ? (
+            <RightPanelTabs
+              mode="inline"
+              maximized={rightPanelMaximized}
+              layoutControls={inlineRightPanelControls}
+              surfaces={rightPanelState.surfaces}
+              activeSurfaceId={activeRightPanelSurface?.id ?? null}
+              pendingSurfaceIds={pendingFileSurfaceIds}
+              previewSessions={activePreviewState.sessions}
+              terminalLabelsById={activeTerminalLabelsById}
+              onActivate={activateRightPanelSurface}
+              onCloseSurface={closeRightPanelSurface}
+              onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
+              onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+              onCloseAllSurfaces={closeAllRightPanelSurfaces}
+              onCopyFilePath={copyRightPanelFilePath}
+              onAddBrowser={createBrowserSurface}
+              onAddTerminal={addTerminalSurface}
+              onAddDiff={addDiffSurface}
+              onAddFiles={addFilesSurface}
+              onAddPullRequest={addPullRequestSurface}
+              onAddAgents={addAgentsSurface}
+              browserAvailable={isPreviewSupportedInRuntime()}
+              terminalAvailable={activeProject !== null}
+              diffAvailable={isServerThread && isGitRepo}
+              filesAvailable={activeProject !== null}
+              pullRequestAvailable={pullRequestSurfaceAvailable}
+              agentsAvailable
+              pullRequestStatuses={pullRequestTabStatuses}
+              liveAgentCount={agentPanelModel.liveCount}
+            >
+              {rightPanelContent}
+            </RightPanelTabs>
+          ) : null}
+        </InlineRightPanelPortal>
       ) : null}
       {shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
         <RightPanelSheet open onClose={closePreviewPanel}>

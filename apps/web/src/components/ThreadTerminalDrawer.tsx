@@ -865,7 +865,7 @@ export function TerminalViewport({
 }
 
 interface ThreadTerminalDrawerProps {
-  mode?: "drawer" | "panel";
+  mode?: "card" | "drawer" | "panel";
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
   cwd: string;
@@ -955,6 +955,7 @@ export default function ThreadTerminalDrawer({
   terminalLaunchLocationsById,
 }: ThreadTerminalDrawerProps) {
   const isPanel = mode === "panel";
+  const isCard = mode === "card";
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1258,17 +1259,42 @@ export default function ThreadTerminalDrawer({
     };
   }, [syncHeight]);
 
+  const wrapTerminalCard = (content: ReactNode) =>
+    isCard ? (
+      <div className="relative min-w-0 shrink-0">
+        <div
+          className="group/terminal-resize absolute inset-x-0 -top-2 z-20 h-2 cursor-row-resize select-none touch-none"
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={handleResizePointerEnd}
+          onPointerCancel={handleResizePointerEnd}
+        >
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-transparent transition-colors duration-150 group-hover/terminal-resize:bg-border group-active/terminal-resize:bg-primary/60"
+          />
+        </div>
+        {content}
+      </div>
+    ) : (
+      content
+    );
+
   if (normalizedTerminalIds.length === 0) {
-    return (
+    return wrapTerminalCard(
       <aside
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
         className={cn(
           "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
-          isPanel ? "h-full flex-1" : "shrink-0 border-t border-border/80",
+          isPanel
+            ? "h-full flex-1"
+            : isCard
+              ? "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
+              : "shrink-0 border-t border-border/80",
         )}
         style={isPanel ? undefined : { height: `${drawerHeight}px` }}
       >
-        {!isPanel ? (
+        {!isPanel && !isCard ? (
           <div
             className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
             onPointerDown={handleResizePointerDown}
@@ -1287,22 +1313,26 @@ export default function ThreadTerminalDrawer({
             {newTerminalActionLabel}
           </button>
         </div>
-      </aside>
+      </aside>,
     );
   }
 
   const activeTerminalLaunchLocation = resolveTerminalLaunchLocation(resolvedActiveTerminalId);
 
-  return (
+  return wrapTerminalCard(
     <aside
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
       className={cn(
         "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
-        isPanel ? "h-full flex-1" : "shrink-0 border-t border-border/80",
+        isPanel
+          ? "h-full flex-1"
+          : isCard
+            ? "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
+            : "shrink-0 border-t border-border/80",
       )}
       style={isPanel ? undefined : { height: `${drawerHeight}px` }}
     >
-      {!isPanel ? (
+      {!isPanel && !isCard ? (
         <div
           className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
           onPointerDown={handleResizePointerDown}
@@ -1584,6 +1614,6 @@ export default function ThreadTerminalDrawer({
           )}
         </div>
       </div>
-    </aside>
+    </aside>,
   );
 }

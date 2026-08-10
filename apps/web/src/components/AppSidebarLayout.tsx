@@ -232,49 +232,58 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar surface-grain">
         <WorkspaceTopBar />
         <div
-          className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:mr-2 md:mb-2 md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5"
-          data-app-content-frame=""
+          className="flex min-h-0 min-w-0 flex-1 gap-2 md:mr-2 md:mb-2"
+          data-app-workspace-row=""
         >
-          {shouldRenderSecondarySidebar ? (
-            <Sidebar
-              side="left"
-              collapsible="offcanvas"
-              data-app-sidebar=""
-              className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full! md:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]!"
-              resizable={{
-                maxWidth: sidebarMaximumWidth,
-                minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-                shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-                  nextWidth <= currentWidth ||
-                  wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-                storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-                onResize: setSidebarWidth,
-              }}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2" data-app-primary-column="">
+            <div
+              className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5"
+              data-app-content-frame=""
             >
-              {secondarySidebarKind === "settings" ? (
-                <>
-                  <ContextualSidebarHeader title="Settings" />
-                  <SettingsSidebarNav pathname={pathname} />
-                </>
-              ) : secondarySidebarKind === "email" ? (
-                <EmailSidebar />
-              ) : secondarySidebarKind === "calendar" ? (
-                <CalendarSidebar />
-              ) : secondarySidebarKind === "orchestrator" ? (
-                <OrchestratorSidebar />
-              ) : secondarySidebarKind === "issues" ? (
-                <IssuesSidebar />
-              ) : secondarySidebarKind === "source-control" ? (
-                <SourceControlSidebar />
-              ) : legacySidebarEnabled ? (
-                <LegacyThreadSidebar />
-              ) : (
-                <ThreadSidebar />
-              )}
-              <SidebarRail />
-            </Sidebar>
-          ) : null}
-          {children}
+              {shouldRenderSecondarySidebar ? (
+                <Sidebar
+                  side="left"
+                  collapsible="offcanvas"
+                  data-app-sidebar=""
+                  className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full! md:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]!"
+                  resizable={{
+                    maxWidth: sidebarMaximumWidth,
+                    minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+                    shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                      nextWidth <= currentWidth ||
+                      wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+                    storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+                    onResize: setSidebarWidth,
+                  }}
+                >
+                  {secondarySidebarKind === "settings" ? (
+                    <>
+                      <ContextualSidebarHeader title="Settings" />
+                      <SettingsSidebarNav pathname={pathname} />
+                    </>
+                  ) : secondarySidebarKind === "email" ? (
+                    <EmailSidebar />
+                  ) : secondarySidebarKind === "calendar" ? (
+                    <CalendarSidebar />
+                  ) : secondarySidebarKind === "orchestrator" ? (
+                    <OrchestratorSidebar />
+                  ) : secondarySidebarKind === "issues" ? (
+                    <IssuesSidebar />
+                  ) : secondarySidebarKind === "source-control" ? (
+                    <SourceControlSidebar />
+                  ) : legacySidebarEnabled ? (
+                    <LegacyThreadSidebar />
+                  ) : (
+                    <ThreadSidebar />
+                  )}
+                  <SidebarRail />
+                </Sidebar>
+              ) : null}
+              {children}
+            </div>
+            <div className="contents" data-terminal-card-host="" />
+          </div>
+          <div className="contents" data-inline-right-panel-host="" />
         </div>
       </div>
       {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
