@@ -11,7 +11,6 @@ import type {
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronDownIcon,
   EyeIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
@@ -20,7 +19,6 @@ import {
   PenLineIcon,
   LoaderIcon,
   RefreshCwIcon,
-  SearchIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -54,14 +52,8 @@ import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhost
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
-import {
-  WorkspaceBreadcrumb,
-  WorkspaceBreadcrumbItem,
-  WorkspaceBreadcrumbSeparator,
-} from "../components/WorkspaceBreadcrumb";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
@@ -1058,14 +1050,6 @@ function PullRequestsRouteView() {
   const columnProps = {
     refreshing,
     onRefresh: () => void refreshFromHost(),
-    searchValue: search.q ?? "",
-    involvement: search.involvement,
-    state: search.state,
-    host: search.host,
-    hostMenuOptions,
-    onInvolvement: (involvement: PullRequestInvolvement) => updateListScope({ involvement }),
-    onState: (state: PullRequestListState) => updateListScope({ state }),
-    onHost: (host: string | undefined) => updateListScope({ host }),
     searchInput,
     filtersMenu,
     rightPanelControl:
@@ -1184,139 +1168,12 @@ function PullRequestsRouteView() {
 }
 
 /**
- * A compact stand-in for one pill group: the trigger wears the current choice, the choices
- * live in a menu. Same options, same handler — only the footprint changes.
- */
-function CompactFilterMenu<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<PullRequestFilterOption<Value>>;
-  onChange: (value: Value) => void;
-}) {
-  const current = options.find((option) => option.value === value) ?? options[0]!;
-  return (
-    <Menu>
-      <MenuTrigger
-        aria-label={label}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        {current.label}
-        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
-      </MenuTrigger>
-      <MenuPopup align="start" side="bottom" className="min-w-40">
-        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-          {options.map((option) => (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              // A host the server has already said it cannot read is not a choice here either.
-              // The pills disable it; a menu that offers it would answer the press by replacing
-              // a working list with the same failure the pill row exists to explain.
-              disabled={option.unavailable !== undefined}
-              title={option.unavailable}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <option.Icon aria-hidden className="size-3.5" />
-                {option.label}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
-  );
-}
-
-/**
- * The search, folded to an icon until asked for. Opening moves focus into the input — the
- * whole point of pressing it is to type. It stays open while it holds a query, so an active
- * search is never invisible; empty and blurred, it folds back.
- */
-function ExpandableSearch({
-  searchInput,
-  searchValue,
-  open,
-  onOpenChange,
-  focusToken,
-  onFocusWithin,
-}: {
-  searchInput: ReactNode;
-  searchValue: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Bumped to pull focus into the input while it is already showing — the Mod+F path. */
-  focusToken: number;
-  /**
-   * Focus entering and leaving the expanded input. An unmount fires no blur, which is the
-   * point: whoever unmounted this can still see the reader was mid-typing and move the
-   * focus somewhere that continues the sentence.
-   */
-  onFocusWithin?: (focused: boolean) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    containerRef.current?.querySelector("input")?.focus();
-  }, [open]);
-  const appliedFocusToken = useRef(focusToken);
-  useEffect(() => {
-    if (appliedFocusToken.current === focusToken) return;
-    appliedFocusToken.current = focusToken;
-    const input = containerRef.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [focusToken]);
-  if (open || searchValue.length > 0) {
-    return (
-      <div
-        ref={containerRef}
-        className="w-56 shrink-0"
-        onFocus={() => onFocusWithin?.(true)}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
-        }}
-      >
-        {searchInput}
-      </div>
-    );
-  }
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      aria-label="Search pull requests"
-      onClick={() => onOpenChange(true)}
-    >
-      <SearchIcon className="size-4" />
-    </Button>
-  );
-}
-
-/**
- * The pull request list column. The full controls live at the top of the scroll flow; once
- * they scroll away, the title transforms into the scope itself — "Pull Requests / Open ▾
- * Authored ▾" — where each segment is the menu for that filter, and a folded search sits on
- * the right. Scrolled back up, the topbar returns to the plain title. The topbar is the
- * window drag region throughout; its interactive children opt out through the `.drag-region`
- * descendant rules.
+ * The pull request list column. Search and filters stay in the topbar so they remain available
+ * while the list scrolls; interactive descendants opt out of the window drag region.
  */
 function PullRequestsColumn({
   refreshing,
   onRefresh,
-  searchValue,
-  involvement,
-  state,
-  host,
-  hostMenuOptions,
-  onInvolvement,
-  onState,
-  onHost,
   searchInput,
   filtersMenu,
   rightPanelControl,
@@ -1325,74 +1182,27 @@ function PullRequestsColumn({
 }: {
   refreshing: boolean;
   onRefresh: () => void;
-  searchValue: string;
-  involvement: PullRequestInvolvement;
-  state: PullRequestListState;
-  host: string | undefined;
-  hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>>;
-  onInvolvement: (involvement: PullRequestInvolvement) => void;
-  onState: (state: PullRequestListState) => void;
-  onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
   rightPanelControl: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
 }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const markerRef = useRef<HTMLDivElement | null>(null);
-  const [condensed, setCondensed] = useState(false);
-  useEffect(() => {
-    const marker = markerRef.current;
-    if (!marker) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setCondensed(entry ? !entry.isIntersecting : false),
-      { root: scrollRef.current },
-    );
-    observer.observe(marker);
-    return () => observer.disconnect();
-  }, []);
-  // Typing into the topbar search narrows the list, and a short enough list un-scrolls the
-  // page — which dissolves the condensed topbar and unmounts the very input being typed in.
-  // The two inputs are one search to the reader, so the focus follows the value into the
-  // in-flow bar, caret at the end, and the sentence continues.
-  const topbarSearchFocusedRef = useRef(false);
-  const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchFocusToken, setSearchFocusToken] = useState(0);
-  // Mod+F belongs to this page's own search: the desktop shell binds no find-in-page, so the
-  // shortcut would otherwise do nothing. Condensed, it unfolds the topbar search; at the top,
-  // it focuses the in-flow bar and selects the query the way a find field would.
+  const topbarSearchRef = useRef<HTMLDivElement | null>(null);
+  // Mod+F belongs to this page's own search rather than the browser's find-in-page command.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
       if (event.altKey || event.shiftKey) return;
       event.preventDefault();
-      if (condensed) {
-        setSearchOpen(true);
-        setSearchFocusToken((token) => token + 1);
-        return;
-      }
-      const input = inFlowSearchRef.current?.querySelector("input");
+      const input = topbarSearchRef.current?.querySelector("input");
       input?.focus();
       input?.select();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
-  useEffect(() => {
-    if (condensed) return;
-    // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
-    // from starting with an empty expanded search nobody asked for.
-    setSearchOpen(false);
-    if (!topbarSearchFocusedRef.current) return;
-    topbarSearchFocusedRef.current = false;
-    const input = inFlowSearchRef.current?.querySelector("input");
-    if (!input) return;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  }, [condensed]);
+  }, []);
 
   return (
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
@@ -1410,58 +1220,10 @@ function PullRequestsColumn({
           COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
       >
-        {condensed ? (
-          <WorkspaceBreadcrumb ariaLabel="Pull request scope">
-            {/* The page name remains the foreground anchor in both states; the live filters are
-                its compact scope, grouped as the second crumb rather than pretending each menu
-                is a separate page in the hierarchy. */}
-            <WorkspaceBreadcrumbItem current>
-              <h1 className="truncate">Pull Requests</h1>
-            </WorkspaceBreadcrumbItem>
-            <WorkspaceBreadcrumbSeparator />
-            <WorkspaceBreadcrumbItem className="gap-1.5 overflow-hidden">
-              <CompactFilterMenu
-                label="Filter by state"
-                value={state}
-                options={STATE_TABS}
-                onChange={onState}
-              />
-              <CompactFilterMenu
-                label="Filter by involvement"
-                value={involvement}
-                options={INVOLVEMENT_TABS}
-                onChange={onInvolvement}
-              />
-              {hostMenuOptions.length > 2 ? (
-                <CompactFilterMenu
-                  label="Filter by host"
-                  value={host ?? ""}
-                  options={hostMenuOptions}
-                  onChange={(next) => onHost(next === "" ? undefined : next)}
-                />
-              ) : null}
-            </WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
-        ) : (
-          <WorkspaceBreadcrumb ariaLabel="Pull requests breadcrumb">
-            <WorkspaceBreadcrumbItem current>
-              <h1 className="truncate">Pull Requests</h1>
-            </WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
-        )}
-        <div className="min-w-0 flex-1" />
-        {condensed ? (
-          <ExpandableSearch
-            searchInput={searchInput}
-            searchValue={searchValue}
-            open={searchOpen}
-            onOpenChange={setSearchOpen}
-            focusToken={searchFocusToken}
-            onFocusWithin={(focused) => {
-              topbarSearchFocusedRef.current = focused;
-            }}
-          />
-        ) : null}
+        <div ref={topbarSearchRef} className="flex min-w-0 flex-1 items-center gap-2">
+          {searchInput}
+          {filtersMenu}
+        </div>
         <Button
           size="icon-sm"
           variant="ghost"
@@ -1473,23 +1235,11 @@ function PullRequestsColumn({
         {rightPanelControl}
       </header>
 
-      <div
-        ref={scrollRef}
-        className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
-      >
+      <div className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
-          <div className="flex flex-col gap-3">
-            <div ref={inFlowSearchRef} className="flex items-center gap-2">
-              {searchInput}
-              {filtersMenu}
-            </div>
-            {/* Scrolled past this marker, the controls are gone and the title takes over. */}
-            <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />
-          </div>
-
           {listBody}
         </div>
       </div>

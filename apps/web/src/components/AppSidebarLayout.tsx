@@ -24,6 +24,7 @@ import { IssuesSidebar } from "./issues/IssuesSidebar";
 import { OrchestratorSidebar } from "./orchestrator/OrchestratorSidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
+import { SourceControlSidebar } from "./sourceControl/SourceControlSidebar";
 import {
   PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY,
   PrimaryNavigationRail,
@@ -161,8 +162,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     isMobile,
     secondarySidebarKind,
   );
-  const usesThreadSidebar =
-    secondarySidebarKind === "threads" || (isMobile && secondarySidebarKind === null);
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
@@ -265,6 +264,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                 <OrchestratorSidebar />
               ) : secondarySidebarKind === "issues" ? (
                 <IssuesSidebar />
+              ) : secondarySidebarKind === "source-control" ? (
+                <SourceControlSidebar />
               ) : legacySidebarEnabled ? (
                 <LegacyThreadSidebar />
               ) : (
@@ -276,9 +277,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           {children}
         </div>
       </div>
-      {shouldRenderSecondarySidebar ? (
-        <SidebarControl useArtworkContrast={usesThreadSidebar} />
-      ) : null}
+      {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
     </SidebarProvider>
   );
 }

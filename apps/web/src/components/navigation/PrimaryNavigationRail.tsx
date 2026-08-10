@@ -195,7 +195,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
           active={activeDestination === "pull-requests"}
           expanded={expanded}
           icon={GitPullRequestIcon}
-          label="Pull Requests"
+          label="Source Control"
           onClick={navigateToPullRequests}
         />
         <NavigationRailButton

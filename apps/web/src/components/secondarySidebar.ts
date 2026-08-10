@@ -4,12 +4,13 @@ export type SecondarySidebarKind =
   | "email"
   | "calendar"
   | "orchestrator"
-  | "issues";
+  | "issues"
+  | "source-control";
 
 /**
  * The icon rail is global navigation; this wider sidebar belongs only to routes
- * with section-specific navigation. Pull Requests gets its own sidebar later,
- * so it must not temporarily inherit thread controls.
+ * with section-specific navigation. Routes without one must not temporarily
+ * inherit thread controls.
  */
 export function resolveSecondarySidebarKind(pathname: string): SecondarySidebarKind | null {
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
@@ -27,10 +28,11 @@ export function resolveSecondarySidebarKind(pathname: string): SecondarySidebarK
   if (pathname === "/issues" || pathname.startsWith("/issues/")) {
     return "issues";
   }
+  if (pathname === "/pull-requests" || pathname.startsWith("/pull-requests/")) {
+    return "source-control";
+  }
   if (
     pathname === "/" ||
-    pathname === "/pull-requests" ||
-    pathname.startsWith("/pull-requests/") ||
     pathname === "/usage" ||
     pathname.startsWith("/usage/") ||
     pathname === "/dashboard" ||

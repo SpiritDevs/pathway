@@ -12,7 +12,8 @@ describe("resolveSecondarySidebarKind", () => {
     ["/issues/assigned", "issues"],
     ["/settings", "settings"],
     ["/settings/connections", "settings"],
-    ["/pull-requests", null],
+    ["/pull-requests", "source-control"],
+    ["/pull-requests/42", "source-control"],
     ["/calendar", "calendar"],
     ["/calendar/week", "calendar"],
     ["/email", "email"],
@@ -41,5 +42,6 @@ describe("shouldRenderSecondarySidebar", () => {
     expect(shouldRenderSecondarySidebar(false, "calendar")).toBe(true);
     expect(shouldRenderSecondarySidebar(false, "orchestrator")).toBe(true);
     expect(shouldRenderSecondarySidebar(false, "issues")).toBe(true);
+    expect(shouldRenderSecondarySidebar(false, "source-control")).toBe(true);
   });
 });
