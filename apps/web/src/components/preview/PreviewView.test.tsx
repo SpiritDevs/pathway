@@ -73,7 +73,6 @@ vi.mock("~/previewStateStore", () => ({
         zoomFactor: 1,
         pictureInPicture: mocks.pictureInPicture,
         colorScheme: "system",
-        controller: "none",
       },
     },
     recentlySeenUrls: [],

@@ -25,7 +25,6 @@ describe("preview keyboard packets", () => {
         location: 0,
         isKeypad: false,
       },
-      signal: { kind: "key", key: "Enter", code: "Enter" },
     });
   });
 
@@ -75,7 +74,6 @@ describe("preview keyboard packets", () => {
       windowsVirtualKeyCode: 49,
       text: "!",
     });
-    expect(sequence.signal).toEqual({ kind: "key", key: "!", code: "Digit1" });
   });
 
   it("keeps shifted key values while suppressing text for modified chords", () => {
@@ -92,6 +90,5 @@ describe("preview keyboard packets", () => {
       location: 0,
       isKeypad: false,
     });
-    expect(sequence.signal).toEqual({ kind: "key", key: "!", code: "Digit1" });
   });
 });

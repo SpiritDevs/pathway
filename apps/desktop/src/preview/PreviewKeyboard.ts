@@ -26,11 +26,6 @@ export interface PreviewAutomationKeyEvent {
 export interface PreviewAutomationKeySequence {
   readonly keyDown: PreviewAutomationKeyEvent;
   readonly keyUp: PreviewAutomationKeyEvent;
-  readonly signal: {
-    readonly kind: "key";
-    readonly key: string;
-    readonly code: string;
-  };
 }
 
 const NAMED_KEYS: Readonly<Record<string, KeyDefinition>> = {
@@ -198,6 +193,5 @@ export function makePreviewAutomationKeySequence(
       ...(commands.length > 0 ? { commands } : {}),
     },
     keyUp: { type: "keyUp", ...shared },
-    signal: { kind: "key", key: definition.key, code: definition.code },
   };
 }

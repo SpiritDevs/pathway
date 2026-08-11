@@ -535,7 +535,6 @@ export interface DesktopPreviewTabState {
   /** Whether this tab is currently mirrored into a desktop picture-in-picture window. */
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
-  controller: "human" | "agent" | "none";
   updatedAt: string;
 }
 
@@ -573,7 +572,6 @@ export const DesktopPreviewTabStateSchema: Schema.Codec<DesktopPreviewTabState> 
   zoomFactor: Schema.Number,
   pictureInPicture: Schema.Boolean,
   colorScheme: DesktopPreviewColorSchemeSchema,
-  controller: Schema.Literals(["human", "agent", "none"]),
   updatedAt: Schema.String,
 });
 

@@ -321,7 +321,6 @@ describe("previewStateStore (single-tab)", () => {
       zoomFactor: 1,
       pictureInPicture: false,
       colorScheme: "system",
-      controller: "none",
     });
     const state = readThreadPreviewState(ref);
     expect(state.desktopOverlay?.canGoBack).toBe(true);
@@ -341,7 +340,6 @@ describe("previewStateStore (single-tab)", () => {
       zoomFactor: 1,
       pictureInPicture: false,
       colorScheme: "system",
-      controller: "none",
     });
     setActivePreviewTab(ref, first.tabId);
 
@@ -389,7 +387,6 @@ describe("previewStateStore (single-tab)", () => {
       zoomFactor: 1,
       pictureInPicture: false,
       colorScheme: "system",
-      controller: "none",
     });
 
     reconcilePreviewServerSessions(ref, { sessions: [active], serverEpoch, revision: 1 });
@@ -503,7 +500,6 @@ describe("previewStateStore (single-tab)", () => {
       zoomFactor: 1,
       pictureInPicture: false,
       colorScheme: "system",
-      controller: "none",
     });
     const restarted = makeSnapshot({
       navStatus: { _tag: "Success", url: "https://new.example", title: "New" },

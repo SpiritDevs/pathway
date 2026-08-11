@@ -141,7 +141,6 @@ export function PreviewView({
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
   const showEmptyState = shouldShowPreviewEmptyState(snapshot);
-  const controller = desktopOverlay?.controller ?? "none";
   const loadProgress = useLoadingProgress(loading);
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const panelRect = useBrowserSurfaceStore((state) =>
@@ -722,16 +721,7 @@ export function PreviewView({
           <ZoomIndicator zoomFactor={desktopOverlay.zoomFactor} />
         ) : null}
         {runtimeTabId && desktopOverlay && !showEmptyState && !isUnreachable ? (
-          <AgentBrowserCursor
-            tabId={runtimeTabId}
-            zoomFactor={desktopOverlay.zoomFactor}
-            controller={controller}
-          />
-        ) : null}
-        {controller !== "none" ? (
-          <div className="pointer-events-none absolute left-3 top-3 z-40 rounded-full border border-border/70 bg-background/90 px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur">
-            {controller === "agent" ? "Agent controlling browser" : "Human control"}
-          </div>
+          <AgentBrowserCursor tabId={runtimeTabId} zoomFactor={desktopOverlay.zoomFactor} />
         ) : null}
         {navStatus._tag === "LoadFailed" ? (
           <div className="absolute inset-0 z-10 bg-background">

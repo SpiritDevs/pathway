@@ -739,18 +739,6 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedErrorClass<Previ
   }
 }
 
-export class PreviewAutomationControlInterruptedError extends Schema.TaggedErrorClass<PreviewAutomationControlInterruptedError>()(
-  "PreviewAutomationControlInterruptedError",
-  {
-    ...PreviewAutomationRequestErrorFields,
-    ...PreviewAutomationRemoteDiagnosticFields,
-  },
-) {
-  override get message(): string {
-    return `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`;
-  }
-}
-
 export class PreviewAutomationExecutionError extends Schema.TaggedErrorClass<PreviewAutomationExecutionError>()(
   "PreviewAutomationExecutionError",
   {
@@ -862,7 +850,6 @@ export const PreviewAutomationError = Schema.Union([
   PreviewAutomationUnsupportedClientError,
   PreviewAutomationTabNotFoundError,
   PreviewAutomationTimeoutError,
-  PreviewAutomationControlInterruptedError,
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationTargetNotEditableError,

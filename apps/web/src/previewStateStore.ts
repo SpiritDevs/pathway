@@ -27,7 +27,6 @@ export interface DesktopPreviewOverlay {
   zoomFactor: number;
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
-  controller: "human" | "agent" | "none";
 }
 
 export interface ThreadPreviewState {

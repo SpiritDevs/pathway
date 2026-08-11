@@ -1590,7 +1590,6 @@ describe("PreviewManager", () => {
   effectIt.effect("emits the resolved pointer target before dispatching an automation click", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
         const activity: string[] = [];
         const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
           if (method === "Runtime.evaluate") {
@@ -1602,7 +1601,6 @@ describe("PreviewManager", () => {
           }
           if (method === "Input.dispatchMouseEvent" && params?.type === "mousePressed") {
             activity.push("mousePressed");
-            humanInput?.({}, { kind: "pointer", x: params.x, y: params.y, button: 0 });
           }
           return undefined;
         });
@@ -1618,12 +1616,7 @@ describe("PreviewManager", () => {
           setZoomFactor: vi.fn(),
           on: vi.fn(),
           off: vi.fn(),
-          ipc: {
-            on: vi.fn((channel: string, listener: typeof humanInput) => {
-              if (channel === "preview:human-input") humanInput = listener;
-            }),
-            off: vi.fn(),
-          },
+          ipc: { on: vi.fn(), off: vi.fn() },
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
@@ -1672,7 +1665,6 @@ describe("PreviewManager", () => {
     withManager((manager) =>
       Effect.gen(function* () {
         let failKeyDown = false;
-        let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
         const sendCommand = vi.fn(async (method: string, params?: Record<string, unknown>) => {
           if (
             failKeyDown &&
@@ -1680,19 +1672,6 @@ describe("PreviewManager", () => {
             (params?.["type"] === "keyDown" || params?.["type"] === "rawKeyDown")
           ) {
             throw new Error("key dispatch failed");
-          }
-          if (
-            method === "Input.dispatchKeyEvent" &&
-            (params?.["type"] === "keyDown" || params?.["type"] === "rawKeyDown")
-          ) {
-            humanInput?.(
-              {},
-              {
-                kind: "key",
-                key: params["key"],
-                code: params["code"] ?? "Digit1",
-              },
-            );
           }
           return method === "Runtime.evaluate" ? { result: { value: { ok: true } } } : undefined;
         });
@@ -1716,12 +1695,7 @@ describe("PreviewManager", () => {
           setZoomFactor: vi.fn(),
           on: vi.fn(),
           off: vi.fn(),
-          ipc: {
-            on: vi.fn((channel: string, listener: typeof humanInput) => {
-              if (channel === "preview:human-input") humanInput = listener;
-            }),
-            off: vi.fn(),
-          },
+          ipc: { on: vi.fn(), off: vi.fn() },
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
@@ -1836,79 +1810,6 @@ describe("PreviewManager", () => {
           unmodifiedText: "!",
         });
         expect(restoreFocus).toHaveBeenCalledTimes(3);
-      }),
-    ),
-  );
-
-  effectIt.effect("still interrupts agent control for a different human pointer event", () =>
-    withManager((manager) =>
-      Effect.gen(function* () {
-        let humanInput: ((_event: unknown, signal: unknown) => void) | undefined;
-        const sendCommand = vi.fn(async (method: string) => {
-          if (method === "Runtime.evaluate") {
-            return {
-              result: {
-                value: { width: 800, height: 600 },
-              },
-            };
-          }
-          if (method === "Input.dispatchMouseEvent") {
-            humanInput?.({}, { kind: "pointer", x: 400, y: 300, button: 0 });
-          }
-          return undefined;
-        });
-        fromId.mockReturnValue({
-          id: 42,
-          isDestroyed: () => false,
-          getType: () => "webview",
-          getURL: () => "https://example.com",
-          getTitle: () => "Example",
-          isLoading: () => false,
-          isDevToolsOpened: () => false,
-          getZoomFactor: () => 1,
-          setZoomFactor: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          ipc: {
-            on: vi.fn((channel: string, listener: typeof humanInput) => {
-              if (channel === "preview:human-input") humanInput = listener;
-            }),
-            off: vi.fn(),
-          },
-          send: webviewSend,
-          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-          setWindowOpenHandler: vi.fn(),
-          debugger: {
-            isAttached: () => false,
-            attach: vi.fn(),
-            sendCommand,
-            on: vi.fn(),
-            off: vi.fn(),
-          },
-        } as never);
-
-        yield* manager.createTab("tab_1");
-        yield* manager.registerWebview("tab_1", 42);
-
-        const click = yield* manager
-          .automationClick("tab_1", { x: 120, y: 80 })
-          .pipe(Effect.forkChild({ startImmediately: true }));
-        yield* TestClock.adjust(200);
-        const exit = yield* Fiber.await(click);
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isSuccess(exit)) return;
-        const error = Option.getOrThrow(Cause.findErrorOption(exit.cause));
-        expect(error).toMatchObject({
-          _tag: "PreviewAutomationControlInterruptedError",
-          operation: "click",
-          tabId: "tab_1",
-          webContentsId: 42,
-        });
-        expect(error).toBeInstanceOf(Error);
-        if (error instanceof Error) {
-          expect(error.name).toBe("PreviewAutomationControlInterruptedError");
-        }
-        expect("cause" in error).toBe(false);
       }),
     ),
   );

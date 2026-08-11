@@ -84,7 +84,6 @@ function projectDesktopState(state: DesktopPreviewTabState): DesktopPreviewOverl
     zoomFactor: state.zoomFactor,
     pictureInPicture: state.pictureInPicture,
     colorScheme: state.colorScheme,
-    controller: state.controller,
   };
 }
 

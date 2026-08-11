@@ -56,7 +56,6 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
-  HUMAN_INPUT_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
@@ -84,7 +83,6 @@ export interface PreviewTabState {
   zoomFactor: number;
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
-  controller: "human" | "agent" | "none";
   updatedAt: string;
 }
 
@@ -341,10 +339,6 @@ const nextZoomLevel = (current: number, direction: "in" | "out"): number => {
 type Listener = (tabId: string, state: PreviewTabState) => Effect.Effect<void>;
 type RecordingFrameListener = (frame: DesktopPreviewRecordingFrame) => Effect.Effect<void>;
 
-type PreviewInputSignal =
-  | { readonly kind: "pointer"; readonly x: number; readonly y: number; readonly button: number }
-  | { readonly kind: "key"; readonly key: string; readonly code: string };
-
 interface ManagedListeners {
   readonly scope: Scope.Closeable;
 }
@@ -386,11 +380,6 @@ interface BrowserDiagnostics {
 
 type PointerEventListener = (event: DesktopPreviewPointerEvent) => Effect.Effect<void>;
 
-interface ExpectedAgentInput {
-  readonly signal: PreviewInputSignal;
-  readonly expiresAt: number;
-}
-
 const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   key: string;
   meta: boolean;
@@ -413,44 +402,6 @@ export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   (input.meta || input.control) &&
   !input.shift &&
   !input.alt;
-
-const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
-  if (typeof value !== "object" || value === null || !("kind" in value)) return false;
-  if (value.kind === "pointer") {
-    return (
-      "x" in value &&
-      typeof value.x === "number" &&
-      "y" in value &&
-      typeof value.y === "number" &&
-      "button" in value &&
-      typeof value.button === "number"
-    );
-  }
-  return (
-    value.kind === "key" &&
-    "key" in value &&
-    typeof value.key === "string" &&
-    "code" in value &&
-    typeof value.code === "string"
-  );
-};
-
-const inputSignalsMatch = (left: PreviewInputSignal, right: PreviewInputSignal): boolean => {
-  if (left.kind !== right.kind) return false;
-  if (left.kind === "pointer" && right.kind === "pointer") {
-    return (
-      Math.abs(left.x - right.x) <= 1 &&
-      Math.abs(left.y - right.y) <= 1 &&
-      left.button === right.button
-    );
-  }
-  return (
-    left.kind === "key" &&
-    right.kind === "key" &&
-    left.key === right.key &&
-    left.code === right.code
-  );
-};
 
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
   artifactDirectory: string,
@@ -481,10 +432,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     ReadonlyMap<number, BrowserControlSession>
   >(new Map());
   const diagnosticsRef = yield* Ref.make<ReadonlyMap<number, BrowserDiagnostics>>(new Map());
-  const expectedAgentInputsRef = yield* Ref.make<
-    ReadonlyMap<string, ReadonlyArray<ExpectedAgentInput>>
-  >(new Map());
-  const controlEpochRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const actionTimelineRef = yield* Ref.make<
     ReadonlyMap<string, ReadonlyArray<PreviewAutomationActionEvent>>
   >(new Map());
@@ -1032,38 +979,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       startedAt,
     };
     yield* pushAction(tabId, actionEvent);
-    const epoch = (yield* Ref.get(controlEpochRef)).get(tabId) ?? 0;
     const control = yield* ensureControlSession(wc);
     const execute = Effect.fn("PreviewManager.executeControlAction")(function* () {
-      yield* update(tabId, { controller: "agent" });
       const send: SendCommand = Effect.fn("PreviewManager.sendCommand")(
         function* (method, commandParams) {
-          const before = (yield* Ref.get(controlEpochRef)).get(tabId) ?? 0;
-          if (before !== epoch) {
-            return yield* new PreviewAutomationControlInterruptedError({
-              operation: action,
-              tabId,
-              webContentsId: wc.id,
-            });
-          }
-          const result = yield* attemptPromise(
+          return yield* attemptPromise(
             { operation: `${action}.${method}`, tabId, webContentsId: wc.id },
             () => wc.debugger.sendCommand(method, commandParams),
           );
-          const after = (yield* Ref.get(controlEpochRef)).get(tabId) ?? 0;
-          if (after !== epoch) {
-            return yield* new PreviewAutomationControlInterruptedError({
-              operation: action,
-              tabId,
-              webContentsId: wc.id,
-            });
-          }
-          return result;
         },
       );
-      // Cleanup commands must still run after human input invalidates the action's
-      // control epoch. Otherwise a partially dispatched input can leave Chromium
-      // with a held key or focus emulation enabled for subsequent actions.
       const sendCleanup: SendCommand = Effect.fn("PreviewManager.sendCleanupCommand")(
         function* (method, commandParams) {
           return yield* attemptPromise(
@@ -1090,7 +1015,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         });
       } else {
         const error = Option.getOrNull(Cause.findErrorOption(exit.cause));
-        const interrupted = isPreviewAutomationControlInterruptedError(error);
         const errorMessage = isPreviewOperationError(error)
           ? PreviewOperationError.toTimelineMessage(error)
           : isPreviewAutomationEvaluationError(error)
@@ -1102,13 +1026,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 : String(error);
         yield* replaceAction(tabId, {
           ...actionEvent,
-          status: interrupted ? "interrupted" : "failed",
+          status: "failed",
           completedAt,
           error: errorMessage,
         });
       }
-      const tabs = yield* SynchronizedRef.get(tabsRef);
-      if (tabs.has(tabId)) yield* update(tabId, { controller: "none" });
     });
     return yield* control.semaphore.withPermit(execute().pipe(Effect.onExit(finalize)));
   });
@@ -1225,44 +1147,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return { kind: "Success", url, title };
   };
 
-  const consumeExpectedAgentInput = Effect.fn("PreviewManager.consumeExpectedAgentInput")(
-    function* (tabId: string, signal: PreviewInputSignal) {
-      const now = yield* currentMillis;
-      return yield* Ref.modify(expectedAgentInputsRef, (allExpected) => {
-        const pending = (allExpected.get(tabId) ?? []).filter(
-          (expected) => expected.expiresAt > now,
-        );
-        const index = pending.findIndex((expected) => inputSignalsMatch(expected.signal, signal));
-        const matched = index >= 0;
-        const nextPending = matched
-          ? pending.filter((_, pendingIndex) => pendingIndex !== index)
-          : pending;
-        return [
-          matched,
-          replaceMap(allExpected, (copy) => {
-            if (nextPending.length === 0) copy.delete(tabId);
-            else copy.set(tabId, nextPending);
-          }),
-        ] as const;
-      });
-    },
-  );
-
-  const expectAgentInput = Effect.fn("PreviewManager.expectAgentInput")(function* (
-    tabId: string,
-    signal: PreviewInputSignal,
-  ) {
-    const now = yield* currentMillis;
-    yield* Ref.update(expectedAgentInputsRef, (allExpected) =>
-      replaceMap(allExpected, (copy) => {
-        const pending = (allExpected.get(tabId) ?? []).filter(
-          (expected) => expected.expiresAt > now,
-        );
-        copy.set(tabId, [...pending, { signal, expiresAt: now + 1_000 }]);
-      }),
-    );
-  });
-
   const attachListeners = Effect.fn("PreviewManager.attachListeners")(function* (
     tabId: string,
     wc: Electron.WebContents,
@@ -1331,27 +1215,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }),
       );
     };
-    const handleHumanInput = Effect.fn("PreviewManager.handleHumanInput")(function* (
-      rawSignal?: unknown,
-    ) {
-      if (isPreviewInputSignal(rawSignal) && (yield* consumeExpectedAgentInput(tabId, rawSignal))) {
-        return;
-      }
-      yield* Ref.update(controlEpochRef, (epochs) =>
-        replaceMap(epochs, (copy) => {
-          copy.set(tabId, (epochs.get(tabId) ?? 0) + 1);
-        }),
-      );
-      yield* update(tabId, { controller: "human" });
-      yield* Effect.sleep(750);
-      const tabs = yield* SynchronizedRef.get(tabsRef);
-      if (tabs.get(tabId)?.controller === "human") {
-        yield* update(tabId, { controller: "none" });
-      }
-    });
-    const humanInput = (_event: unknown, rawSignal?: unknown): void => {
-      runFork(handleHumanInput(rawSignal));
-    };
     const forwardShortcut = Effect.fn("PreviewManager.forwardShortcut")(function* (
       event: Electron.Event,
       input: Electron.Input,
@@ -1394,7 +1257,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("did-stop-loading", sync);
         wc.off("did-fail-load", failed as never);
         wc.off("before-input-event", beforeInput);
-        wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
       }).pipe(Effect.ignore),
     );
     const install = Effect.fn("PreviewManager.installWebContentsListeners")(function* () {
@@ -1405,7 +1267,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
-        wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
         wc.setWindowOpenHandler(({ url }) => {
           runFork(
             attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
@@ -1457,7 +1318,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           zoomFactor: DEFAULT_ZOOM_FACTOR,
           pictureInPicture: false,
           colorScheme: "system",
-          controller: "none",
           updatedAt,
         };
         return [
@@ -1520,7 +1380,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       zoomFactor: DEFAULT_ZOOM_FACTOR,
       pictureInPicture: false,
       colorScheme: "system",
-      controller: "none",
       updatedAt,
     };
     yield* emit(tabId, closed);
@@ -1706,7 +1565,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
         colorScheme: current?.colorScheme ?? "system",
-        controller: current?.controller ?? "none",
         updatedAt,
       };
       return [
@@ -2841,7 +2699,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       createdAt: clickCreatedAt,
     });
     yield* Effect.sleep(AGENT_CURSOR_CLICK_LEAD_MS);
-    yield* expectAgentInput(tabId, { kind: "pointer", ...point, button: 0 });
     yield* send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       ...point,
@@ -3038,7 +2895,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       );
       yield* send("Page.bringToFront");
       yield* send("Emulation.setFocusEmulationEnabled", { enabled: true });
-      yield* expectAgentInput(tabId, keySequence.signal);
       keyDownAttempted = true;
       yield* send("Input.dispatchKeyEvent", keySequence.keyDown);
     }).pipe(Effect.ensuring(releaseInput));
@@ -3262,7 +3118,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* Effect.all(
       [
         Ref.set(listenersRef, new Set()),
-        Ref.set(expectedAgentInputsRef, new Map()),
         Ref.set(pointerEventListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
       ],
@@ -3530,19 +3385,6 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedErrorClass<Previ
   }
 }
 
-export class PreviewAutomationControlInterruptedError extends Schema.TaggedErrorClass<PreviewAutomationControlInterruptedError>()(
-  "PreviewAutomationControlInterruptedError",
-  {
-    operation: Schema.String,
-    tabId: Schema.String,
-    webContentsId: Schema.Number,
-  },
-) {
-  override get message(): string {
-    return `Preview automation ${this.operation} was interrupted by human input in tab ${this.tabId}`;
-  }
-}
-
 export const PreviewManagerError = Schema.Union([
   PreviewTabNotFoundError,
   PreviewWebContentsNotFoundError,
@@ -3559,14 +3401,10 @@ export const PreviewManagerError = Schema.Union([
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationResultTooLargeError,
   PreviewAutomationTimeoutError,
-  PreviewAutomationControlInterruptedError,
 ]);
 export type PreviewManagerError = typeof PreviewManagerError.Type;
 
 export const isPreviewManagerError = Schema.is(PreviewManagerError);
-export const isPreviewAutomationControlInterruptedError = Schema.is(
-  PreviewAutomationControlInterruptedError,
-);
 export const isPreviewAutomationEvaluationError = Schema.is(PreviewAutomationEvaluationError);
 export const isPreviewAutomationInvalidSelectorError = Schema.is(
   PreviewAutomationInvalidSelectorError,

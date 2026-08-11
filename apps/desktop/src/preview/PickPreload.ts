@@ -21,7 +21,6 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
-  HUMAN_INPUT_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
 const OVERLAY_ATTRIBUTE = "data-pathway-annotation-ui";
@@ -79,28 +78,6 @@ const applyAnnotationTheme = (
     host.style.setProperty(name, value);
   }
 };
-
-const reportHumanPointerInput = (event: PointerEvent): void => {
-  if (!event.isTrusted) return;
-  ipcRenderer.send(HUMAN_INPUT_CHANNEL, {
-    kind: "pointer",
-    x: event.clientX,
-    y: event.clientY,
-    button: event.button,
-  });
-};
-
-const reportHumanKeyInput = (event: KeyboardEvent): void => {
-  if (!event.isTrusted) return;
-  ipcRenderer.send(HUMAN_INPUT_CHANNEL, {
-    kind: "key",
-    key: event.key,
-    code: event.code,
-  });
-};
-
-window.addEventListener("pointerdown", reportHumanPointerInput, true);
-window.addEventListener("keydown", reportHumanKeyInput, true);
 
 const nextId = (prefix: string): string => {
   idSequence += 1;

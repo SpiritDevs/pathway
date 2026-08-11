@@ -1,7 +1,6 @@
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
   PreviewAutomationClientDisconnectedError,
-  PreviewAutomationControlInterruptedError,
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -211,11 +210,6 @@ const classifyResponseError = (
       });
     case "PreviewAutomationTimeoutError":
       return new PreviewAutomationTimeoutError({
-        ...context,
-        ...remoteDiagnostics,
-      });
-    case "PreviewAutomationControlInterruptedError":
-      return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
       });

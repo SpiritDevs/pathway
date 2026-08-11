@@ -7,16 +7,12 @@ import { useEffect, useState } from "react";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 
-import { agentBrowserCursorOpacity, type BrowserController } from "./agentBrowserCursorLogic";
+import { agentBrowserCursorOpacity } from "./agentBrowserCursorLogic";
 
 const CURSOR_ACTIVE_MS = 700;
 
-export function AgentBrowserCursor(props: {
-  readonly tabId: string;
-  readonly zoomFactor: number;
-  readonly controller: BrowserController;
-}) {
-  const { tabId, zoomFactor, controller } = props;
+export function AgentBrowserCursor(props: { readonly tabId: string; readonly zoomFactor: number }) {
+  const { tabId, zoomFactor } = props;
   const event = useBrowserPointerStore((state) => state.byTabId[tabId] ?? null);
   const content = useBrowserSurfaceStore((state) => state.byTabId[tabId]?.content ?? null);
 
@@ -28,7 +24,6 @@ export function AgentBrowserCursor(props: {
       event={event}
       content={content}
       zoomFactor={zoomFactor}
-      controller={controller}
     />
   );
 }
@@ -43,9 +38,8 @@ function AgentBrowserCursorEvent(props: {
     readonly scrollTop: number;
   } | null;
   readonly zoomFactor: number;
-  readonly controller: BrowserController;
 }) {
-  const { event, content, zoomFactor, controller } = props;
+  const { event, content, zoomFactor } = props;
   const [active, setActive] = useState(true);
 
   useEffect(() => {
@@ -57,7 +51,7 @@ function AgentBrowserCursorEvent(props: {
     <div
       className="pointer-events-none absolute left-0 top-0 z-40 transition-[transform,opacity] duration-150 ease-out motion-reduce:transition-none"
       style={{
-        opacity: agentBrowserCursorOpacity(active, controller),
+        opacity: agentBrowserCursorOpacity(active),
         transform: `translate3d(${event.x * zoomFactor * (content?.scale ?? 1) + (content?.x ?? 0) - (content?.scrollLeft ?? 0)}px, ${event.y * zoomFactor * (content?.scale ?? 1) + (content?.y ?? 0) - (content?.scrollTop ?? 0)}px, 0)`,
       }}
       aria-hidden="true"
