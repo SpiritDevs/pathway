@@ -98,6 +98,7 @@ import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
 import { EnvironmentRuntimeControls } from "./EnvironmentRuntimeControls";
+import { EnvironmentProviderUsage, supportsProviderUsage } from "./usage/ProviderUsage";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -1017,6 +1018,12 @@ export default function GitActionsControl({
   const activeServerThread = useThread(activeThreadRef, {
     waitForShell: activeDraftThread !== null,
   });
+  const activeProviderInstanceId =
+    activeServerThread?.session?.providerInstanceId ??
+    activeServerThread?.modelSelection.instanceId;
+  const activeProvider = serverConfig?.providers.find(
+    (provider) => provider.instanceId === activeProviderInstanceId,
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
@@ -1963,6 +1970,14 @@ export default function GitActionsControl({
               <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Actions</p>
               {projectActions}
             </section>
+          ) : null}
+
+          {activeEnvironmentId && supportsProviderUsage(activeProvider) ? (
+            <EnvironmentProviderUsage
+              environmentId={activeEnvironmentId}
+              provider={activeProvider}
+              enabled={actionCardOpen || (allowPersistentCard && !persistentCardDismissed)}
+            />
           ) : null}
 
           {activeThreadRef ? (

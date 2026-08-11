@@ -20,6 +20,7 @@ import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadc
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_COLOR, PROVIDER_LABEL, PROVIDER_MARK, PROVIDER_ORDER } from "./usageProviders";
+import { ProviderUsageSettingsSection } from "./ProviderUsage";
 
 const WINDOW_OPTIONS = [
   { days: 7, label: "7 days" },
@@ -92,10 +93,15 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-6">
+          <ProviderUsageSettingsSection />
+
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <p className="text-sm text-muted-foreground">
-              {formatDayShort(window.sinceDay)} to {formatDayShort(window.untilDay)}
-            </p>
+            <div>
+              <h2 className="text-sm font-medium text-foreground">Historical activity</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {formatDayShort(window.sinceDay)} to {formatDayShort(window.untilDay)}
+              </p>
+            </div>
             <div className="flex items-center gap-2">
               <div className="flex overflow-hidden rounded-md border border-border">
                 {WINDOW_OPTIONS.map((option) => (
