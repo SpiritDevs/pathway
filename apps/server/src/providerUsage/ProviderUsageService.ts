@@ -370,8 +370,13 @@ export function parseCodexUsage(input: {
       windowDurationMins: seconds === undefined ? fallbackDurationMins : Math.round(seconds / 60),
     });
   };
-  pushWindow("5h", rateLimit?.primary_window, "x-codex-primary-used-percent", 300);
-  pushWindow("Weekly", rateLimit?.secondary_window, "x-codex-secondary-used-percent", 10_080);
+  const primaryWindow = asRecord(rateLimit?.primary_window);
+  pushWindow(
+    "Weekly",
+    primaryWindow ?? rateLimit?.secondary_window,
+    primaryWindow ? "x-codex-primary-used-percent" : "x-codex-secondary-used-percent",
+    10_080,
+  );
 
   const usageLines: ServerProviderUsageLine[] = [];
   const credits = asRecord(root?.credits);

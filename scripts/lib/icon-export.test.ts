@@ -1,8 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { PNG } from "pngjs";
-
-import { centerPngOnTransparentCanvas, encodePngIco, readPngDimensions } from "./icon-export.ts";
+import { encodePngIco, readPngDimensions } from "./icon-export.ts";
 
 const pngHeader = (width: number, height: number) => {
   const contents = Buffer.alloc(24);
@@ -16,17 +14,6 @@ const pngHeader = (width: number, height: number) => {
 describe("icon export", () => {
   it("reads dimensions from a PNG IHDR chunk", () => {
     assert.deepEqual(readPngDimensions(pngHeader(1024, 512)), { width: 1024, height: 512 });
-  });
-
-  it("centers a PNG on a transparent square canvas", () => {
-    const source = new PNG({ width: 2, height: 2 });
-    source.data.fill(255);
-
-    const centered = PNG.sync.read(centerPngOnTransparentCanvas(PNG.sync.write(source), 4));
-
-    assert.deepEqual({ width: centered.width, height: centered.height }, { width: 4, height: 4 });
-    assert.equal(centered.data[3], 0);
-    assert.equal(centered.data[(1 * centered.width + 1) * 4 + 3], 255);
   });
 
   it("encodes PNG renditions into an ICO directory", () => {

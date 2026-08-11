@@ -14,13 +14,14 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "~/lib/utils";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
-import { useEnvironments } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { SettingsSection } from "../settings/settingsLayout";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import {
   deriveProviderUsageLimits,
   selectPrimaryProviderUsageLimit,
+  shouldCollapseProviderUsage,
   type ProviderUsageDisplayLimit,
 } from "./providerUsageDisplay";
 
@@ -67,15 +68,22 @@ const TONE_CLASS_NAME: Record<ProviderUsageDisplayLimit["tone"], string> = {
 function UsageLimitRow({
   limit,
   compact = false,
+  resetInline = false,
 }: {
   limit: ProviderUsageDisplayLimit;
   compact?: boolean;
+  resetInline?: boolean;
 }) {
   return (
     <div className={cn("space-y-1.5", compact && "space-y-1")}>
       <div className="flex items-baseline justify-between gap-3 text-xs">
         <span className="font-medium text-foreground">{limit.window}</span>
-        <span className="tabular-nums text-muted-foreground">{limit.remainingLabel}</span>
+        <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-muted-foreground">
+          <span>{limit.remainingLabel}</span>
+          {resetInline && limit.resetLabel ? (
+            <span className="text-[11px]">{limit.resetLabel}</span>
+          ) : null}
+        </span>
       </div>
       <div className={cn("h-1.5 overflow-hidden rounded-full bg-muted", compact && "h-1")}>
         <div
@@ -88,7 +96,7 @@ function UsageLimitRow({
           style={{ width: `${limit.remainingPercent}%` }}
         />
       </div>
-      {limit.resetLabel ? (
+      {!resetInline && limit.resetLabel ? (
         <p className="text-right text-[11px] tabular-nums text-muted-foreground">
           {limit.resetLabel}
         </p>
@@ -166,6 +174,7 @@ export function EnvironmentProviderUsage({
     enabled,
   });
   const primary = selectPrimaryProviderUsageLimit(usage.data);
+  const limits = usage.data?.status === "ok" ? deriveProviderUsageLimits(usage.data.limits) : [];
   const summary =
     primary?.remainingLabel ??
     (usage.isPending
@@ -175,6 +184,52 @@ export function EnvironmentProviderUsage({
         : usage.data?.status === "error" || usage.error
           ? "Unavailable"
           : "Usage");
+
+  if (!shouldCollapseProviderUsage(limits)) {
+    return (
+      <section aria-label="Provider usage" className="border-t border-border/70 py-2">
+        <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
+        {primary ? (
+          <div className="flex items-start gap-2 px-2 py-1.5">
+            <ProviderInstanceIcon
+              driverKind={provider.driver}
+              displayName={
+                provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
+              }
+              accentColor={provider.accentColor}
+              className="mt-0.5 size-4"
+              iconClassName="size-4"
+            />
+            <div className="min-w-0 flex-1">
+              <UsageLimitRow limit={primary} compact resetInline />
+              {usage.data?.status === "ok" && usage.data.usageLines.length > 0 ? (
+                <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
+                  {usage.data.usageLines.map((line) => (
+                    <div
+                      key={`${line.label}:${line.value}`}
+                      className="flex items-baseline justify-between gap-3 text-xs"
+                    >
+                      <span className="text-muted-foreground">{line.label}</span>
+                      <span className="text-right tabular-nums text-foreground">{line.value}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <div className="px-2 py-1.5">
+            <ProviderUsageDetails
+              snapshot={usage.data}
+              loading={usage.isPending}
+              error={usage.error}
+              compact
+            />
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section aria-label="Provider usage" className="border-t border-border/70 py-2">
@@ -197,6 +252,11 @@ export function EnvironmentProviderUsage({
             iconClassName="size-4"
           />
           <span className="min-w-0 flex-1 truncate">{summary}</span>
+          {primary?.resetLabel ? (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {primary.resetLabel}
+            </span>
+          ) : null}
           <ChevronDownIcon
             className={cn(
               "size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
@@ -316,13 +376,9 @@ function ProviderUsageCard({
 
 function EnvironmentProviderUsageCards({
   environmentId,
-  label,
-  showEnvironmentLabel,
   refreshVersion,
 }: {
   environmentId: EnvironmentId;
-  label: string;
-  showEnvironmentLabel: boolean;
   refreshVersion: number;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
@@ -333,9 +389,6 @@ function EnvironmentProviderUsageCards({
 
   return (
     <div className="space-y-3">
-      {showEnvironmentLabel ? (
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      ) : null}
       {providers === null ? (
         <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground">
           Loading provider accounts…
@@ -356,21 +409,17 @@ function EnvironmentProviderUsageCards({
   );
 }
 
-export function ProviderUsageSettingsSection() {
-  const { environments } = useEnvironments();
+export function ProviderUsageSettingsSection({
+  environmentId,
+}: {
+  readonly environmentId: EnvironmentId;
+}) {
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   return (
-    <section className="space-y-4" aria-labelledby="provider-usage-heading">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 id="provider-usage-heading" className="text-sm font-medium text-foreground">
-            Provider limits
-          </h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Live subscription quota from each provider account on its environment.
-          </p>
-        </div>
+    <SettingsSection
+      title="Provider limits"
+      headerAction={
         <button
           type="button"
           className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -379,23 +428,24 @@ export function ProviderUsageSettingsSection() {
           <RefreshCwIcon className="size-3.5" aria-hidden="true" />
           Refresh
         </button>
-      </div>
-      <div className="space-y-5">
-        {environments.map((environment) => (
+      }
+    >
+      <div className="space-y-4 px-3 sm:px-4">
+        <p className="text-xs text-muted-foreground">
+          Live subscription quota from each provider account on this environment.
+        </p>
+        <div className="space-y-5">
           <EnvironmentProviderUsageCards
-            key={environment.environmentId}
-            environmentId={environment.environmentId}
-            label={environment.label}
-            showEnvironmentLabel={environments.length > 1}
+            environmentId={environmentId}
             refreshVersion={refreshVersion}
           />
-        ))}
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Pathway reads the CLI&apos;s stored sign-in on this environment and sends only the quota
+          summary to this client. Credentials stay on that environment.
+        </p>
       </div>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Pathway reads the CLI&apos;s stored sign-in on each environment and sends only the quota
-        summary to this client. Credentials stay on that environment.
-      </p>
-    </section>
+    </SettingsSection>
   );
 }
 

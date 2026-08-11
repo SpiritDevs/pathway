@@ -19,6 +19,11 @@ Exporting requires Icon Composer 2 or newer on macOS. The script selects the new
 
 Icon Composer's command-line exporter does not expose the `macOS pre-Tahoe` preset. A plain command-line `macOS` export is full bleed and is not suitable for the desktop app, so the export script intentionally leaves the tracked macOS PNGs unchanged and prints a reminder after every run.
 
+The production Pathway icon is already a finished PNG, so the exporter reuses its full-size
+1024×1024 rendition for macOS. Current macOS releases apply the platform icon shape themselves;
+adding the legacy 100-pixel safe-area inset would make the artwork appear undersized inside that
+system container.
+
 After changing a development or preview Icon Composer project, open it in Icon Composer and export
 the macOS PNG with exactly these settings:
 

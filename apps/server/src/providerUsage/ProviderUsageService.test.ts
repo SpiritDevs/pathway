@@ -8,15 +8,14 @@ const instanceId = ProviderInstanceId.make("usage_test");
 const nowMs = Date.parse("2026-08-12T00:00:00.000Z");
 
 describe("provider usage snapshots", () => {
-  it("maps Codex rolling windows and credits", () => {
+  it("maps the Codex weekly limit and credits", () => {
     const result = parseCodexUsage({
       instanceId,
       nowMs,
       json: {
         plan_type: "chatgpt_plus",
         rate_limit: {
-          primary_window: { used_percent: 22, reset_after_seconds: 3_600 },
-          secondary_window: { used_percent: 64, reset_at: 1_786_579_200 },
+          primary_window: { used_percent: 22, reset_at: 1_786_579_200 },
         },
         credits: { has_credits: true, balance: 4.5 },
       },
@@ -27,10 +26,7 @@ describe("provider usage snapshots", () => {
       provider: "codex",
       status: "ok",
       planName: "Chatgpt Plus",
-      limits: [
-        { window: "5h", usedPercent: 22, windowDurationMins: 300 },
-        { window: "Weekly", usedPercent: 64, windowDurationMins: 10_080 },
-      ],
+      limits: [{ window: "Weekly", usedPercent: 22, windowDurationMins: 10_080 }],
       usageLines: [{ label: "Credits", value: "$4.50 remaining" }],
     });
   });

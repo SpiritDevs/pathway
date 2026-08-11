@@ -60,3 +60,9 @@ export function selectPrimaryProviderUsageLimit(
     null,
   );
 }
+
+export function shouldCollapseProviderUsage(
+  limits: ReadonlyArray<ProviderUsageDisplayLimit>,
+): boolean {
+  return limits.length > 1;
+}

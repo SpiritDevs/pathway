@@ -70,6 +70,7 @@ import {
 } from "../ui/number-field";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ProviderUsageSettingsSection } from "../usage/ProviderUsage";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
@@ -888,6 +889,8 @@ export function EnvironmentProviderSettings({
           })}
         </div>
       </SettingsSection>
+
+      <ProviderUsageSettingsSection environmentId={environmentId} />
 
       {isAddInstanceDialogOpen ? (
         <AddProviderInstanceDialog

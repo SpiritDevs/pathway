@@ -1,5 +1,3 @@
-import { PNG } from "pngjs";
-
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export const WINDOWS_ICON_SIZES = [16, 24, 32, 48, 64, 128, 256] as const;
@@ -25,19 +23,6 @@ export function readPngDimensions(contents: Buffer): {
     width: contents.readUInt32BE(16),
     height: contents.readUInt32BE(20),
   };
-}
-
-export function centerPngOnTransparentCanvas(contents: Buffer, canvasSize: number): Buffer {
-  const source = PNG.sync.read(contents);
-  if (!Number.isInteger(canvasSize) || canvasSize < source.width || canvasSize < source.height) {
-    throw new Error("PNG canvas must be an integer at least as large as the source image.");
-  }
-
-  const output = new PNG({ width: canvasSize, height: canvasSize });
-  const x = Math.floor((canvasSize - source.width) / 2);
-  const y = Math.floor((canvasSize - source.height) / 2);
-  PNG.bitblt(source, output, 0, 0, source.width, source.height, x, y);
-  return PNG.sync.write(output);
 }
 
 /** Encodes PNG renditions directly into a modern, multi-resolution ICO file. */

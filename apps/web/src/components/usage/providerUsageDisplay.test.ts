@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { deriveProviderUsageLimits, formatProviderUsageReset } from "./providerUsageDisplay";
+import {
+  deriveProviderUsageLimits,
+  formatProviderUsageReset,
+  shouldCollapseProviderUsage,
+} from "./providerUsageDisplay";
 
 describe("provider usage display", () => {
   it("turns used quota into clamped remaining quota and warning tones", () => {
@@ -25,5 +29,19 @@ describe("provider usage display", () => {
     expect(
       formatProviderUsageReset("2026-08-14T12:00:00.000Z", Date.parse("2026-08-12T00:00:00Z")),
     ).toBe("Resets in 3d");
+  });
+
+  it("only offers disclosure when there is more than one quota bar", () => {
+    const oneLimit = deriveProviderUsageLimits([{ window: "Weekly", usedPercent: 5 }], 0);
+    const twoLimits = deriveProviderUsageLimits(
+      [
+        { window: "5h", usedPercent: 5 },
+        { window: "Weekly", usedPercent: 10 },
+      ],
+      0,
+    );
+
+    expect(shouldCollapseProviderUsage(oneLimit)).toBe(false);
+    expect(shouldCollapseProviderUsage(twoLimits)).toBe(true);
   });
 });

@@ -10,13 +10,12 @@ panel.
 When the current thread has active terminal sessions, the **Terminals** section lists them under
 **Running terminals**. Choose a terminal to return to it in the terminal drawer or right panel.
 
-When the active provider supports live quota reporting, **Usage** shows the most constrained
-remaining allowance. Expand it to see each provider window, reset time, and any credit balance
-reported by that provider.
+When the active provider supports live quota reporting, **Usage** shows its remaining allowance and
+reset time. Providers with multiple limits can be expanded to see every window and any credit
+balance reported by that provider.
 
-The full **Settings → Usage** page shows the same provider limits for every supported account on
-each connected environment, alongside Pathway's historical token and cost report. Provider
-credentials remain on the environment that owns them.
+The bottom of **Settings → Providers** shows the same limits for every supported account on the
+selected environment. Provider credentials remain on the environment that owns them.
 
 For remote projects, both lists describe processes running in the remote environment rather than on
 the device displaying Pathway.

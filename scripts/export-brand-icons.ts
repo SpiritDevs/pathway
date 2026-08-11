@@ -14,12 +14,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
-import {
-  centerPngOnTransparentCanvas,
-  encodePngIco,
-  readPngDimensions,
-  WINDOWS_ICON_SIZES,
-} from "./lib/icon-export.ts";
+import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -650,10 +645,9 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
   });
 
   const ios = yield* render("iOS", 1024);
-  const macos =
-    variant.source.type === "png"
-      ? centerPngOnTransparentCanvas(yield* render("iOS", 824), 1024)
-      : undefined;
+  // Current macOS applies its own app-icon shape. Reuse the full-size PNG so
+  // the artwork is not inset a second time inside the system container.
+  const macos = variant.source.type === "png" ? ios : undefined;
   const icoRenditions = yield* Effect.forEach(
     WINDOWS_ICON_SIZES,
     (size) => render("iOS", size).pipe(Effect.map((contents) => ({ size, contents }))),
