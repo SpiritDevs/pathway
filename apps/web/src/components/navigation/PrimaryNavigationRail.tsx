@@ -1,9 +1,9 @@
 import {
   BotIcon,
   CalendarDaysIcon,
-  CircleDotIcon,
   GitPullRequestIcon,
   LayoutDashboardIcon,
+  ListTodoIcon,
   MailIcon,
   MessagesSquareIcon,
   PanelLeftCloseIcon,
@@ -314,7 +314,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     },
     {
       destination: "issues",
-      icon: CircleDotIcon,
+      icon: ListTodoIcon,
       label: "Issues",
       onNavigate: navigateToIssues,
     },

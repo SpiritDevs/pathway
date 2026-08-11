@@ -1,4 +1,4 @@
-import { CircleDotIcon } from "lucide-react";
+import { ListTodoIcon } from "lucide-react";
 
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
@@ -11,7 +11,7 @@ export function IssuesSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel className="gap-2">
-            <CircleDotIcon />
+            <ListTodoIcon />
             Issue tracker
           </SidebarGroupLabel>
           <p className="px-2 py-3 text-xs leading-relaxed text-sidebar-muted-foreground/70">

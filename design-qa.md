@@ -45,6 +45,7 @@
 - The compact Git action group reserves an additional 8 px before the adjacent panel controls without changing spacing inside the segmented control.
 - The closed thread header uses the same 8 px gap between Git actions, Terminal, and Right panel controls.
 - A single-project sidebar shows that project directly with its settings icon; the All projects scope menu only appears when multiple projects are available.
+- Issues uses a list-and-tasks icon across primary navigation, its contextual sidebar, and the placeholder view to represent a collection of issue rows rather than one issue.
 - Panel layout controls now retain the same 52 px titlebar centering and one-pixel optical end inset in closed, fixed, and floating states.
 - The floating shell now clips its square panel child to the same rounded corners and uses the fixed panel's border and shadow directly, without generic inset-sheet overrides.
 - The card anchors to the rounded chat frame's right edge instead of the Git button group's right edge.
