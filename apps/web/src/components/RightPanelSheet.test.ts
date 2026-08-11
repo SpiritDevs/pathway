@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveRightPanelSheetMaxWidth } from "./RightPanelSheet";
-import { shouldPresentRightPanelAsSheet } from "../rightPanelLayout";
+import { shouldMountRightPanelSheet, shouldPresentRightPanelAsSheet } from "../rightPanelLayout";
 
 describe("right panel presentation", () => {
   it("uses the floating sheet when a desktop panel is popped out", () => {
@@ -20,6 +20,15 @@ describe("right panel presentation", () => {
     expect(shouldPresentRightPanelAsSheet({ viewportRequiresSheet: false, poppedOut: false })).toBe(
       false,
     );
+  });
+
+  it("keeps a sheet mounted while closed so its ending transition can finish", () => {
+    expect(shouldMountRightPanelSheet({ usesSheet: true, hasContent: true })).toBe(true);
+  });
+
+  it("does not mount a sheet when the layout is inline or has no content", () => {
+    expect(shouldMountRightPanelSheet({ usesSheet: false, hasContent: true })).toBe(false);
+    expect(shouldMountRightPanelSheet({ usesSheet: true, hasContent: false })).toBe(false);
   });
 });
 

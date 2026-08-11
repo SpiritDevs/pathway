@@ -81,6 +81,7 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+  shouldMountRightPanelSheet,
   shouldPresentRightPanelAsSheet,
 } from "~/rightPanelLayout";
 
@@ -1129,10 +1130,13 @@ function PullRequestsRouteView() {
     rightPanelState.isOpen &&
     activePullRequestSurface !== null &&
     pullRequestEnvironmentId !== null;
+  const panelPullRequestSurface = rightPanelUsesSheet
+    ? selectedPullRequestSurface
+    : activePullRequestSurface;
   const pullRequestPanelDefaultWidth =
     typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2);
   const renderPullRequestPanel = (mode: "inline" | "sheet", layoutControls: ReactNode) =>
-    activePullRequestSurface && pullRequestEnvironmentId !== null ? (
+    panelPullRequestSurface && pullRequestEnvironmentId !== null ? (
       <RightPanelTabs
         mode={mode}
         layoutControls={layoutControls}
@@ -1145,7 +1149,7 @@ function PullRequestsRouteView() {
             }
           : {})}
         surfaces={rightPanelState.surfaces}
-        activeSurfaceId={activePullRequestSurface.id}
+        activeSurfaceId={panelPullRequestSurface.id}
         pendingSurfaceIds={EMPTY_PENDING_SURFACES}
         previewSessions={EMPTY_PREVIEW_SESSIONS}
         terminalLabelsById={EMPTY_TERMINAL_LABELS}
@@ -1179,12 +1183,12 @@ function PullRequestsRouteView() {
         pullRequestStatuses={pullRequestTabStatuses}
       >
         <PullRequestDetailPanel
-          key={activePullRequestSurface.id}
+          key={panelPullRequestSurface.id}
           environmentId={pullRequestEnvironmentId}
           reference={{
-            projectId: activePullRequestSurface.projectId as ProjectId,
-            repository: activePullRequestSurface.repository,
-            number: activePullRequestSurface.number,
+            projectId: panelPullRequestSurface.projectId as ProjectId,
+            repository: panelPullRequestSurface.repository,
+            number: panelPullRequestSurface.number,
           }}
           refreshToken={detailRefreshToken}
           // Merging, closing or reopening changes the row this panel was opened from, so
@@ -1211,9 +1215,12 @@ function PullRequestsRouteView() {
             {renderPullRequestPanel("inline", openPanelControls)}
           </InlineRightPanelPortal>
         ) : null}
-        {rightPanelUsesSheet && rightPanelVisible ? (
+        {shouldMountRightPanelSheet({
+          usesSheet: rightPanelUsesSheet,
+          hasContent: selectedPullRequestSurface !== null && pullRequestEnvironmentId !== null,
+        }) ? (
           <RightPanelSheet
-            open
+            open={rightPanelVisible}
             onClose={toggleRightPanel}
             widthStorageKey={PULL_REQUEST_PANEL_WIDTH_STORAGE_KEY}
             defaultWidth={pullRequestPanelDefaultWidth}

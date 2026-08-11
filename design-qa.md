@@ -25,6 +25,21 @@
 - That desktop-only Dock panel action is rendered directly in the popped-out sheet header; responsive tablet and smaller sheets retain their existing header controls without the dock action.
 - Source Control pull-request details now use the same inline, explicit desktop pop-out, dock-back, and automatic smaller-tablet sheet model, while retaining their own persisted panel width.
 - The closed Source Control panel toggle now uses the same shared titlebar-control inset and vertical centering as the sheet header, while the search row reserves its footprint.
+- Below the desktop rail breakpoint, global navigation rests as an empty 20 px frosted capsule within a safe-area-aware 44 px target; it contains no collapsed icons or dark handle line, expands immediately on pointer hover or touch press, retains active route state, and shares semantic light/dark theme tokens.
+- The expanded mobile toolbar has no dedicated hide button; pointer exit, outside press, route selection, and Escape provide the existing close paths without adding another trailing control.
+- The expanded mobile toolbar shrink-wraps its centered icon group and caps itself at the available viewport width, switching to horizontal scrolling only when its controls no longer fit.
+- The collapsed 20 px navigation capsule is vertically centered within the reserved 44 px mobile header area, while its interaction target remains full-sized.
+- Hover or touch expansion morphs the collapsed capsule into the full toolbar using transform and opacity only; the starting horizontal and vertical scales match the capsule footprint, and reduced-motion users receive the state change without animation.
+- The shared mobile workspace body begins below a 44 px header reserve, while desktop continues to use the existing workspace top bar without additional margin.
+- The independently fixed left-sheet toggle receives the same 44 px mobile header offset as the workspace body, keeping it centered in the body titlebar while retaining its desktop position.
+- The shared mobile content frame clips to rounded top corners beneath the reserved header, while desktop retains its existing fully rounded frame.
+- The mobile content frame casts a restrained upward shadow from its rounded top edge in both themes, while desktop retains the standard card shadow.
+- Placeholder workspace headers now use the shared collapsed-sidebar titlebar inset, keeping Dashboard, Issues, Calendar, Email, and Orchestrator titles clear of the fixed left-sheet toggle.
+- On phone widths, both left and right sheets fill the viewport width, begin below the shared 44 px header reserve, consume the remaining height, and use the same rounded top corners as the main content frame; tablet and desktop sizing remains unchanged.
+- Mobile sheets enter from their owning edge over 240 ms with exponential deceleration and exit in 150 ms; larger right-panel sheets retain their shorter travel, and reduced-motion users receive an immediate transition.
+- The mobile sidebar sheet clips its artwork and content to the shared rounded top corners, preventing the stage background from visually flattening the radius.
+- The mobile left sheet remains mounted through Base UI's ending state, allowing its full-width exit translation to complete before the closed viewport is hidden.
+- Right-panel callers now keep the controlled sheet mounted whenever content exists and toggle its `open` state instead of conditionally creating and destroying an already-open sheet, restoring both starting and ending animations in chat and Source Control.
 - Panel layout controls now retain the same 52 px titlebar centering and one-pixel optical end inset in closed, fixed, and floating states.
 - The floating shell now clips its square panel child to the same rounded corners and uses the fixed panel's border and shadow directly, without generic inset-sheet overrides.
 - The card anchors to the rounded chat frame's right edge instead of the Git button group's right edge.

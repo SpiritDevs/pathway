@@ -123,6 +123,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+  shouldMountRightPanelSheet,
   shouldPresentRightPanelAsSheet,
 } from "../rightPanelLayout";
 import {
@@ -6583,8 +6584,11 @@ function ChatViewContent(props: ChatViewProps) {
           ) : null}
         </InlineRightPanelPortal>
       ) : null}
-      {rightPanelUsesSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelSheet open onClose={closePreviewPanel}>
+      {shouldMountRightPanelSheet({
+        usesSheet: rightPanelUsesSheet,
+        hasContent: activeThreadRef !== null,
+      }) ? (
+        <RightPanelSheet open={rightPanelOpen} onClose={closePreviewPanel}>
           <RightPanelTabs
             mode="sheet"
             layoutControls={rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}

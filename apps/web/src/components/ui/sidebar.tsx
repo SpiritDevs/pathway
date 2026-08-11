@@ -25,7 +25,7 @@ import * as Schema from "effect/Schema";
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const SIDEBAR_WIDTH = "16rem";
-const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
+const SIDEBAR_WIDTH_MOBILE = "100vw";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
 
@@ -234,14 +234,20 @@ function Sidebar({
         <Sheet onOpenChange={setOpenMobile} open={openMobile} {...props}>
           <SheetPopup
             className={cn(
-              "w-(--sidebar-width) max-w-none bg-sidebar surface-grain p-0 text-sidebar-foreground",
+              "w-(--sidebar-width) max-w-none overflow-hidden rounded-t-xl bg-sidebar surface-grain p-0 text-sidebar-foreground duration-[240ms] ease-[cubic-bezier(0.16,1,0.3,1)] data-ending-style:duration-150 motion-reduce:transition-none motion-reduce:data-ending-style:translate-x-0 motion-reduce:data-ending-style:opacity-100 motion-reduce:data-starting-style:translate-x-0 motion-reduce:data-starting-style:opacity-100",
+              side === "left" &&
+                "data-ending-style:-translate-x-full data-starting-style:-translate-x-full",
+              side === "right" &&
+                "data-ending-style:translate-x-full data-starting-style:translate-x-full",
               className,
             )}
             data-mobile="true"
             data-sidebar="sidebar"
             data-slot="sidebar"
+            keepMounted
             showCloseButton={false}
             side={side}
+            viewportClassName="pt-11"
             style={
               {
                 "--sidebar-width": SIDEBAR_WIDTH_MOBILE,

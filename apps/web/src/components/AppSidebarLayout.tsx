@@ -110,7 +110,7 @@ function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean })
 
   return (
     <div
-      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 flex h-[var(--workspace-topbar-height)] items-center transition-[left] duration-200 ease-linear motion-reduce:transition-none md:left-[calc(var(--primary-navigation-rail-width)+var(--workspace-controls-left))] md:top-11"
+      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[calc(var(--workspace-controls-top)+2.75rem)] z-50 flex h-[var(--workspace-topbar-height)] items-center transition-[left] duration-200 ease-linear motion-reduce:transition-none md:top-11 md:left-[calc(var(--primary-navigation-rail-width)+var(--workspace-controls-left))]"
       data-sidebar-control=""
     >
       <Tooltip>
@@ -232,12 +232,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar surface-grain">
         <WorkspaceTopBar />
         <div
-          className="flex min-h-0 min-w-0 flex-1 gap-2 md:mr-2 md:mb-2"
+          className="mt-11 flex min-h-0 min-w-0 flex-1 gap-2 md:mt-0 md:mr-2 md:mb-2"
           data-app-workspace-row=""
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2" data-app-primary-column="">
             <div
-              className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5"
+              className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-t-xl bg-background shadow-[0_-4px_12px_rgb(0_0_0/0.06)] md:rounded-xl md:border md:border-sidebar-border md:shadow-sm/5 dark:shadow-[0_-4px_12px_rgb(0_0_0/0.24)] dark:md:shadow-sm/5"
               data-app-content-frame=""
             >
               {shouldRenderSecondarySidebar ? (
