@@ -39,6 +39,40 @@ export type PrimaryNavigationDestination =
   | "orchestrator"
   | "settings";
 
+export type RememberedThreadRoute =
+  | { kind: "draft"; draftId: string }
+  | { kind: "thread"; environmentId: string; threadId: string };
+
+function decodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRememberedThreadRoute(
+  pathname: string,
+  previous: RememberedThreadRoute | null,
+): RememberedThreadRoute | null {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] !== "threads") return previous;
+  if (segments.length === 1) return null;
+
+  if (segments.length === 3 && segments[1] === "draft") {
+    const draftId = decodePathSegment(segments[2] ?? "");
+    return draftId ? { kind: "draft", draftId } : null;
+  }
+
+  if (segments.length === 3) {
+    const environmentId = decodePathSegment(segments[1] ?? "");
+    const threadId = decodePathSegment(segments[2] ?? "");
+    return environmentId && threadId ? { kind: "thread", environmentId, threadId } : null;
+  }
+
+  return null;
+}
+
 export function resolvePrimaryNavigationDestination(
   pathname: string,
 ): PrimaryNavigationDestination {
@@ -273,11 +307,39 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const activeDestination = resolvePrimaryNavigationDestination(pathname);
+  const rememberedThreadRouteRef = useRef<RememberedThreadRoute | null>(
+    resolveRememberedThreadRoute(pathname, null),
+  );
+
+  useEffect(() => {
+    rememberedThreadRouteRef.current = resolveRememberedThreadRoute(
+      pathname,
+      rememberedThreadRouteRef.current,
+    );
+  }, [pathname]);
 
   const navigateToDashboard = useCallback(() => {
     void navigate({ to: "/" });
   }, [navigate]);
   const navigateToThreads = useCallback(() => {
+    const rememberedRoute = rememberedThreadRouteRef.current;
+    if (rememberedRoute?.kind === "thread") {
+      void navigate({
+        to: "/threads/$environmentId/$threadId",
+        params: {
+          environmentId: rememberedRoute.environmentId,
+          threadId: rememberedRoute.threadId,
+        },
+      });
+      return;
+    }
+    if (rememberedRoute?.kind === "draft") {
+      void navigate({
+        to: "/threads/draft/$draftId",
+        params: { draftId: rememberedRoute.draftId },
+      });
+      return;
+    }
     void navigate({ to: "/threads" });
   }, [navigate]);
   const navigateToIssues = useCallback(() => {

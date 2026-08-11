@@ -1958,7 +1958,7 @@ export default function GitActionsControl({
           ) : null}
 
           {projectActions ? (
-            <section aria-label="Project actions" className="border-t border-border/70 pt-2">
+            <section aria-label="Project actions" className="border-t border-border/70 py-2">
               <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Actions</p>
               {projectActions}
             </section>
