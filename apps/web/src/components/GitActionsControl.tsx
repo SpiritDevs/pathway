@@ -1775,7 +1775,7 @@ export default function GitActionsControl({
             ) : null}
           </Group>
         ) : (
-          <Group aria-label="Git actions" className="shrink-0">
+          <Group aria-label="Git actions" className="me-2 shrink-0">
             {quickActionDisabledReason ? (
               <Popover>
                 <PopoverTrigger

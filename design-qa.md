@@ -40,6 +40,9 @@
 - The mobile sidebar sheet clips its artwork and content to the shared rounded top corners, preventing the stage background from visually flattening the radius.
 - The mobile left sheet remains mounted through Base UI's ending state, allowing its full-width exit translation to complete before the closed viewport is hidden.
 - Right-panel callers now keep the controlled sheet mounted whenever content exists and toggle its `open` state instead of conditionally creating and destroying an already-open sheet, restoring both starting and ending animations in chat and Source Control.
+- The mobile contextual sidebar omits its redundant Source Control and Settings footer links; those destinations remain available in the floating primary navigation, while desktop update notices are unchanged.
+- The collapsed mobile composer sits 8 px higher above the bottom inset, while focused mobile and desktop composers retain their existing placement.
+- The compact Git action group reserves an additional 8 px before the adjacent panel controls without changing spacing inside the segmented control.
 - Panel layout controls now retain the same 52 px titlebar centering and one-pixel optical end inset in closed, fixed, and floating states.
 - The floating shell now clips its square panel child to the same rounded corners and uses the fixed panel's border and shadow directly, without generic inset-sheet overrides.
 - The card anchors to the rounded chat frame's right edge instead of the Git button group's right edge.
