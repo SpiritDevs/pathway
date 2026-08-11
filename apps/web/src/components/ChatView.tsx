@@ -6034,7 +6034,7 @@ function ChatViewContent(props: ChatViewProps) {
         // One inset in both states: the controls move between containers when
         // the right panel opens, and a different right offset made them jump
         // sideways on every toggle.
-        "workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]",
+        "workspace-titlebar-controls z-50 gap-2 [-webkit-app-region:no-drag]",
       )}
     >
       {panelToggleControls}

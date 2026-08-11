@@ -1722,6 +1722,7 @@ export default function Sidebar() {
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
+  const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
     () =>
@@ -3254,79 +3255,102 @@ export default function Sidebar() {
             </div>
             {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
-                <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
-                  <MenuTrigger
-                    render={
-                      <SidebarMenuButton
-                        aria-label="Filter threads by project"
-                        className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      />
-                    }
+                {singleProjectGroup ? (
+                  <SidebarMenuButton
+                    aria-label={`Project settings for ${singleProjectGroup.displayName}`}
+                    className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                    onClick={(event) => {
+                      void handleProjectSettings(event, singleProjectGroup);
+                    }}
                   >
-                    {scopedProjectGroup ? (
-                      <ProjectFavicon
-                        environmentId={scopedProjectGroup.environmentId}
-                        cwd={scopedProjectGroup.workspaceRoot}
-                        faviconPath={scopedProjectGroup.faviconPath}
-                        className="size-4 shrink-0"
-                      />
-                    ) : (
-                      <FolderIcon className="size-4 shrink-0" />
-                    )}
+                    <ProjectFavicon
+                      environmentId={singleProjectGroup.environmentId}
+                      cwd={singleProjectGroup.workspaceRoot}
+                      faviconPath={singleProjectGroup.faviconPath}
+                      className="size-4 shrink-0"
+                    />
                     <span className="min-w-0 flex-1 truncate">
-                      {scopedProjectGroup?.displayName ?? "All projects"}
+                      {singleProjectGroup.displayName}
                     </span>
-                    <ChevronDownIcon className="-mr-px size-4 shrink-0" />
-                  </MenuTrigger>
-                  <MenuPopup align="start" className="w-(--anchor-width)">
-                    <MenuRadioGroup
-                      value={projectScopeKey ?? "all"}
-                      onValueChange={(value) =>
-                        setProjectScopeKey(value === "all" ? null : (value as string))
+                    <SettingsIcon className="-mr-px size-4 shrink-0" />
+                  </SidebarMenuButton>
+                ) : (
+                  <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
+                    <MenuTrigger
+                      render={
+                        <SidebarMenuButton
+                          aria-label="Filter threads by project"
+                          className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        />
                       }
                     >
-                      <MenuRadioItem
-                        value="all"
-                        closeOnClick
-                        className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                      >
+                      {scopedProjectGroup ? (
+                        <ProjectFavicon
+                          environmentId={scopedProjectGroup.environmentId}
+                          cwd={scopedProjectGroup.workspaceRoot}
+                          faviconPath={scopedProjectGroup.faviconPath}
+                          className="size-4 shrink-0"
+                        />
+                      ) : (
                         <FolderIcon className="size-4 shrink-0" />
-                        <span className="min-w-0 truncate text-sm">All projects</span>
-                      </MenuRadioItem>
-                      {projectGroups.map((project) => {
-                        const scopeKey = project.projectKey;
-                        return (
-                          <MenuRadioItem
-                            key={scopeKey}
-                            value={scopeKey}
-                            closeOnClick
-                            className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                          >
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                            />
-                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            <button
-                              type="button"
-                              aria-label={`Project settings for ${project.displayName}`}
-                              title={`Project settings for ${project.displayName}`}
-                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={(event) => {
-                                void handleProjectSettings(event, project);
-                              }}
+                      )}
+                      <span className="min-w-0 flex-1 truncate">
+                        {scopedProjectGroup?.displayName ?? "All projects"}
+                      </span>
+                      <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                    </MenuTrigger>
+                    <MenuPopup align="start" className="w-(--anchor-width)">
+                      <MenuRadioGroup
+                        value={projectScopeKey ?? "all"}
+                        onValueChange={(value) =>
+                          setProjectScopeKey(value === "all" ? null : (value as string))
+                        }
+                      >
+                        <MenuRadioItem
+                          value="all"
+                          closeOnClick
+                          className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        >
+                          <FolderIcon className="size-4 shrink-0" />
+                          <span className="min-w-0 truncate text-sm">All projects</span>
+                        </MenuRadioItem>
+                        {projectGroups.map((project) => {
+                          const scopeKey = project.projectKey;
+                          return (
+                            <MenuRadioItem
+                              key={scopeKey}
+                              value={scopeKey}
+                              closeOnClick
+                              className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                             >
-                              <SettingsIcon className="size-3.5" />
-                            </button>
-                          </MenuRadioItem>
-                        );
-                      })}
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </Menu>
+                              <ProjectFavicon
+                                environmentId={project.environmentId}
+                                cwd={project.workspaceRoot}
+                                faviconPath={project.faviconPath}
+                                className="size-4 shrink-0"
+                              />
+                              <span className="min-w-0 truncate text-sm">
+                                {project.displayName}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`Project settings for ${project.displayName}`}
+                                title={`Project settings for ${project.displayName}`}
+                                className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  void handleProjectSettings(event, project);
+                                }}
+                              >
+                                <SettingsIcon className="size-3.5" />
+                              </button>
+                            </MenuRadioItem>
+                          );
+                        })}
+                      </MenuRadioGroup>
+                    </MenuPopup>
+                  </Menu>
+                )}
                 <Tooltip>
                   <TooltipTrigger
                     render={

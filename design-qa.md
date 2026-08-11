@@ -43,6 +43,8 @@
 - The mobile contextual sidebar omits its redundant Source Control and Settings footer links; those destinations remain available in the floating primary navigation, while desktop update notices are unchanged.
 - The collapsed mobile composer sits 8 px higher above the bottom inset, while focused mobile and desktop composers retain their existing placement.
 - The compact Git action group reserves an additional 8 px before the adjacent panel controls without changing spacing inside the segmented control.
+- The closed thread header uses the same 8 px gap between Git actions, Terminal, and Right panel controls.
+- A single-project sidebar shows that project directly with its settings icon; the All projects scope menu only appears when multiple projects are available.
 - Panel layout controls now retain the same 52 px titlebar centering and one-pixel optical end inset in closed, fixed, and floating states.
 - The floating shell now clips its square panel child to the same rounded corners and uses the fixed panel's border and shadow directly, without generic inset-sheet overrides.
 - The card anchors to the rounded chat frame's right edge instead of the Git button group's right edge.
