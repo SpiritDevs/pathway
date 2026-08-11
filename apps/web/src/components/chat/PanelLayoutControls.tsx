@@ -32,7 +32,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
 }: PanelLayoutControlsProps) {
   return (
     <div
-      className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
+      className="mr-px flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
       {showTerminalControl ? (
@@ -101,27 +101,27 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   );
 });
 
-export const RightPanelMaximizeControl = memo(function RightPanelMaximizeControl({
-  maximized,
+export const RightPanelPopOutControl = memo(function RightPanelPopOutControl({
+  poppedOut,
   onToggle,
 }: {
-  maximized: boolean;
+  poppedOut: boolean;
   onToggle: () => void;
 }) {
-  const label = maximized ? "Restore panel size" : "Maximize panel";
+  const label = poppedOut ? "Dock panel" : "Pop out panel";
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Toggle
             className="shrink-0 [-webkit-app-region:no-drag]"
-            pressed={maximized}
+            pressed={poppedOut}
             onPressedChange={onToggle}
             aria-label={label}
             variant="ghost"
             size="sm"
           >
-            {maximized ? (
+            {poppedOut ? (
               <Minimize2Icon className="size-3.5" />
             ) : (
               <Maximize2Icon className="size-3.5" />

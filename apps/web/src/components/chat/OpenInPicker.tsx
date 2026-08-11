@@ -1,9 +1,10 @@
 import { EditorId, type EnvironmentId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
 import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { Group, GroupSeparator } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
 import {
@@ -190,6 +191,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   openInCwd,
   compact = false,
   enableShortcut = true,
+  variant = "toolbar",
 }: {
   environmentId: EnvironmentId;
   keybindings: ResolvedKeybindingsConfig;
@@ -197,14 +199,17 @@ export const OpenInPicker = memo(function OpenInPicker({
   openInCwd: string | null;
   compact?: boolean;
   enableShortcut?: boolean;
+  variant?: "toolbar" | "card";
 }) {
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const [editorOptionsOpen, setEditorOptionsOpen] = useState(false);
   const options = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
     [availableEditors],
   );
   const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  const secondaryOptions = options.filter(({ value }) => value !== preferredEditor);
 
   const openInEditor = useCallback(
     (editorId: EditorId | null) => {
@@ -219,6 +224,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         },
       });
       setPreferredEditor(editor);
+      setEditorOptionsOpen(false);
       return result;
     },
     [environmentId, openInCwd, openInEditorMutation, preferredEditor, setPreferredEditor],
@@ -255,6 +261,77 @@ export const OpenInPicker = memo(function OpenInPicker({
     openInEditorMutation,
     preferredEditor,
   ]);
+
+  if (variant === "card") {
+    if (!primaryOption) {
+      return (
+        <p className="px-2 py-1.5 text-sm text-muted-foreground">No installed editors found</p>
+      );
+    }
+
+    const PrimaryIcon = primaryOption.Icon;
+
+    return (
+      <Collapsible open={editorOptionsOpen} onOpenChange={setEditorOptionsOpen}>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            disabled={!openInCwd}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => openInEditor(primaryOption.value)}
+          >
+            <PrimaryIcon
+              aria-hidden="true"
+              className={cn("size-4 shrink-0", getOpenInIconClass(primaryOption.kind))}
+            />
+            <span className="truncate">Open in {primaryOption.label}</span>
+            {openFavoriteEditorShortcutLabel ? (
+              <span className="ml-auto text-[11px] text-muted-foreground">
+                {openFavoriteEditorShortcutLabel}
+              </span>
+            ) : null}
+          </button>
+          {secondaryOptions.length > 0 ? (
+            <button
+              type="button"
+              data-keep-action-card-open
+              aria-label={editorOptionsOpen ? "Hide other editors" : "Show other editors"}
+              aria-expanded={editorOptionsOpen}
+              className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setEditorOptionsOpen((open) => !open)}
+            >
+              <ChevronDownIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-4 transition-transform duration-200 motion-reduce:transition-none",
+                  editorOptionsOpen && "rotate-180",
+                )}
+              />
+            </button>
+          ) : null}
+        </div>
+        <CollapsiblePanel>
+          <div className="space-y-0.5 pt-0.5">
+            {secondaryOptions.map(({ label, Icon, value, kind }) => (
+              <button
+                key={value}
+                type="button"
+                disabled={!openInCwd}
+                className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => openInEditor(value)}
+              >
+                <Icon
+                  aria-hidden="true"
+                  className={cn("size-4 shrink-0", getOpenInIconClass(kind))}
+                />
+                <span className="truncate">Open in {label}</span>
+              </button>
+            ))}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    );
+  }
 
   return (
     <Group aria-label="Open in editor">

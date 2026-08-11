@@ -8,11 +8,11 @@ import { RightPanelResizeHandle } from "./RightPanelResizeHandle";
 
 export type PreviewPanelMode = "inline" | "sheet" | "sidebar" | "embedded";
 
-const PREVIEW_PANEL_WIDTH_STORAGE_KEY = "pathway:preview-panel-width";
-const PREVIEW_PANEL_MIN_WIDTH = 360;
+export const PREVIEW_PANEL_WIDTH_STORAGE_KEY = "pathway:preview-panel-width";
+export const PREVIEW_PANEL_MIN_WIDTH = 360;
 /** Fraction of the viewport allowed, preserving the remaining space for chat. */
 const PREVIEW_PANEL_MAX_WIDTH_FRACTION = 0.7;
-const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
+export const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
 
 export function getPreviewPanelMaxWidth(viewportWidth: number): number {
   return Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
@@ -25,7 +25,6 @@ export function getPreviewPanelMaxWidth(viewportWidth: number): number {
  */
 export function PreviewPanelShell(props: {
   mode: PreviewPanelMode;
-  maximized?: boolean;
   /**
    * Overrides the localStorage key used to persist the panel width. Callers
    * embedding this shell for a different surface (e.g. the pull requests
@@ -39,7 +38,7 @@ export function PreviewPanelShell(props: {
 }) {
   const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
   const isInline = props.mode === "inline";
-  const maxWidth = useViewportClampedMaxWidth();
+  const maxWidth = usePreviewPanelMaxWidth();
   const { width, handlers } = useResizableWidth({
     storageKey: props.widthStorageKey ?? PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     defaultWidth: props.defaultWidth ?? PREVIEW_PANEL_DEFAULT_WIDTH,
@@ -53,16 +52,15 @@ export function PreviewPanelShell(props: {
       className={cn(
         "relative flex h-full min-h-0 min-w-0 flex-col self-stretch bg-background",
         isInline
-          ? props.maximized
-            ? "flex-1 rounded-xl border border-sidebar-border shadow-sm/5"
-            : "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
-          : "w-full",
+          ? "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
+          : props.mode === "sheet"
+            ? "w-full overflow-hidden rounded-[inherit]"
+            : "w-full",
       )}
-      style={isInline && !props.maximized ? { width: `${width}px` } : undefined}
+      style={isInline ? { width: `${width}px` } : undefined}
       data-preview-panel-mode={props.mode}
-      data-preview-panel-maximized={props.maximized ? "true" : "false"}
     >
-      {isInline && !props.maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
+      {isInline ? <RightPanelResizeHandle handlers={handlers} /> : null}
       {isInline ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">
           {useDragRegion ? <div className="electron-drag-region h-0 w-full" aria-hidden /> : null}
@@ -83,7 +81,7 @@ export function PreviewPanelShell(props: {
  * Resize-aware so dragging the OS window narrower re-clamps the stored
  * width on the next render (the hook's clamp picks this up automatically).
  */
-function useViewportClampedMaxWidth(): number {
+export function usePreviewPanelMaxWidth(): number {
   const [vw, setVw] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
   useEffect(() => {
     if (typeof window === "undefined") return;

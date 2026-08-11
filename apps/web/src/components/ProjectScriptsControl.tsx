@@ -52,6 +52,7 @@ interface ProjectScriptsControlProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  variant?: "toolbar" | "card";
 }
 
 export default function ProjectScriptsControl({
@@ -63,6 +64,7 @@ export default function ProjectScriptsControl({
   onAddScript,
   onUpdateScript,
   onDeleteScript,
+  variant = "toolbar",
 }: ProjectScriptsControlProps) {
   const [actionsMenuOpen, setActionsMenuOpen] = useState({
     scripts: false,
@@ -151,6 +153,78 @@ export default function ProjectScriptsControl({
       </MenuGroup>
     </>
   );
+
+  if (variant === "card") {
+    return (
+      <>
+        <div className="space-y-0.5">
+          {scripts.map((script) => {
+            const shortcutLabel = shortcutLabelForCommand(
+              keybindings,
+              commandForProjectScript(script.id),
+            );
+            return (
+              <div key={script.id} className="group/action-row flex items-center gap-1">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => onRunScript(script)}
+                >
+                  <ScriptIcon icon={script.icon} className="size-4 shrink-0" />
+                  <span className="truncate">
+                    {script.runOnWorktreeCreate ? `${script.name} (setup)` : script.name}
+                  </span>
+                  {shortcutLabel ? (
+                    <span className="ml-auto text-[11px] text-muted-foreground">
+                      {shortcutLabel}
+                    </span>
+                  ) : null}
+                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="size-7 opacity-0 transition-opacity group-hover/action-row:opacity-100 focus-visible:opacity-100"
+                  aria-label={`Edit ${script.name}`}
+                  onClick={() => openEditDialog(script)}
+                >
+                  <SettingsIcon className="size-3.5" />
+                </Button>
+              </div>
+            );
+          })}
+          {importableScripts.map((fileScript) => (
+            <button
+              key={`${fileScript.name} ${fileScript.command}`}
+              type="button"
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => void importFileScript(fileScript)}
+            >
+              <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4 shrink-0" />
+              <span className="truncate">Import {fileScript.name}</span>
+              <DownloadIcon className="ml-auto size-3.5 text-muted-foreground" />
+            </button>
+          ))}
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={openAddDialog}
+          >
+            <PlusIcon className="size-4 shrink-0 text-muted-foreground" />
+            Add action
+          </button>
+        </div>
+
+        <ProjectScriptEditorDialog
+          request={editorRequest}
+          scripts={scripts}
+          onSubmit={submitScript}
+          onDelete={(scriptId) => void onDeleteScript(scriptId)}
+          onClose={() => setEditorRequest(null)}
+        />
+      </>
+    );
+  }
 
   return (
     <>

@@ -121,7 +121,10 @@ import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import {
+  RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+  shouldPresentRightPanelAsSheet,
+} from "../rightPanelLayout";
 import {
   pullRequestSurfaceId,
   selectActiveRightPanel,
@@ -252,7 +255,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
-import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
+import { PanelLayoutControls, RightPanelPopOutControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
@@ -1374,7 +1377,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
-  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
+  const [poppedOutRightPanelThreadKey, setPoppedOutRightPanelThreadKey] = useState<string | null>(
     null,
   );
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
@@ -1639,10 +1642,14 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
   const rightPanelOpen = rightPanelState.isOpen;
-  const canMaximizeRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
-  const rightPanelMaximized =
-    canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
-  const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUseRightPanelSheet;
+  const canPopOutRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
+  const rightPanelPoppedOut =
+    canPopOutRightPanel && poppedOutRightPanelThreadKey === routeThreadKey;
+  const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
+    viewportRequiresSheet: shouldUseRightPanelSheet,
+    poppedOut: rightPanelPoppedOut,
+  });
+  const inlineRightPanelOwnsTitleBar = rightPanelOpen && !rightPanelUsesSheet;
 
   useEffect(() => {
     if (!activeThreadRef) return;
@@ -3330,7 +3337,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activePreviewState.activeTabId, activeThreadRef, createBrowserSurface, previewPanelOpen]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      setMaximizedRightPanelThreadKey(null);
+      setPoppedOutRightPanelThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
@@ -3456,12 +3463,12 @@ function ChatViewContent(props: ChatViewProps) {
     }
     useRightPanelStore.getState().toggleVisibility(activeThreadRef);
   }, [activeThreadRef, closePreviewPanel, rightPanelOpen]);
-  const toggleRightPanelMaximized = useCallback(() => {
-    if (!canMaximizeRightPanel) return;
-    setMaximizedRightPanelThreadKey((threadKey) =>
+  const toggleRightPanelPoppedOut = useCallback(() => {
+    if (!canPopOutRightPanel) return;
+    setPoppedOutRightPanelThreadKey((threadKey) =>
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
-  }, [canMaximizeRightPanel, routeThreadKey]);
+  }, [canPopOutRightPanel, routeThreadKey]);
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
@@ -6026,24 +6033,21 @@ function ChatViewContent(props: ChatViewProps) {
         // One inset in both states: the controls move between containers when
         // the right panel opens, and a different right offset made them jump
         // sideways on every toggle.
-        "workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]",
+        "workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]",
       )}
     >
-      {rightPanelOpen && !shouldUseRightPanelSheet ? (
-        <RightPanelMaximizeControl
-          maximized={rightPanelMaximized}
-          onToggle={toggleRightPanelMaximized}
-        />
-      ) : null}
       {panelToggleControls}
     </div>
   );
   const inlineRightPanelControls = (
     <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-      <RightPanelMaximizeControl
-        maximized={rightPanelMaximized}
-        onToggle={toggleRightPanelMaximized}
-      />
+      <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
+      {panelToggleControls}
+    </div>
+  );
+  const poppedOutRightPanelControls = (
+    <div className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+      <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
       {panelToggleControls}
     </div>
   );
@@ -6150,13 +6154,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
-          rightPanelMaximized ? "w-0 flex-none" : "flex-1",
-        )}
-        data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
-      >
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* Top bar */}
         <header
           data-chat-header
@@ -6548,15 +6546,11 @@ function ChatViewContent(props: ChatViewProps) {
         </TerminalCardPortal>
       </div>
 
-      {!shouldUseRightPanelSheet ? (
-        <InlineRightPanelPortal
-          fill={rightPanelMaximized}
-          open={rightPanelOpen && activeThreadRef !== null}
-        >
+      {!rightPanelUsesSheet ? (
+        <InlineRightPanelPortal open={rightPanelOpen && activeThreadRef !== null}>
           {activeThreadRef ? (
             <RightPanelTabs
               mode="inline"
-              maximized={rightPanelMaximized}
               layoutControls={inlineRightPanelControls}
               surfaces={rightPanelState.surfaces}
               activeSurfaceId={activeRightPanelSurface?.id ?? null}
@@ -6589,11 +6583,11 @@ function ChatViewContent(props: ChatViewProps) {
           ) : null}
         </InlineRightPanelPortal>
       ) : null}
-      {shouldUseRightPanelSheet && rightPanelOpen && activeThreadRef ? (
+      {rightPanelUsesSheet && rightPanelOpen && activeThreadRef ? (
         <RightPanelSheet open onClose={closePreviewPanel}>
           <RightPanelTabs
             mode="sheet"
-            layoutControls={panelToggleControls}
+            layoutControls={rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
             surfaces={rightPanelState.surfaces}
             activeSurfaceId={activeRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}

@@ -8,11 +8,9 @@ const INLINE_RIGHT_PANEL_EXIT_DURATION_MS = 180;
 
 export function InlineRightPanelPresence({
   children,
-  fill = false,
   open,
 }: {
   children: ReactNode;
-  fill?: boolean;
   open: boolean;
 }) {
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -46,24 +44,19 @@ export function InlineRightPanelPresence({
       aria-hidden={!open}
       className={cn(
         "flex min-h-0 min-w-0 transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:translate-x-0 motion-reduce:transition-none",
-        fill ? "flex-1" : "shrink-0",
+        "shrink-0",
         visible
           ? "translate-x-0 opacity-100 duration-[240ms]"
           : "pointer-events-none translate-x-4 opacity-0 duration-[180ms]",
       )}
       data-inline-right-panel-presence={visible ? "open" : "closing"}
-      data-inline-right-panel-fill={fill ? "true" : "false"}
     >
       {children}
     </div>
   );
 }
 
-export function InlineRightPanelPortal(props: {
-  children: ReactNode;
-  fill?: boolean;
-  open: boolean;
-}) {
+export function InlineRightPanelPortal(props: { children: ReactNode; open: boolean }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
 
   useEffect(() => {

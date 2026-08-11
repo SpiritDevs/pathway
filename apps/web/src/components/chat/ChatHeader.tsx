@@ -307,31 +307,38 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
-        {activeProjectScripts && (
-          <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            fileScripts={fileScripts}
-            keybindings={keybindings}
-            preferredScriptId={preferredScriptId}
-            onRunScript={onRunProjectScript}
-            onAddScript={onAddProjectScript}
-            onUpdateScript={onUpdateProjectScript}
-            onDeleteScript={onDeleteProjectScript}
-          />
-        )}
-        {showOpenInPicker && (
-          <OpenInPicker
-            environmentId={activeThreadEnvironmentId}
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            openInCwd={openInCwd}
-          />
-        )}
         {activeProjectName && (
           <GitActionsControl
             gitCwd={gitCwd}
             activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
             onOpenPullRequest={onOpenPullRequest}
+            allowPersistentCard={!rightPanelOpen}
+            projectActions={
+              activeProjectScripts ? (
+                <ProjectScriptsControl
+                  variant="card"
+                  scripts={activeProjectScripts}
+                  fileScripts={fileScripts}
+                  keybindings={keybindings}
+                  preferredScriptId={preferredScriptId}
+                  onRunScript={onRunProjectScript}
+                  onAddScript={onAddProjectScript}
+                  onUpdateScript={onUpdateProjectScript}
+                  onDeleteScript={onDeleteProjectScript}
+                />
+              ) : undefined
+            }
+            editorActions={
+              showOpenInPicker ? (
+                <OpenInPicker
+                  variant="card"
+                  environmentId={activeThreadEnvironmentId}
+                  keybindings={keybindings}
+                  availableEditors={availableEditors}
+                  openInCwd={openInCwd}
+                />
+              ) : undefined
+            }
             {...(draftId ? { draftId } : {})}
           />
         )}

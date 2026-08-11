@@ -13,9 +13,13 @@ const PRIMARY_SCRIPT: ProjectScript = {
   runOnWorktreeCreate: false,
 };
 
-function renderControl(scripts: ReadonlyArray<ProjectScript>) {
+function renderControl(
+  scripts: ReadonlyArray<ProjectScript>,
+  variant: "toolbar" | "card" = "toolbar",
+) {
   return renderToStaticMarkup(
     <ProjectScriptsControl
+      variant={variant}
       scripts={scripts}
       keybindings={EMPTY_KEYBINDINGS}
       onRunScript={() => {}}
@@ -61,5 +65,13 @@ describe("ProjectScriptsControl compact controls", () => {
     expect(html).toContain(
       'class="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5"',
     );
+  });
+
+  it("renders scripts and Add action as card rows", () => {
+    const html = renderControl([PRIMARY_SCRIPT], "card");
+
+    expect(html).toContain(">Dev</span>");
+    expect(html).toContain(">Add action</button>");
+    expect(html).not.toContain('aria-label="Script actions"');
   });
 });

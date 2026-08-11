@@ -52,11 +52,16 @@ import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhost
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { InlineRightPanelPortal } from "../components/preview/InlineRightPanelPresence";
+import { RightPanelSheet } from "../components/RightPanelSheet";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
-import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
+import {
+  PanelLayoutControls,
+  RightPanelPopOutControl,
+} from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   pullRequestSurfaceId,
   selectActiveRightPanelSurface,
@@ -74,6 +79,10 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import {
+  RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
+  shouldPresentRightPanelAsSheet,
+} from "~/rightPanelLayout";
 
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
@@ -124,6 +133,7 @@ const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
 const EMPTY_PREVIEW_SESSIONS = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
+const PULL_REQUEST_PANEL_WIDTH_STORAGE_KEY = "pathway:pull-request-panel-width";
 
 export const Route = createFileRoute("/_chat/pull-requests")({
   validateSearch: (raw: Record<string, unknown>): PullRequestsSearch => ({
@@ -200,6 +210,13 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  const [rightPanelPoppedOut, setRightPanelPoppedOut] = useState(false);
+  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const desktopRightPanelPoppedOut = rightPanelPoppedOut && !shouldUseRightPanelSheet;
+  const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
+    viewportRequiresSheet: shouldUseRightPanelSheet,
+    poppedOut: desktopRightPanelPoppedOut,
+  });
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -249,6 +266,7 @@ function PullRequestsRouteView() {
   }) => {
     if (rightPanelRef !== null) {
       // Hide the old selection while retaining peer PR tabs for parallel reviews.
+      setRightPanelPoppedOut(false);
       useRightPanelStore.getState().close(rightPanelRef);
     }
     updateSearch({ ...patch, ...clearedSelection });
@@ -832,6 +850,7 @@ function PullRequestsRouteView() {
   const toggleRightPanel = () => {
     if (rightPanelRef === null) return;
     if (rightPanelState.isOpen) {
+      setRightPanelPoppedOut(false);
       useRightPanelStore.getState().close(rightPanelRef);
       updateSearch(clearedSelection);
       return;
@@ -839,6 +858,11 @@ function PullRequestsRouteView() {
     if (selectedPullRequestSurface === null) return;
     useRightPanelStore.getState().show(rightPanelRef);
     selectSurfaceInUrl(selectedPullRequestSurface);
+  };
+
+  const toggleRightPanelPoppedOut = () => {
+    if (!rightPanelState.isOpen || shouldUseRightPanelSheet) return;
+    setRightPanelPoppedOut((poppedOut) => !poppedOut);
   };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
@@ -912,6 +936,13 @@ function PullRequestsRouteView() {
   );
   const openPanelControls = (
     <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+      <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
+      {panelToggleControls}
+    </div>
+  );
+  const poppedOutPanelControls = (
+    <div className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+      <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
       {panelToggleControls}
     </div>
   );
@@ -1071,6 +1102,7 @@ function PullRequestsRouteView() {
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
+    if (next === null) setRightPanelPoppedOut(false);
     selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
   };
   const closeOtherSurfaces = (surface: PullRequestSurface) => {
@@ -1089,88 +1121,109 @@ function PullRequestsRouteView() {
   };
   const closeAllSurfaces = () => {
     if (rightPanelRef === null) return;
+    setRightPanelPoppedOut(false);
     useRightPanelStore.getState().closeAllSurfaces(rightPanelRef);
     selectSurfaceInUrl(null);
   };
+  const rightPanelVisible =
+    rightPanelState.isOpen &&
+    activePullRequestSurface !== null &&
+    pullRequestEnvironmentId !== null;
+  const pullRequestPanelDefaultWidth =
+    typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2);
+  const renderPullRequestPanel = (mode: "inline" | "sheet", layoutControls: ReactNode) =>
+    activePullRequestSurface && pullRequestEnvironmentId !== null ? (
+      <RightPanelTabs
+        mode={mode}
+        layoutControls={layoutControls}
+        {...(mode === "inline"
+          ? {
+              widthStorageKey: PULL_REQUEST_PANEL_WIDTH_STORAGE_KEY,
+              // Default to roughly half the viewport: the PR list needs more room
+              // than a chat, so the 540px chat-preview default squashes it.
+              defaultWidth: pullRequestPanelDefaultWidth,
+            }
+          : {})}
+        surfaces={rightPanelState.surfaces}
+        activeSurfaceId={activePullRequestSurface.id}
+        pendingSurfaceIds={EMPTY_PENDING_SURFACES}
+        previewSessions={EMPTY_PREVIEW_SESSIONS}
+        terminalLabelsById={EMPTY_TERMINAL_LABELS}
+        onActivate={(surface) => {
+          if (surface.kind === "pull-request") activateSurface(surface);
+        }}
+        onCloseSurface={(surface) => {
+          if (surface.kind === "pull-request") closeSurface(surface);
+        }}
+        onCloseOtherSurfaces={(surface) => {
+          if (surface.kind === "pull-request") closeOtherSurfaces(surface);
+        }}
+        onCloseSurfacesToRight={(surface) => {
+          if (surface.kind === "pull-request") closeSurfacesToRight(surface);
+        }}
+        onCloseAllSurfaces={closeAllSurfaces}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddAgents={() => undefined}
+        browserAvailable={false}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        agentsAvailable={false}
+        liveAgentCount={0}
+        pullRequestStatuses={pullRequestTabStatuses}
+      >
+        <PullRequestDetailPanel
+          key={activePullRequestSurface.id}
+          environmentId={pullRequestEnvironmentId}
+          reference={{
+            projectId: activePullRequestSurface.projectId as ProjectId,
+            repository: activePullRequestSurface.repository,
+            number: activePullRequestSurface.number,
+          }}
+          refreshToken={detailRefreshToken}
+          // Merging, closing or reopening changes the row this panel was opened from, so
+          // the list behind it is out of date the moment the host takes the action.
+          onActed={() => {
+            refreshList();
+            baselineQuery.refresh();
+            authoredQuery.refresh();
+            reviewingQuery.refresh();
+          }}
+          onStateChange={handlePullRequestTabStatusChange}
+          chromeVariant="collapse"
+        />
+      </RightPanelTabs>
+    ) : null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         <PullRequestsColumn {...columnProps} />
 
-        <InlineRightPanelPortal
-          open={
-            rightPanelState.isOpen &&
-            activePullRequestSurface !== null &&
-            pullRequestEnvironmentId !== null
-          }
-        >
-          {activePullRequestSurface && pullRequestEnvironmentId !== null ? (
-            <RightPanelTabs
-              mode="inline"
-              layoutControls={openPanelControls}
-              widthStorageKey="pathway:pull-request-panel-width"
-              // Default to roughly half the viewport: the PR list needs more
-              // room than a chat, so the 540px chat-preview default squashes
-              // it. SSR has no window, so fall back to a reasonable width.
-              defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
-              surfaces={rightPanelState.surfaces}
-              activeSurfaceId={activePullRequestSurface.id}
-              pendingSurfaceIds={EMPTY_PENDING_SURFACES}
-              previewSessions={EMPTY_PREVIEW_SESSIONS}
-              terminalLabelsById={EMPTY_TERMINAL_LABELS}
-              onActivate={(surface) => {
-                if (surface.kind === "pull-request") activateSurface(surface);
-              }}
-              onCloseSurface={(surface) => {
-                if (surface.kind === "pull-request") closeSurface(surface);
-              }}
-              onCloseOtherSurfaces={(surface) => {
-                if (surface.kind === "pull-request") closeOtherSurfaces(surface);
-              }}
-              onCloseSurfacesToRight={(surface) => {
-                if (surface.kind === "pull-request") closeSurfacesToRight(surface);
-              }}
-              onCloseAllSurfaces={closeAllSurfaces}
-              onCopyFilePath={() => undefined}
-              onAddBrowser={() => undefined}
-              onAddTerminal={() => undefined}
-              onAddDiff={() => undefined}
-              onAddFiles={() => undefined}
-              onAddPullRequest={() => undefined}
-              onAddAgents={() => undefined}
-              browserAvailable={false}
-              terminalAvailable={false}
-              diffAvailable={false}
-              filesAvailable={false}
-              pullRequestAvailable={false}
-              agentsAvailable={false}
-              liveAgentCount={0}
-              pullRequestStatuses={pullRequestTabStatuses}
-            >
-              <PullRequestDetailPanel
-                key={activePullRequestSurface.id}
-                environmentId={pullRequestEnvironmentId}
-                reference={{
-                  projectId: activePullRequestSurface.projectId as ProjectId,
-                  repository: activePullRequestSurface.repository,
-                  number: activePullRequestSurface.number,
-                }}
-                refreshToken={detailRefreshToken}
-                // Merging, closing or reopening changes the row this panel was opened from, so
-                // the list behind it is out of date the moment the host takes the action.
-                onActed={() => {
-                  refreshList();
-                  baselineQuery.refresh();
-                  authoredQuery.refresh();
-                  reviewingQuery.refresh();
-                }}
-                onStateChange={handlePullRequestTabStatusChange}
-                chromeVariant="collapse"
-              />
-            </RightPanelTabs>
-          ) : null}
-        </InlineRightPanelPortal>
+        {!rightPanelUsesSheet ? (
+          <InlineRightPanelPortal open={rightPanelVisible}>
+            {renderPullRequestPanel("inline", openPanelControls)}
+          </InlineRightPanelPortal>
+        ) : null}
+        {rightPanelUsesSheet && rightPanelVisible ? (
+          <RightPanelSheet
+            open
+            onClose={toggleRightPanel}
+            widthStorageKey={PULL_REQUEST_PANEL_WIDTH_STORAGE_KEY}
+            defaultWidth={pullRequestPanelDefaultWidth}
+          >
+            {renderPullRequestPanel(
+              "sheet",
+              desktopRightPanelPoppedOut ? poppedOutPanelControls : panelToggleControls,
+            )}
+          </RightPanelSheet>
+        ) : null}
       </div>
     </SidebarInset>
   );
@@ -1216,7 +1269,7 @@ function PullRequestsColumn({
   return (
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <header
         className={cn(
           "workspace-topbar drag-region gap-1.5 px-3 sm:px-5",
@@ -1225,7 +1278,9 @@ function PullRequestsColumn({
           // way Settings and the chat view do. While the panel is open the column
           // ends at the panel's left edge and the absolute controls strip (already
           // WCO-aware) owns the top-right corner.
-          !rightPanelOpen && "wco:pr-[var(--workspace-native-controls-inset)]",
+          rightPanelControl
+            ? "pr-[calc(var(--workspace-controls-right)+2.25rem)]!"
+            : !rightPanelOpen && "wco:pr-[var(--workspace-native-controls-inset)]",
           COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
       >
@@ -1241,8 +1296,12 @@ function PullRequestsColumn({
         >
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
-        {rightPanelControl}
       </header>
+      {rightPanelControl ? (
+        <div className="workspace-titlebar-controls z-20 [-webkit-app-region:no-drag]">
+          {rightPanelControl}
+        </div>
+      ) : null}
 
       <div className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
