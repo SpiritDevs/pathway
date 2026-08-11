@@ -187,8 +187,6 @@ export const make = Effect.gen(function* () {
       {
         label: "View",
         submenu: [
-          { role: "reload" },
-          { role: "forceReload" },
           { role: "toggleDevTools" },
           { type: "separator" },
           /*

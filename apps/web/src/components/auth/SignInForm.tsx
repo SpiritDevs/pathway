@@ -40,6 +40,8 @@ interface ResetCodeStepProps extends ResetRequestStepProps {
   readonly onResend: () => void;
 }
 
+type ClientTrustCodeStepProps = ResetCodeStepProps;
+
 function CardHeading({
   description,
   title,
@@ -86,20 +88,11 @@ function CredentialsStep({ dispatch, onForgotPassword, onSubmit, state }: Creden
         />
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <Label htmlFor="sign-in-password">Password</Label>
-          <button
-            className={QUIET_LINK_CLASS}
-            disabled={state.pending}
-            onClick={onForgotPassword}
-            type="button"
-          >
-            Forgot password?
-          </button>
-        </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-1.5">
+        <Label htmlFor="sign-in-password">Password</Label>
         <Input
           autoComplete="current-password"
+          className="col-span-2 row-start-2"
           disabled={state.pending}
           id="sign-in-password"
           onChange={(event) => {
@@ -109,6 +102,14 @@ function CredentialsStep({ dispatch, onForgotPassword, onSubmit, state }: Creden
           type="password"
           value={state.password}
         />
+        <button
+          className={cn(QUIET_LINK_CLASS, "col-start-2 row-start-1")}
+          disabled={state.pending}
+          onClick={onForgotPassword}
+          type="button"
+        >
+          Forgot password?
+        </button>
       </div>
 
       <Button className="w-full" disabled={state.pending} size="lg" type="submit">
@@ -216,6 +217,58 @@ function ResetCodeStep({ dispatch, onCancel, onResend, onSubmit, state }: ResetC
   );
 }
 
+function ClientTrustCodeStep({
+  dispatch,
+  onCancel,
+  onResend,
+  onSubmit,
+  state,
+}: ClientTrustCodeStepProps) {
+  return (
+    <form className="space-y-4" onSubmit={onSubmit}>
+      <div className="space-y-1.5">
+        <Label htmlFor="client-trust-code">Verification code</Label>
+        <Input
+          autoComplete="one-time-code"
+          autoFocus
+          disabled={state.pending}
+          id="client-trust-code"
+          inputMode="numeric"
+          maxLength={VERIFICATION_CODE_LENGTH}
+          onChange={(event) => {
+            dispatch({ field: "code", type: "fieldChanged", value: event.target.value });
+          }}
+          placeholder="000000"
+          value={state.code}
+        />
+      </div>
+
+      <Button className="w-full" disabled={state.pending} size="lg" type="submit">
+        {state.pending ? "Verifying…" : "Verify and sign in"}
+      </Button>
+
+      <div className="flex items-baseline justify-between gap-3">
+        <button
+          className={QUIET_LINK_CLASS}
+          disabled={state.pending}
+          onClick={onCancel}
+          type="button"
+        >
+          Back to sign in
+        </button>
+        <button
+          className={QUIET_LINK_CLASS}
+          disabled={state.pending || state.resendCooldown > 0}
+          onClick={onResend}
+          type="button"
+        >
+          {resendCodeLabel(state.resendCooldown)}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /**
  * The first-party sign-in card. Clerk's `<SignIn />` is replaced by
  * `useSignIn()` from `@clerk/react/legacy` — in v6.12 the root `useSignIn`
@@ -256,10 +309,87 @@ export function SignInForm() {
         return;
       }
 
+      if (attempt.status === "needs_client_trust") {
+        const emailCodeFactor = attempt.supportedSecondFactors?.find(
+          (factor) => factor.strategy === "email_code",
+        );
+        if (!emailCodeFactor) {
+          dispatch({
+            message: "This sign-in requires a verification method that is not available.",
+            type: "failed",
+          });
+          return;
+        }
+
+        await attempt.prepareSecondFactor({
+          emailAddressId: emailCodeFactor.emailAddressId,
+          strategy: "email_code",
+        });
+        dispatch({ type: "clientTrustCodeSent" });
+        return;
+      }
+
       dispatch({ message: describeUnexpectedSignInStatus(attempt.status), type: "failed" });
     } catch (error) {
       dispatch({
         message: clerkErrorMessage(error, "We could not sign you in. Try again."),
+        type: "failed",
+      });
+    }
+  };
+
+  const sendClientTrustCode = async () => {
+    if (!clerkSignIn.isLoaded) return;
+    const { signIn } = clerkSignIn;
+    dispatch({ type: "submitted" });
+
+    try {
+      const emailCodeFactor = signIn.supportedSecondFactors?.find(
+        (factor) => factor.strategy === "email_code",
+      );
+      if (!emailCodeFactor) {
+        dispatch({
+          message: "This sign-in requires a verification method that is not available.",
+          type: "failed",
+        });
+        return;
+      }
+
+      await signIn.prepareSecondFactor({
+        emailAddressId: emailCodeFactor.emailAddressId,
+        strategy: "email_code",
+      });
+      dispatch({ type: "clientTrustCodeSent" });
+    } catch (error) {
+      dispatch({
+        message: clerkErrorMessage(error, "We could not send a verification code. Try again."),
+        type: "failed",
+      });
+    }
+  };
+
+  const submitClientTrustCode = async () => {
+    if (!clerkSignIn.isLoaded) return;
+    const { setActive, signIn } = clerkSignIn;
+    dispatch({ type: "submitted" });
+
+    try {
+      const attempt = await signIn.attemptSecondFactor({
+        code: state.code,
+        strategy: "email_code",
+      });
+
+      if (attempt.status === "complete" && attempt.createdSessionId !== null) {
+        await setActive({ session: attempt.createdSessionId });
+        dispatch({ type: "succeeded" });
+        await navigate({ replace: true, to: "/" });
+        return;
+      }
+
+      dispatch({ message: describeUnexpectedSignInStatus(attempt.status), type: "failed" });
+    } catch (error) {
+      dispatch({
+        message: clerkErrorMessage(error, "That verification code did not work. Try again."),
         type: "failed",
       });
     }
@@ -342,11 +472,19 @@ export function SignInForm() {
       void sendResetCode();
       return;
     }
+    if (state.step === "client-trust-code") {
+      void submitClientTrustCode();
+      return;
+    }
     void submitNewPassword();
   };
 
   const handleResend = () => {
     if (state.pending || cooldownActive) return;
+    if (state.step === "client-trust-code") {
+      void sendClientTrustCode();
+      return;
+    }
     void sendResetCode();
   };
 
@@ -378,6 +516,12 @@ export function SignInForm() {
             title="Check your email"
           />
         ) : null}
+        {state.step === "client-trust-code" ? (
+          <CardHeading
+            description={`Enter the six-digit code we sent to ${state.identifier.trim()}.`}
+            title="Verify this device"
+          />
+        ) : null}
 
         {state.error === null ? null : <FormAlert message={state.error} />}
 
@@ -399,6 +543,15 @@ export function SignInForm() {
         ) : null}
         {state.step === "reset-code" ? (
           <ResetCodeStep
+            dispatch={dispatch}
+            onCancel={handleCancel}
+            onResend={handleResend}
+            onSubmit={handleSubmit}
+            state={state}
+          />
+        ) : null}
+        {state.step === "client-trust-code" ? (
+          <ClientTrustCodeStep
             dispatch={dispatch}
             onCancel={handleCancel}
             onResend={handleResend}

@@ -3,15 +3,37 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
+const {
+  handleMock,
+  netFetchMock,
+  onBeforeSendHeadersMock,
+  onCompletedMock,
+  onErrorOccurredMock,
+  onHeadersReceivedMock,
+  unhandleMock,
+} = vi.hoisted(() => ({
   handleMock: vi.fn(),
   netFetchMock: vi.fn(),
+  onBeforeSendHeadersMock: vi.fn(),
+  onCompletedMock: vi.fn(),
+  onErrorOccurredMock: vi.fn(),
+  onHeadersReceivedMock: vi.fn(),
   unhandleMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   net: { fetch: netFetchMock },
   protocol: { handle: handleMock, unhandle: unhandleMock },
+  session: {
+    defaultSession: {
+      webRequest: {
+        onBeforeSendHeaders: onBeforeSendHeadersMock,
+        onCompleted: onCompletedMock,
+        onErrorOccurred: onErrorOccurredMock,
+        onHeadersReceived: onHeadersReceivedMock,
+      },
+    },
+  },
 }));
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
@@ -20,7 +42,62 @@ describe("ElectronProtocol", () => {
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();
+    onBeforeSendHeadersMock.mockReset();
+    onCompletedMock.mockReset();
+    onErrorOccurredMock.mockReset();
+    onHeadersReceivedMock.mockReset();
     unhandleMock.mockReset();
+  });
+
+  it("removes Chromium's origin only from authenticated Clerk requests", () => {
+    const authenticatedHeaders = {
+      Accept: "application/json",
+      Authorization: "Bearer client-jwt",
+      Origin: "pathway://app",
+    };
+
+    assert.deepEqual(
+      ElectronProtocol.prepareDesktopClerkRequestHeaders(authenticatedHeaders, "pathway://app"),
+      {
+        Accept: "application/json",
+        Authorization: "Bearer client-jwt",
+      },
+    );
+    assert.deepEqual(
+      ElectronProtocol.prepareDesktopClerkRequestHeaders(
+        {
+          Accept: "application/json",
+          Origin: "pathway://app",
+        },
+        "pathway://app",
+      ),
+      { Accept: "application/json", Origin: "pathway://app" },
+    );
+    assert.deepEqual(
+      ElectronProtocol.prepareDesktopClerkRequestHeaders(authenticatedHeaders, "pathway-dev://app"),
+      authenticatedHeaders,
+    );
+    assert.deepEqual(authenticatedHeaders, {
+      Accept: "application/json",
+      Authorization: "Bearer client-jwt",
+      Origin: "pathway://app",
+    });
+  });
+
+  it("allows the trusted desktop origin to read native Clerk responses", () => {
+    assert.deepEqual(
+      ElectronProtocol.prepareDesktopClerkResponseHeaders(
+        {
+          "content-type": ["application/json"],
+          "access-control-allow-origin": ["https://unexpected.example"],
+        },
+        "pathway://app",
+      ),
+      {
+        "content-type": ["application/json"],
+        "Access-Control-Allow-Origin": ["pathway://app"],
+      },
+    );
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>

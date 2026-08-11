@@ -396,12 +396,21 @@ const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   { key: "w", meta: true, shift: false, control: false },
 ]);
 
-export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
-  input.type === "keyDown" &&
-  input.key.toLowerCase() === "r" &&
-  (input.meta || input.control) &&
-  !input.shift &&
-  !input.alt;
+export type PreviewReloadShortcut = "reload" | "hardReload";
+
+export const resolvePreviewReloadShortcut = (
+  input: Electron.Input,
+): PreviewReloadShortcut | null => {
+  if (
+    input.type !== "keyDown" ||
+    input.key.toLowerCase() !== "r" ||
+    (!input.meta && !input.control) ||
+    input.alt
+  ) {
+    return null;
+  }
+  return input.shift ? "hardReload" : "reload";
+};
 
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
   artifactDirectory: string,
@@ -1236,11 +1245,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
     });
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
-      if (isPreviewRefreshShortcut(input)) {
+      const reloadShortcut = resolvePreviewReloadShortcut(input);
+      if (reloadShortcut !== null) {
         event.preventDefault();
         runFork(
-          attempt({ operation: "shortcut.refresh", tabId, webContentsId: wc.id }, () =>
-            wc.reload(),
+          attempt(
+            {
+              operation:
+                reloadShortcut === "hardReload" ? "shortcut.hardReload" : "shortcut.reload",
+              tabId,
+              webContentsId: wc.id,
+            },
+            () => (reloadShortcut === "hardReload" ? wc.reloadIgnoringCache() : wc.reload()),
           ).pipe(Effect.ignore),
         );
         return;

@@ -66,6 +66,20 @@ describe("signInFormReducer", () => {
     expect(state.resendCooldown).toBe(RESEND_COOLDOWN_SECONDS);
   });
 
+  it("moves client trust to its own code screen and drops the password", () => {
+    const state = reduce(
+      initialSignInFormState,
+      { field: "password", type: "fieldChanged", value: "hunter22" },
+      { type: "submitted" },
+      { type: "clientTrustCodeSent" },
+    );
+
+    expect(state.step).toBe("client-trust-code");
+    expect(state.password).toBe("");
+    expect(state.pending).toBe(false);
+    expect(state.resendCooldown).toBe(RESEND_COOLDOWN_SECONDS);
+  });
+
   it("clears the stale code on a resend so the dead one cannot be submitted", () => {
     const state = reduce(
       initialSignInFormState,
@@ -205,6 +219,17 @@ describe("validateSubmission", () => {
           { field: "code", type: "fieldChanged", value: "123456" },
           { field: "newPassword", type: "fieldChanged", value: "long-enough-password" },
         ),
+      ),
+    ).toBeNull();
+  });
+
+  it("requires only the emailed code for client trust", () => {
+    const onCodeStep = reduce(initialSignInFormState, { type: "clientTrustCodeSent" });
+
+    expect(validateSubmission(onCodeStep)).toBe("Enter the 6-digit code we emailed you.");
+    expect(
+      validateSubmission(
+        reduce(onCodeStep, { field: "code", type: "fieldChanged", value: "123456" }),
       ),
     ).toBeNull();
   });

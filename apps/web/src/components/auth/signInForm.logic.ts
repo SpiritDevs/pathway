@@ -9,7 +9,7 @@ export const RESEND_COOLDOWN_SECONDS = 30;
 export const VERIFICATION_CODE_LENGTH = 6;
 export const MIN_PASSWORD_LENGTH = 8;
 
-export type SignInStep = "credentials" | "reset-code" | "reset-request";
+export type SignInStep = "client-trust-code" | "credentials" | "reset-code" | "reset-request";
 
 export type SignInField = "code" | "identifier" | "newPassword" | "password";
 
@@ -28,6 +28,7 @@ export type SignInFormEvent =
   | { readonly field: SignInField; readonly type: "fieldChanged"; readonly value: string }
   | { readonly message: string; readonly type: "failed" }
   | { readonly type: "cancelled" }
+  | { readonly type: "clientTrustCodeSent" }
   | { readonly type: "codeSent" }
   | { readonly type: "cooldownTicked" }
   | { readonly type: "resetRequested" }
@@ -93,6 +94,16 @@ export function signInFormReducer(state: SignInFormState, event: SignInFormEvent
         resendCooldown: RESEND_COOLDOWN_SECONDS,
         step: "reset-code",
       };
+    case "clientTrustCodeSent":
+      return {
+        ...state,
+        code: "",
+        error: null,
+        password: "",
+        pending: false,
+        resendCooldown: RESEND_COOLDOWN_SECONDS,
+        step: "client-trust-code",
+      };
     case "cooldownTicked":
       return state.resendCooldown === 0
         ? state
@@ -127,6 +138,7 @@ export function validateSubmission(state: SignInFormState): string | null {
   if (state.code.length !== VERIFICATION_CODE_LENGTH) {
     return `Enter the ${VERIFICATION_CODE_LENGTH}-digit code we emailed you.`;
   }
+  if (state.step === "client-trust-code") return null;
   if (state.newPassword.length < MIN_PASSWORD_LENGTH) {
     return `Your new password needs at least ${MIN_PASSWORD_LENGTH} characters.`;
   }

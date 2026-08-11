@@ -36,7 +36,7 @@ describe("fitPictureInPictureContentSize", () => {
   });
 });
 
-describe("isPreviewRefreshShortcut", () => {
+describe("resolvePreviewReloadShortcut", () => {
   const input = (overrides: Partial<Electron.Input> = {}) =>
     ({
       type: "keyDown",
@@ -48,13 +48,14 @@ describe("isPreviewRefreshShortcut", () => {
       ...overrides,
     }) as Electron.Input;
 
-  it("recognizes the platform refresh chord without matching modified variants", () => {
-    expect(PreviewManager.isPreviewRefreshShortcut(input())).toBe(true);
-    expect(PreviewManager.isPreviewRefreshShortcut(input({ meta: false, control: true }))).toBe(
-      true,
+  it("distinguishes normal and hard reload chords", () => {
+    expect(PreviewManager.resolvePreviewReloadShortcut(input())).toBe("reload");
+    expect(PreviewManager.resolvePreviewReloadShortcut(input({ meta: false, control: true }))).toBe(
+      "reload",
     );
-    expect(PreviewManager.isPreviewRefreshShortcut(input({ shift: true }))).toBe(false);
-    expect(PreviewManager.isPreviewRefreshShortcut(input({ type: "keyUp" }))).toBe(false);
+    expect(PreviewManager.resolvePreviewReloadShortcut(input({ shift: true }))).toBe("hardReload");
+    expect(PreviewManager.resolvePreviewReloadShortcut(input({ alt: true }))).toBeNull();
+    expect(PreviewManager.resolvePreviewReloadShortcut(input({ type: "keyUp" }))).toBeNull();
   });
 });
 
@@ -709,6 +710,68 @@ describe("PreviewManager", () => {
         listeners.get("did-navigate")?.();
         yield* Effect.yieldNow;
         expect(statuses.at(-1)?.kind).toBe("Success");
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps normal and hard reload shortcuts inside the preview", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const listeners = new Map<string, (...args: unknown[]) => void>();
+        const reload = vi.fn();
+        const reloadIgnoringCache = vi.fn();
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          reload,
+          reloadIgnoringCache,
+          on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+            listeners.set(event, listener);
+          }),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand: vi.fn(async () => undefined),
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+
+        yield* manager.createTab("tab_reload_shortcuts");
+        yield* manager.registerWebview("tab_reload_shortcuts", 42);
+
+        const beforeInput = listeners.get("before-input-event");
+        if (!beforeInput) {
+          return yield* Effect.die("before-input-event listener was not registered");
+        }
+
+        const event = { preventDefault: vi.fn() };
+        const input = {
+          type: "keyDown",
+          key: "r",
+          meta: true,
+          control: false,
+          shift: false,
+          alt: false,
+        };
+        beforeInput(event, input);
+        beforeInput(event, { ...input, shift: true });
+        yield* Effect.yieldNow;
+
+        expect(event.preventDefault).toHaveBeenCalledTimes(2);
+        expect(reload).toHaveBeenCalledOnce();
+        expect(reloadIgnoringCache).toHaveBeenCalledOnce();
       }),
     ),
   );

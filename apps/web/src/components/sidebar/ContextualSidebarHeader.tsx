@@ -25,7 +25,7 @@ export function ContextualSidebarHeader({ title }: { title: string }) {
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0",
         isElectron && "drag-region",
       )}
     >
@@ -39,7 +39,7 @@ export function ContextualSidebarHeader({ title }: { title: string }) {
       />
       <span
         className={cn(
-          "relative z-10 ml-[var(--workspace-titlebar-content-left)] truncate text-sm font-semibold tracking-tight",
+          "relative z-10 ml-[calc(var(--workspace-titlebar-control-size)+var(--workspace-titlebar-control-gap))] truncate text-sm font-semibold tracking-tight",
           backdropVariant ? "text-white" : "text-sidebar-foreground",
         )}
       >

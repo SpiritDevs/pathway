@@ -19,7 +19,7 @@ export function resolveSidebarStageBackdropVariant(
   if (!enabled) return null;
   const normalized = stageLabel.trim().toLowerCase();
   if (normalized === "nightly") return "nightly";
-  if (normalized === "dev") return "dev";
+  if (normalized === "dev" || normalized === "alpha") return "dev";
   return null;
 }
 

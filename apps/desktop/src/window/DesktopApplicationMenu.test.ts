@@ -179,4 +179,25 @@ describe("DesktopApplicationMenu", () => {
       assert.equal(yield* Deferred.await(selectedAction), "zoom-in");
     }),
   );
+
+  it.effect("does not register native app reload accelerators", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+
+      yield* configureMenu(selectedAction, applicationMenuTemplate);
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const viewMenu = template.find((item) => item.label === "View");
+      assert.isDefined(viewMenu);
+      if (!Array.isArray(viewMenu.submenu)) {
+        throw new Error("Expected View menu submenu to be an array.");
+      }
+
+      assert.isUndefined(
+        viewMenu.submenu.find((item) => item.role === "reload" || item.role === "forceReload"),
+      );
+    }),
+  );
 });

@@ -12,6 +12,44 @@ export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "pathway";
 export const DESKTOP_DEVELOPMENT_SCHEME = "pathway-dev";
 
+/**
+ * Clerk's Electron SDK authenticates native requests with a bearer client JWT.
+ * Chromium also adds Origin for requests initiated by our custom-scheme renderer,
+ * but Clerk deliberately rejects requests carrying both security identities.
+ */
+export function prepareDesktopClerkRequestHeaders(
+  requestHeaders: Record<string, string>,
+  desktopOrigin: string,
+): Record<string, string> {
+  const names = Object.keys(requestHeaders);
+  const hasAuthorization = names.some((name) => name.toLowerCase() === "authorization");
+  if (!hasAuthorization) return requestHeaders;
+
+  const originNames = names.filter((name) => name.toLowerCase() === "origin");
+  if (originNames.length === 0) return requestHeaders;
+  if (!originNames.some((name) => requestHeaders[name] === desktopOrigin)) return requestHeaders;
+
+  const prepared = { ...requestHeaders };
+  for (const name of originNames) {
+    delete prepared[name];
+  }
+  return prepared;
+}
+
+export function prepareDesktopClerkResponseHeaders(
+  responseHeaders: Record<string, string[]>,
+  desktopOrigin: string,
+): Record<string, string[]> {
+  const prepared = { ...responseHeaders };
+  for (const name of Object.keys(prepared)) {
+    if (name.toLowerCase() === "access-control-allow-origin") {
+      delete prepared[name];
+    }
+  }
+  prepared["Access-Control-Allow-Origin"] = [desktopOrigin];
+  return prepared;
+}
+
 export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
 }
@@ -210,6 +248,8 @@ export const make = Effect.gen(function* () {
       if (yield* Ref.get(registered)) return;
 
       const contentSecurityPolicy = makeDesktopContentSecurityPolicy(input);
+      const desktopOrigin = `${input.scheme}://${DESKTOP_HOST}`;
+      const nativeClerkRequestOrigins = new Map<number, string>();
 
       yield* Effect.acquireRelease(
         Effect.try({
@@ -217,12 +257,60 @@ export const make = Effect.gen(function* () {
             Electron.protocol.handle(input.scheme, (request) =>
               proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
             );
+            if (input.clerkFrontendApiHostname) {
+              const clerkUrls = { urls: [`https://${input.clerkFrontendApiHostname}/*`] };
+              Electron.session.defaultSession.webRequest.onBeforeSendHeaders(
+                clerkUrls,
+                (details, callback) => {
+                  const preparedHeaders = prepareDesktopClerkRequestHeaders(
+                    details.requestHeaders,
+                    desktopOrigin,
+                  );
+                  if (preparedHeaders !== details.requestHeaders) {
+                    nativeClerkRequestOrigins.set(details.id, desktopOrigin);
+                  }
+                  callback({
+                    requestHeaders: preparedHeaders,
+                  });
+                },
+              );
+              Electron.session.defaultSession.webRequest.onHeadersReceived(
+                clerkUrls,
+                (details, callback) => {
+                  const allowedOrigin = nativeClerkRequestOrigins.get(details.id);
+                  if (allowedOrigin && details.responseHeaders) {
+                    callback({
+                      responseHeaders: prepareDesktopClerkResponseHeaders(
+                        details.responseHeaders,
+                        allowedOrigin,
+                      ),
+                    });
+                    return;
+                  }
+                  callback({});
+                },
+              );
+              Electron.session.defaultSession.webRequest.onErrorOccurred(clerkUrls, (details) => {
+                nativeClerkRequestOrigins.delete(details.id);
+              });
+              Electron.session.defaultSession.webRequest.onCompleted(clerkUrls, (details) => {
+                nativeClerkRequestOrigins.delete(details.id);
+              });
+            }
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),
         }).pipe(Effect.andThen(Ref.set(registered, true))),
         () =>
           Effect.try({
-            try: () => Electron.protocol.unhandle(input.scheme),
+            try: () => {
+              Electron.protocol.unhandle(input.scheme);
+              if (input.clerkFrontendApiHostname) {
+                Electron.session.defaultSession.webRequest.onBeforeSendHeaders(null);
+                Electron.session.defaultSession.webRequest.onCompleted(null);
+                Electron.session.defaultSession.webRequest.onHeadersReceived(null);
+                Electron.session.defaultSession.webRequest.onErrorOccurred(null);
+              }
+            },
             catch: (cause) =>
               new ElectronProtocolUnregistrationError({
                 scheme: input.scheme,
