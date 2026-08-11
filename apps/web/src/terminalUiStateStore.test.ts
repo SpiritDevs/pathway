@@ -30,6 +30,7 @@ describe("terminalUiStateStore actions", () => {
     expect(terminalUiState).toEqual({
       terminalOpen: false,
       terminalHeight: 280,
+      terminalFullWidth: false,
       terminalIds: [],
       activeTerminalId: "",
       terminalGroups: [],
@@ -85,6 +86,7 @@ describe("terminalUiStateStore actions", () => {
     expect(terminalUiState).toEqual({
       terminalOpen: true,
       terminalHeight: 280,
+      terminalFullWidth: false,
       terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
       activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
       terminalGroups: [
@@ -173,6 +175,34 @@ describe("terminalUiStateStore actions", () => {
     ).toEqual(["env-b-terminal"]);
   });
 
+  it("stores full-width mode per thread and can restore the column layout", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.setTerminalOpen(THREAD_REF, true);
+    store.setTerminalFullWidth(THREAD_REF, true);
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalFullWidth,
+    ).toBe(true);
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        OTHER_THREAD_REF,
+      ).terminalFullWidth,
+    ).toBe(false);
+
+    useTerminalUiStateStore.getState().setTerminalFullWidth(THREAD_REF, false);
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalFullWidth,
+    ).toBe(false);
+  });
+
   it("drops persisted entries whose thread keys are not valid scoped keys", () => {
     const migrated = migratePersistedTerminalUiStateStoreState(
       {
@@ -203,6 +233,7 @@ describe("terminalUiStateStore actions", () => {
         [scopedThreadKey(THREAD_REF)]: {
           terminalOpen: true,
           terminalHeight: 320,
+          terminalFullWidth: false,
           terminalIds: ["term-1"],
           activeTerminalId: "term-1",
           terminalGroups: [{ id: "group-term-1", terminalIds: ["term-1"] }],

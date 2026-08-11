@@ -757,6 +757,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     [panelTerminalIds, serverOrderedTerminalIds, terminalUiState.terminalIds],
   );
   const storeSetTerminalHeight = useTerminalUiStateStore((state) => state.setTerminalHeight);
+  const storeSetTerminalFullWidth = useTerminalUiStateStore((state) => state.setTerminalFullWidth);
   const storeSplitTerminal = useTerminalUiStateStore((state) => state.splitTerminal);
   const storeSplitTerminalVertical = useTerminalUiStateStore(
     (state) => state.splitTerminalVertical,
@@ -819,6 +820,13 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
       storeSetTerminalHeight(threadRef, height);
     },
     [storeSetTerminalHeight, threadRef],
+  );
+
+  const setTerminalFullWidth = useCallback(
+    (fullWidth: boolean) => {
+      storeSetTerminalFullWidth(threadRef, fullWidth);
+    },
+    [storeSetTerminalFullWidth, threadRef],
   );
 
   const splitTerminal = useCallback(() => {
@@ -1010,6 +1018,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         runtimeEnv={runtimeEnv}
         visible={visible}
         height={terminalUiState.terminalHeight}
+        fullWidth={terminalUiState.terminalFullWidth}
         // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
         terminalIds={terminalUiState.terminalIds}
         activeTerminalId={terminalUiState.activeTerminalId}
@@ -1027,6 +1036,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         onActiveTerminalChange={activateTerminal}
         onCloseTerminal={closeTerminal}
         onHeightChange={setTerminalHeight}
+        onFullWidthChange={detached ? setTerminalFullWidth : undefined}
         onAddTerminalContext={handleAddTerminalContext}
         terminalLabelsById={terminalLabelsById}
         terminalLaunchLocationsById={terminalLaunchLocationsById}
@@ -6519,7 +6529,10 @@ function ChatViewContent(props: ChatViewProps) {
         </div>
         {/* end horizontal flex container */}
 
-        <TerminalCardPortal detached={!shouldUseRightPanelSheet}>
+        <TerminalCardPortal
+          detached={!shouldUseRightPanelSheet}
+          fullWidth={terminalUiState.terminalFullWidth}
+        >
           {mountedTerminalThreadRefs.map(
             ({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
               <PersistentThreadTerminalDrawer

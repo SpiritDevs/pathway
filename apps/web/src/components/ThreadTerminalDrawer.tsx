@@ -5,6 +5,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
 import {
+  EllipsisIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
@@ -30,6 +33,14 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
@@ -873,6 +884,7 @@ interface ThreadTerminalDrawerProps {
   runtimeEnv?: Record<string, string>;
   visible?: boolean;
   height: number;
+  fullWidth?: boolean;
   terminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -888,6 +900,7 @@ interface ThreadTerminalDrawerProps {
   onActiveTerminalChange: (terminalId: string) => void;
   onCloseTerminal: (terminalId: string) => void;
   onHeightChange: (height: number) => void;
+  onFullWidthChange?: ((fullWidth: boolean) => void) | undefined;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   keybindings: ResolvedKeybindingsConfig;
   /** Prefer server-provided tab titles when present (e.g. active subprocess name). */
@@ -925,6 +938,62 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
+interface TerminalOverflowMenuProps {
+  triggerClassName: string;
+  hasReachedSplitLimit: boolean;
+  splitShortcutLabel?: string | undefined;
+  splitVerticalShortcutLabel?: string | undefined;
+  fullWidth: boolean;
+  onSplitHorizontal: () => void;
+  onSplitVertical: () => void;
+  onFullWidthChange?: ((fullWidth: boolean) => void) | undefined;
+}
+
+function TerminalOverflowMenu({
+  triggerClassName,
+  hasReachedSplitLimit,
+  splitShortcutLabel,
+  splitVerticalShortcutLabel,
+  fullWidth,
+  onSplitHorizontal,
+  onSplitVertical,
+  onFullWidthChange,
+}: TerminalOverflowMenuProps) {
+  const splitStatus = hasReachedSplitLimit ? `Max ${MAX_TERMINALS_PER_GROUP}` : splitShortcutLabel;
+  const verticalSplitStatus = hasReachedSplitLimit
+    ? `Max ${MAX_TERMINALS_PER_GROUP}`
+    : splitVerticalShortcutLabel;
+
+  return (
+    <Menu>
+      <MenuTrigger className={triggerClassName} aria-label="Terminal options">
+        <EllipsisIcon aria-hidden="true" className="size-3.25" />
+      </MenuTrigger>
+      <MenuPopup align="end" side="bottom" sideOffset={6} className="w-56">
+        <MenuItem disabled={hasReachedSplitLimit} onClick={onSplitHorizontal}>
+          <SquareSplitHorizontal />
+          Split horizontally
+          {splitStatus ? <MenuShortcut>{splitStatus}</MenuShortcut> : null}
+        </MenuItem>
+        <MenuItem disabled={hasReachedSplitLimit} onClick={onSplitVertical}>
+          <SquareSplitVertical />
+          Split vertically
+          {verticalSplitStatus ? <MenuShortcut>{verticalSplitStatus}</MenuShortcut> : null}
+        </MenuItem>
+        {onFullWidthChange ? (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={() => onFullWidthChange(!fullWidth)}>
+              {fullWidth ? <Minimize2Icon /> : <Maximize2Icon />}
+              {fullWidth ? "Compact width" : "Full width"}
+            </MenuItem>
+          </>
+        ) : null}
+      </MenuPopup>
+    </Menu>
+  );
+}
+
 export default function ThreadTerminalDrawer({
   mode = "drawer",
   threadRef,
@@ -934,6 +1003,7 @@ export default function ThreadTerminalDrawer({
   runtimeEnv,
   visible = true,
   height,
+  fullWidth = false,
   terminalIds,
   activeTerminalId,
   terminalGroups,
@@ -949,6 +1019,7 @@ export default function ThreadTerminalDrawer({
   onActiveTerminalChange,
   onCloseTerminal,
   onHeightChange,
+  onFullWidthChange,
   onAddTerminalContext,
   keybindings,
   terminalLabelsById,
@@ -1129,16 +1200,6 @@ export default function ThreadTerminalDrawer({
     },
     [cwd, runtimeEnv, terminalLaunchLocationsById, worktreePath],
   );
-  const splitTerminalActionLabel = hasReachedSplitLimit
-    ? `Split Terminal Horizontally (max ${MAX_TERMINALS_PER_GROUP} per group)`
-    : splitShortcutLabel
-      ? `Split Terminal Horizontally (${splitShortcutLabel})`
-      : "Split Terminal Horizontally";
-  const splitTerminalVerticalActionLabel = hasReachedSplitLimit
-    ? `Split Terminal Vertically (max ${MAX_TERMINALS_PER_GROUP} per group)`
-    : splitVerticalShortcutLabel
-      ? `Split Terminal Vertically (${splitVerticalShortcutLabel})`
-      : "Split Terminal Vertically";
   const newTerminalActionLabel = newShortcutLabel
     ? `New Terminal (${newShortcutLabel})`
     : "New Terminal";
@@ -1345,29 +1406,16 @@ export default function ThreadTerminalDrawer({
       {!hasTerminalSidebar && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
-            <TerminalActionButton
-              className={`p-1 text-foreground/90 transition-colors ${
-                hasReachedSplitLimit
-                  ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                  : "hover:bg-accent"
-              }`}
-              onClick={onSplitTerminalAction}
-              label={splitTerminalActionLabel}
-            >
-              <SquareSplitHorizontal className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              className={`p-1 text-foreground/90 transition-colors ${
-                hasReachedSplitLimit
-                  ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                  : "hover:bg-accent"
-              }`}
-              onClick={onSplitTerminalVerticalAction}
-              label={splitTerminalVerticalActionLabel}
-            >
-              <SquareSplitVertical className="size-3.25" />
-            </TerminalActionButton>
+            <TerminalOverflowMenu
+              triggerClassName="p-1 text-foreground/90 transition-colors hover:bg-accent"
+              hasReachedSplitLimit={hasReachedSplitLimit}
+              splitShortcutLabel={splitShortcutLabel}
+              splitVerticalShortcutLabel={splitVerticalShortcutLabel}
+              fullWidth={fullWidth}
+              onSplitHorizontal={onSplitTerminalAction}
+              onSplitVertical={onSplitTerminalVerticalAction}
+              onFullWidthChange={onFullWidthChange}
+            />
             <div className="h-4 w-px bg-border/80" />
             <TerminalActionButton
               className="p-1 text-foreground/90 transition-colors hover:bg-accent"
@@ -1483,28 +1531,16 @@ export default function ThreadTerminalDrawer({
             <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10">
               <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
                 <div className="inline-flex h-full items-stretch">
-                  <TerminalActionButton
-                    className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
-                      hasReachedSplitLimit
-                        ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                        : "hover:bg-accent/70"
-                    }`}
-                    onClick={onSplitTerminalAction}
-                    label={splitTerminalActionLabel}
-                  >
-                    <SquareSplitHorizontal className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    className={`inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors ${
-                      hasReachedSplitLimit
-                        ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                        : "hover:bg-accent/70"
-                    }`}
-                    onClick={onSplitTerminalVerticalAction}
-                    label={splitTerminalVerticalActionLabel}
-                  >
-                    <SquareSplitVertical className="size-3.25" />
-                  </TerminalActionButton>
+                  <TerminalOverflowMenu
+                    triggerClassName="inline-flex h-full items-center px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                    hasReachedSplitLimit={hasReachedSplitLimit}
+                    splitShortcutLabel={splitShortcutLabel}
+                    splitVerticalShortcutLabel={splitVerticalShortcutLabel}
+                    fullWidth={fullWidth}
+                    onSplitHorizontal={onSplitTerminalAction}
+                    onSplitVertical={onSplitTerminalVerticalAction}
+                    onFullWidthChange={onFullWidthChange}
+                  />
                   <TerminalActionButton
                     className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
                     onClick={onNewTerminalAction}

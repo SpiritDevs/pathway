@@ -20,6 +20,7 @@ import {
 interface ThreadTerminalUiState {
   terminalOpen: boolean;
   terminalHeight: number;
+  terminalFullWidth: boolean;
   terminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -46,9 +47,9 @@ export function migratePersistedTerminalUiStateStoreState(
   const persistedUiStateByThreadKey =
     candidate.terminalUiStateByThreadKey ?? candidate.terminalStateByThreadKey ?? {};
   const terminalUiStateByThreadKey = Object.fromEntries(
-    Object.entries(persistedUiStateByThreadKey).filter(([threadKey]) =>
-      parseScopedThreadKey(threadKey),
-    ),
+    Object.entries(persistedUiStateByThreadKey)
+      .filter(([threadKey]) => parseScopedThreadKey(threadKey))
+      .map(([threadKey, state]) => [threadKey, normalizeThreadTerminalUiState(state)]),
   );
 
   return { terminalUiStateByThreadKey };
@@ -173,6 +174,7 @@ function threadTerminalUiStateEqual(
   return (
     left.terminalOpen === right.terminalOpen &&
     left.terminalHeight === right.terminalHeight &&
+    left.terminalFullWidth === right.terminalFullWidth &&
     left.activeTerminalId === right.activeTerminalId &&
     left.activeTerminalGroupId === right.activeTerminalGroupId &&
     arraysEqual(left.terminalIds, right.terminalIds) &&
@@ -183,6 +185,7 @@ function threadTerminalUiStateEqual(
 const DEFAULT_THREAD_TERMINAL_UI_STATE: ThreadTerminalUiState = Object.freeze({
   terminalOpen: false,
   terminalHeight: DEFAULT_THREAD_TERMINAL_HEIGHT,
+  terminalFullWidth: false,
   terminalIds: [],
   activeTerminalId: "",
   terminalGroups: [],
@@ -221,6 +224,7 @@ function normalizeThreadTerminalUiState(state: ThreadTerminalUiState): ThreadTer
       Number.isFinite(state.terminalHeight) && state.terminalHeight > 0
         ? state.terminalHeight
         : DEFAULT_THREAD_TERMINAL_HEIGHT,
+    terminalFullWidth: state.terminalFullWidth === true,
     terminalIds: nextTerminalIds,
     activeTerminalId,
     terminalGroups,
@@ -367,6 +371,17 @@ function setThreadTerminalHeight(
   return { ...normalized, terminalHeight: height };
 }
 
+function setThreadTerminalFullWidth(
+  state: ThreadTerminalUiState,
+  fullWidth: boolean,
+): ThreadTerminalUiState {
+  const normalized = normalizeThreadTerminalUiState(state);
+  if (normalized.terminalFullWidth === fullWidth) {
+    return normalized;
+  }
+  return { ...normalized, terminalFullWidth: fullWidth };
+}
+
 function splitThreadTerminal(
   state: ThreadTerminalUiState,
   terminalId: string,
@@ -444,6 +459,7 @@ function closeThreadTerminal(
   return normalizeThreadTerminalUiState({
     terminalOpen: normalized.terminalOpen,
     terminalHeight: normalized.terminalHeight,
+    terminalFullWidth: normalized.terminalFullWidth,
     terminalIds: remainingTerminalIds,
     activeTerminalId: nextActiveTerminalId,
     terminalGroups,
@@ -566,6 +582,7 @@ interface TerminalUiStateStoreState {
   suppressedTerminalIdsByThreadKey: Record<string, string[]>;
   setTerminalOpen: (threadRef: ScopedThreadRef, open: boolean) => void;
   setTerminalHeight: (threadRef: ScopedThreadRef, height: number) => void;
+  setTerminalFullWidth: (threadRef: ScopedThreadRef, fullWidth: boolean) => void;
   splitTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   splitTerminalVertical: (threadRef: ScopedThreadRef, terminalId: string) => void;
   newTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
@@ -640,6 +657,8 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
         },
         setTerminalHeight: (threadRef, height) =>
           updateTerminal(threadRef, (state) => setThreadTerminalHeight(state, height)),
+        setTerminalFullWidth: (threadRef, fullWidth) =>
+          updateTerminal(threadRef, (state) => setThreadTerminalFullWidth(state, fullWidth)),
         splitTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => splitThreadTerminal(state, terminalId), {
             terminalId,
@@ -770,7 +789,7 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
     },
     {
       name: TERMINAL_UI_STATE_STORAGE_KEY,
-      version: 4,
+      version: 5,
       storage: createJSONStorage(createTerminalUiStateStorage),
       migrate: migratePersistedTerminalUiStateStoreState,
       partialize: (state) => ({
