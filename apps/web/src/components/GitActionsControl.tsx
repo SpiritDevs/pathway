@@ -97,6 +97,7 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
+import { EnvironmentRuntimeControls } from "./EnvironmentRuntimeControls";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -1962,6 +1963,13 @@ export default function GitActionsControl({
               <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Actions</p>
               {projectActions}
             </section>
+          ) : null}
+
+          {activeThreadRef ? (
+            <EnvironmentRuntimeControls
+              threadRef={activeThreadRef}
+              enabled={actionCardOpen || (allowPersistentCard && !persistentCardDismissed)}
+            />
           ) : null}
 
           {editorActions ? (

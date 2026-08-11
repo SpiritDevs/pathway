@@ -8,9 +8,10 @@ const EMPTY_PORTS: ReadonlyArray<DiscoveredLocalServer> = Object.freeze([]);
 
 export function useDiscoveredPorts(
   environmentId: EnvironmentId | null,
+  enabled = true,
 ): ReadonlyArray<DiscoveredLocalServer> {
   const query = useEnvironmentQuery(
-    environmentId === null
+    environmentId === null || !enabled
       ? null
       : previewEnvironment.discoveredServers({ environmentId, input: {} }),
   );
