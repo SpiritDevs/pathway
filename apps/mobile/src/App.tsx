@@ -10,6 +10,7 @@ import { createStaticNavigation, DarkTheme, DefaultTheme } from "@react-navigati
 
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
+import { AuthGate } from "./features/auth/AuthGate";
 import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
@@ -81,12 +82,19 @@ export default function App() {
                     the system is in dark mode. */}
                 {/* Blur target for Android dropdown backdrops — see appBlurTarget.ts. */}
                 <BlurTargetView ref={appBlurTargetRef} style={{ flex: 1 }}>
-                  <IncomingShareProvider>
-                    <Navigation
-                      linking={appLinking}
-                      theme={colorScheme === "dark" ? DarkTheme : DefaultTheme}
-                    />
-                  </IncomingShareProvider>
+                  {/* Accounts are mandatory (docs/internals/decisions/0001).
+                      The gate sits ABOVE the navigator on purpose: while it
+                      shows auth or onboarding, no app route — and none of the
+                      workspace machinery hanging off RootStackLayout — is
+                      mounted. */}
+                  <AuthGate>
+                    <IncomingShareProvider>
+                      <Navigation
+                        linking={appLinking}
+                        theme={colorScheme === "dark" ? DarkTheme : DefaultTheme}
+                      />
+                    </IncomingShareProvider>
+                  </AuthGate>
                   <ConfirmDialogHost />
                 </BlurTargetView>
                 {/* Anchored-menu overlays render here — in-window, so the

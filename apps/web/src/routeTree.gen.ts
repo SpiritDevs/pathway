@@ -11,8 +11,11 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as RegisterRouteImport } from './routes/register'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as OrchestratorRouteImport } from './routes/orchestrator'
+import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as IssuesRouteImport } from './routes/issues'
 import { Route as EmailRouteImport } from './routes/email'
 import { Route as DashboardRouteImport } from './routes/dashboard'
@@ -48,6 +51,11 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PairRoute = PairRouteImport.update({
   id: '/pair',
   path: '/pair',
@@ -56,6 +64,16 @@ const PairRoute = PairRouteImport.update({
 const OrchestratorRoute = OrchestratorRouteImport.update({
   id: '/orchestrator',
   path: '/orchestrator',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IssuesRoute = IssuesRouteImport.update({
@@ -187,8 +205,11 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
   '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
@@ -216,8 +237,11 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
   '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
@@ -247,8 +271,11 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
   '/issues': typeof IssuesRoute
+  '/login': typeof LoginRoute
+  '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
+  '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
@@ -278,8 +305,11 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/email'
     | '/issues'
+    | '/login'
+    | '/onboarding'
     | '/orchestrator'
     | '/pair'
+    | '/register'
     | '/settings'
     | '/usage'
     | '/pull-requests'
@@ -307,8 +337,11 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/email'
     | '/issues'
+    | '/login'
+    | '/onboarding'
     | '/orchestrator'
     | '/pair'
+    | '/register'
     | '/settings'
     | '/usage'
     | '/pull-requests'
@@ -337,8 +370,11 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/email'
     | '/issues'
+    | '/login'
+    | '/onboarding'
     | '/orchestrator'
     | '/pair'
+    | '/register'
     | '/settings'
     | '/usage'
     | '/_chat/pull-requests'
@@ -368,8 +404,11 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   EmailRoute: typeof EmailRoute
   IssuesRoute: typeof IssuesRoute
+  LoginRoute: typeof LoginRoute
+  OnboardingRoute: typeof OnboardingRoute
   OrchestratorRoute: typeof OrchestratorRoute
   PairRoute: typeof PairRoute
+  RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
@@ -392,6 +431,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/pair': {
       id: '/pair'
       path: '/pair'
@@ -404,6 +450,20 @@ declare module '@tanstack/react-router' {
       path: '/orchestrator'
       fullPath: '/orchestrator'
       preLoaderRoute: typeof OrchestratorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/issues': {
@@ -633,8 +693,11 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   EmailRoute: EmailRoute,
   IssuesRoute: IssuesRoute,
+  LoginRoute: LoginRoute,
+  OnboardingRoute: OnboardingRoute,
   OrchestratorRoute: OrchestratorRoute,
   PairRoute: PairRoute,
+  RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,

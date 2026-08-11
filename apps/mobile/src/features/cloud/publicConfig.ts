@@ -78,6 +78,17 @@ export function hasCloudPublicConfig(): boolean {
   return Boolean(config.clerk.publishableKey && config.clerk.jwtTemplate && config.relay.url);
 }
 
+/**
+ * Whether Clerk identity is configured at all. Split out of
+ * `hasCloudPublicConfig()` because accounts are mandatory on every surface
+ * (docs/internals/decisions/0001) — identity no longer implies a configured
+ * relay, and a build without a publishable key fails closed rather than
+ * falling through to an open app.
+ */
+export function hasClerkPublicConfig(): boolean {
+  return Boolean(resolveCloudPublicConfig().clerk.publishableKey);
+}
+
 type Configured<T> = {
   readonly [Key in keyof T]: NonNullable<T[Key]>;
 };

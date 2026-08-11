@@ -173,6 +173,17 @@ function CloudAuthBridge(props: { readonly children: ReactNode }) {
   return props.children;
 }
 
+/**
+ * Provides Clerk to the whole app, and bridges the Clerk session onto the
+ * relay when one is configured.
+ *
+ * Clerk identity no longer implies a configured relay: accounts are mandatory
+ * on every surface (docs/internals/decisions/0001), so ClerkProvider mounts
+ * whenever a publishable key exists, even with no relay URL. The relay bridge
+ * stays conditional on the relay URL. With no publishable key nothing mounts
+ * here at all and `AuthGate` renders the misconfiguration screen instead —
+ * Clerk hooks would throw without a provider.
+ */
 export function CloudAuthProvider(props: { readonly children: ReactNode }) {
   const config = resolveCloudPublicConfig();
   const publishableKey = config.clerk.publishableKey;
@@ -184,13 +195,13 @@ export function CloudAuthProvider(props: { readonly children: ReactNode }) {
     }
   }, [publishableKey, relayUrl]);
 
-  if (!publishableKey || !relayUrl) {
+  if (!publishableKey) {
     return props.children;
   }
 
   return (
     <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
-      <CloudAuthBridge>{props.children}</CloudAuthBridge>
+      {relayUrl ? <CloudAuthBridge>{props.children}</CloudAuthBridge> : props.children}
     </ClerkProvider>
   );
 }

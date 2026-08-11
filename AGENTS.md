@@ -8,19 +8,15 @@ You can think of Pathway as an open source "bring-your-own-subscription" alterna
 
 We have over 100,000 users who love Pathway. It's important we maintain the things they love as we continue to iterate on the product. Here's a brief list of the things we can never compromise on.
 
-### 1. Open at the core
-
-Pathway is truly open. We share our roadmap, we share how we think about things, and of course we share all our code. A large number of our users run forks. We work in the open, and should strive to stay that way.
-
-### 2. Performance without compromise
+### 1. Performance without compromise
 
 Lots of apps have gotten bogged down with bad tech decisions and "slop". We have not, and we're proud of the performance of Pathway. We regularly audit for performance regressions, often caused by sending too much data over websockets, css animations causing gpu spikes, lists being hard to render, and more. Make sure all changes are considerate of performance impact.
 
-### 3. Remote ready
+### 2. Remote ready
 
 The architecture of Pathway's websocket layer (npx t3) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with T3 Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
 
-### 4. Multi-surface
+### 3. Multi-surface
 
 Pathway has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
@@ -30,7 +26,7 @@ Pathway has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
 **Mobile** is a React Native app for both iOS and Android, available on the App Store and Google Play. The mobile app allows for connecting to any Pathway server to control work remotely.
 
-## A note from Theo
+## A note from Corey
 
 I like ambitious ideas, simple systems, and software that feels obvious. Do not preserve complexity just because it already exists. Do not introduce machinery because it looks architecturally impressive. Understand the real constraint, then fight for the smallest model that makes the correct behavior unsurprising.
 

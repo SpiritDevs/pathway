@@ -74,6 +74,10 @@ export function hasCloudPublicConfig(): boolean {
   return Boolean(config.clerkPublishableKey && config.clerkJwtTemplate && config.relayUrl);
 }
 
+export function hasClerkPublicConfig(): boolean {
+  return Boolean(resolveCloudPublicConfig().clerkPublishableKey);
+}
+
 export function resolveRelayClerkTokenOptions() {
   const { clerkJwtTemplate } = resolveCloudPublicConfig();
   if (!clerkJwtTemplate) {

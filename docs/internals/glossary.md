@@ -11,6 +11,7 @@ This is a living glossary for Pathway. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Identity and onboarding](#identity-and-onboarding)
 
 ## Concepts
 
@@ -147,6 +148,76 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 - If you see `receipt`, think "async milestone signal, for tests".
 - If you see `checkpoint`, think "workspace snapshot for diff/restore".
 - If you see `quiesced`, think "all relevant follow-up work has gone idle".
+
+### Identity and onboarding
+
+Terms below describe this fork, where an account is required to open the app. Upstream Pathway
+treats identity as an optional T3 Connect concern. See [decisions/](./decisions/).
+
+#### Account
+
+The Clerk user. The only identity in the system, and the first user-scoped thing in a codebase
+that is otherwise environment-scoped or client-scoped. Distinct from an **environment**, which is
+a machine and its state, and from a **client**, which is one installed app. One account spans many
+of each.
+
+#### Auth gate
+
+The single decision about whether a visitor may reach the app, made by
+`resolveClerkAuthGateState` in `apps/web/src/components/clerk/authGate.logic.ts`. It has five
+outcomes — `authenticated`, `loading`, `onboarding` (signed in, profile incomplete), `public`,
+`redirect`. Not to be confused with the **primary
+environment auth gate** (`resolveInitialServerAuthGateState`), which decides whether this client
+may talk to a T3 server. The two are independent: being signed in says nothing about being paired
+to a server.
+
+#### Profile
+
+The user-scoped record of display name, avatar, account kind, and survey answers. Lives on the
+Clerk user — native fields plus `unsafeMetadata` — not in `settings.json` and not in
+localStorage, both of which are per-machine. See
+[decisions/0003](./decisions/0003-profile-in-clerk-user.md).
+
+#### Account kind
+
+The discriminant of the profile: `individual` or `company`. Chosen in onboarding, and it selects
+which branch of the step graph runs. A sum type, not a flag — the fields that follow differ
+entirely by branch.
+
+#### Onboarding
+
+Ambiguous in this codebase; always qualify it.
+
+**Profile onboarding** is the blocking, resumable stepper at `/onboarding` that collects the
+profile after registration ([decisions/0004](./decisions/0004-onboarding-stepper.md)).
+
+**Connect onboarding** is the pre-existing post-sign-in wizard in
+`apps/web/src/components/cloud/ConnectOnboardingDialog.tsx` that publishes an environment and
+connects devices. It runs inside the authenticated shell, so profile onboarding always precedes
+it.
+
+#### Company
+
+An organization the account belongs to, modelled as a Clerk organization. Has identity and
+membership independent of whoever created it. In v1 membership grants nothing — no shared
+billing, visibility, or data — which is what makes email-domain matching an acceptable way to
+offer it. See [decisions/0005](./decisions/0005-company-via-clerk-organizations.md).
+
+#### Domain auto-join
+
+Planned, not yet implemented (ships with the organizations change; see
+[decisions/0005](./decisions/0005-company-via-clerk-organizations.md)). Offering a registering
+user membership in an existing company when their verified email domain matches its verified
+domain. Always **offered and opt-in**, never applied silently. Free and disposable mail domains
+will be excluded, a check that only means anything server-side.
+
+#### Pending session
+
+A Clerk session that is authenticated but has an outstanding task, such as selecting an
+organization. Eleven non-test call sites pass `treatPendingAsSignedOut: false` to keep such a
+session from reading as signed out — including the auth gates themselves; enabling organizations
+is what makes that state common rather than rare, and each site needs a deliberate answer before
+that change lands.
 
 ## Related Docs
 

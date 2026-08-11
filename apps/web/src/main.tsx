@@ -9,7 +9,7 @@ import "./index.css";
 
 import { isElectron } from "./env";
 import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
-import { hasCloudPublicConfig } from "./cloud/publicConfig";
+import { hasClerkPublicConfig, hasCloudPublicConfig } from "./cloud/publicConfig";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
@@ -30,18 +30,21 @@ if (isElectron) {
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
 const app = <AppRoot router={router} />;
+const configuredApp = hasCloudPublicConfig() ? (
+  <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
+) : (
+  app
+);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {clerkPublishableKey && hasCloudPublicConfig() ? (
+    {clerkPublishableKey && hasClerkPublicConfig() ? (
       isElectron ? (
         <ElectronClerkProvider publishableKey={clerkPublishableKey} passkeys={passkeys}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
+          {configuredApp}
         </ElectronClerkProvider>
       ) : (
-        <ClerkProvider publishableKey={clerkPublishableKey}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ClerkProvider>
+        <ClerkProvider publishableKey={clerkPublishableKey}>{configuredApp}</ClerkProvider>
       )
     ) : (
       app

@@ -51,7 +51,11 @@ should set `PATHWAY_CLERK_PUBLISHABLE_KEY`, `PATHWAY_CLERK_JWT_TEMPLATE`,
 production builds only need the Clerk publishable key, JWT template name, and relay URL in their EAS
 environment.
 
-When any client-facing public value is absent, cloud UI is omitted. The `t3 connect` command group is
+The Clerk publishable key is mandatory in this fork: the app requires an account to open, and a
+build without the key fails closed to a misconfiguration screen rather than running open
+([decisions/0001](./decisions/0001-mandatory-account-gate.md)). The remaining public values stay
+optional — when the relay URL or JWT template is absent, T3 Connect cloud UI is omitted while
+identity keeps working. The `t3 connect` command group is
 always registered: when the CLI public values are absent, `makeCli` in `apps/server/src/bin.ts`
 registers a hidden fallback `connect` command that reports the missing configuration instead of
 silently vanishing from help. The bundled server still accepts runtime overrides for self-hosted or

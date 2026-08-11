@@ -1,6 +1,8 @@
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { isOnboardingComplete, parseProfileMetadata } from "@t3tools/client-runtime/profile";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useAuth, useUser } from "@clerk/react";
 import {
   Outlet,
   createRootRoute,
@@ -12,6 +14,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
+import { hasClerkPublicConfig } from "../cloud/publicConfig";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
@@ -55,9 +58,22 @@ import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
+import { resolveClerkAuthGateState } from "../components/clerk/authGate.logic";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
+    if (
+      location.pathname === "/login" ||
+      location.pathname === "/register" ||
+      location.pathname === "/onboarding"
+    ) {
+      return {
+        authGateState: {
+          status: "hosted-static",
+        } as const,
+      };
+    }
+
     if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
       return {
         authGateState: {
@@ -88,6 +104,74 @@ export const Route = createRootRoute({
 
 function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
+
+  // Fail closed: accounts are mandatory (docs/internals/decisions/0001). A
+  // build without a Clerk publishable key is a misconfiguration, not an open
+  // app.
+  return hasClerkPublicConfig() ? (
+    <ConfiguredClerkAuthGate pathname={pathname} />
+  ) : (
+    <MissingAuthConfigScreen />
+  );
+}
+
+function MissingAuthConfigScreen() {
+  return (
+    <main className="surface-grain flex min-h-dvh items-center justify-center bg-background px-4 text-foreground">
+      <section className="w-full max-w-md rounded-2xl border border-border/70 bg-card p-6 shadow-xl shadow-black/8">
+        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+          {APP_DISPLAY_NAME}
+        </p>
+        <h1 className="mt-3 text-xl font-semibold tracking-tight">
+          Authentication is not configured.
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          This build has no Clerk publishable key, and {APP_DISPLAY_NAME} requires an account to
+          run. Set <code className="text-foreground/90">PATHWAY_CLERK_PUBLISHABLE_KEY</code> in the
+          repository-root <code className="text-foreground/90">.env</code> and rebuild.
+        </p>
+      </section>
+    </main>
+  );
+}
+
+function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { user } = useUser();
+  const navigate = useNavigate();
+  const onboardingComplete = isSignedIn
+    ? user
+      ? isOnboardingComplete(parseProfileMetadata(user.unsafeMetadata))
+      : undefined
+    : undefined;
+  const gateState = resolveClerkAuthGateState({
+    isLoaded,
+    isSignedIn,
+    onboardingComplete,
+    pathname,
+  });
+
+  useEffect(() => {
+    if (gateState === "redirect") {
+      void navigate({ replace: true, to: "/login" });
+    }
+    if (gateState === "onboarding") {
+      void navigate({ replace: true, to: "/onboarding" });
+    }
+  }, [gateState, navigate]);
+
+  if (gateState === "loading" || gateState === "redirect" || gateState === "onboarding") {
+    return (
+      <div className="surface-grain flex min-h-dvh items-center justify-center bg-background">
+        <div className="h-1 w-12 animate-pulse rounded-full bg-muted-foreground/35" />
+      </div>
+    );
+  }
+
+  return <RootRouteContent pathname={pathname} />;
+}
+
+function RootRouteContent({ pathname }: { readonly pathname: string }) {
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
 
@@ -100,7 +184,14 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
+  if (
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/onboarding" ||
+    pathname === "/pair" ||
+    pathname === "/connect" ||
+    pathname.startsWith("/connect/")
+  ) {
     return (
       <>
         <DocumentTitleSync />
