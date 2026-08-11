@@ -1,7 +1,6 @@
 import { CalendarDaysIcon } from "lucide-react";
 
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { SidebarContent, SidebarGroup, SidebarGroupLabel } from "../ui/sidebar";
 
 export function CalendarSidebar() {
@@ -19,7 +18,6 @@ export function CalendarSidebar() {
           </p>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter />
     </>
   );
 }

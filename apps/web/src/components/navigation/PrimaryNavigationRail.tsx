@@ -15,6 +15,8 @@ import { memo, useCallback, useEffect, useRef, useState, type ComponentProps } f
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
+import { SidebarProviderUpdatePill } from "../sidebar/SidebarProviderUpdatePill";
+import { SidebarUpdatePill } from "../sidebar/SidebarUpdatePill";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -386,6 +388,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             expanded ? "items-stretch" : "items-center",
           )}
         >
+          <SidebarProviderUpdatePill expanded={expanded} />
+          <SidebarUpdatePill expanded={expanded} />
           {navigationItems
             .slice(PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT)
             .map(({ destination, icon, label, onNavigate }) => (

@@ -10,9 +10,7 @@ import {
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
 import { Badge } from "../ui/badge";
-import { SidebarFooter, SidebarHeader, SidebarTrigger } from "../ui/sidebar";
-import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarHeader, SidebarTrigger } from "../ui/sidebar";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -82,12 +80,3 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
     </Link>
   );
 }
-
-export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
-  return (
-    <SidebarFooter className="hidden p-[var(--sidebar-content-inset)] md:flex">
-      <SidebarProviderUpdatePill />
-      <SidebarUpdatePill />
-    </SidebarFooter>
-  );
-});

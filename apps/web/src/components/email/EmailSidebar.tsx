@@ -2,7 +2,6 @@ import { useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { SidebarContent, SidebarGroup } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
@@ -57,7 +56,6 @@ export function EmailSidebar() {
           <EmailSourceToggle />
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter />
     </>
   );
 }

@@ -10,6 +10,7 @@ import {
   type ProviderUpdateSidebarPillView,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { cn } from "../../lib/utils";
 
 const PROVIDER_UPDATE_PILL_STYLES = {
   loading:
@@ -38,7 +39,7 @@ function latestProviderCheckedAt(
   );
 }
 
-export function SidebarProviderUpdatePill() {
+export function SidebarProviderUpdatePill({ expanded }: { readonly expanded: boolean }) {
   const navigate = useNavigate();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(() => new Set());
@@ -124,13 +125,14 @@ export function SidebarProviderUpdatePill() {
 
   return (
     <div
-      className={`group/provider-update relative flex h-7 w-full items-center overflow-hidden rounded-lg text-xs font-medium transform-gpu transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
-        PROVIDER_UPDATE_PILL_STYLES[displayedView.tone]
-      } ${
+      className={cn(
+        "group/provider-update relative flex items-center overflow-hidden text-xs font-medium transform-gpu transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform",
+        expanded ? "h-7 w-full rounded-lg" : "size-9 rounded-md",
+        PROVIDER_UPDATE_PILL_STYLES[displayedView.tone],
         exitingKey === displayedView.key
           ? "pointer-events-none translate-y-1.5 opacity-0"
-          : "translate-y-0 opacity-100"
-      }`}
+          : "translate-y-0 opacity-100",
+      )}
       onTransitionEnd={(event) => {
         if (event.target !== event.currentTarget) {
           return;
@@ -161,32 +163,37 @@ export function SidebarProviderUpdatePill() {
           }
         />
       ) : null}
-      <div className="pointer-events-none absolute inset-0 rounded-lg transition-colors" />
+      <div className="pointer-events-none absolute inset-0 rounded-[inherit] transition-colors" />
       <Tooltip>
         <TooltipTrigger
           render={
             <button
               type="button"
               aria-label={displayedView.description}
-              className="provider-update-main relative z-[1] flex h-full flex-1 items-center gap-2 px-2 text-left"
+              className={cn(
+                "provider-update-main relative z-[1] flex h-full flex-1 items-center",
+                expanded ? "gap-2 px-2 text-left" : "justify-center px-0",
+              )}
               onClick={openProviderSettings}
             >
               {displayedView.tone === "loading" ? (
-                <LoaderIcon className="size-3.5 animate-spin" />
+                <LoaderIcon className={cn(expanded ? "size-3.5" : "size-4", "animate-spin")} />
               ) : displayedView.tone === "success" ? (
-                <CircleCheckIcon className="size-3.5" />
+                <CircleCheckIcon className={expanded ? "size-3.5" : "size-4"} />
               ) : displayedView.tone === "error" ? (
-                <TriangleAlertIcon className="size-3.5" />
+                <TriangleAlertIcon className={expanded ? "size-3.5" : "size-4"} />
               ) : (
-                <DownloadIcon className="size-3.5" />
+                <DownloadIcon className={expanded ? "size-3.5" : "size-4"} />
               )}
-              <span>{displayedView.title}</span>
+              {expanded ? <span>{displayedView.title}</span> : null}
             </button>
           }
         />
-        <TooltipPopup side="top">{displayedView.description}</TooltipPopup>
+        <TooltipPopup side={expanded ? "top" : "right"} sideOffset={expanded ? 0 : 8}>
+          {displayedView.description}
+        </TooltipPopup>
       </Tooltip>
-      {displayedView.dismissible && (
+      {expanded && displayedView.dismissible && (
         <Tooltip>
           <TooltipTrigger
             render={

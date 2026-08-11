@@ -19,6 +19,7 @@ import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Separator } from "../ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { cn } from "../../lib/utils";
 
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
@@ -68,7 +69,7 @@ function SidebarUpdateReleaseNotesTooltip({
   );
 }
 
-export function SidebarUpdatePill() {
+export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) {
   const state = useDesktopUpdateState();
   const [dismissed, setDismissed] = useState(false);
   const [isActionPending, setIsActionPending] = useState(false);
@@ -171,21 +172,41 @@ export function SidebarUpdatePill() {
   if (!visible && !showArm64Warning) return null;
 
   return (
-    <div className="flex flex-col gap-1">
-      {showArm64Warning && arm64Description && (
+    <div className={cn("flex flex-col gap-1", expanded ? "w-full" : "items-center")}>
+      {showArm64Warning && arm64Description && expanded ? (
         <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
           <TriangleAlertIcon />
           <AlertTitle>Intel build on Apple Silicon</AlertTitle>
           <AlertDescription>{arm64Description}</AlertDescription>
         </Alert>
-      )}
+      ) : showArm64Warning && arm64Description ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <div
+                aria-label={arm64Description}
+                className="flex size-9 items-center justify-center rounded-md bg-warning/12 text-warning"
+                role="status"
+                tabIndex={0}
+              >
+                <TriangleAlertIcon className="size-4" />
+              </div>
+            }
+          />
+          <TooltipPopup side="right" sideOffset={8}>
+            {arm64Description}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
       {visible && (
         <div
-          className={`group/update relative flex h-7 w-full items-center rounded-lg bg-update-surface text-xs font-medium text-update-foreground ${
-            disabled ? " cursor-not-allowed opacity-60" : ""
-          }`}
+          className={cn(
+            "group/update relative flex items-center bg-update-surface text-xs font-medium text-update-foreground",
+            expanded ? "h-7 w-full rounded-lg" : "size-9 rounded-md",
+            disabled && "cursor-not-allowed opacity-60",
+          )}
         >
-          <div className="pointer-events-none absolute inset-0 rounded-lg transition-colors group-has-[button.update-main:hover]/update:bg-update/12" />
+          <div className="pointer-events-none absolute inset-0 rounded-[inherit] transition-colors group-has-[button.update-main:hover]/update:bg-update/12" />
           <Tooltip>
             <TooltipTrigger
               render={
@@ -194,28 +215,33 @@ export function SidebarUpdatePill() {
                   aria-label={tooltip}
                   aria-disabled={disabled || isActionPending || undefined}
                   disabled={disabled || isActionPending}
-                  className="update-main relative flex h-full flex-1 items-center gap-2 px-2 enabled:cursor-pointer"
+                  className={cn(
+                    "update-main relative flex h-full flex-1 items-center enabled:cursor-pointer",
+                    expanded ? "gap-2 px-2" : "justify-center px-0",
+                  )}
                   onClick={handleAction}
                 >
                   {action === "install" ? (
                     <>
-                      <RotateCwIcon className="size-3.5" />
-                      <span>Restart to update</span>
+                      <RotateCwIcon className={expanded ? "size-3.5" : "size-4"} />
+                      {expanded ? <span>Restart to update</span> : null}
                     </>
                   ) : state?.status === "downloading" ? (
                     <>
-                      <DownloadIcon className="size-3.5" />
-                      <span>
-                        Downloading
-                        {typeof state.downloadPercent === "number"
-                          ? ` (${Math.floor(state.downloadPercent)}%)`
-                          : "…"}
-                      </span>
+                      <DownloadIcon className={expanded ? "size-3.5" : "size-4"} />
+                      {expanded ? (
+                        <span>
+                          Downloading
+                          {typeof state.downloadPercent === "number"
+                            ? ` (${Math.floor(state.downloadPercent)}%)`
+                            : "…"}
+                        </span>
+                      ) : null}
                     </>
                   ) : (
                     <>
-                      <DownloadIcon className="size-3.5" />
-                      <span>Update available</span>
+                      <DownloadIcon className={expanded ? "size-3.5" : "size-4"} />
+                      {expanded ? <span>Update available</span> : null}
                     </>
                   )}
                 </button>
@@ -230,7 +256,8 @@ export function SidebarUpdatePill() {
                     "pointer-events-auto max-w-none text-balance"
                   : undefined
               }
-              side="top"
+              side={expanded ? "top" : "right"}
+              sideOffset={expanded ? 0 : 8}
             >
               {state ? (
                 <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
@@ -239,7 +266,7 @@ export function SidebarUpdatePill() {
               )}
             </TooltipPopup>
           </Tooltip>
-          {action === "download" && (
+          {expanded && action === "download" && (
             <Tooltip>
               <TooltipTrigger
                 render={

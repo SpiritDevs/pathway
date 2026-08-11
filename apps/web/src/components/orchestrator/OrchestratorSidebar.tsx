@@ -1,7 +1,6 @@
 import { BotIcon } from "lucide-react";
 
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { SidebarContent, SidebarGroup, SidebarGroupLabel } from "../ui/sidebar";
 
 export function OrchestratorSidebar() {
@@ -19,7 +18,6 @@ export function OrchestratorSidebar() {
           </p>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter />
     </>
   );
 }

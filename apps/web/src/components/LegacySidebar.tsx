@@ -185,7 +185,7 @@ import {
   ThreadStatusPill,
 } from "./Sidebar.logic";
 import { sortThreads } from "../lib/threadSort";
-import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
@@ -3691,7 +3691,6 @@ export default function LegacySidebar() {
         attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
         projectsLength={projects.length}
       />
-      <SidebarChromeFooter />
     </>
   );
 }

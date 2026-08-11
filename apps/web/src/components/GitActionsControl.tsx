@@ -1025,7 +1025,7 @@ export default function GitActionsControl({
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
   const [actionCardOpen, setActionCardOpen] = useState(false);
-  const [persistentCardDismissed, setPersistentCardDismissed] = useState(false);
+  const [persistentCardDismissed, setPersistentCardDismissed] = useState(true);
   const actionCardRootRef = useRef<HTMLDivElement | null>(null);
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
   const sourceControlScope = useMemo(
@@ -1873,7 +1873,7 @@ export default function GitActionsControl({
         <div
           aria-label="Environment actions"
           className={cn(
-            "invisible pointer-events-none absolute right-0 top-[calc(var(--workspace-topbar-height)+0.5rem)] z-50 max-h-[min(34rem,calc(100dvh-5rem))] w-[min(18rem,calc(100vw-2rem))] translate-y-1 overflow-y-auto rounded-2xl border border-border/80 bg-popover p-3 text-popover-foreground opacity-0 shadow-xl transition-[opacity,transform,visibility] duration-150 ease-out motion-reduce:translate-y-0 motion-reduce:transition-none",
+            "invisible pointer-events-none absolute right-[6px] top-[calc(var(--workspace-topbar-height)+0.5rem)] z-50 max-h-[min(34rem,calc(100dvh-5rem))] w-[min(18rem,calc(100vw-2rem))] translate-y-1 overflow-y-auto rounded-2xl border border-border/80 bg-popover p-3 text-popover-foreground opacity-0 shadow-xl transition-[opacity,transform,visibility] duration-150 ease-out motion-reduce:translate-y-0 motion-reduce:transition-none",
             actionCardOpen && "visible pointer-events-auto translate-y-0 opacity-100",
             allowPersistentCard &&
               !persistentCardDismissed &&

@@ -1,7 +1,6 @@
 import { ListTodoIcon } from "lucide-react";
 
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarChromeFooter } from "../sidebar/SidebarChrome";
 import { SidebarContent, SidebarGroup, SidebarGroupLabel } from "../ui/sidebar";
 
 export function IssuesSidebar() {
@@ -19,7 +18,6 @@ export function IssuesSidebar() {
           </p>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarChromeFooter />
     </>
   );
 }
