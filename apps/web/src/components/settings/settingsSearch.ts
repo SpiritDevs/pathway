@@ -357,6 +357,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/email",
   },
   {
+    id: "email-clear-all",
+    title: "Clear captured mail",
+    to: "/settings/email",
+    // The row lives inside the retention section, which is the stable scroll target.
+    targetId: "email-retention",
+  },
+  {
     id: "email-toasts",
     title: "Captured mail toasts",
     to: "/settings/email",

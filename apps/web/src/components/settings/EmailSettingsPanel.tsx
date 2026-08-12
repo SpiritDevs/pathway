@@ -25,6 +25,7 @@ import {
   parsePositiveInteger,
   summarizeEmailListener,
 } from "../email/emailSettings.logic";
+import { ClearInboxButton } from "../email/ClearInboxButton";
 import { EmailSettingField } from "../email/EmailSettingsField";
 import { EmailTriggerRulesSection } from "../email/EmailTriggerRulesSection";
 import { reportEmailWriteFailure } from "../email/emailWrites";
@@ -184,6 +185,17 @@ export function EmailSettingsPanel() {
           }
           description="Whichever cap is reached first wins."
           title="Days kept"
+        />
+        <SettingsRow
+          control={
+            <ClearInboxButton
+              inboxName="all inboxes"
+              label="Clear all mail"
+              scope={{ type: "all" }}
+            />
+          }
+          description="Deletes every captured message across every inbox, including raw sources and attachments. Per-project clearing lives on each project's page."
+          title="Clear all captured mail"
         />
       </SettingsSection>
 

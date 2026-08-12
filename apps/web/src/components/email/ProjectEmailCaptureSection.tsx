@@ -27,6 +27,7 @@ import {
   parseOptionalPositiveInteger,
   withEmailProjectSettings,
 } from "./emailSettings.logic";
+import { ClearInboxButton } from "./ClearInboxButton";
 import { EmailSettingField } from "./EmailSettingsField";
 import { EmailTriggerRulesSection } from "./EmailTriggerRulesSection";
 import { reportEmailWriteFailure } from "./emailWrites";
@@ -254,6 +255,17 @@ export function ProjectEmailCaptureSection({
             )
           }
           title="Toast on captured mail"
+        />
+
+        <SettingsRow
+          control={
+            <ClearInboxButton
+              inboxName={`${projectName} inbox`}
+              scope={{ type: "project", projectId }}
+            />
+          }
+          description="Deletes every captured message in this project's inbox, including raw sources and attachments."
+          title="Clear inbox"
         />
       </SettingsSection>
 
