@@ -1,6 +1,7 @@
 import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
+  type CommandId,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -185,13 +186,21 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import {
+  NO_PROVIDER_MODEL_SELECTION,
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import { resolveAppModelSelectionForInstance } from "../modelSelection";
+import {
+  getAppModelOptionsForInstance,
+  resolveAppModelSelectionForInstance,
+} from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { preventRepeatedTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -252,6 +261,7 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { ContinuationDialog, type ContinuationWorkspaceTarget } from "./chat/ContinuationDialog";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
@@ -1309,7 +1319,7 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
-  const forkThreadFromRun = useAtomCommand(threadEnvironment.forkFromRun, {
+  const launchThreadContinuation = useAtomCommand(threadEnvironment.launchContinuation, {
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
@@ -2376,6 +2386,23 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchServerLabel,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  const continuationProviderEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(deriveProviderInstanceEntries(providerStatuses), settings),
+      ),
+    [providerStatuses, settings],
+  );
+  const continuationModelOptionsByInstance = useMemo(
+    () =>
+      new Map(
+        continuationProviderEntries.map((entry) => [
+          entry.instanceId,
+          getAppModelOptionsForInstance(settings, entry),
+        ]),
+      ),
+    [continuationProviderEntries, settings],
+  );
   const unlockedSelectedProvider = resolveSelectableProvider(
     providerStatuses,
     selectedProviderByThreadId ?? threadProvider,
@@ -5156,30 +5183,101 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, navigate],
   );
 
-  const onForkFromRun = useCallback(
-    async (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => {
-      if (!activeThread || activeEnvironmentUnavailable) return;
-      const targetThreadId = newThreadId();
+  const [continuationRequest, setContinuationRequest] = useState<
+    | {
+        readonly kind: "continue";
+        readonly commandId: CommandId;
+        readonly sourceThreadId: ThreadId;
+        readonly sourceRunId: RunId;
+        readonly targetThreadId: ThreadId;
+      }
+    | { readonly kind: "handoff" }
+    | null
+  >(null);
+  const [continuationPending, setContinuationPending] = useState(false);
+  const onContinueFromRun = useCallback(
+    (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => {
+      setContinuationRequest({
+        kind: "continue",
+        commandId: newCommandId(),
+        sourceThreadId: input.sourceThreadId,
+        sourceRunId: input.runId,
+        targetThreadId: newThreadId(),
+      });
+    },
+    [],
+  );
+  const onOpenHandoff = useCallback(() => {
+    if (activeLatestRun?.status !== "completed") return;
+    setContinuationRequest({ kind: "handoff" });
+  }, [activeLatestRun?.status]);
+  const onSubmitContinuation = useCallback(
+    async (modelSelection: ModelSelection, workspaceTarget: ContinuationWorkspaceTarget) => {
+      const request = continuationRequest;
+      if (
+        request === null ||
+        continuationPending ||
+        !activeThread ||
+        activeEnvironmentUnavailable ||
+        isWorking ||
+        !latestRunSettled ||
+        activePendingApproval !== null ||
+        activePendingUserInput !== null
+      ) {
+        return;
+      }
+      setContinuationPending(true);
+      if (request.kind === "handoff") {
+        const result = await updateThreadMetadata({
+          environmentId,
+          input: { threadId: activeThread.id, modelSelection },
+        });
+        setContinuationPending(false);
+        if (result._tag === "Success") {
+          setComposerDraftModelSelection(
+            scopeThreadRef(activeThread.environmentId, activeThread.id),
+            modelSelection,
+          );
+          setStickyComposerModelSelection(modelSelection);
+          setContinuationRequest(null);
+        } else if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to hand off this chat.",
+          );
+        }
+        return;
+      }
+
+      const targetThreadId = request.targetThreadId;
       const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
-      const result = await forkThreadFromRun({
+      const result = await launchThreadContinuation({
         environmentId,
         input: {
-          sourceThreadId: input.sourceThreadId,
+          commandId: request.commandId,
+          sourceThreadId: request.sourceThreadId,
+          sourceRunId: request.sourceRunId,
           targetThreadId,
-          runId: input.runId,
-          title: `${activeThread.title} fork`,
+          title: `${activeThread.title} continuation`,
+          modelSelection,
+          runtimeMode,
+          interactionMode,
+          workspaceTarget,
         },
       });
+      setContinuationPending(false);
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
           setThreadError(
             activeThread.id,
-            error instanceof Error ? error.message : "Failed to fork this response.",
+            error instanceof Error ? error.message : "Failed to continue this response.",
           );
         }
         return;
       }
+      setContinuationRequest(null);
       const ownerThreadRef = panelOwnerThreadRef ?? activeThreadRef;
       if (!ownerThreadRef) return;
       await openForkedThreadSideChatWhenReady({
@@ -5196,12 +5294,23 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeEnvironmentUnavailable,
+      activePendingApproval,
+      activePendingUserInput,
       activeThread,
+      continuationPending,
+      continuationRequest,
       environmentId,
-      forkThreadFromRun,
       panelOwnerThreadRef,
       activeThreadRef,
+      interactionMode,
+      isWorking,
+      latestRunSettled,
+      launchThreadContinuation,
+      runtimeMode,
+      setComposerDraftModelSelection,
+      setStickyComposerModelSelection,
       setThreadError,
+      updateThreadMetadata,
     ],
   );
 
@@ -6525,6 +6634,12 @@ function ChatViewContent(props: ChatViewProps) {
       : {}),
     onComposerFocusRequest: scheduleComposerFocus,
     ...(isServerThread && isGitRepo ? { onOpenChanges: openChangesFromThreadPanel } : {}),
+    ...(isServerThread &&
+    activeLatestRun?.status === "completed" &&
+    !isWorking &&
+    !activeEnvironmentUnavailable
+      ? { onHandoff: onOpenHandoff }
+      : {}),
     onReconnectEnvironment: reconnectActiveEnvironment,
     onOpenConnectionSettings: openConnectionSettings,
     versionMismatch:
@@ -6697,7 +6812,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onPanelSurfaceOpen={revealPanelThreadAsPage}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
-                onForkFromRun={onForkFromRun}
+                onContinueFromRun={onContinueFromRun}
                 onRollbackCheckpoint={(input) => void onRollbackCheckpoint(input)}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
@@ -7125,6 +7240,21 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+      <ContinuationDialog
+        open={continuationRequest !== null}
+        kind={continuationRequest?.kind ?? "continue"}
+        sourceModelSelection={activeThread.modelSelection}
+        instanceEntries={continuationProviderEntries}
+        modelOptionsByInstance={continuationModelOptionsByInstance}
+        keybindings={keybindings}
+        pending={continuationPending}
+        onOpenChange={(open) => {
+          if (!open) setContinuationRequest(null);
+        }}
+        onSubmit={(modelSelection, workspaceTarget) => {
+          void onSubmitContinuation(modelSelection, workspaceTarget);
+        }}
+      />
     </div>
   );
 }

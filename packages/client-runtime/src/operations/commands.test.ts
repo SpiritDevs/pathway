@@ -13,6 +13,7 @@ import {
   RunId,
   ThreadId,
   WS_METHODS,
+  type OrchestrationV2ContinuationLaunchInput,
   type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
@@ -39,6 +40,7 @@ import {
   archiveThread,
   createProject,
   forkThreadFromRun,
+  launchThreadContinuation,
   mergeThreadBack,
   cancelQueuedRun,
   editQueuedRun,
@@ -71,6 +73,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly commands: OrchestrationV2Command[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
+  readonly continuationLaunches?: OrchestrationV2ContinuationLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
 }) {
   const client = {
@@ -86,6 +89,17 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
         input.launches?.push(launchInput);
         return {
           threadId: launchInput.threadId ?? v2ThreadId,
+          projection: input.projection ?? v2Projection,
+          resumed: false,
+        };
+      }),
+    [ORCHESTRATION_V2_WS_METHODS.launchContinuation]: (
+      launchInput: OrchestrationV2ContinuationLaunchInput,
+    ) =>
+      Effect.sync(() => {
+        input.continuationLaunches?.push(launchInput);
+        return {
+          threadId: launchInput.targetThreadId,
           projection: input.projection ?? v2Projection,
           resumed: false,
         };
@@ -165,6 +179,49 @@ describe("V2 environment commands", () => {
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("launches continuation through the composite V2 request", () =>
+    Effect.gen(function* () {
+      const continuationLaunches: OrchestrationV2ContinuationLaunchInput[] = [];
+      const supervisor = yield* makeSupervisor({
+        commands: [],
+        projects: [],
+        continuationLaunches,
+      });
+
+      const result = yield* launchThreadContinuation({
+        commandId: CommandId.make("continue-command"),
+        creationSource: "mobile",
+        sourceThreadId: v2ThreadId,
+        sourceRunId: RunId.make("run-source"),
+        targetThreadId: ThreadId.make("thread-continuation"),
+        title: "Continue here",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude"),
+          model: "claude-opus-4-1",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        workspaceTarget: "new-worktree",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(continuationLaunches).toEqual([
+        {
+          commandId: "continue-command",
+          creationSource: "mobile",
+          sourceThreadId: v2ThreadId,
+          sourceRunId: "run-source",
+          targetThreadId: "thread-continuation",
+          title: "Continue here",
+          modelSelection: { instanceId: "claude", model: "claude-opus-4-1" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          workspaceTarget: "new-worktree",
+        },
+      ]);
+      expect(result.threadId).toBe("thread-continuation");
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

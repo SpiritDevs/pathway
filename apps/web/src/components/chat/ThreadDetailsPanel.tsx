@@ -63,6 +63,7 @@ export interface ThreadDetailsPanelProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
+  onHandoff?: () => void;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
   versionMismatch: VersionMismatchIssue | null;
@@ -284,6 +285,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   activeThreadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
                   {...(props.draftId ? { draftId: props.draftId } : {})}
                   {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
+                  {...(props.onHandoff ? { onHandoff: props.onHandoff } : {})}
                 />
               ) : null}
             </div>

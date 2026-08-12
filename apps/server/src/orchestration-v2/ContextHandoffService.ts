@@ -50,6 +50,7 @@ export interface ContextHandoffServiceV2Shape {
     readonly toProviderInstanceId: ProviderInstanceId;
     readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
     readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly maxChars?: number | null;
     readonly createdAt: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
   readonly prepareProviderHandoff: (input: {
@@ -66,6 +67,7 @@ export interface ContextHandoffServiceV2Shape {
       "delta_since_target_last_seen" | "full_thread_summary"
     >;
     readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly maxChars?: number | null;
     readonly createdAt: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
 }
@@ -81,6 +83,49 @@ function compactText(text: string, maxLength = 240): string {
     return compacted;
   }
   return `${compacted.slice(0, maxLength - 3)}...`;
+}
+
+export const DEFAULT_CONTEXT_HANDOFF_MAX_CHARS = 32_000;
+
+function contextHandoffBudget(maxChars: number | null | undefined): number {
+  return Math.max(1, Math.floor(maxChars ?? DEFAULT_CONTEXT_HANDOFF_MAX_CHARS));
+}
+
+function newestContextWithinBudget(input: {
+  readonly preamble: ReadonlyArray<string>;
+  readonly itemLines: ReadonlyArray<string>;
+  readonly emptyLine: string;
+  readonly maxChars?: number | null;
+}): string {
+  const budget = contextHandoffBudget(input.maxChars);
+  const complete = [
+    ...input.preamble,
+    ...(input.itemLines.length === 0 ? [input.emptyLine] : input.itemLines),
+  ].join("\n");
+  if (complete.length <= budget) {
+    return complete;
+  }
+
+  const marker = `- [Earlier context truncated; showing newest entries within ${budget} characters.]`;
+  const base = [...input.preamble, marker];
+  const baseText = base.join("\n");
+  if (baseText.length > budget) {
+    // Provider recommendations are normally large enough for the preamble.
+    // Still honor an unexpectedly tiny limit rather than silently exceeding it.
+    return marker.slice(0, budget);
+  }
+
+  const retained: string[] = [];
+  for (let index = input.itemLines.length - 1; index >= 0; index -= 1) {
+    const line = input.itemLines[index];
+    if (line === undefined) continue;
+    const candidate = [...base, line, ...retained].join("\n");
+    if (candidate.length > budget) {
+      break;
+    }
+    retained.unshift(line);
+  }
+  return [...base, ...retained].join("\n");
 }
 
 function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
@@ -107,20 +152,25 @@ function makeForkDeltaSummary(input: {
   readonly targetThreadId: ThreadId;
   readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
   readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars?: number | null;
 }): string {
   const itemLines = input.deltaItems.flatMap((item) => {
     const line = summarizeDeltaItem(item);
     return line === null ? [] : [line];
   });
-  return [
-    "Merge-back context from forked conversation.",
-    `Source thread: ${input.sourceThreadId}`,
-    `Target thread: ${input.targetThreadId}`,
-    `Covered fork runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
-    "",
-    "Fork delta:",
-    ...(itemLines.length === 0 ? ["- No user-visible delta items."] : itemLines),
-  ].join("\n");
+  return newestContextWithinBudget({
+    preamble: [
+      "Merge-back context from forked conversation.",
+      `Source thread: ${input.sourceThreadId}`,
+      `Target thread: ${input.targetThreadId}`,
+      `Covered fork runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
+      "",
+      "Fork delta:",
+    ],
+    itemLines,
+    emptyLine: "- No user-visible delta items.",
+    ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+  });
 }
 
 function makeProviderHandoffSummary(input: {
@@ -132,6 +182,7 @@ function makeProviderHandoffSummary(input: {
     "delta_since_target_last_seen" | "full_thread_summary"
   >;
   readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars?: number | null;
 }): string {
   const itemLines = input.items.flatMap((item) => {
     if (item.type === "handoff") {
@@ -140,17 +191,21 @@ function makeProviderHandoffSummary(input: {
     const line = summarizeDeltaItem(item);
     return line === null ? [] : [line];
   });
-  return [
-    input.strategy === "full_thread_summary"
-      ? "Full conversation context for provider handoff."
-      : "Conversation delta since this provider last participated.",
-    `From driver: ${input.fromProviderInstanceId}`,
-    `To driver: ${input.toProviderInstanceId}`,
-    `Covered app runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
-    "",
-    "Canonical conversation context:",
-    ...(itemLines.length === 0 ? ["- No user-visible context items."] : itemLines),
-  ].join("\n");
+  return newestContextWithinBudget({
+    preamble: [
+      input.strategy === "full_thread_summary"
+        ? "Full conversation context for provider handoff."
+        : "Conversation delta since this provider last participated.",
+      `From driver: ${input.fromProviderInstanceId}`,
+      `To driver: ${input.toProviderInstanceId}`,
+      `Covered app runs: ${input.coveredRunOrdinals.from}-${input.coveredRunOrdinals.to}`,
+      "",
+      "Canonical conversation context:",
+    ],
+    itemLines,
+    emptyLine: "- No user-visible context items.",
+    ...(input.maxChars === undefined ? {} : { maxChars: input.maxChars }),
+  });
 }
 
 export function providerMessageWithContextHandoff(input: {
@@ -236,6 +291,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         readonly toProviderInstanceId: ProviderInstanceId;
         readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
         readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+        readonly maxChars?: number | null;
         readonly createdAt: DateTime.Utc;
       }) {
         const handoffId = yield* idAllocator.allocate
@@ -291,6 +347,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         "delta_since_target_last_seen" | "full_thread_summary"
       >;
       readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+      readonly maxChars?: number | null;
       readonly createdAt: DateTime.Utc;
     }) {
       const handoffId = yield* idAllocator.allocate

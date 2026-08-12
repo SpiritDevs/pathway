@@ -86,6 +86,7 @@ export type ThreadGitMenuProps = {
   readonly gitOperationLabel: string | null;
   readonly onOpenFilesInspector?: () => void;
   readonly onOpenGitInspector?: () => void;
+  readonly onHandoff?: () => void;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
 };
@@ -345,6 +346,14 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
               type: "action",
             },
             {
+              description: "Continue the latest response with another provider",
+              disabled: !props.onHandoff,
+              icon: { name: "arrow.triangle.branch", type: "sfSymbol" },
+              label: "Hand off…",
+              onPress: props.onHandoff ?? (() => {}),
+              type: "action",
+            },
+            {
               description: "Turn diffs and worktree changes",
               disabled: !model.isRepo,
               icon: { name: "text.bubble", type: "sfSymbol" },
@@ -381,6 +390,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       props.canOpenFiles,
       props.canOpenTerminal,
       props.gitStatus,
+      props.onHandoff,
       props.onOpenNewTerminal,
       props.onOpenTerminal,
       props.onRunProjectScript,
@@ -521,6 +531,14 @@ export function ThreadGitMenu(props: ThreadGitMenuProps) {
         subtitle={model.quickActionHint ?? undefined}
       >
         <NativeHeaderToolbar.Label>{model.quickAction.label}</NativeHeaderToolbar.Label>
+      </NativeHeaderToolbar.MenuAction>
+      <NativeHeaderToolbar.MenuAction
+        icon="arrow.triangle.branch"
+        disabled={!props.onHandoff}
+        onPress={props.onHandoff ?? (() => {})}
+        subtitle="Continue the latest response with another provider"
+      >
+        <NativeHeaderToolbar.Label>Hand off…</NativeHeaderToolbar.Label>
       </NativeHeaderToolbar.MenuAction>
       <NativeHeaderToolbar.MenuAction
         icon="text.bubble"

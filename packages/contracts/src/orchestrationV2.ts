@@ -2262,6 +2262,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
   getWorkflowScript: "orchestration.getWorkflowScript",
+  launchContinuation: "orchestration.launchContinuation",
   launchThread: "orchestration.launchThread",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
@@ -2343,6 +2344,29 @@ export const OrchestrationV2ThreadLaunchResult = Schema.Struct({
   resumed: Schema.Boolean,
 });
 export type OrchestrationV2ThreadLaunchResult = typeof OrchestrationV2ThreadLaunchResult.Type;
+
+export const OrchestrationV2ContinuationLaunchInput = Schema.Struct({
+  commandId: CommandId,
+  creationSource: Schema.optional(OrchestrationV2CreationSource),
+  sourceThreadId: ThreadId,
+  sourceRunId: RunId,
+  targetThreadId: ThreadId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  workspaceTarget: Schema.Literals(["current", "new-worktree"]),
+});
+export type OrchestrationV2ContinuationLaunchInput =
+  typeof OrchestrationV2ContinuationLaunchInput.Type;
+
+export const OrchestrationV2ContinuationLaunchResult = Schema.Struct({
+  threadId: ThreadId,
+  projection: OrchestrationV2ThreadProjection,
+  resumed: Schema.Boolean,
+});
+export type OrchestrationV2ContinuationLaunchResult =
+  typeof OrchestrationV2ContinuationLaunchResult.Type;
 
 export const OrchestrationV2DispatchCommandResult = Schema.Struct({
   sequence: NonNegativeInt,
@@ -2446,10 +2470,22 @@ export class OrchestrationV2ThreadLaunchError extends Schema.TaggedErrorClass<Or
   },
 ) {}
 
+export class OrchestrationV2ContinuationLaunchError extends Schema.TaggedErrorClass<OrchestrationV2ContinuationLaunchError>()(
+  "OrchestrationV2ContinuationLaunchError",
+  {
+    commandId: CommandId,
+    sourceThreadId: ThreadId,
+    targetThreadId: ThreadId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 export const OrchestrationV2RpcError = Schema.Union([
   OrchestrationV2DispatchCommandError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2ContinuationLaunchError,
   OrchestrationV2ThreadLaunchError,
 ]);
 export type OrchestrationV2RpcError = typeof OrchestrationV2RpcError.Type;
@@ -2528,6 +2564,10 @@ export const OrchestrationV2RpcSchemas = {
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,
     output: OrchestrationV2GetWorkflowScriptResult,
+  },
+  launchContinuation: {
+    input: OrchestrationV2ContinuationLaunchInput,
+    output: OrchestrationV2ContinuationLaunchResult,
   },
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
