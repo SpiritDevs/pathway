@@ -29,8 +29,17 @@ v2 removes the handshake outright. There is no `server/discover`, no
 
 ## Decision
 
-Migrate wholesale to the official `@modelcontextprotocol/sdk` (Tier 1 for
-`2026-07-28` alongside Python, Go, and C#). v2 only. The v1 path is deleted.
+Migrate wholesale to the official v2 SDK. v2 only. The v1 path is deleted.
+
+**Package correction (learned the hard way):** the v2 SDK is NOT
+`@modelcontextprotocol/sdk` — that package is the v1 line and tops out at
+protocol `2025-11-25`. For v2 the TypeScript SDK split into
+`@modelcontextprotocol/server` and `@modelcontextprotocol/client`, both at
+2.0.0 stable, published by Anthropic from the typescript-sdk main branch.
+Verified in the published bundle: `2026-07-28`, `server/discover`, and
+`subscriptions/listen` are present. Effect's own `effect/unstable/ai` McpServer
+was also evaluated as a v2 vehicle and rejected: even `4.0.0-rc.108` speaks
+only `2025-06-18` and is still initialize-based.
 
 Rejected: dual-version, and hand-rolling v2 on the Effect RPC layer. The
 maintainer's call is a clean cutover on the basis that Codex and Claude — the
