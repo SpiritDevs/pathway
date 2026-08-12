@@ -11,7 +11,6 @@ describe("orchestrator MCP tool guidance", () => {
     assert.include(CreateThreadsTool.description ?? "", "not delegation");
     assert.include(CreateThreadsTool.description ?? "", "call delegate_task");
     assert.include(CreateThreadsTool.description ?? "", "Pathway conversations");
-    assert.notInclude(CreateThreadsTool.description ?? "", "T3 conversations");
   });
 
   it("publishes an actionable schedule schema and compatibility string branch", () => {

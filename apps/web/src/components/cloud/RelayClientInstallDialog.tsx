@@ -69,8 +69,8 @@ export function RelayClientInstallDialog() {
           </DialogTitle>
           <DialogDescription>
             {isInstalling
-              ? "Pathway is preparing this environment for secure access through T3 Connect."
-              : "Pathway needs the relay client to make this environment available through T3 Connect."}
+              ? "Pathway is preparing this environment for secure access through Pathway Connect."
+              : "Pathway needs the relay client to make this environment available through Pathway Connect."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>

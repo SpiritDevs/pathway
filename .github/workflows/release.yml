@@ -175,7 +175,7 @@ jobs:
             --github-output
 
   relay_public_config:
-    name: Resolve T3 Connect public config
+    name: Resolve Pathway Connect public config
     needs: preflight
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404

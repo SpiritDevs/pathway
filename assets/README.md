@@ -7,7 +7,7 @@ of truth for full application icons:
 - `nightly/app-icon.icon`
 - `pathway-concepts/pathway-blueprint-forward-simple.png`
 
-The Icon Composer projects use `text.svg` for the T3 mark and `background.svg` when the background
+The Icon Composer projects use `text.svg` for the Pathway mark and `background.svg` when the background
 is a vector layer. Additional layers use semantic names that describe their role and placement. The
 production icon exporter resizes the selected Pathway PNG directly.
 

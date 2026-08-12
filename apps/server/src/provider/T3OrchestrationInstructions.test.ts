@@ -6,10 +6,10 @@ import {
   t3OrchestrationSystemPrompt,
 } from "./T3OrchestrationInstructions.ts";
 
-describe("T3 orchestration provider instructions", () => {
+describe("Pathway orchestration provider instructions", () => {
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "use `delegate_task`");
-    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level T3 conversations");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level Pathway conversations");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Never use them merely");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "different provider");
   });
@@ -40,7 +40,7 @@ describe("T3 orchestration provider instructions", () => {
     );
   });
 
-  it("only exposes the system prompt when the T3 MCP server is attached", () => {
+  it("only exposes the system prompt when the Pathway MCP server is attached", () => {
     assert.equal(t3OrchestrationSystemPrompt(false), undefined);
     assert.equal(t3OrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
   });

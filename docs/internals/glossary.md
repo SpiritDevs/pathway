@@ -197,7 +197,7 @@ recognises the bot's own messages. See [issue-tracker.md][25].
 ### Identity and onboarding
 
 Terms below describe this fork, where an account is required to open the app. Upstream Pathway
-treats identity as an optional T3 Connect concern. See [decisions/](./decisions/).
+treats identity as an optional Pathway Connect concern. See [decisions/](./decisions/).
 
 #### Account
 
@@ -213,7 +213,7 @@ The single decision about whether a visitor may reach the app, made by
 outcomes — `authenticated`, `loading`, `onboarding` (signed in, profile incomplete), `public`,
 `redirect`. Not to be confused with the **primary
 environment auth gate** (`resolveInitialServerAuthGateState`), which decides whether this client
-may talk to a T3 server. The two are independent: being signed in says nothing about being paired
+may talk to a Pathway server. The two are independent: being signed in says nothing about being paired
 to a server.
 
 #### Profile

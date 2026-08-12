@@ -28,7 +28,7 @@ planning container you can create by typing a name.
 
 ### Where the data lives
 
-New plain SQLite tables in the T3 server's `state.sqlite`, alongside the projection tables. Not the
+New plain SQLite tables in the Pathway server's `state.sqlite`, alongside the projection tables. Not the
 orchestration decider: that aggregate exists for agent turn lifecycle, and issue CRUD would drown
 it in commands and projector cases. Clients read through a new RPC group in
 `packages/contracts` and stay live through a stream RPC modelled on `authAccessStream`.

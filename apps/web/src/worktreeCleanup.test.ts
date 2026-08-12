@@ -94,7 +94,7 @@ describe("formatWorktreePathForDisplay", () => {
 
   it("normalizes windows separators before selecting the final segment", () => {
     const result = formatWorktreePathForDisplay(
-      "C:\\Users\\julius\\.t3\\worktrees\\pathway-mvp\\pathway-4e609bb8",
+      "C:\\Users\\julius\\.pathway\\worktrees\\pathway-mvp\\pathway-4e609bb8",
     );
     expect(result).toBe("pathway-4e609bb8");
   });

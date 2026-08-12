@@ -6,7 +6,7 @@ Date: 2026-08-11
 ## Context
 
 Nothing in Pathway is user-scoped. `apps/web/src/hooks/useSettings.ts` documents the only two
-storage tiers that exist: server-authoritative settings in `settings.json`, owned by one T3 server
+storage tiers that exist: server-authoritative settings in `settings.json`, owned by one Pathway server
 on one machine, and client-only settings in localStorage. Both are per-machine by construction,
 because each computer runs its own server. The relay's schema
 (`infra/relay/src/persistence/schema.ts`) has no users table — a Clerk `sub` appears only as a

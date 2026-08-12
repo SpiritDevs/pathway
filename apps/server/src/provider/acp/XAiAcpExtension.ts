@@ -1152,7 +1152,7 @@ const rememberCompletedXAiPromptId = (
  * - `x.ai/session/prompt_complete` (open-source fire-and-forget signal)
  * - `_x.ai/session/prompt_complete` (released-build alias)
  *
- * Pending entries are keyed by root sessionId + T3-injected promptId, so
+ * Pending entries are keyed by root sessionId + Pathway-injected promptId, so
  * foreign/child sessions and `task-completed-*` ids do not settle the root turn.
  */
 export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletionRuntime")(

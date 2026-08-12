@@ -3,7 +3,7 @@ import "culori/css";
 import { converter, parse } from "culori/fn";
 
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
-export const T3_CHAT_THEME_LABEL = "T3 Chat";
+export const T3_CHAT_THEME_LABEL = "Pathway Chat";
 export const GROVE_THEME_ID = "grove" as const;
 export const GROVE_THEME_LABEL = "Grove";
 export const OCEAN_THEME_ID = "ocean" as const;
@@ -333,7 +333,7 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
 }
 
 // Earlier builds shipped every maintainer theme under a t3- prefix; only the
-// genuinely T3-branded palette keeps it. Stored preferences and mixes with the
+// genuinely Pathway-branded palette keeps it. Stored preferences and mixes with the
 // old ids stay readable through this alias table.
 const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_T3_CHAT_DARK_THEME_ID]: T3_CHAT_THEME_ID,
@@ -360,7 +360,7 @@ function themeIdFromPreference(theme: ThemePreference): string {
   return normalizeThemeId(theme);
 }
 
-// Older builds stored the dark T3 Chat palette as a separate theme. Keep
+// Older builds stored the dark Pathway Chat palette as a separate theme. Keep
 // those preferences readable while mapping them to the dark variant.
 function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
   return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
@@ -372,17 +372,17 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
  */
 // Measured from the live t3.chat default theme. Translucent chat surfaces are
 // flattened over --chat-background so this opaque palette reproduces the
-// pixels users see after T3 Chat's blur and noise layers are composited.
+// pixels users see after Pathway Chat's blur and noise layers are composited.
 // Foreground pairs deviate where necessary to keep normal text at WCAG AA.
 const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   canvas: "#fdf7fd",
   // Pathway's workspace header belongs to the chat panel, so keep it seamless
-  // with the light chat canvas rather than mapping it to T3 Chat's outer shell.
+  // with the light chat canvas rather than mapping it to Pathway Chat's outer shell.
   chrome: "#fdf7fd",
   toolbar: "#fdf7fd",
   toolbarForeground: "#501854",
   toolbarBorder: "#efbdeb",
-  // T3 Chat's light chrome controls sit on its pale gradient-noise surface,
+  // Pathway Chat's light chrome controls sit on its pale gradient-noise surface,
   // not the substantially darker solid accent token.
   toolbarControl: "#f3e6f5",
   toolbarControlForeground: "#501854",
@@ -420,11 +420,11 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   messageAction: "#db2777",
   messageActionForeground: "#ffffff",
   messageActionHover: "#c12269",
-  // T3 Chat uses a light lavender code surface in light mode. Keeping the
+  // Pathway Chat uses a light lavender code surface in light mode. Keeping the
   // dark plum pair here also leaked the dark palette into Pathway's diffs.
   codeBackground: "#f5ecf9",
   codeForeground: "#673c8b",
-  // The live sidebar is transparent over T3 Chat's outer shell. Use that
+  // The live sidebar is transparent over Pathway Chat's outer shell. Use that
   // rendered shell color rather than its unused, darker sidebar token.
   sidebar: "#f2e1f4",
   sidebarForeground: "#454554",
@@ -445,7 +445,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
 const T3_CHAT_DARK_COLORS: ThemeColors = {
   canvas: "#1f1a24",
   // Pathway's workspace header belongs to the chat panel, so keep it seamless
-  // with the canvas rather than mapping it to T3 Chat's outer shell.
+  // with the canvas rather than mapping it to Pathway Chat's outer shell.
   chrome: "#1f1a24",
   toolbar: "#1f1a24",
   toolbarForeground: "#f9f8fb",
@@ -453,7 +453,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   toolbarControl: "#362d3d",
   toolbarControlForeground: "#d4c7e1",
   toolbarControlHover: "#463753",
-  // Cards and panels stay in T3 Chat's plum surface family. Near-black here
+  // Cards and panels stay in Pathway Chat's plum surface family. Near-black here
   // made the right-panel surface picker look unrelated to the chat canvas.
   surface: "#29232d",
   // Pre-composited for the composer's 80% glass layer; this resolves to the
@@ -504,7 +504,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
   sidebarRowHover: "#261922",
   sidebarRowActive: "#261922",
   sidebarRowSelected: "#261922",
-  // T3 Chat draws the chat panel edge in this muted pink. The resize rail uses
+  // Pathway Chat draws the chat panel edge in this muted pink. The resize rail uses
   // the same role on hover, so it stays pink instead of falling back to black.
   sidebarBorder: "#322028",
   terminalBackground: "#1f1a24",
@@ -645,7 +645,7 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
 /**
  * The standard Pathway look as a theme palette, for seeding a new theme when
  * no theme is installed. Distinct from {@link getDefaultThemeColors}, which
- * carries the flagship T3 Chat palette used to fill roles omitted by theme
+ * carries the flagship Pathway Chat palette used to fill roles omitted by theme
  * files.
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
@@ -1444,7 +1444,7 @@ export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors 
 }
 
 /**
- * A companion action color in the T3 Chat mold. This gives send buttons,
+ * A companion action color in the Pathway Chat mold. This gives send buttons,
  * status pills, and theme previews a second voice; foreground and hover follow
  * the same rules as the managed generator.
  */

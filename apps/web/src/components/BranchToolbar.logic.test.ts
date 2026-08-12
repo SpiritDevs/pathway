@@ -508,7 +508,7 @@ describe("resolveLockedWorkspaceLabel", () => {
 
 describe("resolveWorkspaceDisplayName", () => {
   it("returns the final folder for POSIX and Windows paths", () => {
-    expect(resolveWorkspaceDisplayName("/repo/.t3/worktrees/feature-a")).toBe("feature-a");
+    expect(resolveWorkspaceDisplayName("/repo/.pathway/worktrees/feature-a")).toBe("feature-a");
     expect(resolveWorkspaceDisplayName("C:\\code\\project\\feature-b\\")).toBe("feature-b");
   });
 

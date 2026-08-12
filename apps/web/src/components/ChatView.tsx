@@ -4279,7 +4279,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, []);
 
   // Anchored end space intentionally disables LegendList's normal end-follow so
-  // the sent message can stay near the top. T3 only owns streaming adjustments
+  // the sent message can stay near the top. Pathway only owns streaming adjustments
   // during that mode; LegendList owns ordinary end-follow everywhere else
   // (#5449, maintainScrollAtEnd gated by liveFollowEnabled in the timeline).
   useEffect(() => {

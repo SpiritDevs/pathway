@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 
-import { resolveGitWorktreePath, resolveWorktreeT3Home } from "./devHome.ts";
+import { resolveGitWorktreePath, resolveWorktreePathwayHome } from "./devHome.ts";
 
 const makeRepo = (
   kind:
@@ -94,11 +94,11 @@ describe("resolveGitWorktreePath", () => {
   );
 });
 
-describe("resolveWorktreeT3Home", () => {
+describe("resolveWorktreePathwayHome", () => {
   it.effect("answers with .pathway before the dev runner creates it", () =>
     Effect.gen(function* () {
       const { root, nested } = yield* makeRepo("worktree");
-      const home = yield* resolveWorktreeT3Home(nested);
+      const home = yield* resolveWorktreePathwayHome(nested);
       assert.equal(home, NodePath.join(NodePath.resolve(root), ".pathway"));
       assert.isFalse(NodeFS.existsSync(home ?? ""));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
