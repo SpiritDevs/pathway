@@ -130,6 +130,8 @@ import { usePreviewPanelInlineSize } from "../hooks/usePreviewPanelInlineSize";
 import {
   RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY,
   resolveThreadPanelPresentation,
+  shouldMountRightPanelSheet,
+  shouldPresentRightPanelAsSheet,
 } from "../rightPanelLayout";
 import {
   pullRequestSurfaceId,
@@ -158,6 +160,7 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import { InlineRightPanelPortal } from "./preview/InlineRightPanelPresence";
 import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
@@ -254,7 +257,7 @@ import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
   type PanelLayoutControlsProps,
-  RightPanelMaximizeControl,
+  RightPanelPopOutControl,
 } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
@@ -1411,7 +1414,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
-  const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
+  const [poppedOutRightPanelThreadKey, setPoppedOutRightPanelThreadKey] = useState<string | null>(
     null,
   );
   const [respondingRequestIds, setRespondingRequestIds] = useState<RuntimeRequestId[]>([]);
@@ -1423,7 +1426,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>();
   const previewPanelInlineSize = usePreviewPanelInlineSize();
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
@@ -1758,14 +1761,20 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
   const rightPanelOpen = rightPanelState.isOpen;
-  const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
-  const rightPanelMaximized =
-    canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
-  const inlineRightPanelOwnsTitleBar = rightPanelOpen && !shouldUsePlanSidebarSheet;
+  const canPopOutRightPanel = rightPanelOpen && !shouldUseRightPanelSheet;
+  const rightPanelPoppedOut =
+    canPopOutRightPanel && poppedOutRightPanelThreadKey === routeThreadKey;
+  const rightPanelUsesSheet = shouldPresentRightPanelAsSheet({
+    viewportRequiresSheet: shouldUseRightPanelSheet,
+    poppedOut: rightPanelPoppedOut,
+  });
+  const inlineRightPanelOwnsTitleBar = rightPanelOpen && !rightPanelUsesSheet;
   const threadPanelPresentation = resolveThreadPanelPresentation(
     workspaceLayoutWidth,
-    inlineRightPanelOwnsTitleBar ? previewPanelInlineSize.width : 0,
-    rightPanelMaximized,
+    // The inline right panel lives in the adjacent workspace host, so this
+    // element's observed width is already the remaining chat-pane width.
+    0,
+    rightPanelPoppedOut,
   );
   const threadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
@@ -3439,7 +3448,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activePreviewState.activeTabId, activeThreadRef, createBrowserSurface, previewPanelOpen]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      setMaximizedRightPanelThreadKey(null);
+      setPoppedOutRightPanelThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
@@ -3589,12 +3598,12 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().setThreadPanelOpen(activeThreadRef, "popover", false);
   }, [activeThreadRef]);
-  const toggleRightPanelMaximized = useCallback(() => {
-    if (!canMaximizeRightPanel) return;
-    setMaximizedRightPanelThreadKey((threadKey) =>
+  const toggleRightPanelPoppedOut = useCallback(() => {
+    if (!canPopOutRightPanel) return;
+    setPoppedOutRightPanelThreadKey((threadKey) =>
       threadKey === routeThreadKey ? null : routeThreadKey,
     );
-  }, [canMaximizeRightPanel, routeThreadKey]);
+  }, [canPopOutRightPanel, routeThreadKey]);
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
@@ -6390,6 +6399,8 @@ function ChatViewContent(props: ChatViewProps) {
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,
+    activeProvider: activeProviderStatus,
+    resourcesEnabled: threadPanelOpen,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
       : null,
@@ -6483,17 +6494,20 @@ function ChatViewContent(props: ChatViewProps) {
     <div
       className={cn(
         "workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]",
-        rightPanelOpen && !shouldUsePlanSidebarSheet
+        rightPanelOpen && !rightPanelUsesSheet
           ? "right-2 wco:right-[var(--workspace-controls-right)]"
           : "mr-px",
       )}
     >
-      {rightPanelOpen && !shouldUsePlanSidebarSheet ? (
-        <RightPanelMaximizeControl
-          maximized={rightPanelMaximized}
-          onToggle={toggleRightPanelMaximized}
-        />
+      {rightPanelOpen && !rightPanelUsesSheet ? (
+        <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
       ) : null}
+      {panelToggleControls}
+    </div>
+  );
+  const poppedOutRightPanelControls = (
+    <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+      <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
       {panelToggleControls}
     </div>
   );
@@ -6503,13 +6517,7 @@ function ChatViewContent(props: ChatViewProps) {
       ref={workspaceLayoutRef}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
     >
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
-          rightPanelMaximized ? "w-0 flex-none" : "flex-1",
-        )}
-        data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
-      >
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* Top bar */}
         <header
           ref={threadPanelPopoverAnchorRef}
@@ -6895,7 +6903,7 @@ function ChatViewContent(props: ChatViewProps) {
         {/* end horizontal flex container */}
 
         <TerminalCardPortal
-          detached={!shouldUsePlanSidebarSheet}
+          detached={!shouldUseRightPanelSheet}
           fullWidth={terminalUiState.terminalFullWidth}
         >
           {mountedTerminalThreadRefs.map(
@@ -6918,54 +6926,60 @@ function ChatViewContent(props: ChatViewProps) {
                 closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
                 keybindings={keybindings}
                 onAddTerminalContext={addTerminalContextToDraft}
-                detached={!shouldUsePlanSidebarSheet}
+                detached={!shouldUseRightPanelSheet}
               />
             ),
           )}
         </TerminalCardPortal>
       </div>
 
-      {!shouldUsePlanSidebarSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelTabs
-          mode="inline"
-          maximized={rightPanelMaximized}
-          inlineSize={previewPanelInlineSize}
-          layoutControls={panelLayoutControls}
-          surfaces={rightPanelState.surfaces}
-          activeSurfaceId={activeRightPanelSurface?.id ?? null}
-          pendingSurfaceIds={pendingFileSurfaceIds}
-          previewSessions={activePreviewState.sessions}
-          terminalLabelsById={activeTerminalLabelsById}
-          onActivate={activateRightPanelSurface}
-          onCloseSurface={closeRightPanelSurface}
-          onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
-          onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
-          onCloseAllSurfaces={closeAllRightPanelSurfaces}
-          onCopyFilePath={copyRightPanelFilePath}
-          onAddBrowser={createBrowserSurface}
-          onAddTerminal={addTerminalSurface}
-          onAddDiff={addDiffSurface}
-          onAddFiles={addFilesSurface}
-          onAddPullRequest={addPullRequestSurface}
-          onAddAgents={addAgentsSurface}
-          browserAvailable={isPreviewSupportedInRuntime()}
-          terminalAvailable={activeProject !== null}
-          diffAvailable={isServerThread && isGitRepo}
-          filesAvailable={activeProject !== null}
-          pullRequestAvailable={pullRequestSurfaceAvailable}
-          agentsAvailable
-          pullRequestStatuses={pullRequestTabStatuses}
-          liveAgentCount={agentPanelModel.liveCount}
-        >
-          {rightPanelContent}
-        </RightPanelTabs>
+      {!rightPanelUsesSheet ? (
+        <InlineRightPanelPortal open={rightPanelOpen && activeThreadRef !== null}>
+          {activeThreadRef ? (
+            <RightPanelTabs
+              mode="inline"
+              inlineSize={previewPanelInlineSize}
+              layoutControls={panelLayoutControls}
+              surfaces={rightPanelState.surfaces}
+              activeSurfaceId={activeRightPanelSurface?.id ?? null}
+              pendingSurfaceIds={pendingFileSurfaceIds}
+              previewSessions={activePreviewState.sessions}
+              terminalLabelsById={activeTerminalLabelsById}
+              onActivate={activateRightPanelSurface}
+              onCloseSurface={closeRightPanelSurface}
+              onCloseOtherSurfaces={closeOtherRightPanelSurfaces}
+              onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
+              onCloseAllSurfaces={closeAllRightPanelSurfaces}
+              onCopyFilePath={copyRightPanelFilePath}
+              onAddBrowser={createBrowserSurface}
+              onAddTerminal={addTerminalSurface}
+              onAddDiff={addDiffSurface}
+              onAddFiles={addFilesSurface}
+              onAddPullRequest={addPullRequestSurface}
+              onAddAgents={addAgentsSurface}
+              browserAvailable={isPreviewSupportedInRuntime()}
+              terminalAvailable={activeProject !== null}
+              diffAvailable={isServerThread && isGitRepo}
+              filesAvailable={activeProject !== null}
+              pullRequestAvailable={pullRequestSurfaceAvailable}
+              agentsAvailable
+              pullRequestStatuses={pullRequestTabStatuses}
+              liveAgentCount={agentPanelModel.liveCount}
+            >
+              {rightPanelContent}
+            </RightPanelTabs>
+          ) : null}
+        </InlineRightPanelPortal>
       ) : null}
-      {shouldUsePlanSidebarSheet && rightPanelOpen && activeThreadRef ? (
-        <RightPanelSheet open onClose={closePreviewPanel}>
+      {shouldMountRightPanelSheet({
+        usesSheet: rightPanelUsesSheet,
+        hasContent: activeThreadRef !== null,
+      }) ? (
+        <RightPanelSheet open={rightPanelOpen} onClose={closePreviewPanel}>
           <RightPanelTabs
             mode="sheet"
             inlineSize={previewPanelInlineSize}
-            layoutControls={panelToggleControls}
+            layoutControls={rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
             surfaces={rightPanelState.surfaces}
             activeSurfaceId={activeRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}

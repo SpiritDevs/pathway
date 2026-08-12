@@ -269,6 +269,38 @@ export const DiscoveredLocalServer = Schema.Struct({
 });
 export type DiscoveredLocalServer = typeof DiscoveredLocalServer.Type;
 
+export const StopDiscoveredLocalServerInput = Schema.Struct({
+  port: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThan(65536)),
+  pid: PositiveInt,
+});
+export type StopDiscoveredLocalServerInput = typeof StopDiscoveredLocalServerInput.Type;
+
+export const StopDiscoveredLocalServerResult = Schema.Struct({
+  port: Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThan(65536)),
+  pid: PositiveInt,
+});
+export type StopDiscoveredLocalServerResult = typeof StopDiscoveredLocalServerResult.Type;
+
+export class StopDiscoveredLocalServerError extends Schema.TaggedErrorClass<StopDiscoveredLocalServerError>()(
+  "StopDiscoveredLocalServerError",
+  {
+    port: Schema.Int,
+    pid: PositiveInt,
+    reason: Schema.Literals(["not-found", "server-process", "signal-failed"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    if (this.reason === "not-found") {
+      return `localhost:${this.port} is no longer owned by process ${this.pid}.`;
+    }
+    if (this.reason === "server-process") {
+      return "Pathway cannot stop its own server process from the development environments list.";
+    }
+    return `Failed to stop localhost:${this.port}.`;
+  }
+}
+
 export const DiscoveredLocalServerList = Schema.Struct({
   servers: Schema.Array(DiscoveredLocalServer),
   scannedAt: Schema.String,

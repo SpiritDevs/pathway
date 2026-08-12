@@ -11,7 +11,13 @@
  * Polling is reference-counted via scoped `retain`. A single layer-scoped fiber
  * polls forever, but each tick is a no-op when the retain count is zero.
  */
-import { ThreadId, type DiscoveredLocalServer } from "@t3tools/contracts";
+import {
+  StopDiscoveredLocalServerError,
+  ThreadId,
+  type DiscoveredLocalServer,
+  type StopDiscoveredLocalServerInput,
+  type StopDiscoveredLocalServerResult,
+} from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Net from "@t3tools/shared/Net";
 import { LSOF_LOCAL_HOST_TOKENS } from "@t3tools/shared/preview";
@@ -34,6 +40,9 @@ export class PortDiscovery extends Context.Service<
       listener: (servers: ReadonlyArray<DiscoveredLocalServer>) => Effect.Effect<void>,
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly retain: Effect.Effect<void, never, Scope.Scope>;
+    readonly stop: (
+      input: StopDiscoveredLocalServerInput,
+    ) => Effect.Effect<StopDiscoveredLocalServerResult, StopDiscoveredLocalServerError>;
     readonly registerTerminalProcesses: (input: {
       readonly threadId: string;
       readonly terminalId: string;
@@ -378,10 +387,42 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     });
   });
 
+  const stop: PortDiscovery["Service"]["stop"] = Effect.fn("PortDiscovery.stop")(function* (input) {
+    const discovered = (yield* scanOnce()).find(
+      (server) => server.port === input.port && server.pid === input.pid,
+    );
+    if (!discovered) {
+      return yield* new StopDiscoveredLocalServerError({
+        port: input.port,
+        pid: input.pid,
+        reason: "not-found",
+      });
+    }
+    if (input.pid === process.pid) {
+      return yield* new StopDiscoveredLocalServerError({
+        port: input.port,
+        pid: input.pid,
+        reason: "server-process",
+      });
+    }
+    yield* Effect.try({
+      try: () => process.kill(input.pid, "SIGINT"),
+      catch: (cause) =>
+        new StopDiscoveredLocalServerError({
+          port: input.port,
+          pid: input.pid,
+          reason: "signal-failed",
+          cause,
+        }),
+    });
+    return { port: input.port, pid: input.pid };
+  });
+
   return PortDiscovery.of({
     scan: scanOnce,
     subscribe,
     retain,
+    stop,
     registerTerminalProcesses,
     unregisterTerminal,
   });

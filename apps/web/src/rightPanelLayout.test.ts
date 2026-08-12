@@ -13,7 +13,7 @@ describe("resolveThreadPanelPresentation", () => {
     expect(resolveThreadPanelPresentation(1_644, 540, false)).toBe("inline");
   });
 
-  it("uses a popover while the real right panel is maximized", () => {
+  it("uses a popover while the right panel overlays the chat", () => {
     expect(resolveThreadPanelPresentation(2_000, 0, true)).toBe("popover");
   });
 });

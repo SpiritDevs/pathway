@@ -51,6 +51,16 @@ describe("searchSettings", () => {
     expect(searchSettings("xyzzy")).toEqual([]);
   });
 
+  it("finds the development server port range", () => {
+    expect(searchSettings("development server ports")).toEqual([
+      {
+        id: "development-server-ports",
+        title: "Development server ports",
+        to: "/settings/general",
+      },
+    ]);
+  });
+
   it("keeps catalog order for multiple title matches", () => {
     expect(searchSettings("update", ITEMS).map((item) => item.id)).toEqual([
       "provider-updates",

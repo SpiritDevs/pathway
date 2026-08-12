@@ -53,6 +53,28 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 export const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
+export const MIN_DEVELOPMENT_SERVER_PORT = 1;
+export const MAX_DEVELOPMENT_SERVER_PORT = 65_535;
+export const DevelopmentServerPort = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_DEVELOPMENT_SERVER_PORT,
+    maximum: MAX_DEVELOPMENT_SERVER_PORT,
+  }),
+);
+export type DevelopmentServerPort = typeof DevelopmentServerPort.Type;
+export const DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE = {
+  from: 3_000,
+  to: 9_999,
+} as const;
+const validDevelopmentServerPortRange = Schema.makeFilter(
+  ({ from, to }: { readonly from: number; readonly to: number }) =>
+    from <= to || "Development server port range must start at or before its end.",
+);
+export const DevelopmentServerPortRange = Schema.Struct({
+  from: DevelopmentServerPort,
+  to: DevelopmentServerPort,
+}).check(validDevelopmentServerPortRange);
+export type DevelopmentServerPortRange = typeof DevelopmentServerPortRange.Type;
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -118,6 +140,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  developmentServerPortRange: DevelopmentServerPortRange.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE)),
+  ),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
   ),
@@ -808,6 +833,7 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
+  developmentServerPortRange: Schema.optionalKey(DevelopmentServerPortRange),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),
   fontSizeInterface: Schema.optionalKey(InterfaceFontSize),

@@ -19,15 +19,18 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
+  DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
   DEFAULT_UNIFIED_SETTINGS,
   type EnvironmentIdentificationMode,
   MAX_CODE_FONT_SIZE,
+  MAX_DEVELOPMENT_SERVER_PORT,
   MAX_GLASS_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_TERMINAL_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
+  MIN_DEVELOPMENT_SERVER_PORT,
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
   MIN_PROMPT_FONT_SIZE,
@@ -1687,6 +1690,75 @@ function AutoSettleDaysInput({
   );
 }
 
+function DevelopmentServerPortRangeInput({
+  value,
+  onCommit,
+}: {
+  value: { readonly from: number; readonly to: number };
+  onCommit: (value: { readonly from: number; readonly to: number }) => void;
+}) {
+  const [fromDraft, setFromDraft] = useState(String(value.from));
+  const [toDraft, setToDraft] = useState(String(value.to));
+
+  useEffect(() => setFromDraft(String(value.from)), [value.from]);
+  useEffect(() => setToDraft(String(value.to)), [value.to]);
+
+  const commitFrom = () => {
+    const from = Number(fromDraft);
+    if (Number.isInteger(from) && from >= MIN_DEVELOPMENT_SERVER_PORT && from <= value.to) {
+      onCommit({ from, to: value.to });
+      return true;
+    }
+    return false;
+  };
+  const commitTo = () => {
+    const to = Number(toDraft);
+    if (Number.isInteger(to) && to >= value.from && to <= MAX_DEVELOPMENT_SERVER_PORT) {
+      onCommit({ from: value.from, to });
+      return true;
+    }
+    return false;
+  };
+
+  return (
+    <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+      <Input
+        type="number"
+        min={MIN_DEVELOPMENT_SERVER_PORT}
+        max={value.to}
+        className="w-full tabular-nums sm:w-24"
+        value={fromDraft}
+        onChange={(event) => setFromDraft(event.target.value)}
+        onBlur={() => {
+          if (!commitFrom()) setFromDraft(String(value.from));
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        aria-label="First development server port"
+      />
+      <span className="text-xs text-muted-foreground" aria-hidden="true">
+        to
+      </span>
+      <Input
+        type="number"
+        min={value.from}
+        max={MAX_DEVELOPMENT_SERVER_PORT}
+        className="w-full tabular-nums sm:w-24"
+        value={toDraft}
+        onChange={(event) => setToDraft(event.target.value)}
+        onBlur={() => {
+          if (!commitTo()) setToDraft(String(value.to));
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        aria-label="Last development server port"
+      />
+    </div>
+  );
+}
+
 // The legacy rows sit behind the fold, so a settings-search jump has to
 // expand the section before its target can mount and scroll.
 const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
@@ -2015,6 +2087,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
               }
               aria-label="Check provider versions"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("development-server-ports")}
+          description="Only show detected local services whose listening port is inside this range."
+          resetAction={
+            !Equal.equals(
+              settings.developmentServerPortRange,
+              DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
+            ) ? (
+              <SettingResetButton
+                label="development server port range"
+                onClick={() =>
+                  updateSettings({
+                    developmentServerPortRange: DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <DevelopmentServerPortRangeInput
+              value={settings.developmentServerPortRange}
+              onCommit={(developmentServerPortRange) =>
+                updateSettings({ developmentServerPortRange })
+              }
             />
           }
         />

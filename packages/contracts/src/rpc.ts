@@ -226,6 +226,9 @@ import {
   PreviewReportStatusInput,
   PreviewResizeInput,
   PreviewSessionSnapshot,
+  StopDiscoveredLocalServerError,
+  StopDiscoveredLocalServerInput,
+  StopDiscoveredLocalServerResult,
 } from "./preview.ts";
 import {
   PreviewAutomationError,
@@ -345,6 +348,7 @@ export const WS_METHODS = {
   previewClose: "preview.close",
   previewList: "preview.list",
   previewReportStatus: "preview.reportStatus",
+  previewStopDiscoveredServer: "preview.stopDiscoveredServer",
   previewAutomationConnect: "previewAutomation.connect",
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationFocusHost: "previewAutomation.focusHost",
@@ -962,6 +966,12 @@ export const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsPreviewStopDiscoveredServerRpc = Rpc.make(WS_METHODS.previewStopDiscoveredServer, {
+  payload: StopDiscoveredLocalServerInput,
+  success: StopDiscoveredLocalServerResult,
+  error: Schema.Union([StopDiscoveredLocalServerError, EnvironmentAuthorizationError]),
+});
 
 export const WsOrchestrationV2DispatchCommandRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -1636,6 +1646,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationFocusHostRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
+  WsPreviewStopDiscoveredServerRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,

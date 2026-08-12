@@ -175,6 +175,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "development-server-ports",
+    title: "Development server ports",
+    to: "/settings/general",
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",

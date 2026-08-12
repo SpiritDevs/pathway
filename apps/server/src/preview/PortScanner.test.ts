@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
-import { expect } from "vite-plus/test";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { expect, vi } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "./PortScanner.ts";
@@ -152,6 +153,42 @@ effectIt("does not swallow process probe interruption", () =>
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
       expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    }
+  }),
+);
+
+effectIt("stops only the process currently verified against the requested port", () =>
+  Effect.gen(function* () {
+    const run: ProcessRunner.ProcessRunner["Service"]["run"] = () =>
+      Effect.succeed({
+        stdout: "p43210\ncnode\nn*:5173\n",
+        stderr: "",
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutInvalidUtf8: false,
+        stderrInvalidUtf8: false,
+      });
+    const layer = makeProbeFailureLayer(run);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    try {
+      const stopped = yield* Effect.flatMap(PortScanner.PortDiscovery, (scanner) =>
+        scanner.stop({ port: 5_173, pid: 43_210 }),
+      ).pipe(Effect.provide(layer));
+
+      expect(stopped).toEqual({ port: 5_173, pid: 43_210 });
+      expect(kill).toHaveBeenCalledWith(43_210, "SIGINT");
+
+      const stale = yield* Effect.flatMap(PortScanner.PortDiscovery, (scanner) =>
+        scanner.stop({ port: 5_173, pid: 43_211 }),
+      ).pipe(Effect.provide(layer), Effect.exit);
+
+      expect(Exit.isFailure(stale)).toBe(true);
+      expect(kill).toHaveBeenCalledTimes(1);
+    } finally {
+      kill.mockRestore();
     }
   }),
 );
