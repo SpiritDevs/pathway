@@ -6,6 +6,7 @@ import {
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthTerminalOperateScope,
+  EMAIL_WS_METHODS,
   ISSUES_WS_METHODS,
   ORCHESTRATION_V2_WS_METHODS,
   type AuthEnvironmentScope,
@@ -198,6 +199,19 @@ export const RPC_REQUIRED_SCOPES = {
   [ISSUES_WS_METHODS.slackWatchDelete]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.triageAccept]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.triageReject]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.list]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.get]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.analytics]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.triggerRulesList]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.triggerFiringsList]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.getSettings]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.stream]: AuthOrchestrationReadScope,
+  [EMAIL_WS_METHODS.markRead]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.markUnread]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.clearInbox]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.triggerRulesUpsert]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.triggerRulesDelete]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.updateSettings]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

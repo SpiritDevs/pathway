@@ -5,11 +5,14 @@ import {
   CapturedEmailMessage,
   DEFAULT_EMAIL_CAPTURE_SETTINGS,
   EMAIL_WS_METHODS,
+  EmailAnalyticsInput,
+  EmailAnalyticsResult,
   EmailCaptureSettings,
   EmailListInput,
   EmailMailSlug,
   EmailStreamEvent,
   EmailTriggerRule,
+  EmailTriggerRuleUpsertInput,
   EmailWaitRegistration,
 } from "./email.ts";
 
@@ -17,9 +20,12 @@ const decodeCapturedEmailMessage = Schema.decodeUnknownSync(CapturedEmailMessage
 const decodeEmailMailSlug = Schema.decodeUnknownSync(EmailMailSlug);
 const decodeEmailCaptureSettings = Schema.decodeUnknownSync(EmailCaptureSettings);
 const decodeEmailTriggerRule = Schema.decodeUnknownSync(EmailTriggerRule);
+const decodeEmailTriggerRuleUpsertInput = Schema.decodeUnknownSync(EmailTriggerRuleUpsertInput);
 const decodeEmailWaitRegistration = Schema.decodeUnknownSync(EmailWaitRegistration);
 const decodeEmailListInput = Schema.decodeUnknownSync(EmailListInput);
 const decodeEmailStreamEvent = Schema.decodeUnknownSync(EmailStreamEvent);
+const decodeEmailAnalyticsInput = Schema.decodeUnknownSync(EmailAnalyticsInput);
+const decodeEmailAnalyticsResult = Schema.decodeUnknownSync(EmailAnalyticsResult);
 
 const MESSAGE_JSON = {
   id: "message-1",
@@ -81,6 +87,25 @@ const MESSAGE_JSON = {
   sizeBytes: 4096,
   isRead: false,
   detectedCode: "482913",
+  deliverability: {
+    version: 1,
+    checks: [
+      {
+        id: "dkim",
+        status: "pass",
+        summary: "DKIM signature is structurally valid",
+        detail: "Required tags are present; no cryptographic verification was performed.",
+      },
+    ],
+    metrics: {
+      subjectLength: 22,
+      imageCount: 0,
+      visibleTextCharacters: 22,
+      imageToTextRatio: 0,
+      trackingPixelCount: 0,
+    },
+    htmlCompatibilityWarnings: [],
+  },
 };
 
 describe("CapturedEmailMessage", () => {
@@ -140,7 +165,6 @@ describe("EmailCaptureSettings", () => {
       retention: { maxMessages: null, maxAgeDays: null },
       toastMuted: false,
       twoFactorCodeRegex: null,
-      triggerRules: [],
     });
   });
 
@@ -164,6 +188,18 @@ describe("EmailCaptureSettings", () => {
         autoDisabledReason: null,
       }),
     ).toThrow();
+  });
+
+  it("creates trigger rules disabled unless explicitly enabled", () => {
+    expect(
+      decodeEmailTriggerRuleUpsertInput({
+        projectId: "project-1",
+        name: "Login mail",
+        matcher: { sender: null, subject: "code", recipient: null },
+        promptTemplate: "Handle {{messageId}}",
+        maxTriggersPerHour: 5,
+      }).enabled,
+    ).toBe(false);
   });
 });
 
@@ -207,6 +243,11 @@ describe("Email waits and WebSocket payloads", () => {
     expect(Object.values(EMAIL_WS_METHODS)).toEqual([
       "email.list",
       "email.get",
+      "email.analytics",
+      "email.triggerRules.list",
+      "email.triggerRules.upsert",
+      "email.triggerRules.delete",
+      "email.triggerFirings.list",
       "email.markRead",
       "email.markUnread",
       "email.clearInbox",
@@ -214,6 +255,28 @@ describe("Email waits and WebSocket payloads", () => {
       "email.updateSettings",
       "email.stream",
     ]);
+  });
+
+  it("round-trips inbox-scoped analytics inputs and results", () => {
+    expect(
+      decodeEmailAnalyticsInput({
+        scope: { type: "project", projectId: "project-1" },
+        from: "2026-08-12T00:00:00.000Z",
+        to: "2026-08-13T00:00:00.000Z",
+        interval: "hour",
+        topAddressLimit: 5,
+      }),
+    ).toMatchObject({ interval: "hour", topAddressLimit: 5 });
+
+    expect(
+      decodeEmailAnalyticsResult({
+        volumeOverTime: [{ bucketStart: "2026-08-12T10:00:00.000Z", messageCount: 3 }],
+        perProjectCounts: [{ projectId: "project-1", mailSlug: "my-app", messageCount: 3 }],
+        topSenders: [{ address: "sender@example.com", messageCount: 3 }],
+        topRecipients: [{ address: "hello@my-app.test", messageCount: 3 }],
+        captureLatency: { messageCount: 3, averageMs: 120, p50Ms: 100, p95Ms: 160, maxMs: 160 },
+      }),
+    ).toMatchObject({ captureLatency: { messageCount: 3, p95Ms: 160 } });
   });
 
   it("carries a detected code on the live captured event", () => {

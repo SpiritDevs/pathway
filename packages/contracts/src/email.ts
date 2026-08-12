@@ -23,6 +23,11 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const EMAIL_WS_METHODS = {
   list: "email.list",
   get: "email.get",
+  analytics: "email.analytics",
+  triggerRulesList: "email.triggerRules.list",
+  triggerRulesUpsert: "email.triggerRules.upsert",
+  triggerRulesDelete: "email.triggerRules.delete",
+  triggerFiringsList: "email.triggerFirings.list",
   markRead: "email.markRead",
   markUnread: "email.markUnread",
   clearInbox: "email.clearInbox",
@@ -40,6 +45,8 @@ export const EmailAttachmentId = makeEmailEntityId("EmailAttachmentId");
 export type EmailAttachmentId = typeof EmailAttachmentId.Type;
 export const EmailTriggerRuleId = makeEmailEntityId("EmailTriggerRuleId");
 export type EmailTriggerRuleId = typeof EmailTriggerRuleId.Type;
+export const EmailTriggerFiringId = makeEmailEntityId("EmailTriggerFiringId");
+export type EmailTriggerFiringId = typeof EmailTriggerFiringId.Type;
 export const EmailWaitRegistrationId = makeEmailEntityId("EmailWaitRegistrationId");
 export type EmailWaitRegistrationId = typeof EmailWaitRegistrationId.Type;
 
@@ -140,6 +147,56 @@ export type EmailCaptureTimings = typeof EmailCaptureTimings.Type;
 export const DetectedEmailCode = Schema.String.check(Schema.isMinLength(4), Schema.isMaxLength(8));
 export type DetectedEmailCode = typeof DetectedEmailCode.Type;
 
+export const EmailDeliverabilityCheckId = Schema.Literals([
+  "spf",
+  "dkim",
+  "dmarc",
+  "list-unsubscribe",
+  "text-plain-alternative",
+  "subject-length",
+  "image-to-text-ratio",
+  "tracking-pixels",
+  "html-compatibility",
+]);
+export type EmailDeliverabilityCheckId = typeof EmailDeliverabilityCheckId.Type;
+
+export const EmailDeliverabilityCheckStatus = Schema.Literals(["pass", "warning", "fail"]);
+export type EmailDeliverabilityCheckStatus = typeof EmailDeliverabilityCheckStatus.Type;
+
+export const EmailDeliverabilityCheck = Schema.Struct({
+  id: EmailDeliverabilityCheckId,
+  status: EmailDeliverabilityCheckStatus,
+  summary: TrimmedNonEmptyString,
+  detail: TrimmedNonEmptyString,
+});
+export type EmailDeliverabilityCheck = typeof EmailDeliverabilityCheck.Type;
+
+export const EmailHtmlCompatibilityWarning = Schema.Struct({
+  ruleId: TrimmedNonEmptyString,
+  feature: TrimmedNonEmptyString,
+  clients: Schema.Array(TrimmedNonEmptyString),
+  detail: TrimmedNonEmptyString,
+});
+export type EmailHtmlCompatibilityWarning = typeof EmailHtmlCompatibilityWarning.Type;
+
+export const EmailDeliverabilityMetrics = Schema.Struct({
+  subjectLength: NonNegativeInt,
+  imageCount: NonNegativeInt,
+  visibleTextCharacters: NonNegativeInt,
+  imageToTextRatio: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  trackingPixelCount: NonNegativeInt,
+});
+export type EmailDeliverabilityMetrics = typeof EmailDeliverabilityMetrics.Type;
+
+/** Capture-time, offline analysis. Versioned so old messages retain the result they were sent with. */
+export const EmailDeliverabilityResult = Schema.Struct({
+  version: PositiveInt,
+  checks: Schema.Array(EmailDeliverabilityCheck),
+  metrics: EmailDeliverabilityMetrics,
+  htmlCompatibilityWarnings: Schema.Array(EmailHtmlCompatibilityWarning),
+});
+export type EmailDeliverabilityResult = typeof EmailDeliverabilityResult.Type;
+
 export const CapturedEmailMessage = Schema.Struct({
   id: EmailMessageId,
   attribution: EmailProjectAttribution,
@@ -153,6 +210,7 @@ export const CapturedEmailMessage = Schema.Struct({
   sizeBytes: NonNegativeInt,
   isRead: Schema.Boolean,
   detectedCode: Schema.NullOr(DetectedEmailCode),
+  deliverability: EmailDeliverabilityResult,
 });
 export type CapturedEmailMessage = typeof CapturedEmailMessage.Type;
 
@@ -245,6 +303,65 @@ export const EmailTriggerRule = Schema.Struct({
 });
 export type EmailTriggerRule = typeof EmailTriggerRule.Type;
 
+export const EmailTriggerFiringStatus = Schema.Literals(["launched", "failed", "loop-detected"]);
+export type EmailTriggerFiringStatus = typeof EmailTriggerFiringStatus.Type;
+
+/** Durable audit record tying an agent run to the captured message that caused it. */
+export const EmailTriggerFiring = Schema.Struct({
+  id: EmailTriggerFiringId,
+  ruleId: EmailTriggerRuleId,
+  projectId: ProjectId,
+  messageId: EmailMessageId,
+  threadId: ThreadId,
+  firedAt: IsoDateTime,
+  status: EmailTriggerFiringStatus,
+  error: Schema.NullOr(Schema.String),
+  /** The later message proven to have originated from this firing's thread. */
+  loopMessageId: Schema.NullOr(EmailMessageId),
+});
+export type EmailTriggerFiring = typeof EmailTriggerFiring.Type;
+
+export const EmailTriggerRulesListInput = Schema.Struct({ projectId: ProjectId });
+export type EmailTriggerRulesListInput = typeof EmailTriggerRulesListInput.Type;
+export const EmailTriggerRulesListResult = Schema.Struct({
+  rules: Schema.Array(EmailTriggerRule),
+});
+export type EmailTriggerRulesListResult = typeof EmailTriggerRulesListResult.Type;
+
+export const EmailTriggerRuleUpsertInput = Schema.Struct({
+  id: Schema.optional(EmailTriggerRuleId),
+  projectId: ProjectId,
+  name: TrimmedNonEmptyString,
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  matcher: EmailTriggerMatcher,
+  promptTemplate: Schema.String.check(Schema.isNonEmpty()),
+  maxTriggersPerHour: PositiveInt,
+});
+export type EmailTriggerRuleUpsertInput = typeof EmailTriggerRuleUpsertInput.Type;
+export const EmailTriggerRuleMutationResult = Schema.Struct({ rule: EmailTriggerRule });
+export type EmailTriggerRuleMutationResult = typeof EmailTriggerRuleMutationResult.Type;
+
+export const EmailTriggerRuleDeleteInput = Schema.Struct({
+  projectId: ProjectId,
+  ruleId: EmailTriggerRuleId,
+});
+export type EmailTriggerRuleDeleteInput = typeof EmailTriggerRuleDeleteInput.Type;
+export const EmailTriggerRuleDeleteResult = Schema.Struct({ ruleId: EmailTriggerRuleId });
+export type EmailTriggerRuleDeleteResult = typeof EmailTriggerRuleDeleteResult.Type;
+
+export const EmailTriggerFiringsListInput = Schema.Struct({
+  projectId: ProjectId,
+  ruleId: Schema.optional(EmailTriggerRuleId),
+  cursor: Schema.optional(EmailTriggerFiringId),
+  limit: Schema.optional(PositiveInt),
+});
+export type EmailTriggerFiringsListInput = typeof EmailTriggerFiringsListInput.Type;
+export const EmailTriggerFiringsListResult = Schema.Struct({
+  firings: Schema.Array(EmailTriggerFiring),
+  nextCursor: Schema.NullOr(EmailTriggerFiringId),
+});
+export type EmailTriggerFiringsListResult = typeof EmailTriggerFiringsListResult.Type;
+
 export const EmailProjectSettings = Schema.Struct({
   projectId: ProjectId,
   mailSlug: EmailMailSlug,
@@ -253,7 +370,6 @@ export const EmailProjectSettings = Schema.Struct({
   twoFactorCodeRegex: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  triggerRules: Schema.Array(EmailTriggerRule).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type EmailProjectSettings = typeof EmailProjectSettings.Type;
 
@@ -337,6 +453,126 @@ export type EmailGetInput = typeof EmailGetInput.Type;
 export const EmailGetResult = Schema.Struct({ message: CapturedEmailMessage });
 export type EmailGetResult = typeof EmailGetResult.Type;
 
+export const EmailAnalyticsInterval = Schema.Literals(["hour", "day"]);
+export type EmailAnalyticsInterval = typeof EmailAnalyticsInterval.Type;
+
+export const EmailAnalyticsInput = Schema.Struct({
+  scope: EmailInboxScope,
+  from: Schema.optional(IsoDateTime),
+  to: Schema.optional(IsoDateTime),
+  interval: EmailAnalyticsInterval,
+  topAddressLimit: Schema.optional(PositiveInt),
+});
+export type EmailAnalyticsInput = typeof EmailAnalyticsInput.Type;
+
+export const EmailVolumePoint = Schema.Struct({
+  bucketStart: IsoDateTime,
+  messageCount: NonNegativeInt,
+});
+export type EmailVolumePoint = typeof EmailVolumePoint.Type;
+
+export const EmailProjectMessageCount = Schema.Struct({
+  projectId: Schema.NullOr(ProjectId),
+  mailSlug: Schema.NullOr(EmailMailSlug),
+  messageCount: NonNegativeInt,
+});
+export type EmailProjectMessageCount = typeof EmailProjectMessageCount.Type;
+
+export const EmailAddressMessageCount = Schema.Struct({
+  address: TrimmedNonEmptyString,
+  messageCount: NonNegativeInt,
+});
+export type EmailAddressMessageCount = typeof EmailAddressMessageCount.Type;
+
+export const EmailCaptureLatencyAnalytics = Schema.Struct({
+  messageCount: NonNegativeInt,
+  averageMs: NonNegativeInt,
+  p50Ms: NonNegativeInt,
+  p95Ms: NonNegativeInt,
+  maxMs: NonNegativeInt,
+});
+export type EmailCaptureLatencyAnalytics = typeof EmailCaptureLatencyAnalytics.Type;
+
+export const EmailAnalyticsResult = Schema.Struct({
+  volumeOverTime: Schema.Array(EmailVolumePoint),
+  perProjectCounts: Schema.Array(EmailProjectMessageCount),
+  topSenders: Schema.Array(EmailAddressMessageCount),
+  topRecipients: Schema.Array(EmailAddressMessageCount),
+  captureLatency: EmailCaptureLatencyAnalytics,
+});
+export type EmailAnalyticsResult = typeof EmailAnalyticsResult.Type;
+
+/** Project selector used by agent-facing email tools. Omitted means the calling thread's project. */
+export const EmailMcpProject = Schema.Union([Schema.Literal("all"), EmailMailSlug]);
+export type EmailMcpProject = typeof EmailMcpProject.Type;
+
+export const EmailMcpWaitForInput = Schema.Struct({
+  project: Schema.optional(EmailMcpProject),
+  sender: Schema.optional(TrimmedNonEmptyString),
+  subject: Schema.optional(TrimmedNonEmptyString),
+  recipient: Schema.optional(TrimmedNonEmptyString),
+  timeoutMs: Schema.optional(PositiveInt),
+});
+export type EmailMcpWaitForInput = typeof EmailMcpWaitForInput.Type;
+
+export const EmailMcpLatestCodeInput = Schema.Struct({
+  project: Schema.optional(EmailMcpProject),
+});
+export type EmailMcpLatestCodeInput = typeof EmailMcpLatestCodeInput.Type;
+
+export const EmailMcpLatestCodeResult = Schema.Struct({
+  messageId: EmailMessageId,
+  code: DetectedEmailCode,
+  sender: Schema.NullOr(TrimmedNonEmptyString),
+  receivedAt: IsoDateTime,
+  ageMs: NonNegativeInt,
+});
+export type EmailMcpLatestCodeResult = typeof EmailMcpLatestCodeResult.Type;
+
+export const EmailMcpListInput = Schema.Struct({
+  project: Schema.optional(EmailMcpProject),
+  cursor: Schema.optional(TrimmedNonEmptyString),
+  limit: Schema.optional(PositiveInt),
+  sender: Schema.optional(TrimmedNonEmptyString),
+  subject: Schema.optional(TrimmedNonEmptyString),
+  recipient: Schema.optional(TrimmedNonEmptyString),
+  isRead: Schema.optional(Schema.Boolean),
+});
+export type EmailMcpListInput = typeof EmailMcpListInput.Type;
+
+export const EmailMcpGetInput = Schema.Struct({
+  project: Schema.optional(EmailMcpProject),
+  messageId: EmailMessageId,
+});
+export type EmailMcpGetInput = typeof EmailMcpGetInput.Type;
+
+export const EmailMcpTaskStatus = Schema.Literals(["working", "completed", "failed", "cancelled"]);
+export type EmailMcpTaskStatus = typeof EmailMcpTaskStatus.Type;
+
+/** Full task state, used by both `tasks/get` and the arrival notification. */
+export const EmailMcpTaskState = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  status: EmailMcpTaskStatus,
+  createdAt: IsoDateTime,
+  lastUpdatedAt: IsoDateTime,
+  ttlMs: PositiveInt,
+  pollIntervalMs: PositiveInt,
+  result: Schema.NullOr(CapturedEmailMessage),
+  error: Schema.NullOr(Schema.String),
+});
+export type EmailMcpTaskState = typeof EmailMcpTaskState.Type;
+
+export const EmailMcpCreateTaskResult = Schema.Struct({
+  task: EmailMcpTaskState,
+});
+export type EmailMcpCreateTaskResult = typeof EmailMcpCreateTaskResult.Type;
+
+export const EmailMcpLongPollResult = Schema.Struct({
+  message: Schema.NullOr(CapturedEmailMessage),
+  timedOut: Schema.Boolean,
+});
+export type EmailMcpLongPollResult = typeof EmailMcpLongPollResult.Type;
+
 export const EmailReadTarget = Schema.Union([
   Schema.Struct({ type: Schema.Literal("message"), messageId: EmailMessageId }),
   Schema.Struct({ type: Schema.Literal("inbox"), scope: EmailInboxScope }),
@@ -393,8 +629,39 @@ export const EmailStreamEvent = Schema.Union([
     inboxes: Schema.Array(EmailInboxSummary),
   }),
   Schema.TaggedStruct("EmailSettingsChanged", { snapshot: EmailSettingsSnapshot }),
+  Schema.TaggedStruct("EmailTriggerRuleAutoDisabled", {
+    rule: EmailTriggerRule,
+    firing: EmailTriggerFiring,
+    loopMessageId: EmailMessageId,
+    notice: TrimmedNonEmptyString,
+  }),
 ]);
 export type EmailStreamEvent = typeof EmailStreamEvent.Type;
+
+/** Completion signals for listener-owned asynchronous work. Tests and internal reactors subscribe
+ * before initiating work, so completion is observed without sleeps or polling. */
+export const EmailCaptureReceipt = Schema.Union([
+  Schema.TaggedStruct("EmailMessageStored", {
+    messageId: EmailMessageId,
+    attribution: EmailProjectAttribution,
+    storedAt: IsoDateTime,
+    evictedMessageIds: Schema.Array(EmailMessageId),
+  }),
+  Schema.TaggedStruct("EmailCaptureFailed", {
+    failedAt: IsoDateTime,
+    message: Schema.String,
+  }),
+  Schema.TaggedStruct("EmailListenerChanged", {
+    changedAt: IsoDateTime,
+    status: EmailListenerStatus,
+  }),
+  Schema.TaggedStruct("EmailInboxClearCompleted", {
+    completedAt: IsoDateTime,
+    scope: EmailInboxScope,
+    clearedMessageIds: Schema.Array(EmailMessageId),
+  }),
+]);
+export type EmailCaptureReceipt = typeof EmailCaptureReceipt.Type;
 
 export const EmailCaptureErrorReason = Schema.Literals([
   "not-found",

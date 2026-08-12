@@ -29,6 +29,12 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { EmailToolkitHandlersLive } from "./toolkits/email/handlers.ts";
+import { EmailToolkit } from "./toolkits/email/tools.ts";
+import { EmailMcpProjectScopeLive } from "./toolkits/email/EmailMcpService.ts";
+import * as EmailMcpService from "./toolkits/email/EmailMcpService.ts";
+import * as EmailStoreLive from "../email/EmailStore.ts";
+import * as EmailWaitStoreLive from "../email/EmailWaitStore.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
@@ -243,6 +249,15 @@ export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit
   Layer.provide(WorktreeMcpService.layer),
 );
 
+const EmailMcpServiceLive = EmailMcpService.layer.pipe(
+  Layer.provideMerge(EmailMcpProjectScopeLive),
+);
+
+export const EmailToolkitRegistrationLive = McpServer.toolkit(EmailToolkit).pipe(
+  Layer.provide(EmailToolkitHandlersLive),
+  Layer.provide(EmailMcpServiceLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Pathway",
   version: packageJson.version,
@@ -250,9 +265,21 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = Layer.mergeAll(
+const ToolkitRegistrationsLive = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   IssuesToolkitRegistrationLive,
   OrchestratorToolkitRegistrationLive,
   WorktreeToolkitRegistrationLive,
-).pipe(Layer.provideMerge(McpTransportLive));
+  EmailToolkitRegistrationLive,
+);
+
+/** Production shares these services with SMTP capture so wait notifications use one PubSub. */
+export const layerWithSharedEmailPersistence = ToolkitRegistrationsLive.pipe(
+  Layer.provideMerge(McpTransportLive),
+);
+
+/** Self-contained variant retained for isolated MCP registration tests. */
+export const layer = layerWithSharedEmailPersistence.pipe(
+  Layer.provideMerge(EmailStoreLive.layer),
+  Layer.provideMerge(EmailWaitStoreLive.layer),
+);

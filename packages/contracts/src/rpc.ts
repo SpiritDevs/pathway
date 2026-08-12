@@ -4,6 +4,34 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  EMAIL_WS_METHODS,
+  EmailAnalyticsInput,
+  EmailAnalyticsResult,
+  EmailCaptureError,
+  EmailClearInboxInput,
+  EmailClearInboxResult,
+  EmailGetInput,
+  EmailGetResult,
+  EmailGetSettingsInput,
+  EmailGetSettingsResult,
+  EmailListInput,
+  EmailListResult,
+  EmailMarkReadInput,
+  EmailMarkUnreadInput,
+  EmailReadStateResult,
+  EmailStreamEvent,
+  EmailTriggerFiringsListInput,
+  EmailTriggerFiringsListResult,
+  EmailTriggerRuleDeleteInput,
+  EmailTriggerRuleDeleteResult,
+  EmailTriggerRuleMutationResult,
+  EmailTriggerRulesListInput,
+  EmailTriggerRulesListResult,
+  EmailTriggerRuleUpsertInput,
+  EmailUpdateSettingsInput,
+  EmailUpdateSettingsResult,
+} from "./email.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -1544,6 +1572,103 @@ export const IssuesRpcs = RpcGroup.make(
   WsIssuesStreamRpc,
 );
 
+const EmailRpcError = Schema.Union([EmailCaptureError, EnvironmentAuthorizationError]);
+
+export const WsEmailListRpc = Rpc.make(EMAIL_WS_METHODS.list, {
+  payload: EmailListInput,
+  success: EmailListResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailGetRpc = Rpc.make(EMAIL_WS_METHODS.get, {
+  payload: EmailGetInput,
+  success: EmailGetResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailAnalyticsRpc = Rpc.make(EMAIL_WS_METHODS.analytics, {
+  payload: EmailAnalyticsInput,
+  success: EmailAnalyticsResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailTriggerRulesListRpc = Rpc.make(EMAIL_WS_METHODS.triggerRulesList, {
+  payload: EmailTriggerRulesListInput,
+  success: EmailTriggerRulesListResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailTriggerRulesUpsertRpc = Rpc.make(EMAIL_WS_METHODS.triggerRulesUpsert, {
+  payload: EmailTriggerRuleUpsertInput,
+  success: EmailTriggerRuleMutationResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailTriggerRulesDeleteRpc = Rpc.make(EMAIL_WS_METHODS.triggerRulesDelete, {
+  payload: EmailTriggerRuleDeleteInput,
+  success: EmailTriggerRuleDeleteResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailTriggerFiringsListRpc = Rpc.make(EMAIL_WS_METHODS.triggerFiringsList, {
+  payload: EmailTriggerFiringsListInput,
+  success: EmailTriggerFiringsListResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailMarkReadRpc = Rpc.make(EMAIL_WS_METHODS.markRead, {
+  payload: EmailMarkReadInput,
+  success: EmailReadStateResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailMarkUnreadRpc = Rpc.make(EMAIL_WS_METHODS.markUnread, {
+  payload: EmailMarkUnreadInput,
+  success: EmailReadStateResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailClearInboxRpc = Rpc.make(EMAIL_WS_METHODS.clearInbox, {
+  payload: EmailClearInboxInput,
+  success: EmailClearInboxResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailGetSettingsRpc = Rpc.make(EMAIL_WS_METHODS.getSettings, {
+  payload: EmailGetSettingsInput,
+  success: EmailGetSettingsResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailUpdateSettingsRpc = Rpc.make(EMAIL_WS_METHODS.updateSettings, {
+  payload: EmailUpdateSettingsInput,
+  success: EmailUpdateSettingsResult,
+  error: EmailRpcError,
+});
+
+export const WsEmailStreamRpc = Rpc.make(EMAIL_WS_METHODS.stream, {
+  payload: Schema.Struct({}),
+  success: EmailStreamEvent,
+  error: EmailRpcError,
+  stream: true,
+});
+
+export const EmailRpcs = RpcGroup.make(
+  WsEmailListRpc,
+  WsEmailGetRpc,
+  WsEmailAnalyticsRpc,
+  WsEmailTriggerRulesListRpc,
+  WsEmailTriggerRulesUpsertRpc,
+  WsEmailTriggerRulesDeleteRpc,
+  WsEmailTriggerFiringsListRpc,
+  WsEmailMarkReadRpc,
+  WsEmailMarkUnreadRpc,
+  WsEmailClearInboxRpc,
+  WsEmailGetSettingsRpc,
+  WsEmailUpdateSettingsRpc,
+  WsEmailStreamRpc,
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1652,4 +1777,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
-).merge(IssuesRpcs);
+)
+  .merge(IssuesRpcs)
+  .merge(EmailRpcs);

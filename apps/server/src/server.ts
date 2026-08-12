@@ -8,6 +8,11 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as EmailCapture from "./email/EmailCaptureService.ts";
+import * as EmailTrigger from "./email/EmailTriggerService.ts";
+import * as EmailProjectCatalog from "./email/EmailProjectCatalog.ts";
+import * as EmailStore from "./email/EmailStore.ts";
+import * as EmailWaitStore from "./email/EmailWaitStore.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import {
@@ -159,6 +164,14 @@ const PtyAdapterLive = Layer.unwrap(
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
+const EmailCaptureLayerLive = EmailCapture.layer.pipe(
+  Layer.provideMerge(EmailStore.layer),
+  Layer.provideMerge(EmailWaitStore.layer),
+  Layer.provideMerge(EmailProjectCatalog.layer),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.tap((service) => service.start),
+);
+
 const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
 );
@@ -255,6 +268,7 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
+const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provideMerge(PersistenceLayerLive));
 
 // One `SqlClient` behind every repository: these tables reference each other, and the
 // tracker's key counter is only unique per database. The repositories stay internal to the
@@ -429,6 +443,7 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
 const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
+  Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
@@ -444,6 +459,7 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  Layer.provideMerge(EmailTriggerLayerLive),
 );
 
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
@@ -460,6 +476,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(WorkspaceLayerLive),
+  Layer.provideMerge(EmailCaptureLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
@@ -481,6 +498,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
+  Layer.provideMerge(EmailTrigger.reactorLayer),
   Layer.provideMerge(UsageLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),
@@ -522,7 +540,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here.
-  McpHttpServer.layer,
+  McpHttpServer.layerWithSharedEmailPersistence,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
