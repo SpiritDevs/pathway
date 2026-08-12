@@ -1,7 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EmailMailSlug,
   EmailMessageId,
@@ -9,7 +6,10 @@ import {
   type EmailProjectAttribution,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import { makeEmailStore, type CapturedEmailMessageInput } from "./EmailStore.ts";
 
@@ -75,19 +75,18 @@ const capturedMessage = (input: {
   detectedCode: null,
 });
 
-const withStore = <A, E>(
-  use: (store: Effect.Effect.Success<ReturnType<typeof makeEmailStore>>) => Effect.Effect<A, E>,
+const withStore = <A, E, R>(
+  use: (store: Effect.Success<ReturnType<typeof makeEmailStore>>) => Effect.Effect<A, E, R>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const directory = yield* Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-mail-store-"))),
-        (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
-      );
-      const store = yield* makeEmailStore(join(directory, "mail.sqlite"));
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-mail-store-" });
+      const store = yield* makeEmailStore(path.join(directory, "mail.sqlite"));
       return yield* use(store);
     }),
-  );
+  ).pipe(Effect.provide(NodeServices.layer));
 
 it.effect("computes deliverability before capture and reads the stored result back unchanged", () =>
   withStore((store) =>
@@ -226,11 +225,10 @@ it.effect("keeps the unassigned inbox isolated from project analytics", () =>
 it.effect("evicts each inbox independently and removes raw message files", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const directory = yield* Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-mail-retention-"))),
-        (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
-      );
-      const store = yield* makeEmailStore(join(directory, "mail.sqlite"));
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-mail-retention-" });
+      const store = yield* makeEmailStore(path.join(directory, "mail.sqlite"));
       const older = yield* store.capture(
         capturedMessage({
           id: "older-message",
@@ -265,20 +263,20 @@ it.effect("evicts each inbox independently and removes raw message files", () =>
       const evicted = yield* store.applyRetention({
         policy: { maxMessages: 1, maxAgeDays: 7 },
         projects: [],
-        nowMs: Date.parse("2026-08-12T12:00:00.000Z"),
+        nowMs: DateTime.toEpochMillis(DateTime.makeUnsafe("2026-08-12T12:00:00.000Z")),
       });
       expect(evicted).toEqual([older.id]);
       expect(yield* store.getMessage(older.id)).toBeNull();
       expect(yield* store.getMessage(newer.id)).not.toBeNull();
       expect(yield* store.getMessage(unassigned.id)).not.toBeNull();
-      expect(existsSync(join(directory, "mail", "raw", `${older.id}.eml`))).toBe(false);
+      expect(yield* fs.exists(path.join(directory, "mail", "raw", `${older.id}.eml`))).toBe(false);
 
       const cleared = yield* store.clear({
         type: "project",
         projectId: projectAttribution("one").projectId!,
       });
       expect(cleared).toEqual([newer.id]);
-      expect(existsSync(join(directory, "mail", "raw", `${newer.id}.eml`))).toBe(false);
+      expect(yield* fs.exists(path.join(directory, "mail", "raw", `${newer.id}.eml`))).toBe(false);
     }),
-  ),
+  ).pipe(Effect.provide(NodeServices.layer)),
 );

@@ -11,6 +11,7 @@ export type SettingsPath =
   | "/settings/issues-intake"
   | "/settings/issues-import"
   | "/settings/issues-enrichment"
+  | "/settings/email"
   | "/settings/connections"
   | "/settings/archived"
   | "/settings/diagnostics";
@@ -40,6 +41,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
+  "/settings/email": "Capture",
   "/settings/connections": "Connections",
   "/settings/archived": "Archive",
   "/settings/diagnostics": "Diagnostics",
@@ -61,7 +63,12 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     label: "Agents",
-    paths: ["/settings/providers", "/settings/source-control", "/settings/usage"],
+    paths: [
+      "/settings/providers",
+      "/settings/scheduled-tasks",
+      "/settings/source-control",
+      "/settings/usage",
+    ],
   },
   {
     label: "Issues",
@@ -72,6 +79,12 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ],
+  },
+  // Email is its own group rather than a System page: direct mailbox integration (Gmail, Outlook)
+  // lands beside local capture later, and it is plainly not a System concern.
+  {
+    label: "Email",
+    paths: ["/settings/email"],
   },
   {
     label: "System",
@@ -284,6 +297,31 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "issue-enrichment-model",
     title: "Investigation model",
     to: "/settings/issues-enrichment",
+  },
+  {
+    id: "email-listener",
+    title: "Local SMTP capture",
+    to: "/settings/email",
+  },
+  {
+    id: "email-listener-port",
+    title: "Capture port",
+    to: "/settings/email",
+  },
+  {
+    id: "email-retention",
+    title: "Captured mail retention",
+    to: "/settings/email",
+  },
+  {
+    id: "email-toasts",
+    title: "Captured mail toasts",
+    to: "/settings/email",
+  },
+  {
+    id: "email-trigger-rules",
+    title: "Mail trigger rules",
+    to: "/settings/email",
   },
   {
     id: "remote-environments",

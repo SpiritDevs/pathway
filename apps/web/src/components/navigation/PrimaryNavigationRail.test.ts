@@ -1,12 +1,24 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  formatNavigationBadgeCount,
   PRIMARY_NAVIGATION_COMPACT_WIDTH,
   PRIMARY_NAVIGATION_EXPANDED_WIDTH,
   resolvePrimaryNavigationDestination,
   resolvePrimaryNavigationRailWidth,
   resolveRememberedThreadRoute,
 } from "./PrimaryNavigationRail";
+
+describe("formatNavigationBadgeCount", () => {
+  it("keeps small counts exact", () => {
+    expect(formatNavigationBadgeCount(1)).toBe("1");
+    expect(formatNavigationBadgeCount(99)).toBe("99");
+  });
+
+  it("caps the label so it still fits a rail button", () => {
+    expect(formatNavigationBadgeCount(100)).toBe("99+");
+  });
+});
 
 describe("resolvePrimaryNavigationDestination", () => {
   it.each([

@@ -34,11 +34,17 @@ import {
   EMAIL_WS_METHODS,
   type CapturedEmailMessage,
   type CapturedEmailSummary,
+  type EmailCaptureSettings,
   type EmailInboxScope,
   type EmailInboxSummary,
+  type EmailListenerStatus,
   type EmailMessageId,
+  type EmailSettingsSnapshot,
   type EmailStreamEvent,
+  type EmailTriggerFiring,
+  type EmailTriggerRule,
   type EnvironmentId,
+  type ProjectId,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -63,18 +69,33 @@ import { useAtomCommand } from "./use-atom-command";
  * message list for at least one scope, and a list read is cheap enough that narrowing which scopes
  * moved would cost more code than it saves round trips.
  */
+/** The loop-detection notice, kept whole so the toast can name the rule and the message. */
+export type EmailTriggerAutoDisabledEvent = Extract<
+  EmailStreamEvent,
+  { readonly _tag: "EmailTriggerRuleAutoDisabled" }
+>;
+
 export interface EmailStreamState {
   readonly revision: number;
   /** Null until the first event; the list read answers for the inboxes until then. */
   readonly inboxes: ReadonlyArray<EmailInboxSummary> | null;
   /** The most recent capture, so a toast or an auto-select can name it without a diff of its own. */
   readonly lastCaptured: CapturedEmailSummary | null;
+  /**
+   * The server's latest settings push. Null until one arrives — the `email.getSettings` read
+   * answers until then — so a reconnect falls back to a fresh read rather than to stale mutes.
+   */
+  readonly settings: EmailSettingsSnapshot | null;
+  /** The last rule to trip loop detection, so its notice is visible from any route. */
+  readonly lastAutoDisabledTrigger: EmailTriggerAutoDisabledEvent | null;
 }
 
 export const EMPTY_EMAIL_STREAM_STATE: EmailStreamState = {
   revision: 0,
   inboxes: null,
   lastCaptured: null,
+  settings: null,
+  lastAutoDisabledTrigger: null,
 };
 
 export function applyEmailStreamEvent(
@@ -84,6 +105,7 @@ export function applyEmailStreamEvent(
   switch (event._tag) {
     case "EmailCaptured":
       return {
+        ...current,
         revision: current.revision + 1,
         inboxes: event.inboxes,
         lastCaptured: event.message,
@@ -91,14 +113,16 @@ export function applyEmailStreamEvent(
     case "EmailReadStateChanged":
     case "EmailInboxCleared":
       return { ...current, revision: current.revision + 1, inboxes: event.inboxes };
-    // Settings never change which messages exist, so it moves the inbox list for nobody and the
-    // list query is left alone.
+    // Neither of the last two changes which messages exist, so the list query is left alone and
+    // only the settings-shaped readers (mutes, the listener card, the loop notice) move.
     case "EmailSettingsChanged":
-      return current;
+      return { ...current, settings: event.snapshot };
+    case "EmailTriggerRuleAutoDisabled":
+      return { ...current, lastAutoDisabledTrigger: event };
   }
 }
 
-/** Returns `current` untouched when a chunk moved nothing, so an unrelated diff notifies nobody. */
+/** Folds a chunk; the message list only refetches when `revision` moved. */
 export function applyEmailStreamEvents(
   current: EmailStreamState,
   events: ReadonlyArray<EmailStreamEvent>,
@@ -227,6 +251,32 @@ const emailMessageQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRunt
   idleTtlMs: 60_000,
 });
 
+/**
+ * The capture settings and listener state. Read once and then kept current by the stream's
+ * `EmailSettingsChanged`, which every write broadcasts — so a mute toggled on one client moves the
+ * sidebar on the others without either of them polling.
+ */
+const emailSettingsQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:email:settings",
+  tag: EMAIL_WS_METHODS.getSettings,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
+const emailTriggerRulesQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:email:trigger-rules",
+  tag: EMAIL_WS_METHODS.triggerRulesList,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
+const emailTriggerFiringsQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:email:trigger-firings",
+  tag: EMAIL_WS_METHODS.triggerFiringsList,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
 const EMPTY_EMAIL_MESSAGES: ReadonlyArray<CapturedEmailSummary> = Object.freeze([]);
 const EMPTY_EMAIL_INBOXES: ReadonlyArray<EmailInboxSummary> = Object.freeze([]);
 
@@ -291,6 +341,116 @@ export function useEmailInboxSummaries(scope: EmailInboxScope): ReadonlyArray<Em
   return streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES;
 }
 
+/**
+ * Everything unread, wherever it was routed — the badge on the Email nav item.
+ *
+ * Shares the All-mail list atom with the Email view rather than adding a count-only read: it is the
+ * same request the sidebar already makes, and after the first stream event the count comes off the
+ * stream without any read at all.
+ */
+export function useEmailUnreadTotal(): number {
+  return totalEmailUnreadCount(useEmailInboxSummaries(ALL_EMAIL_SCOPE));
+}
+
+export interface EmailSettingsView {
+  /** Null until the first read lands. */
+  readonly settings: EmailCaptureSettings | null;
+  readonly listenerStatus: EmailListenerStatus | null;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+/** Capture settings, preferring the stream's pushed snapshot over the read it started from. */
+export function useEmailSettings(): EmailSettingsView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const streamed = useAtomValue(emailStreamViewAtom).state.settings;
+  const query = useEnvironmentQuery(
+    environmentId === null ? null : emailSettingsQuery({ environmentId, input: {} }),
+  );
+  const snapshot = streamed ?? query.data ?? null;
+  return {
+    settings: snapshot?.settings ?? null,
+    listenerStatus: snapshot?.listenerStatus ?? null,
+    isPending: query.isPending,
+    error: query.error,
+    refresh: query.refresh,
+  };
+}
+
+const EMPTY_EMAIL_TRIGGER_RULES: ReadonlyArray<EmailTriggerRule> = Object.freeze([]);
+const EMPTY_EMAIL_TRIGGER_FIRINGS: ReadonlyArray<EmailTriggerFiring> = Object.freeze([]);
+
+export interface EmailTriggerRulesView {
+  readonly rules: ReadonlyArray<EmailTriggerRule>;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+/**
+ * One project's trigger rules.
+ *
+ * Rules are refetched when loop detection auto-disables one, since that write happens on the server
+ * with no client command to hang a refresh off.
+ */
+export function useEmailTriggerRules(projectId: ProjectId | null): EmailTriggerRulesView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const autoDisabled = useAtomValue(emailStreamViewAtom).state.lastAutoDisabledTrigger;
+  const query = useEnvironmentQuery(
+    environmentId === null || projectId === null
+      ? null
+      : emailTriggerRulesQuery({ environmentId, input: { projectId } }),
+  );
+
+  const autoDisabledRuleId = autoDisabled?.rule.id ?? null;
+  const refetch = useEffectEvent(() => query.refresh());
+  useEffect(() => {
+    if (autoDisabledRuleId === null) return;
+    refetch();
+  }, [autoDisabledRuleId]);
+
+  return {
+    rules: query.data?.rules ?? EMPTY_EMAIL_TRIGGER_RULES,
+    isPending: query.isPending,
+    error: query.error,
+    refresh: query.refresh,
+  };
+}
+
+export interface EmailTriggerFiringsView {
+  readonly firings: ReadonlyArray<EmailTriggerFiring>;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+/** The firing log for a project: which message caused which run, and whether it launched. */
+export function useEmailTriggerFirings(projectId: ProjectId | null): EmailTriggerFiringsView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const revision = useAtomValue(emailStreamViewAtom).state.revision;
+  const query = useEnvironmentQuery(
+    environmentId === null || projectId === null
+      ? null
+      : emailTriggerFiringsQuery({ environmentId, input: { projectId } }),
+  );
+
+  // A firing is always caused by a capture, so the same signal that moves the message list is the
+  // one that grows this log.
+  const refetch = useEffectEvent(() => query.refresh());
+  useEffect(() => {
+    if (revision === 0) return;
+    refetch();
+  }, [revision]);
+
+  return {
+    firings: query.data?.firings ?? EMPTY_EMAIL_TRIGGER_FIRINGS,
+    isPending: query.isPending,
+    error: query.error,
+    refresh: query.refresh,
+  };
+}
+
 export interface EmailMessageView {
   /** Null until the first read lands. */
   readonly message: CapturedEmailMessage | null;
@@ -351,6 +511,23 @@ export const emailCommands = {
     tag: EMAIL_WS_METHODS.clearInbox,
     ...emailWriteOptions,
   }),
+  // Settings are a single document: the listener card, the mute toggles, and the retention caps all
+  // send the whole thing, so serialising them is what keeps two editors from clobbering each other.
+  updateSettings: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:email:update-settings",
+    tag: EMAIL_WS_METHODS.updateSettings,
+    ...emailWriteOptions,
+  }),
+  upsertTriggerRule: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:email:trigger-rule-upsert",
+    tag: EMAIL_WS_METHODS.triggerRulesUpsert,
+    ...emailWriteOptions,
+  }),
+  deleteTriggerRule: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:email:trigger-rule-delete",
+    tag: EMAIL_WS_METHODS.triggerRulesDelete,
+    ...emailWriteOptions,
+  }),
 } as const;
 
 type EmailCommandInput<C> =
@@ -402,3 +579,8 @@ function usePrimaryEmailCommand<
 export const useMarkEmailRead = () => usePrimaryEmailCommand(emailCommands.markRead);
 export const useMarkEmailUnread = () => usePrimaryEmailCommand(emailCommands.markUnread);
 export const useClearEmailInbox = () => usePrimaryEmailCommand(emailCommands.clearInbox);
+export const useUpdateEmailSettings = () => usePrimaryEmailCommand(emailCommands.updateSettings);
+export const useUpsertEmailTriggerRule = () =>
+  usePrimaryEmailCommand(emailCommands.upsertTriggerRule);
+export const useDeleteEmailTriggerRule = () =>
+  usePrimaryEmailCommand(emailCommands.deleteTriggerRule);

@@ -30,6 +30,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -66,7 +68,7 @@ export interface EmailStoredReceipt {
 }
 
 export interface EmailCaptureServiceShape {
-  readonly start: Effect.Effect<void>;
+  readonly start: Effect.Effect<void, never, Scope.Scope>;
   readonly stop: Effect.Effect<void>;
   readonly capture: (
     input: CaptureEmailInput,
@@ -107,7 +109,10 @@ const captureError = (reason: EmailCaptureError["reason"], message: string) =>
 const errorText = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-const nowIso = (): string => new Date().toISOString();
+const nowIso = (): string => DateTime.formatIso(DateTime.nowUnsafe());
+
+const listenerKey = (listener: EmailCaptureSettings["listener"]): string =>
+  `${listener.enabled ? "enabled" : "disabled"}:${listener.bindAddress}:${listener.port}`;
 
 const smtpEntry = (
   direction: EmailSmtpTransactionEntry["direction"],
@@ -160,6 +165,8 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
   const waits = yield* EmailWaitStore;
   const projects = yield* EmailProjectCatalog;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const runtimeContext = yield* Effect.context<never>();
+  const runPromise = Effect.runPromiseWith(runtimeContext);
   const events = yield* PubSub.sliding<EmailStreamEvent>(256);
   const storedEvents = yield* PubSub.sliding<EmailStoredReceipt>(256);
   const receiptEvents = yield* PubSub.sliding<EmailCaptureReceipt>(256);
@@ -252,10 +259,11 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       yield* store.insert(message, files);
       const completedWaits = yield* waits.completeMatching(message);
       const settings = yield* readSettings();
+      const nowMs = yield* Clock.currentTimeMillis;
       const evictedMessageIds = yield* store.applyRetention({
         policy: settings.retention,
         projects: settings.projects,
-        nowMs: Date.now(),
+        nowMs,
       });
       const allInboxes = yield* inboxes(settings);
       const storedReceipt = {
@@ -300,16 +308,16 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     session: SMTPServerSession,
   ) {
     const connectedAt = transactionLogs.get(session.id)?.[0]?.at ?? nowIso();
-    const messageReceivedAt = nowIso();
-    const parseStartedAt = Date.now();
+    const messageReceivedAt = DateTime.formatIso(yield* DateTime.now);
+    const parseStartedAt = yield* Clock.currentTimeMillis;
     const mail = yield* Effect.tryPromise({
       // Preserve MIME-part presence for deliverability checks. mailparser otherwise synthesizes
       // text from HTML (and HTML from text), which would hide a missing multipart alternative.
       try: () => simpleParser(Buffer.from(raw), { skipHtmlToText: true, skipTextToHtml: true }),
       catch: () => captureError("invalid", "Could not parse MIME message."),
-    }).pipe(Effect.catchAll(() => Effect.succeed(emptyParsedMail(raw))));
-    const parsedAtMs = Date.now();
-    const parsedAt = new Date(parsedAtMs).toISOString();
+    }).pipe(Effect.catch(() => Effect.succeed(emptyParsedMail(raw))));
+    const parsedAtMs = yield* Clock.currentTimeMillis;
+    const parsedAt = DateTime.formatIso(DateTime.makeUnsafe(parsedAtMs));
     const settings = yield* readSettings();
     const recipients = session.envelope.rcptTo.map(({ address }) => address);
     const attribution = routeEmail({
@@ -329,7 +337,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       };
       return { attachment: metadata, content: attachment.content };
     });
-    const storedAt = nowIso();
+    const storedAt = DateTime.formatIso(yield* DateTime.now);
     const projectSettings = settings.projects.find(
       ({ projectId }) => projectId === attribution.projectId,
     );
@@ -361,7 +369,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       },
       raw,
       attachments: attachmentFiles,
-      projectSettings,
+      projectSettings: projectSettings ?? null,
     });
   });
 
@@ -415,11 +423,11 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
         stream.once("error", (cause) => finish(cause));
         stream.once("end", () => {
           transactionLogs.get(session.id)?.push(smtpEntry("server", "250 Message captured"));
-          void Effect.runPromise(captureRaw(Buffer.concat(chunks), session)).then(
+          void runPromise(captureRaw(Buffer.concat(chunks), session)).then(
             () => finish(null, "Message captured"),
             (cause) => {
               const message = errorText(cause);
-              void Effect.runPromise(
+              void runPromise(
                 PubSub.publish(receiptEvents, {
                   _tag: "EmailCaptureFailed",
                   failedAt: nowIso(),
@@ -457,7 +465,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
   const applyListener = Effect.fn("EmailCaptureService.applyListener")(function* (
     settings: EmailCaptureSettings,
   ) {
-    const key = JSON.stringify(settings.listener);
+    const key = listenerKey(settings.listener);
     yield* Ref.set(appliedListenerKey, key);
     yield* stop;
     if (!settings.listener.enabled) {
@@ -512,7 +520,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
 
   const start = Effect.gen(function* () {
     const settings = yield* readSettings().pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         publishStatus({
           state: "error",
           bindAddress: DEFAULT_EMAIL_CAPTURE_SETTINGS.listener.bindAddress,
@@ -524,7 +532,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     yield* applyListener(settings);
     yield* Stream.runForEach(serverSettings.streamChanges, (next) =>
       Effect.gen(function* () {
-        const key = JSON.stringify(next.emailCapture.listener);
+        const key = listenerKey(next.emailCapture.listener);
         if (key === (yield* Ref.get(appliedListenerKey))) return;
         yield* applyListener(next.emailCapture);
         const snapshot = {
@@ -533,7 +541,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
         };
         yield* PubSub.publish(events, { _tag: "EmailSettingsChanged", snapshot });
       }).pipe(
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           Effect.logWarning("Could not apply SMTP capture settings", { cause }),
         ),
       ),
@@ -545,8 +553,10 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
   const list: EmailCaptureServiceShape["list"] = Effect.fn("EmailCaptureService.list")(
     function* (input) {
       const stored = yield* store.list({
-        ...input,
+        scope: input.scope,
         limit: Math.min(input.limit ?? 50, MAX_LIST_LIMIT),
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.filters === undefined ? {} : { filters: input.filters }),
       });
       return { ...stored, inboxes: yield* inboxes() };
     },

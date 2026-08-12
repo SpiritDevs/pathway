@@ -1,4 +1,5 @@
 import { EnvironmentHttpApi } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -164,14 +165,6 @@ const PtyAdapterLive = Layer.unwrap(
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
 
-const EmailCaptureLayerLive = EmailCapture.layer.pipe(
-  Layer.provideMerge(EmailStore.layer),
-  Layer.provideMerge(EmailWaitStore.layer),
-  Layer.provideMerge(EmailProjectCatalog.layer),
-  Layer.provide(ServerSettingsLayerLive),
-  Layer.tap((service) => service.start),
-);
-
 const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
 );
@@ -268,8 +261,6 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
-const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provideMerge(PersistenceLayerLive));
-
 // One `SqlClient` behind every repository: these tables reference each other, and the
 // tracker's key counter is only unique per database. The repositories stay internal to the
 // service — nothing else reads the issue tables.
@@ -459,7 +450,6 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-  Layer.provideMerge(EmailTriggerLayerLive),
 );
 
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
@@ -476,7 +466,6 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(WorkspaceLayerLive),
-  Layer.provideMerge(EmailCaptureLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
@@ -494,11 +483,35 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const EmailProjectCatalogLayerLive = EmailProjectCatalog.layer.pipe(
+  Layer.provide(RuntimeCoreDependenciesLive),
+);
+
+const EmailCaptureLayerLive = EmailCapture.layer.pipe(
+  Layer.provideMerge(EmailStore.layer),
+  Layer.provideMerge(EmailWaitStore.layer),
+  Layer.provideMerge(EmailProjectCatalogLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.tap((context) => Context.get(context, EmailCapture.EmailCaptureService).start),
+);
+
+const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provide(RuntimeCoreDependenciesLive));
+
+const RuntimeWithEmailServicesLive = Layer.mergeAll(
+  RuntimeCoreDependenciesLive,
+  EmailCaptureLayerLive,
+  EmailTriggerLayerLive,
+);
+
+const RuntimeCoreWithEmailReactorLive = Layer.merge(
+  RuntimeWithEmailServicesLive,
+  EmailTrigger.reactorLayer.pipe(Layer.provide(RuntimeWithEmailServicesLive)),
+);
+
+const RuntimeDependenciesLive = RuntimeCoreWithEmailReactorLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
-  Layer.provideMerge(EmailTrigger.reactorLayer),
   Layer.provideMerge(UsageLayerLive),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(AnalyticsService.layer),

@@ -9,18 +9,20 @@
  * @module components/email/EmailView
  */
 import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@t3tools/contracts";
-import { BarChart3Icon, MailIcon } from "lucide-react";
+import { BarChart3Icon, MailIcon, MailOpenIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import {
+  findEmailInbox,
   useEmailInbox,
   useEmailMessage,
   useMarkEmailRead,
   useMarkEmailUnread,
   type EmailStoreStatus,
 } from "~/state/email";
+import { Button } from "../ui/button";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
@@ -83,6 +85,8 @@ export function EmailView({
 
   const selectMessage = (message: CapturedEmailSummary) => onSearch({ message: message.id });
 
+  const unreadCount = findEmailInbox(inbox.inboxes, scope)?.unreadCount ?? 0;
+
   if (search.analytics === true) {
     return (
       <EmailShell inboxName={inboxName}>
@@ -112,6 +116,18 @@ export function EmailView({
               {inbox.messages.length} {inbox.messages.length === 1 ? "message" : "messages"}
             </span>
             {inbox.isPending ? <Spinner className="ms-auto size-3" /> : null}
+            {/* Clears this inbox's badge in one write; the reading pane carries the way back. */}
+            {unreadCount > 0 ? (
+              <Button
+                className={cn("h-6 px-2 text-xs", inbox.isPending ? null : "ms-auto")}
+                onClick={() => void markRead({ target: { type: "inbox", scope } })}
+                size="xs"
+                variant="ghost"
+              >
+                <MailOpenIcon aria-hidden="true" />
+                Mark all read
+              </Button>
+            ) : null}
           </div>
 
           {inbox.messages.length === 0 ? (

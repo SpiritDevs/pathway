@@ -10,7 +10,7 @@ import {
   EmailWaitCriteria as EmailWaitCriteriaSchema,
   type EmailWaitDelivery,
   EmailWaitRegistration,
-  type EmailWaitRegistrationId,
+  EmailWaitRegistrationId,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -196,7 +196,7 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
       });
       if (existing !== undefined) return decodeWait(existing.registration_json);
       const registration = EmailWaitRegistration.make({
-        id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+        id: EmailWaitRegistrationId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
         threadId: input.threadId,
         providerInstanceId: input.providerInstanceId,
         criteria: input.criteria,

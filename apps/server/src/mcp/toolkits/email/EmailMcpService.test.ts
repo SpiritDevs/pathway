@@ -266,7 +266,9 @@ describe("EmailMcpService", () => {
 
         const defaultList = yield* service.list(invocation(threadA), {});
         expect(defaultList.map(({ id }) => id)).toEqual([messageA.id]);
-        const widened = yield* service.list(invocation(threadA), { project: "project-b" });
+        const widened = yield* service.list(invocation(threadA), {
+          project: EmailMailSlug.make("project-b"),
+        });
         expect(widened.map(({ id }) => id)).toEqual([messageB.id]);
         const all = yield* service.list(invocation(threadA), { project: "all" });
         expect(new Set(all.map(({ id }) => id))).toEqual(new Set([messageA.id, messageB.id]));
@@ -277,7 +279,7 @@ describe("EmailMcpService", () => {
         expect(hidden.reason).toBe("not-found");
         const explicit = yield* service.get(invocation(threadA), {
           messageId: messageB.id,
-          project: "project-b",
+          project: EmailMailSlug.make("project-b"),
         });
         expect(explicit.id).toBe(messageB.id);
 

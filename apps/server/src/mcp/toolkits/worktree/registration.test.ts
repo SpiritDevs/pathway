@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { HttpBody, HttpClient, HttpRouter } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as ServerConfig from "../../../config.ts";
 import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import { ThreadManagementService } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -29,6 +30,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
+  ServerConfig.layerTest(process.cwd(), { prefix: "t3-worktree-mcp-test-" }),
 );
 
 const ToolsListPayload = Schema.fromJsonString(

@@ -4,7 +4,10 @@ import type {
   EmailMessageId,
   EmailSettingsSnapshot,
   EmailStreamEvent,
+  EmailTriggerFiringId,
+  EmailTriggerRuleId,
   ProjectId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -60,6 +63,35 @@ const SETTINGS_SNAPSHOT: EmailSettingsSnapshot = {
   settings: DEFAULT_EMAIL_CAPTURE_SETTINGS,
   listenerStatus: { state: "listening", bindAddress: "0.0.0.0", port: 1025, error: null },
 };
+
+const AUTO_DISABLED_EVENT = {
+  _tag: "EmailTriggerRuleAutoDisabled",
+  rule: {
+    id: "rule_1" as EmailTriggerRuleId,
+    name: "Password resets",
+    enabled: false,
+    matcher: { sender: "noreply@example.com", subject: null, recipient: null },
+    promptTemplate: "Investigate {{subject}}",
+    maxTriggersPerHour: 5,
+    rateLimitWindowStartedAt: null,
+    triggersInCurrentWindow: 1,
+    autoDisabledAt: "2026-08-12T10:05:00.000Z",
+    autoDisabledReason: "This rule matched a message its own run produced.",
+  },
+  firing: {
+    id: "firing_1" as EmailTriggerFiringId,
+    ruleId: "rule_1" as EmailTriggerRuleId,
+    projectId: PROJECT_ID,
+    messageId: "msg_1" as EmailMessageId,
+    threadId: "thr_1" as ThreadId,
+    firedAt: "2026-08-12T10:04:00.000Z",
+    status: "loop-detected",
+    error: null,
+    loopMessageId: "msg_2" as EmailMessageId,
+  },
+  loopMessageId: "msg_2" as EmailMessageId,
+  notice: "Password resets was disabled after its own run produced a matching message.",
+} as const satisfies EmailStreamEvent;
 
 describe("emailScopeKey", () => {
   it("is total across every scope shape", () => {
@@ -127,13 +159,22 @@ describe("applyEmailStreamEvent", () => {
     expect(findEmailInbox(next.inboxes ?? [], ALL_EMAIL_SCOPE)?.messageCount).toBe(0);
   });
 
-  it("leaves the state untouched for a settings change, which moves no message", () => {
+  it("adopts pushed settings without invalidating the message list", () => {
     const next = applyEmailStreamEvent(EMPTY_EMAIL_STREAM_STATE, {
       _tag: "EmailSettingsChanged",
       snapshot: SETTINGS_SNAPSHOT,
     });
 
-    expect(next).toBe(EMPTY_EMAIL_STREAM_STATE);
+    expect(next.revision).toBe(0);
+    expect(next.settings).toBe(SETTINGS_SNAPSHOT);
+  });
+
+  it("keeps the loop-detection notice so it can be raised from any route", () => {
+    const next = applyEmailStreamEvent(EMPTY_EMAIL_STREAM_STATE, AUTO_DISABLED_EVENT);
+
+    expect(next.revision).toBe(0);
+    expect(next.lastAutoDisabledTrigger?.rule.id).toBe("rule_1");
+    expect(next.lastAutoDisabledTrigger?.notice).toBe(AUTO_DISABLED_EVENT.notice);
   });
 });
 
@@ -149,12 +190,14 @@ describe("applyEmailStreamEvents", () => {
     expect(next.lastCaptured?.id).toBe("msg_2");
   });
 
-  it("returns the same state for a chunk that moved nothing", () => {
+  it("leaves the revision alone for a chunk that moved no message", () => {
     const next = applyEmailStreamEvents(EMPTY_EMAIL_STREAM_STATE, [
       { _tag: "EmailSettingsChanged", snapshot: SETTINGS_SNAPSHOT },
+      AUTO_DISABLED_EVENT,
     ]);
 
-    expect(next).toBe(EMPTY_EMAIL_STREAM_STATE);
+    expect(next.revision).toBe(0);
+    expect(next.lastCaptured).toBeNull();
   });
 });
 

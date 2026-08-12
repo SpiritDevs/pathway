@@ -264,9 +264,13 @@ const matchesFilters = (message: CapturedEmailMessage, filters?: EmailListFilter
     ) &&
     (filters.isRead === undefined || message.isRead === filters.isRead));
 
+const CapturedEmailMessageJson = Schema.fromJsonString(CapturedEmailMessageSchema);
+const decodeMessageJson = Schema.decodeUnknownSync(CapturedEmailMessageJson);
+const encodeMessageJson = Schema.encodeSync(CapturedEmailMessageJson);
+
 const decodeMessage = (row: MessagePayloadRow): CapturedEmailMessage =>
   Schema.decodeUnknownSync(CapturedEmailMessageSchema)({
-    ...JSON.parse(row.payload_json),
+    ...decodeMessageJson(row.payload_json),
     isRead: row.is_read === 1,
   });
 
@@ -412,7 +416,7 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
                 message.timings.totalDurationMs,
                 message.isRead ? 1 : 0,
                 files.rawRelativePath,
-                JSON.stringify(message),
+                encodeMessageJson(message),
               );
             const attachmentStatement = database.prepare(
               `INSERT INTO email_attachments (id, message_id, filename, content_type, content_disposition, content_id, size_bytes, relative_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

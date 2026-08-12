@@ -131,6 +131,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "Workspace",
       "Agents",
       "Issues",
+      "Email",
       "System",
     ]);
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
@@ -140,5 +141,19 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ]);
+  });
+
+  it("gives capture its own group, so mailbox integrations have a home to land in", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Email")?.paths).toEqual([
+      "/settings/email",
+    ]);
+    expect(searchSettings("capture port")[0]).toMatchObject({
+      id: "email-listener-port",
+      to: "/settings/email",
+    });
+    expect(searchSettings("trigger rules")[0]).toMatchObject({
+      id: "email-trigger-rules",
+      to: "/settings/email",
+    });
   });
 });

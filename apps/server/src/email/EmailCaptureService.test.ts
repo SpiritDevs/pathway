@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   DEFAULT_EMAIL_CAPTURE_SETTINGS,
+  EmailCaptureError,
   EmailMailSlug,
   ProjectId,
   type EmailCaptureReceipt,
@@ -13,6 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -56,7 +58,10 @@ const freePort = Effect.acquireUseRelease(
     if (address === null || typeof address === "string") return Effect.die("Expected TCP port");
     return Effect.succeed(address.port);
   },
-  (server) => Effect.callback<void>((resume) => server.close(() => resume(Effect.void))),
+  (server) =>
+    Effect.callback<void>((resume) => {
+      server.close(() => resume(Effect.void));
+    }),
 );
 
 const layerFor = (databasePath: string, port: number) => {
@@ -127,7 +132,11 @@ const sendMail = (input: {
                   raw: input.raw,
                 },
           ),
-        catch: (cause) => cause,
+        catch: (cause) =>
+          new EmailCaptureError({
+            reason: "listener",
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
       }),
     (transport) => Effect.sync(() => transport.close()),
   );
@@ -143,7 +152,7 @@ const sendAndReceive = Effect.fn("sendAndReceive")(function* (
         receipt._tag === "EmailMessageStored",
     ),
     Stream.runHead,
-    Effect.fork,
+    Effect.forkChild,
   );
   yield* sendMail(input);
   return Option.getOrThrow(yield* Fiber.join(receiptFiber));
@@ -251,7 +260,7 @@ describe("EmailCaptureService SMTP listener", () => {
           const clearFiber = yield* clearReceipts.pipe(
             Stream.filter((receipt) => receipt._tag === "EmailInboxClearCompleted"),
             Stream.runHead,
-            Effect.fork,
+            Effect.forkChild,
           );
           const cleared = yield* capture.clearInbox({ type: "project", projectId: betaProjectId });
           const clearReceipt = Option.getOrThrow(yield* Fiber.join(clearFiber));
@@ -261,8 +270,12 @@ describe("EmailCaptureService SMTP listener", () => {
             false,
           );
         }).pipe(
-          Effect.provide(layerFor(join(directory, "mail.sqlite"), port)),
-          Effect.provide(NodeServices.layer),
+          Effect.provide(
+            layerFor(join(directory, "mail.sqlite"), port).pipe(
+              Layer.provideMerge(NodeCrypto.layer),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
         );
       }),
     ),

@@ -14,7 +14,7 @@ export interface EmailProject {
 export class EmailProjectCatalog extends Context.Service<
   EmailProjectCatalog,
   {
-    readonly list: Effect.Effect<ReadonlyArray<EmailProject>, unknown>;
+    readonly list: Effect.Effect<ReadonlyArray<EmailProject>, ProjectService.ProjectOperationError>;
   }
 >()("t3/email/EmailProjectCatalog") {}
 
