@@ -19,13 +19,13 @@ import { cn } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
 import { useEmailSettings, useUpdateEmailSettings } from "../../state/email";
 import {
-  emailCaptureAddress,
   isEmailPortConflict,
   parsePort,
   parsePositiveInteger,
   summarizeEmailListener,
 } from "../email/emailSettings.logic";
 import { ClearInboxButton } from "../email/ClearInboxButton";
+import { EmailProjectCaptureSettings } from "../email/EmailProjectCaptureSettings";
 import { EmailSettingField } from "../email/EmailSettingsField";
 import { EmailTriggerRulesSection } from "../email/EmailTriggerRulesSection";
 import { reportEmailWriteFailure } from "../email/emailWrites";
@@ -216,30 +216,7 @@ export function EmailSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection icon={<MailIcon className="size-3.5" />} title="Capture addresses">
-        <div className="divide-y divide-border/60">
-          {settings.projects.length === 0 ? (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground sm:px-4">
-              A project gets a capture address as soon as it exists.
-            </p>
-          ) : (
-            settings.projects.map((project) => (
-              <div
-                className="flex items-center justify-between gap-3 px-3 py-2.5 sm:px-4"
-                key={project.projectId}
-              >
-                <span className="truncate text-sm text-foreground">
-                  {projects.find((candidate) => candidate.id === project.projectId)?.title ??
-                    project.mailSlug}
-                </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {emailCaptureAddress(project.mailSlug)}
-                </span>
-              </div>
-            ))
-          )}
-        </div>
-      </SettingsSection>
+      <EmailProjectCaptureSettings save={save} settings={settings} />
 
       <EmailTriggerRulesSection
         headerContent={

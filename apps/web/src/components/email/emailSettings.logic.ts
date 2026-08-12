@@ -36,6 +36,18 @@ export function emailCaptureAddress(mailSlug: string): string {
 
 const MAIL_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
+/**
+ * The SMTP host an app is pointed at.
+ *
+ * A wildcard bind is what a socket listens on, not something an app can dial, so it reads as
+ * localhost here. Docker containers and other machines reach the same listener at this machine's
+ * own address, which only the person wiring it up knows — so the field says so rather than guessing.
+ */
+export function emailSmtpHostLabel(bindAddress: string): string {
+  const bind = bindAddress.trim();
+  return bind.length === 0 || bind === "0.0.0.0" || bind === "::" ? "localhost" : bind;
+}
+
 /** The rejection reason for a hand-edited slug, or null when it is usable. */
 export function mailSlugError(value: string): string | null {
   const slug = value.trim();
@@ -328,4 +340,47 @@ export function otherMailSlugs(
   return settings.projects
     .filter((project) => project.projectId !== projectId)
     .map((project) => project.mailSlug);
+}
+
+// ── Capture password ───────────────────────────────────────────────────
+
+/**
+ * The AUTH password a project claims, or null for "route some other way".
+ *
+ * Emptying the field clears the routing label rather than storing a blank one: the contract holds a
+ * trimmed non-empty string or null, and a project whose password is `""` would otherwise claim
+ * every send from an app that authenticates without one.
+ */
+export function parseCapturePassword(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** Every other project's capture password, so a collision can be caught before it is sent. */
+export function otherCapturePasswords(
+  settings: EmailCaptureSettings | null,
+  projectId: ProjectId,
+): ReadonlyArray<string> {
+  if (settings === null) return [];
+  return settings.projects
+    .filter((project) => project.projectId !== projectId)
+    .map((project) => project.capturePassword)
+    .filter((password): password is string => password !== null);
+}
+
+/**
+ * The rejection reason for a hand-edited capture password, or null when it is usable.
+ *
+ * Routing takes the first project whose password matches, so two projects sharing one would make
+ * attribution depend on the order the document happens to be in — a misroute with no visible cause.
+ */
+export function capturePasswordError(
+  value: string,
+  takenPasswords: ReadonlyArray<string>,
+): string | null {
+  const password = parseCapturePassword(value);
+  if (password === null) return null;
+  return takenPasswords.includes(password)
+    ? "Another project already routes with that password."
+    : null;
 }
