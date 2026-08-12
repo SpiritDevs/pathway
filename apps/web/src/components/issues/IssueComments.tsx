@@ -40,7 +40,7 @@ import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { IssueAssigneeGlyph } from "./IssueGlyphs";
+import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
 import {
   issueCommentAttachmentDataUrlRejection,
   issueCommentAttachmentIds,
@@ -115,10 +115,22 @@ function CommentRow({
 
   return (
     <li className="group/comment flex items-start gap-2">
-      <IssueAssigneeGlyph
-        assignee={comment.author.kind === "system" ? null : comment.author}
-        className="mt-0.5 size-5 shrink-0"
-      />
+      {/* A Slack reply is attributed in its body ("**Corey:** …") because there is no account for
+          the person who wrote it, so the avatar says where it came from rather than who. */}
+      {comment.author.kind === "system" && comment.author.source === "slack" ? (
+        <span
+          aria-label="From Slack"
+          className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-foreground/70"
+          role="img"
+        >
+          <IssueSlackGlyph className="size-3" />
+        </span>
+      ) : (
+        <IssueAssigneeGlyph
+          assignee={comment.author.kind === "system" ? null : comment.author}
+          className="mt-0.5 size-5 shrink-0"
+        />
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="text-[13px] font-medium text-foreground">

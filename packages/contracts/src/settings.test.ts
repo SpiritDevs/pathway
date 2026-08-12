@@ -340,3 +340,40 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
   });
 });
+
+describe("ServerSettingsPatch.issueEnrichmentModelSelection", () => {
+  it("decodes what the Enrichment settings page sends", () => {
+    // The page hands `createModelSelection(...)` straight to `updateSettings`, so the patch has to
+    // accept a whole selection — including the option-only shape the traits picker writes, which
+    // omits `instanceId` and `model` entirely.
+    const whole = decodeServerSettingsPatch({
+      issueEnrichmentModelSelection: {
+        instanceId: "claudeAgent",
+        model: "claude-opus-5",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      },
+    });
+
+    expect(whole.issueEnrichmentModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-5",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+    // Independent of the text-generation key: naming one must not name the other.
+    expect(whole.textGenerationModelSelection).toBeUndefined();
+
+    expect(
+      decodeServerSettingsPatch({ issueEnrichmentModelSelection: { model: "gpt-5.6-luna" } })
+        .issueEnrichmentModelSelection,
+    ).toEqual({ model: "gpt-5.6-luna" });
+    expect(decodeServerSettingsPatch({}).issueEnrichmentModelSelection).toBeUndefined();
+  });
+
+  it("defaults to the text generation selection and survives a full re-decode", () => {
+    const settings = decodeServerSettings({});
+    expect(settings.issueEnrichmentModelSelection).toEqual(settings.textGenerationModelSelection);
+    expect(
+      decodeServerSettings(encodeServerSettings(settings)).issueEnrichmentModelSelection,
+    ).toEqual(DEFAULT_SERVER_SETTINGS.issueEnrichmentModelSelection);
+  });
+});

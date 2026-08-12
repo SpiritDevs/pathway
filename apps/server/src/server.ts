@@ -39,7 +39,13 @@ import { IssueTodoRepositoryLive } from "./persistence/Layers/IssueTodos.ts";
 import { IssueTrackerConfigRepositoryLive } from "./persistence/Layers/IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "./persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
+import { SlackChannelWatchRepositoryLive } from "./persistence/Layers/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "./persistence/Layers/SlackIntakeLedger.ts";
 import * as IssueEnrichmentEngineLive from "./issues/IssueEnrichmentEngineLive.ts";
+import * as SlackApiClient from "./issues/slack/SlackApiClient.ts";
+import * as SlackIntakeEngineLive from "./issues/slack/SlackIntakeEngineLive.ts";
+import * as SlackIntakePoller from "./issues/slack/SlackIntakePoller.ts";
+import * as SlackIntakeSignal from "./issues/slack/SlackIntakeSignal.ts";
 import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -270,6 +276,8 @@ const IssueRepositoriesLive = Layer.mergeAll(
   IssueViewRepositoryLive,
   IssueEnrichmentRunRepositoryLive,
   IssueThreadLinkRepositoryLive,
+  SlackChannelWatchRepositoryLive,
+  SlackIntakeLedgerRepositoryLive,
   // Read-only: an enrichment run needs the project's directory, and a rootless project is
   // the case the tracker refuses. Its own instance of the repository, over the same client.
   ProjectionProjectRepositoryLive,
@@ -285,10 +293,30 @@ const IssueEnrichmentEngineLayerLive = IssueEnrichmentEngineLive.layer.pipe(
   Layer.provide(ServerSettingsLayerLive),
 );
 
+// Intake's transport. The HTTP client and the poke latch are merged out rather than swallowed:
+// the poller below needs both, and building it a second client would give it a second rate-limit
+// queue, which is the one thing a rate-limit queue must not have.
+const SlackIntakeEngineLayerLive = SlackIntakeEngineLive.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(SlackApiClient.layer, SlackIntakeSignal.layer)),
+  Layer.provide(ServerSecretStore.layer),
+);
+
 const IssueTrackerLayerLive = IssueTrackerService.layer.pipe(
   Layer.provide(IssueRepositoriesLive),
   Layer.provide(IssueEnrichmentEngineLayerLive),
+  Layer.provideMerge(SlackIntakeEngineLayerLive),
+  Layer.provide(ServerSecretStore.layer),
   Layer.provideMerge(PersistenceLayerLive),
+);
+
+// The loops: watched channels read from a stored cursor, and the tracker's own stream answered
+// back into the source threads. It requires the tracker *and* the engine, which is exactly why it
+// is its own layer — the tracker requires the engine, so the engine can never require the tracker.
+// Nothing requires this one, so it may require everything.
+const SlackIntakePollerLayerLive = SlackIntakePoller.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(IssueTrackerLayerLive),
 );
 
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
@@ -406,7 +434,8 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
-  Layer.provideMerge(IssueTrackerLayerLive),
+  // The poller merges the tracker out, so this one entry is both the service and its loops.
+  Layer.provideMerge(SlackIntakePollerLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,

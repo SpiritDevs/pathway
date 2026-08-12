@@ -142,7 +142,7 @@ export default Effect.gen(function* () {
     projectRows,
     (project) =>
       Effect.gen(function* () {
-        const createdEventId = `migration:51:project:${project.project_id}:baseline`;
+        const createdEventId = `migration:52:project:${project.project_id}:baseline`;
         const createdPayload = {
           projectId: project.project_id,
           title: project.title,
@@ -222,7 +222,7 @@ export default Effect.gen(function* () {
               application_event_version
             )
             VALUES (
-              ${`migration:51:project:${project.project_id}:deleted`},
+              ${`migration:52:project:${project.project_id}:deleted`},
               'project',
               ${project.project_id},
               (

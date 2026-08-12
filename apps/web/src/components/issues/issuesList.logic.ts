@@ -145,6 +145,12 @@ export const ISSUE_ROW_MAX_LABEL_CHIPS = 3;
  */
 export interface IssuesSearch {
   readonly tab?: IssuesTab | undefined;
+  /**
+   * The triage queue instead of the list. A boolean rather than a fourth tab: triage items have no
+   * status, so they appear in no tab, no board, and no count — and a mode with none of the list's
+   * filters, groupings, or layouts is not a tab of it.
+   */
+  readonly triage?: boolean | undefined;
   /** The issue *key* (`PAT-221`), which is what a link a human pastes will carry. */
   readonly issue?: string | undefined;
   readonly status?: string | undefined;
@@ -224,6 +230,9 @@ export function parseIssuesSearch(raw: Record<string, unknown>): IssuesSearch {
   const assignees = parseListParam(raw.assignee, isAssigneeValue);
   return {
     tab: tab === "active" || tab === "backlog" || tab === "all" ? tab : undefined,
+    // Absent rather than `false` for the default, the way `view` is: the one thing this param ever
+    // says is "not the list".
+    triage: raw.triage === true || raw.triage === "true" ? true : undefined,
     issue: optionalParam(raw.issue),
     status: serializeListParam(parseListParam(raw.status)),
     project: serializeListParam(parseListParam(raw.project)),

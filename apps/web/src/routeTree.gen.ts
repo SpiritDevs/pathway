@@ -30,6 +30,7 @@ import { Route as SettingsProvidersRouteImport } from './routes/settings.provide
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
 import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
+import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issues-intake'
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
 import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
@@ -150,6 +151,11 @@ const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
   path: '/issues-labels',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsIssuesIntakeRoute = SettingsIssuesIntakeRouteImport.update({
+  id: '/issues-intake',
+  path: '/issues-intake',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsIssuesImportRoute = SettingsIssuesImportRouteImport.update({
   id: '/issues-import',
   path: '/issues-import',
@@ -254,6 +260,7 @@ export interface FileRoutesByFullPath {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -291,6 +298,7 @@ export interface FileRoutesByTo {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -330,6 +338,7 @@ export interface FileRoutesById {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -369,6 +378,7 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
+    | '/settings/issues-intake'
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -406,6 +416,7 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
+    | '/settings/issues-intake'
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -444,6 +455,7 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
+    | '/settings/issues-intake'
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -625,6 +637,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIssuesLabelsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/issues-intake': {
+      id: '/settings/issues-intake'
+      path: '/issues-intake'
+      fullPath: '/settings/issues-intake'
+      preLoaderRoute: typeof SettingsIssuesIntakeRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/issues-import': {
       id: '/settings/issues-import'
       path: '/issues-import'
@@ -761,6 +780,7 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
+  SettingsIssuesIntakeRoute: typeof SettingsIssuesIntakeRoute
   SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
@@ -778,6 +798,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,
+  SettingsIssuesIntakeRoute: SettingsIssuesIntakeRoute,
   SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,

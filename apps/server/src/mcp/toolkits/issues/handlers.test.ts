@@ -15,8 +15,10 @@ import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 
+import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as IssueEnrichmentEngine from "../../../issues/IssueEnrichmentEngine.ts";
+import * as SlackIntakeEngine from "../../../issues/slack/SlackIntakeEngine.ts";
 import {
   IssueTrackerService,
   layer as issueTrackerLayer,
@@ -35,6 +37,8 @@ import { IssueTodoRepositoryLive } from "../../../persistence/Layers/IssueTodos.
 import { IssueTrackerConfigRepositoryLive } from "../../../persistence/Layers/IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "../../../persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "../../../persistence/Layers/ProjectionProjects.ts";
+import { SlackChannelWatchRepositoryLive } from "../../../persistence/Layers/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "../../../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -71,7 +75,10 @@ const invocation: McpInvocationContext.McpInvocationScope = {
  * fake tracker would be a fake of exactly those.
  */
 const TestLayer = Layer.mergeAll(
-  issueTrackerLayer.pipe(Layer.provide(IssueEnrichmentEngine.layerStub)),
+  issueTrackerLayer.pipe(
+    Layer.provide(IssueEnrichmentEngine.layerStub),
+    Layer.provide(SlackIntakeEngine.layerStub),
+  ),
   IssuesToolkitHandlersLive,
 ).pipe(
   Layer.provideMerge(
@@ -89,10 +96,13 @@ const TestLayer = Layer.mergeAll(
       IssueViewRepositoryLive,
       IssueEnrichmentRunRepositoryLive,
       IssueThreadLinkRepositoryLive,
+      SlackChannelWatchRepositoryLive,
+      SlackIntakeLedgerRepositoryLive,
       ProjectionProjectRepositoryLive,
     ),
   ),
   Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issues-mcp-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );

@@ -73,6 +73,17 @@ export const ISSUES_WS_METHODS = {
   linkThread: "issues.linkThread",
   unlinkThread: "issues.unlinkThread",
   getThreadLinks: "issues.getThreadLinks",
+  /** Write-only: the bot token never comes back out. An empty string clears it. */
+  slackSetToken: "issues.slackSetToken",
+  slackGetStatus: "issues.slackGetStatus",
+  /** Asked of Slack, not of the database: the picker lists what the bot can actually see. */
+  slackListChannels: "issues.slackListChannels",
+  slackWatchCreate: "issues.slackWatchCreate",
+  slackWatchUpdate: "issues.slackWatchUpdate",
+  slackWatchDelete: "issues.slackWatchDelete",
+  /** Status, project, and priority in one write, and the only place enrichment fires by itself. */
+  triageAccept: "issues.triageAccept",
+  triageReject: "issues.triageReject",
   stream: "issues.stream",
 } as const;
 
@@ -101,6 +112,8 @@ export const IssueViewId = makeIssueEntityId("IssueViewId");
 export type IssueViewId = typeof IssueViewId.Type;
 export const IssueEnrichmentRunId = makeIssueEntityId("IssueEnrichmentRunId");
 export type IssueEnrichmentRunId = typeof IssueEnrichmentRunId.Type;
+export const SlackChannelWatchId = makeIssueEntityId("SlackChannelWatchId");
+export type SlackChannelWatchId = typeof SlackChannelWatchId.Type;
 
 export const ISSUE_TITLE_MAX_CHARS = 512;
 export const ISSUE_DESCRIPTION_MAX_CHARS = 100_000;
@@ -141,6 +154,18 @@ export const ISSUE_ENRICHMENT_SUMMARY_MAX_CHARS = 8_000;
 export const ISSUE_ENRICHMENT_MAX_LIKELY_FILES = 25;
 export const ISSUE_ENRICHMENT_MAX_RELATED_ISSUES = 25;
 export const ISSUE_ENRICHMENT_MAX_SUGGESTED_LABELS = 10;
+/**
+ * How long a bot token may be. Slack's `xoxb-` tokens are around seventy characters; the ceiling
+ * only exists so a paste of the wrong thing entirely is refused on the wire rather than written
+ * to disk.
+ */
+export const SLACK_BOT_TOKEN_MAX_CHARS = 512;
+/**
+ * How many channels one environment can watch. Every watch costs a `conversations.history` call
+ * per poll interval, forever, on a laptop — the bound is what stops that bill from being unpayable
+ * by accident.
+ */
+export const SLACK_MAX_CHANNEL_WATCHES = 50;
 /** One comment attachment, held to the same ceiling a turn's image is. */
 export const ISSUE_COMMENT_ATTACHMENT_MAX_BYTES = PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
 /**
@@ -226,6 +251,38 @@ export type IssueAssignee = typeof IssueAssignee.Type;
 export const IssueActor = Schema.Union([IssueUserActor, IssueAgentActor, IssueSystemActor]);
 export type IssueActor = typeof IssueActor.Type;
 
+/**
+ * A Slack channel id, `C0123ABCD`. Opaque on purpose: it is whatever Slack handed back, and the
+ * poller's cursor, the echo registry, and the dedupe table are all keyed on it verbatim.
+ */
+export const SlackChannelId = TrimmedNonEmptyString;
+export type SlackChannelId = typeof SlackChannelId.Type;
+
+/**
+ * A Slack message timestamp, `1723459200.001900`. It is Slack's message *identity*, not a clock
+ * reading, which is why it is a string: it is the thread key a reply attaches to, the cursor the
+ * poller resumes from, and the id the echo registry recognises the bot's own post by.
+ */
+export const SlackMessageTs = TrimmedNonEmptyString;
+export type SlackMessageTs = typeof SlackMessageTs.Type;
+
+/**
+ * Where an issue came in from, when it came in from Slack.
+ *
+ * `messageTs` is the load-bearing field: it is the thread a reply attaches to, the thread the bot
+ * posts its own updates back into, and the id the poller skips its own posts by.
+ */
+export const IssueSlackSource = Schema.Struct({
+  issueId: IssueId,
+  channelId: SlackChannelId,
+  messageTs: SlackMessageTs,
+  /** Null until Slack answers with one; a permalink is a nicety, not a requirement to file. */
+  permalink: Schema.NullOr(TrimmedNonEmptyString),
+  /** The display name of whoever wrote the source message, for the attribution on the issue. */
+  authorName: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IssueSlackSource = typeof IssueSlackSource.Type;
+
 export const Issue = Schema.Struct({
   id: IssueId,
   key: IssueKey,
@@ -251,6 +308,14 @@ export const Issue = Schema.Struct({
    * and no count, and accepting it assigns status, project, and priority in one action.
    */
   triage: Schema.Boolean,
+  /**
+   * Where this issue came in from, when it came in from Slack.
+   *
+   * Carried on the row rather than in a side table: the list draws a Slack marker on a triage
+   * item and the sheet links back to the thread, so a side table would make the tracker's first
+   * read two reads.
+   */
+  slackSource: Schema.NullOr(IssueSlackSource),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   /** Soft delete, which is what makes agent writes recoverable. */
@@ -461,6 +526,12 @@ export const IssueEventKind = Schema.Literals([
   "deleted",
   "restored",
   "imported",
+  /**
+   * A triage item turned down. It is a soft delete underneath, but the feed has to tell "somebody
+   * deleted this issue" apart from "this never was one" — the second is the normal outcome of
+   * intake and should not read as destruction.
+   */
+  "triage_rejected",
 ]);
 export type IssueEventKind = typeof IssueEventKind.Type;
 
@@ -574,6 +645,76 @@ export const IssueThreadLink = Schema.Struct({
 });
 export type IssueThreadLink = typeof IssueThreadLink.Type;
 
+/**
+ * A reaction name as Slack spells it — `ticket`, `white_check_mark`, `+1`, `-1` — with no colons.
+ * The poller compares this against `reaction.name` verbatim, so a decorated or capitalised value
+ * would never match anything.
+ */
+export const SlackEmojiName = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-z0-9_+-]+$/));
+export type SlackEmojiName = typeof SlackEmojiName.Type;
+
+/**
+ * What turns a message in a watched channel into a triage item. Any combination: a channel can
+ * file on a reaction *and* on a mention. All three off is a paused watch rather than an invalid
+ * one — pausing a channel and forgetting how it was configured are different things.
+ */
+export const SlackIntakeTrigger = Schema.Struct({
+  /** Null means no reaction files anything. Otherwise the one reaction that does. */
+  emoji: Schema.NullOr(SlackEmojiName),
+  /** Every message in the channel becomes an issue. For a dedicated intake channel. */
+  everyMessage: Schema.Boolean,
+  botMention: Schema.Boolean,
+});
+export type SlackIntakeTrigger = typeof SlackIntakeTrigger.Type;
+
+/** Whether a watch can file anything at all. All triggers off is a paused channel. */
+export const isSlackIntakeTriggerActive = (trigger: SlackIntakeTrigger): boolean =>
+  trigger.emoji !== null || trigger.everyMessage || trigger.botMention;
+
+/**
+ * One watched channel. `projectId` is the auto-tag target rather than a filter: an issue filed
+ * from this channel lands on that project, and null means it lands with none — which is also what
+ * makes enrichment skip it, since there is no directory to read.
+ */
+export const SlackChannelWatch = Schema.Struct({
+  id: SlackChannelWatchId,
+  channelId: SlackChannelId,
+  /**
+   * Cached from the channel picker so the settings page reads without a Slack call. It can go
+   * stale after a rename; the id is what everything else is keyed on.
+   */
+  channelName: TrimmedNonEmptyString,
+  projectId: Schema.NullOr(ProjectId),
+  trigger: SlackIntakeTrigger,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type SlackChannelWatch = typeof SlackChannelWatch.Type;
+
+/**
+ * Whether intake is working, and what it last said. Runtime state, not a stored row: `configured`
+ * is whether a token is on disk, and the rest is what the poller has managed since this server
+ * woke up. A server that has been asleep for a week reports no poll and no error, which is the
+ * truth.
+ */
+export const SlackIntakeStatus = Schema.Struct({
+  /** A token is present in the secrets directory. Never the token itself. */
+  configured: Schema.Boolean,
+  lastPollAt: Schema.NullOr(IsoDateTime),
+  /** The last thing that went wrong, cleared by the next poll that does not. */
+  lastError: Schema.NullOr(Schema.String),
+  /** Read back from Slack when the token was accepted, so the page can say which workspace. */
+  workspaceName: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type SlackIntakeStatus = typeof SlackIntakeStatus.Type;
+
+/** One channel the bot can see, as the picker lists it. Asked of Slack, never stored. */
+export const SlackChannelRef = Schema.Struct({
+  id: SlackChannelId,
+  name: TrimmedNonEmptyString,
+});
+export type SlackChannelRef = typeof SlackChannelRef.Type;
+
 export const IssueTrackerConfig = Schema.Struct({
   keyPrefix: IssueKeyPrefix,
   /** The number the next issue takes. Never reused, so a deleted key is never handed out twice. */
@@ -628,6 +769,13 @@ export const IssuesStreamEvent = Schema.Union([
     links: Schema.Array(IssueThreadLink),
   }),
   Schema.TaggedStruct("ConfigChanged", { config: IssueTrackerConfig }),
+  /** The whole set, like statuses: there are a handful of channels and a write rewrites one. */
+  Schema.TaggedStruct("SlackWatchesChanged", { watches: Schema.Array(SlackChannelWatch) }),
+  /**
+   * Intake's health, republished whenever it moves: a token accepted or cleared, a poll that
+   * landed, a poll that failed. Four small fields, so there is nothing here worth diffing.
+   */
+  Schema.TaggedStruct("SlackStatusChanged", { status: SlackIntakeStatus }),
 ]);
 export type IssuesStreamEvent = typeof IssuesStreamEvent.Type;
 
@@ -645,6 +793,12 @@ export const IssuesSnapshot = Schema.Struct({
   milestones: Schema.Array(IssueMilestone),
   cycles: Schema.Array(IssueCycle),
   views: Schema.Array(IssueView),
+  /**
+   * Configuration like statuses and labels, not a tail: the triage queue is read on the first
+   * paint, and knowing which channel an item came from is part of reading it.
+   */
+  slackWatches: Schema.Array(SlackChannelWatch),
+  slackStatus: SlackIntakeStatus,
   config: IssueTrackerConfig,
 });
 export type IssuesSnapshot = typeof IssuesSnapshot.Type;
@@ -672,6 +826,7 @@ export const IssueCreateInput = Schema.Struct({
   /** Absent takes the first status by position, except on a triage item, which has none yet. */
   statusId: Schema.optional(IssueStatusId),
   priority: Schema.optional(IssuePriority),
+  assignee: Schema.optional(IssueAssignee),
   projectId: Schema.optional(ProjectId),
   milestoneId: Schema.optional(IssueMilestoneId),
   cycleId: Schema.optional(IssueCycleId),
@@ -1166,6 +1321,111 @@ export const IssueThreadLinksResult = Schema.Struct({
   links: Schema.Array(IssueThreadLink),
 });
 export type IssueThreadLinksResult = typeof IssueThreadLinksResult.Type;
+
+/**
+ * The bot token, on its way in and never on its way out.
+ *
+ * An empty string clears it, which is why this is `Schema.String` and not a trimmed non-empty one:
+ * "disconnect Slack" and "set the token" are the same write, and a client that had to call a
+ * second method to disconnect would eventually forget to.
+ */
+export const SlackSetTokenInput = Schema.Struct({
+  token: Schema.String.check(Schema.isMaxLength(SLACK_BOT_TOKEN_MAX_CHARS)),
+});
+export type SlackSetTokenInput = typeof SlackSetTokenInput.Type;
+
+/** Intake's health after a write, matching the stream event a watching client also sees. */
+export const SlackIntakeStatusResult = Schema.Struct({ status: SlackIntakeStatus });
+export type SlackIntakeStatusResult = typeof SlackIntakeStatusResult.Type;
+
+/** What the bot can see right now. Answered by Slack, so it is a read that can fail. */
+export const SlackChannelsResult = Schema.Struct({
+  channels: Schema.Array(SlackChannelRef),
+});
+export type SlackChannelsResult = typeof SlackChannelsResult.Type;
+
+/**
+ * Watching a channel already watched is refused as `conflict` rather than silently rewriting the
+ * existing row: two watches on one channel would poll it twice and file everything twice.
+ */
+export const SlackWatchCreateInput = Schema.Struct({
+  channelId: SlackChannelId,
+  channelName: TrimmedNonEmptyString,
+  projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  /** Absent starts the channel paused: configured, watched, and filing nothing yet. */
+  trigger: Schema.optional(SlackIntakeTrigger),
+});
+export type SlackWatchCreateInput = typeof SlackWatchCreateInput.Type;
+
+/**
+ * `trigger` is replaced wholesale rather than merged, for the same reason a saved view's config
+ * is: it is edited as one set of switches, and a partial patch could never say "no emoji".
+ */
+export const SlackWatchPatch = Schema.Struct({
+  channelName: Schema.optional(TrimmedNonEmptyString),
+  projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  trigger: Schema.optional(SlackIntakeTrigger),
+});
+export type SlackWatchPatch = typeof SlackWatchPatch.Type;
+
+export const SlackWatchUpdateInput = Schema.Struct({
+  watchId: SlackChannelWatchId,
+  patch: SlackWatchPatch,
+});
+export type SlackWatchUpdateInput = typeof SlackWatchUpdateInput.Type;
+
+export const SlackWatchDeleteInput = Schema.Struct({ watchId: SlackChannelWatchId });
+export type SlackWatchDeleteInput = typeof SlackWatchDeleteInput.Type;
+
+/** The whole set after the write, matching the stream event and the snapshot field. */
+export const SlackWatchesResult = Schema.Struct({
+  watches: Schema.Array(SlackChannelWatch),
+});
+export type SlackWatchesResult = typeof SlackWatchesResult.Type;
+
+export const SlackWatchResult = Schema.Struct({
+  watch: SlackChannelWatch,
+  watches: Schema.Array(SlackChannelWatch),
+});
+export type SlackWatchResult = typeof SlackWatchResult.Type;
+
+/**
+ * Accept a triage item: status, project, and priority in one write.
+ *
+ * One action rather than three, because a triage item has no status at all — applying them one at
+ * a time would put the issue on a board halfway through being triaged, which is exactly the state
+ * triage exists to keep out of the board.
+ */
+export const IssueTriageAcceptInput = Schema.Struct({
+  issueId: IssueId,
+  /** Required: leaving triage means landing in the workflow, and the workflow is statuses. */
+  statusId: IssueStatusId,
+  /** Absent keeps whatever the channel auto-tagged; an explicit null files it under no project. */
+  projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  priority: Schema.optional(IssuePriority),
+  /**
+   * Fire the read-only investigation as part of accepting. Refused for a rootless or absent
+   * project — and that refusal does not undo the accept, it is reported alongside it.
+   */
+  runEnrichment: Schema.Boolean,
+});
+export type IssueTriageAcceptInput = typeof IssueTriageAcceptInput.Type;
+
+/**
+ * The accepted issue, and what became of the investigation that was asked for.
+ *
+ * Both `enrichment` fields are null when `runEnrichment` was false. When it was true, exactly one
+ * of them is set: enrichment refusing — a rootless project, a run already in flight, no model
+ * configured — must not take the accept down with it, so the refusal is reported here rather than
+ * raised.
+ */
+export const IssueTriageAcceptResult = Schema.Struct({
+  issue: Issue,
+  enrichmentRun: Schema.NullOr(IssueEnrichmentRun),
+  /** Why no run was started, in a sentence the accept toast can show underneath itself. */
+  enrichmentRefusal: Schema.NullOr(Schema.String),
+});
+export type IssueTriageAcceptResult = typeof IssueTriageAcceptResult.Type;
 
 export const IssueTrackerErrorReason = Schema.Literals([
   /** The row named by the request — issue, status, label, milestone, cycle, todo, comment — is gone. */

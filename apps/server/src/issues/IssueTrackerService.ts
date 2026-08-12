@@ -14,6 +14,8 @@
 import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   ISSUE_MAX_PARENT_DEPTH,
+  ISSUE_TITLE_MAX_CHARS,
+  SLACK_MAX_CHANNEL_WATCHES,
   type Issue,
   type IssueActor,
   type IssueBulkUpdateInput,
@@ -71,6 +73,7 @@ import {
   type IssueRelationsResult,
   type IssueResult,
   type IssueSetSortOrderInput,
+  type IssueSlackSource,
   type IssueStatus,
   type IssueStatusCategory,
   type IssueStatusCreateInput,
@@ -93,6 +96,8 @@ import {
   type IssueThreadUnlinkInput,
   type IssueTrackerConfigResult,
   IssueTrackerError,
+  type IssueTriageAcceptInput,
+  type IssueTriageAcceptResult,
   type IssueUpdateInput,
   type IssueView,
   type IssueViewCreateInput,
@@ -110,6 +115,21 @@ import {
   type IssuesSnapshot,
   type IssuesStreamEvent,
   ProviderDriverKind,
+  type ProjectId,
+  type SlackChannelId,
+  type SlackChannelWatch,
+  SlackChannelWatchId,
+  type SlackChannelsResult,
+  type SlackIntakeStatus,
+  type SlackIntakeStatusResult,
+  type SlackIntakeTrigger,
+  type SlackMessageTs,
+  type SlackSetTokenInput,
+  type SlackWatchCreateInput,
+  type SlackWatchDeleteInput,
+  type SlackWatchResult,
+  type SlackWatchUpdateInput,
+  type SlackWatchesResult,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -121,6 +141,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import {
@@ -129,6 +150,7 @@ import {
   resolveAttachmentPath,
   toSafeIssueAttachmentSegment,
 } from "../attachmentStore.ts";
+import { ServerSecretStore, type SecretStoreError } from "../auth/ServerSecretStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import type { IssueTrackerRepositoryError } from "../persistence/Errors.ts";
@@ -146,7 +168,12 @@ import { IssueTodoRepository } from "../persistence/Services/IssueTodos.ts";
 import { IssueTrackerConfigRepository } from "../persistence/Services/IssueTrackerConfig.ts";
 import { IssueViewRepository } from "../persistence/Services/IssueViews.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import { SlackChannelWatchRepository } from "../persistence/Services/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepository } from "../persistence/Services/SlackIntakeLedger.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentRunRecorder } from "./IssueEnrichmentEngine.ts";
+import { SlackIntakeEngine } from "./slack/SlackIntakeEngine.ts";
+// The poller reads the same file at the top of every cycle; one name, so they cannot drift.
+import { SLACK_BOT_TOKEN_SECRET } from "./slack/slackToken.ts";
 import { appendInvestigationBlock, buildInvestigationBlock } from "./enrichment.ts";
 import {
   guessIssueStatusCategory,
@@ -194,6 +221,24 @@ const CATEGORY_COLORS: Readonly<Record<IssueStatusCategory, string>> = {
   canceled: "#95a2b3",
 };
 
+/** Every write intake makes is the tracker acting on somebody's behalf, never a person. */
+const SLACK_ACTOR: IssueActor = { kind: "system", source: "slack" };
+
+/** A watch created without one: configured, watched, and filing nothing until it is switched on. */
+const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = {
+  emoji: null,
+  everyMessage: false,
+  botMention: false,
+};
+
+/**
+ * What a filed message is called when it had no text — an image, a file, a bare reaction target.
+ * Refusing to file it would be worse: somebody reacted to it on purpose.
+ */
+const SLACK_UNTITLED_ISSUE_TITLE = "Slack message";
+
+const textEncoder = new TextEncoder();
+
 /** Imported labels arrive with a name and nothing else; these are the colours they land in. */
 const IMPORTED_LABEL_COLORS: ReadonlyArray<string> = [
   "#eb5757",
@@ -205,6 +250,53 @@ const IMPORTED_LABEL_COLORS: ReadonlyArray<string> = [
   "#bb87fc",
   "#95a2b3",
 ];
+
+/**
+ * What intake's transport hands over for one watched message.
+ *
+ * Plain interfaces rather than schemas, because none of this crosses a socket: the transport lives
+ * in this process and these are the two calls it makes inward.
+ */
+export interface IssueIntakeCreateInput {
+  readonly channelId: SlackChannelId;
+  /** Slack's message identity, and the thread everything about this issue is posted back into. */
+  readonly messageTs: SlackMessageTs;
+  /** Normalised here rather than by the caller: a Slack message is not a title until it is cut. */
+  readonly title: string;
+  readonly description?: string | undefined;
+  /** The channel's auto-tag target. Null files the issue under no project, which is allowed. */
+  readonly projectId?: ProjectId | null | undefined;
+  readonly permalink?: string | null | undefined;
+  readonly authorName?: string | null | undefined;
+}
+
+export interface IssueIntakeCreateResult {
+  readonly issue: Issue;
+  /** False when this message had already been filed, which an overlapping poll makes ordinary. */
+  readonly created: boolean;
+}
+
+export interface IssueIntakeCommentInput {
+  readonly channelId: SlackChannelId;
+  /** The parent message's ts, which is the key the issue was filed under. */
+  readonly threadTs: SlackMessageTs;
+  /** The reply's own ts, which is what dedupes it. */
+  readonly messageTs: SlackMessageTs;
+  readonly authorName?: string | null | undefined;
+  readonly body: string;
+  /**
+   * Images the transport already put in the store through
+   * {@link IssueTrackerServiceShape.uploadCommentAttachment}, so they are namespaced to this issue
+   * before they get here. Slack images cannot ride on the issue itself — an attachment is an id on
+   * a comment row, and a description is Markdown with nowhere to hang one.
+   */
+  readonly attachmentIds?: ReadonlyArray<string> | undefined;
+}
+
+export interface IssueIntakeCommentResult {
+  /** Null when the thread routes to no issue, or when this reply had already been attached. */
+  readonly comment: IssueComment | null;
+}
 
 export interface IssueTrackerServiceShape {
   /**
@@ -421,6 +513,97 @@ export interface IssueTrackerServiceShape {
     input: IssueRefInput,
   ) => Effect.Effect<IssueThreadLinksResult, IssueTrackerError>;
   /**
+   * Store the Slack bot token, or clear it with an empty string.
+   *
+   * The token is tried against Slack before it is written, so `configured` never means
+   * "configured with something broken". A token that does not work is refused and the failure is
+   * left on the status for the settings page to show.
+   */
+  readonly slackSetToken: (
+    input: SlackSetTokenInput,
+  ) => Effect.Effect<SlackIntakeStatusResult, IssueTrackerError>;
+  readonly slackGetStatus: () => Effect.Effect<SlackIntakeStatusResult, IssueTrackerError>;
+  /** Asked of Slack, not of the database: the picker lists what the bot can actually see. */
+  readonly slackListChannels: () => Effect.Effect<SlackChannelsResult, IssueTrackerError>;
+  /**
+   * Watch a channel. Refused as `conflict` when the channel is already watched: two watches would
+   * poll it twice and file everything twice.
+   */
+  readonly slackWatchCreate: (
+    input: SlackWatchCreateInput,
+  ) => Effect.Effect<SlackWatchResult, IssueTrackerError>;
+  readonly slackWatchUpdate: (
+    input: SlackWatchUpdateInput,
+  ) => Effect.Effect<SlackWatchResult, IssueTrackerError>;
+  /**
+   * Stop watching a channel. Its cursor and its processed messages stay: unwatching is usually a
+   * pause, and re-watching a swept channel would refile everything still in Slack's history.
+   */
+  readonly slackWatchDelete: (
+    input: SlackWatchDeleteInput,
+  ) => Effect.Effect<SlackWatchesResult, IssueTrackerError>;
+  /**
+   * Accept a triage item: status, project, and priority in one write, and optionally the
+   * investigation.
+   *
+   * One action rather than three, because a triage item has no status — applying them separately
+   * would put a half-triaged issue on the board, which is the state triage exists to prevent.
+   * Enrichment refusing (a rootless project, a run already in flight) does not undo the accept;
+   * it comes back as `enrichmentRefusal` beside the accepted issue.
+   */
+  readonly triageAccept: (
+    input: IssueTriageAcceptInput,
+    actor: IssueActor,
+  ) => Effect.Effect<IssueTriageAcceptResult, IssueTrackerError>;
+  /**
+   * Turn a triage item down. A soft delete underneath, logged as `triage_rejected` rather than
+   * `deleted`: "this never was an issue" and "somebody deleted this issue" are different stories,
+   * and rejecting is the ordinary outcome of intake. `triage` is left set, so restoring the row
+   * puts it back in the queue rather than loose in the backlog.
+   */
+  readonly triageReject: (
+    input: IssueRefInput,
+    actor: IssueActor,
+  ) => Effect.Effect<IssueResult, IssueTrackerError>;
+  /**
+   * File a watched channel's message as a triage item. Not an RPC: intake's transport calls this,
+   * and nothing else should.
+   *
+   * Deduped on `(channelId, messageTs)` through the processed-message ledger, because a poll
+   * window overlaps the last one by design — a cursor is a floor, not a fence. A message already
+   * filed comes back with `created: false` and the issue it became.
+   */
+  readonly intakeCreateIssue: (
+    input: IssueIntakeCreateInput,
+  ) => Effect.Effect<IssueIntakeCreateResult, IssueTrackerError>;
+  /**
+   * Attach a Slack thread reply to the issue its parent message became. Not an RPC, for the same
+   * reason.
+   *
+   * Answers with a null comment rather than failing when the thread routes nowhere: most replies
+   * in a watched channel are on threads that never became issues, and that is not an error.
+   */
+  readonly intakeAddComment: (
+    input: IssueIntakeCommentInput,
+  ) => Effect.Effect<IssueIntakeCommentResult, IssueTrackerError>;
+  /**
+   * Report the outcome of one poll. Not an RPC: this is how the transport keeps the status the
+   * settings page reads honest, and `null` is the error being cleared by a pass that worked.
+   */
+  readonly slackRecordPoll: (input: {
+    readonly error: string | null;
+  }) => Effect.Effect<SlackIntakeStatus, IssueTrackerError>;
+  /**
+   * Remember that the bot posted this message, so the next poll does not read it back.
+   *
+   * Not an RPC. This registry is the entire echo-suppression story: without it, a status change
+   * posted into a thread comes back as a message in a watched channel and becomes an issue.
+   */
+  readonly slackRecordOutboundPost: (input: {
+    readonly channelId: SlackChannelId;
+    readonly messageTs: SlackMessageTs;
+  }) => Effect.Effect<void, IssueTrackerError>;
+  /**
    * The whole tracker as diffs, then every later diff. Subscribing happens before the read, so a
    * write that lands mid-read is repeated rather than lost — every event on this stream is an
    * upsert or a removal, so seeing one twice costs nothing.
@@ -454,6 +637,28 @@ const storage = (operation: string) => (cause: IssueTrackerRepositoryError) =>
   new IssueTrackerError({ reason: "storage", message: `${operation}: ${cause.message}` });
 
 const categoryRank = (category: IssueStatusCategory) => CATEGORY_ORDER.indexOf(category);
+
+/** Trim to null, so "" and "   " off a Slack payload mean absent rather than a blank field. */
+const nullableTrimmed = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length === 0 ? null : trimmed;
+};
+
+/**
+ * A Slack message is not a title until it is cut down to one.
+ *
+ * Newlines collapse because a title is one line, and the whole thing is capped at the schema's
+ * ceiling — the body keeps the full text, so nothing is lost by cutting here. An empty result is
+ * named rather than refused: a message that is only an image is still worth filing when somebody
+ * has deliberately reacted to it.
+ */
+const normalizeSlackTitle = (title: string): string => {
+  const collapsed = title.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return SLACK_UNTITLED_ISSUE_TITLE;
+  return collapsed.length <= ISSUE_TITLE_MAX_CHARS
+    ? collapsed
+    : `${collapsed.slice(0, ISSUE_TITLE_MAX_CHARS - 1)}…`;
+};
 
 const truncateEventValue = (value: string) =>
   value.length <= EVENT_VALUE_MAX_CHARS ? value : `${value.slice(0, EVENT_VALUE_MAX_CHARS)}…`;
@@ -722,14 +927,43 @@ export const make = Effect.gen(function* () {
   const viewRepository = yield* IssueViewRepository;
   const enrichmentRunRepository = yield* IssueEnrichmentRunRepository;
   const threadLinkRepository = yield* IssueThreadLinkRepository;
+  const slackWatchRepository = yield* SlackChannelWatchRepository;
+  const slackLedgerRepository = yield* SlackIntakeLedgerRepository;
   // Read-only, and the only table outside the tracker this service touches: an enrichment run
   // needs the project's directory, and a rootless project is the case that has none.
   const projectRepository = yield* ProjectionProjectRepository;
   const enrichmentEngine = yield* IssueEnrichmentEngine;
+  const slackEngine = yield* SlackIntakeEngine;
+  // The bot token is a secret like any other on this server, so it goes through the same store:
+  // `<secretsDir>/slack-bot-token.bin`, 0600, written through a temp file and a rename.
+  const secretStore = yield* ServerSecretStore;
   const serverConfig = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const changes = yield* PubSub.unbounded<IssuesStreamEvent>();
+
+  /**
+   * Intake's health, held in memory rather than in a table.
+   *
+   * `configured` is whether a token is on disk, read once here. The rest is what the poller has
+   * managed *since this server woke up*: a laptop that has been shut for a week reports no poll
+   * and no error, which is the truth, whereas a stored `lastPollAt` from last Tuesday would read
+   * as a working connection.
+   */
+  const slackTokenPresent = yield* secretStore.get(SLACK_BOT_TOKEN_SECRET).pipe(
+    Effect.map(Option.isSome),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Failed to read the Slack bot token at startup.", { cause }).pipe(
+        Effect.as(false),
+      ),
+    ),
+  );
+  const slackStatus = yield* Ref.make<SlackIntakeStatus>({
+    configured: slackTokenPresent,
+    lastPollAt: null,
+    lastError: null,
+    workspaceName: null,
+  });
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
@@ -821,6 +1055,11 @@ export const make = Effect.gen(function* () {
       .listAssignmentsByIssue({ issueId })
       .pipe(Effect.mapError(storage("Failed to read issue label assignments")));
 
+  const listSlackWatches = () =>
+    slackWatchRepository
+      .listAll()
+      .pipe(Effect.mapError(storage("Failed to read the Slack channel watches")));
+
   const readSnapshot = () =>
     Effect.all([
       listIssues(),
@@ -829,17 +1068,23 @@ export const make = Effect.gen(function* () {
       listMilestones(),
       listCycles(),
       listViews(),
+      listSlackWatches(),
+      Ref.get(slackStatus),
       readConfig(),
     ]).pipe(
-      Effect.map(([issues, statuses, labels, milestones, cycles, views, config]) => ({
-        issues,
-        statuses,
-        labels,
-        milestones,
-        cycles,
-        views,
-        config,
-      })),
+      Effect.map(
+        ([issues, statuses, labels, milestones, cycles, views, slackWatches, status, config]) => ({
+          issues,
+          statuses,
+          labels,
+          milestones,
+          cycles,
+          views,
+          slackWatches,
+          slackStatus: status,
+          config,
+        }),
+      ),
     );
 
   const getSnapshot: IssueTrackerServiceShape["getSnapshot"] = () =>
@@ -983,106 +1228,120 @@ export const make = Effect.gen(function* () {
       }
     });
 
-  const create: IssueTrackerServiceShape["create"] = Effect.fn("IssueTrackerService.create")(
-    function* (input, actor) {
-      const [statuses, labels, records, milestones, cycles] = yield* Effect.all([
-        listStatuses(),
-        listLabels(),
-        listRecords(),
-        listMilestones(),
-        listCycles(),
-      ]);
+  /**
+   * The body of `create`, with one thing the wire cannot ask for: where the issue came in from.
+   *
+   * `slackOrigin` is the source minus its `issueId`, because the id is minted in here. Intake is
+   * the only caller that passes one, and keeping it off `IssueCreateInput` is deliberate — a
+   * client that could claim a Slack origin could point an issue at a thread the bot then posts
+   * into.
+   */
+  const createIssue = Effect.fn("IssueTrackerService.create")(function* (
+    input: IssueCreateInput,
+    actor: IssueActor,
+    slackOrigin: Omit<IssueSlackSource, "issueId"> | null,
+  ) {
+    const [statuses, labels, records, milestones, cycles] = yield* Effect.all([
+      listStatuses(),
+      listLabels(),
+      listRecords(),
+      listMilestones(),
+      listCycles(),
+    ]);
 
-      const status =
-        input.statusId === undefined
-          ? (statuses.find((candidate) => DEFAULT_STATUS_CATEGORIES.has(candidate.category)) ??
-            statuses[0])
-          : statuses.find((candidate) => candidate.id === input.statusId);
-      if (status === undefined) {
-        return yield* input.statusId === undefined
-          ? conflict("The tracker has no statuses, so an issue has nowhere to land.")
-          : notFound(input.statusId, `No issue status with id ${input.statusId}.`);
-      }
+    const status =
+      input.statusId === undefined
+        ? (statuses.find((candidate) => DEFAULT_STATUS_CATEGORIES.has(candidate.category)) ??
+          statuses[0])
+        : statuses.find((candidate) => candidate.id === input.statusId);
+    if (status === undefined) {
+      return yield* input.statusId === undefined
+        ? conflict("The tracker has no statuses, so an issue has nowhere to land.")
+        : notFound(input.statusId, `No issue status with id ${input.statusId}.`);
+    }
 
-      yield* validatePatch({
-        patch: {
-          ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
-          ...(input.milestoneId === undefined ? {} : { milestoneId: input.milestoneId }),
-          ...(input.cycleId === undefined ? {} : { cycleId: input.cycleId }),
-          ...(input.labelIds === undefined ? {} : { labelIds: input.labelIds }),
-        },
-        statuses,
-        labels,
-        milestones,
-        cycles,
-        records,
-        issueIds: [],
-      });
+    yield* validatePatch({
+      patch: {
+        ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+        ...(input.milestoneId === undefined ? {} : { milestoneId: input.milestoneId }),
+        ...(input.cycleId === undefined ? {} : { cycleId: input.cycleId }),
+        ...(input.labelIds === undefined ? {} : { labelIds: input.labelIds }),
+      },
+      statuses,
+      labels,
+      milestones,
+      cycles,
+      records,
+      issueIds: [],
+    });
 
-      const key = yield* configRepository
-        .allocateKey()
-        .pipe(Effect.mapError(storage("Failed to allocate an issue key")));
-      const id = IssueId.make(yield* newId);
-      const createdAt = yield* nowIso;
-      // Appended after the last issue in its own column, not the tracker's last row.
-      const last = records.findLast((record) => record.statusId === status.id);
-      const labelIds = input.labelIds === undefined ? [] : [...new Set(input.labelIds)];
+    const key = yield* configRepository
+      .allocateKey()
+      .pipe(Effect.mapError(storage("Failed to allocate an issue key")));
+    const id = IssueId.make(yield* newId);
+    const createdAt = yield* nowIso;
+    // Appended after the last issue in its own column, not the tracker's last row.
+    const last = records.findLast((record) => record.statusId === status.id);
+    const labelIds = input.labelIds === undefined ? [] : [...new Set(input.labelIds)];
 
-      const record: IssueRecord = {
-        id,
-        key,
-        title: input.title,
-        description: input.description ?? "",
-        statusId: status.id,
-        priority: input.priority ?? "none",
-        assignee: null,
-        projectId: input.projectId ?? null,
-        milestoneId: input.milestoneId ?? null,
-        cycleId: input.cycleId ?? null,
-        parentId: input.parentId ?? null,
-        sortOrder: issueSortOrderAfter(last?.sortOrder ?? null),
-        dueDate: input.dueDate ?? null,
-        triage: input.triage ?? false,
-        createdAt,
-        updatedAt: createdAt,
-        deletedAt: null,
-      };
+    const record: IssueRecord = {
+      id,
+      key,
+      title: input.title,
+      description: input.description ?? "",
+      statusId: status.id,
+      priority: input.priority ?? "none",
+      assignee: input.assignee ?? null,
+      projectId: input.projectId ?? null,
+      milestoneId: input.milestoneId ?? null,
+      cycleId: input.cycleId ?? null,
+      parentId: input.parentId ?? null,
+      sortOrder: issueSortOrderAfter(last?.sortOrder ?? null),
+      dueDate: input.dueDate ?? null,
+      triage: input.triage ?? false,
+      slackSource: slackOrigin === null ? null : { ...slackOrigin, issueId: id },
+      createdAt,
+      updatedAt: createdAt,
+      deletedAt: null,
+    };
 
-      // A new issue has no subtree, so this only ever measures the parent's own depth.
-      yield* validatePlacement({
-        issue: record,
-        checkMilestone: true,
-        checkParent: true,
-        tree: buildIssueTree(records),
-        milestones,
-      });
+    // A new issue has no subtree, so this only ever measures the parent's own depth.
+    yield* validatePlacement({
+      issue: record,
+      checkMilestone: true,
+      checkParent: true,
+      tree: buildIssueTree(records),
+      milestones,
+    });
 
-      yield* issueRepository
-        .upsert(record)
-        .pipe(Effect.mapError(storage("Failed to write the issue")));
-      if (labelIds.length > 0) {
-        yield* labelRepository
-          .setAssignments({ issueId: id, labelIds })
-          .pipe(Effect.mapError(storage("Failed to write the issue labels")));
-      }
-      yield* appendChangeLog({
-        issueId: id,
-        actor,
-        createdAt,
-        kind: "created",
-        changes: WHOLE_ISSUE_CHANGE,
-      });
+    yield* issueRepository
+      .upsert(record)
+      .pipe(Effect.mapError(storage("Failed to write the issue")));
+    if (labelIds.length > 0) {
+      yield* labelRepository
+        .setAssignments({ issueId: id, labelIds })
+        .pipe(Effect.mapError(storage("Failed to write the issue labels")));
+    }
+    yield* appendChangeLog({
+      issueId: id,
+      actor,
+      createdAt,
+      kind: "created",
+      changes: WHOLE_ISSUE_CHANGE,
+    });
 
-      const issue: Issue = { ...record, labelIds };
-      const config = yield* readConfig();
-      yield* publishAll([
-        { _tag: "IssueUpserted", issue },
-        // The key allocation moved the counter, and the counter is on screen in settings.
-        { _tag: "ConfigChanged", config },
-      ]);
-      return { issue };
-    },
-  );
+    const issue: Issue = { ...record, labelIds };
+    const config = yield* readConfig();
+    yield* publishAll([
+      { _tag: "IssueUpserted", issue },
+      // The key allocation moved the counter, and the counter is on screen in settings.
+      { _tag: "ConfigChanged", config },
+    ]);
+    return { issue };
+  });
+
+  const create: IssueTrackerServiceShape["create"] = (input, actor) =>
+    createIssue(input, actor, null);
 
   /**
    * Placement is checked for every target before the first one is written, for the same reason
@@ -2849,6 +3108,375 @@ export const make = Effect.gen(function* () {
     return { issueId: input.issueId, links: yield* readThreadLinks(input.issueId) };
   });
 
+  // ── Slack intake ─────────────────────────────────────────────────────
+
+  const secretFailure = (operation: string) => (cause: SecretStoreError) =>
+    new IssueTrackerError({ reason: "storage", message: `${operation}: ${cause.message}` });
+
+  /** Every move of the status is published: four small fields, so there is nothing to diff. */
+  const patchSlackStatus = (patch: Partial<SlackIntakeStatus>) =>
+    Ref.updateAndGet(slackStatus, (current) => ({ ...current, ...patch })).pipe(
+      Effect.tap((status) => publish({ _tag: "SlackStatusChanged", status })),
+    );
+
+  /**
+   * The whole set after any watch write, and a poke at the poller.
+   *
+   * The poke is fire-and-forget on purpose: the next pass reads the new configuration either way,
+   * so a poller that is mid-sleep must not make a settings write fail.
+   */
+  const publishSlackWatches = () =>
+    listSlackWatches().pipe(
+      Effect.tap((watches) => publish({ _tag: "SlackWatchesChanged", watches })),
+      Effect.tap(() => slackEngine.notifyWatchesChanged),
+    );
+
+  const slackGetStatus: IssueTrackerServiceShape["slackGetStatus"] = () =>
+    Effect.map(Ref.get(slackStatus), (status) => ({ status }));
+
+  const slackSetToken: IssueTrackerServiceShape["slackSetToken"] = Effect.fn(
+    "IssueTrackerService.slackSetToken",
+  )(function* (input) {
+    const token = input.token.trim();
+    if (token.length === 0) {
+      yield* secretStore
+        .remove(SLACK_BOT_TOKEN_SECRET)
+        .pipe(Effect.mapError(secretFailure("Failed to clear the Slack bot token")));
+      // Everything the old token told us goes with it, including the last error: a disconnected
+      // integration reporting last week's failure reads as a broken one.
+      const status = yield* patchSlackStatus({
+        configured: false,
+        workspaceName: null,
+        lastError: null,
+        lastPollAt: null,
+      });
+      yield* slackEngine.notifyWatchesChanged;
+      return { status };
+    }
+
+    // Tried before it is written, so `configured` never means "configured with something broken".
+    // The failure is left on the status as well as raised: the settings page reads the status.
+    const connection = yield* slackEngine
+      .testConnection({ token })
+      .pipe(Effect.tapError((error) => patchSlackStatus({ lastError: error.message })));
+    yield* secretStore
+      .set(SLACK_BOT_TOKEN_SECRET, textEncoder.encode(token))
+      .pipe(Effect.mapError(secretFailure("Failed to store the Slack bot token")));
+
+    const workspaceName = connection.workspaceName.trim();
+    const status = yield* patchSlackStatus({
+      configured: true,
+      workspaceName: workspaceName.length === 0 ? null : workspaceName,
+      lastError: null,
+      // A new token is a new connection, and the old token's last poll says nothing about it.
+      lastPollAt: null,
+    });
+    yield* slackEngine.notifyWatchesChanged;
+    return { status };
+  });
+
+  const slackListChannels: IssueTrackerServiceShape["slackListChannels"] = () =>
+    Effect.map(slackEngine.listChannels, (channels) => ({ channels }));
+
+  const requireSlackWatch = (watchId: SlackChannelWatch["id"]) =>
+    slackWatchRepository.getById({ watchId }).pipe(
+      Effect.mapError(storage("Failed to read the Slack channel watch")),
+      Effect.flatMap((watch) =>
+        Option.isNone(watch)
+          ? Effect.fail(notFound(watchId, `No Slack channel watch with id ${watchId}.`))
+          : Effect.succeed(watch.value),
+      ),
+    );
+
+  const slackWatchCreate: IssueTrackerServiceShape["slackWatchCreate"] = Effect.fn(
+    "IssueTrackerService.slackWatchCreate",
+  )(function* (input) {
+    const existing = yield* listSlackWatches();
+    if (existing.some((watch) => watch.channelId === input.channelId)) {
+      return yield* conflict(`#${input.channelName} is already watched.`, input.channelName);
+    }
+    // Every watch costs a history call per interval, forever, on a laptop.
+    if (existing.length >= SLACK_MAX_CHANNEL_WATCHES) {
+      return yield* conflict(
+        `At most ${SLACK_MAX_CHANNEL_WATCHES} Slack channels can be watched at once.`,
+      );
+    }
+
+    const createdAt = yield* nowIso;
+    const watch: SlackChannelWatch = {
+      id: SlackChannelWatchId.make(yield* newId),
+      channelId: input.channelId,
+      channelName: input.channelName,
+      projectId: input.projectId ?? null,
+      trigger: input.trigger ?? PAUSED_SLACK_TRIGGER,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    yield* slackWatchRepository
+      .upsert(watch)
+      .pipe(Effect.mapError(storage("Failed to write the Slack channel watch")));
+
+    return { watch, watches: yield* publishSlackWatches() };
+  });
+
+  const slackWatchUpdate: IssueTrackerServiceShape["slackWatchUpdate"] = Effect.fn(
+    "IssueTrackerService.slackWatchUpdate",
+  )(function* (input) {
+    const existing = yield* requireSlackWatch(input.watchId);
+    const { patch } = input;
+    const next: SlackChannelWatch = {
+      ...existing,
+      ...(patch.channelName === undefined ? {} : { channelName: patch.channelName }),
+      ...(patch.projectId === undefined ? {} : { projectId: patch.projectId }),
+      // Replaced wholesale rather than merged: the trigger is one set of switches, and a partial
+      // patch could never say "no emoji".
+      ...(patch.trigger === undefined ? {} : { trigger: patch.trigger }),
+    };
+    if (
+      next.channelName === existing.channelName &&
+      next.projectId === existing.projectId &&
+      next.trigger.emoji === existing.trigger.emoji &&
+      next.trigger.everyMessage === existing.trigger.everyMessage &&
+      next.trigger.botMention === existing.trigger.botMention
+    ) {
+      return { watch: existing, watches: yield* listSlackWatches() };
+    }
+
+    const updated: SlackChannelWatch = { ...next, updatedAt: yield* nowIso };
+    yield* slackWatchRepository
+      .upsert(updated)
+      .pipe(Effect.mapError(storage("Failed to write the Slack channel watch")));
+
+    return { watch: updated, watches: yield* publishSlackWatches() };
+  });
+
+  const slackWatchDelete: IssueTrackerServiceShape["slackWatchDelete"] = Effect.fn(
+    "IssueTrackerService.slackWatchDelete",
+  )(function* (input) {
+    yield* requireSlackWatch(input.watchId);
+    // The channel's cursor and its processed messages stay behind on purpose: unwatching is
+    // usually a pause, and re-watching a swept channel would refile its whole history window.
+    yield* slackWatchRepository
+      .deleteById({ watchId: input.watchId })
+      .pipe(Effect.mapError(storage("Failed to delete the Slack channel watch")));
+
+    return { watches: yield* publishSlackWatches() };
+  });
+
+  const slackRecordPoll: IssueTrackerServiceShape["slackRecordPoll"] = Effect.fn(
+    "IssueTrackerService.slackRecordPoll",
+  )(function* (input) {
+    return yield* patchSlackStatus({ lastPollAt: yield* nowIso, lastError: input.error });
+  });
+
+  const slackRecordOutboundPost: IssueTrackerServiceShape["slackRecordOutboundPost"] = Effect.fn(
+    "IssueTrackerService.slackRecordOutboundPost",
+  )(function* (input) {
+    yield* slackLedgerRepository
+      .recordOutbound({
+        channelId: input.channelId,
+        messageTs: input.messageTs,
+        createdAt: yield* nowIso,
+      })
+      .pipe(Effect.mapError(storage("Failed to record the Slack outbound post")));
+  });
+
+  const readProcessedMessage = (channelId: SlackChannelId, messageTs: SlackMessageTs) =>
+    slackLedgerRepository
+      .getProcessed({ channelId, messageTs })
+      .pipe(Effect.mapError(storage("Failed to read the Slack message ledger")));
+
+  const recordProcessedMessage = (
+    channelId: SlackChannelId,
+    messageTs: SlackMessageTs,
+    issueId: IssueId | null,
+  ) =>
+    Effect.flatMap(nowIso, (createdAt) =>
+      slackLedgerRepository
+        .recordProcessed({ channelId, messageTs, issueId, createdAt })
+        .pipe(Effect.mapError(storage("Failed to record the Slack message ledger"))),
+    );
+
+  const intakeCreateIssue: IssueTrackerServiceShape["intakeCreateIssue"] = Effect.fn(
+    "IssueTrackerService.intakeCreateIssue",
+  )(function* (input) {
+    // A poll window overlaps the last one by design — a cursor is a floor, not a fence — so the
+    // ledger, not the cursor, is what stops a message from being filed twice.
+    const processed = yield* readProcessedMessage(input.channelId, input.messageTs);
+    if (Option.isSome(processed) && processed.value.issueId !== null) {
+      const existing = yield* issueRepository
+        .getById({ issueId: processed.value.issueId })
+        .pipe(Effect.mapError(storage("Failed to read the issue")));
+      if (Option.isSome(existing)) {
+        const labelIds = yield* labelsOf(existing.value.id);
+        return { issue: { ...existing.value, labelIds }, created: false };
+      }
+      // The row it named is gone for good, so the ledger is stale rather than authoritative and
+      // this message deserves a second chance at being an issue.
+    }
+
+    const title = normalizeSlackTitle(input.title);
+    const { issue } = yield* createIssue(
+      {
+        title,
+        triage: true,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        // The channel's auto-tag target, and `undefined` rather than `null` because
+        // `IssueCreateInput` has no "explicitly no project" — absent already means that.
+        ...(input.projectId === undefined || input.projectId === null
+          ? {}
+          : { projectId: input.projectId }),
+      },
+      SLACK_ACTOR,
+      {
+        channelId: input.channelId,
+        messageTs: input.messageTs,
+        permalink: nullableTrimmed(input.permalink),
+        authorName: nullableTrimmed(input.authorName),
+      },
+    );
+    yield* recordProcessedMessage(input.channelId, input.messageTs, issue.id);
+    return { issue, created: true };
+  });
+
+  const intakeAddComment: IssueTrackerServiceShape["intakeAddComment"] = Effect.fn(
+    "IssueTrackerService.intakeAddComment",
+  )(function* (input) {
+    const already = yield* readProcessedMessage(input.channelId, input.messageTs);
+    if (Option.isSome(already)) return { comment: null };
+
+    const parent = yield* readProcessedMessage(input.channelId, input.threadTs);
+    const issueId = Option.isSome(parent) ? parent.value.issueId : null;
+    if (issueId === null) {
+      // Most replies in a watched channel are on threads that never became issues. Remembering
+      // that is what stops the next pass from reconsidering this one.
+      yield* recordProcessedMessage(input.channelId, input.messageTs, null);
+      return { comment: null };
+    }
+
+    const record = yield* issueRepository
+      .getById({ issueId })
+      .pipe(Effect.mapError(storage("Failed to read the issue")));
+    if (Option.isNone(record) || record.value.deletedAt !== null) {
+      yield* recordProcessedMessage(input.channelId, input.messageTs, null);
+      return { comment: null };
+    }
+
+    // The author rides in the body rather than in `author`: the comment was written by a person
+    // this environment has no account for, and `system:slack` is the honest actor for the write.
+    const authorName = nullableTrimmed(input.authorName);
+    const body = authorName === null ? input.body : `**${authorName}:** ${input.body}`;
+    const attachmentIds = input.attachmentIds ?? [];
+    const { comment } = yield* commentCreate(
+      { issueId, body, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
+      SLACK_ACTOR,
+    );
+    yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
+    return { comment };
+  });
+
+  // ── Triage ───────────────────────────────────────────────────────────
+
+  const triageAccept: IssueTrackerServiceShape["triageAccept"] = Effect.fn(
+    "IssueTrackerService.triageAccept",
+  )(function* (input, actor) {
+    const [statuses, labels, records, milestones, cycles] = yield* Effect.all([
+      listStatuses(),
+      listLabels(),
+      listRecords(),
+      listMilestones(),
+      listCycles(),
+    ]);
+    const record = yield* requireRecord(records, input.issueId);
+    if (record.deletedAt !== null) {
+      return yield* conflict(`${record.key} has been deleted.`, record.key);
+    }
+    // Accepting something already accepted is a stale client, and answering "done" would hide a
+    // second enrichment run behind a button that looked idempotent.
+    if (!record.triage) {
+      return yield* conflict(`${record.key} is not in triage.`, record.key);
+    }
+
+    // One patch, so `patchOne` writes one `issue_events` row per field that actually moved and
+    // publishes one `IssueUpserted`. Three separate writes would put a half-triaged issue on the
+    // board between them, which is the state triage exists to keep out of it.
+    const patch: IssuePatch = {
+      statusId: input.statusId,
+      triage: false,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
+    };
+    yield* validatePatch({
+      patch,
+      statuses,
+      labels,
+      milestones,
+      cycles,
+      records,
+      issueIds: [input.issueId],
+    });
+
+    const labelIds = yield* labelsOf(input.issueId);
+    const naming = namingOf(statuses, labels, milestones, cycles);
+    yield* validatePlacements({
+      targets: [record],
+      labelIdsOf: () => labelIds,
+      patch,
+      naming,
+      tree: buildIssueTree(records),
+      milestones,
+    });
+
+    const issue = yield* patchOne({
+      record,
+      labelIds,
+      patch,
+      naming,
+      actor,
+      updatedAt: yield* nowIso,
+    });
+    if (!input.runEnrichment) return { issue, enrichmentRun: null, enrichmentRefusal: null };
+
+    // Tolerant on purpose. Enrichment refuses a rootless or absent project, a run already in
+    // flight, and a server with no model configured — none of which is a reason to un-triage an
+    // issue somebody just triaged. The refusal is reported beside the accepted issue instead.
+    return yield* startEnrichment({ issueId: issue.id }).pipe(
+      Effect.map(({ run }) => ({ issue, enrichmentRun: run, enrichmentRefusal: null })),
+      Effect.catch((error) =>
+        Effect.succeed({ issue, enrichmentRun: null, enrichmentRefusal: error.message }),
+      ),
+    );
+  });
+
+  const triageReject: IssueTrackerServiceShape["triageReject"] = Effect.fn(
+    "IssueTrackerService.triageReject",
+  )(function* (input, actor) {
+    const records = yield* listRecords();
+    const record = yield* requireRecord(records, input.issueId);
+    const labelIds = yield* labelsOf(input.issueId);
+    if (record.deletedAt !== null) return { issue: { ...record, labelIds } };
+
+    const deletedAt = yield* nowIso;
+    yield* issueRepository
+      .softDelete({ issueId: input.issueId, deletedAt })
+      .pipe(Effect.mapError(storage("Failed to reject the triage item")));
+    // `triage_rejected` rather than `deleted`: "this never was an issue" is the ordinary outcome
+    // of intake, and it should not read in the feed as somebody destroying work.
+    yield* appendChangeLog({
+      issueId: input.issueId,
+      actor,
+      createdAt: deletedAt,
+      kind: "triage_rejected",
+      changes: WHOLE_ISSUE_CHANGE,
+    });
+
+    // `triage` is left set: a deleted triage item is already out of every count, and keeping the
+    // flag means restoring the row puts it back in the queue rather than loose in the backlog.
+    const issue: Issue = { ...record, labelIds, deletedAt, updatedAt: deletedAt };
+    yield* publish({ _tag: "IssueUpserted", issue });
+    return { issue };
+  });
+
   const importCsv: IssueTrackerServiceShape["importCsv"] = Effect.fn(
     "IssueTrackerService.importCsv",
   )(function* (input, actor) {
@@ -3000,6 +3628,9 @@ export const make = Effect.gen(function* () {
           sortOrder,
           dueDate: row.dueDate,
           triage: false,
+          // A CSV row cannot claim a Slack thread. Only intake writes this, and only for a
+          // message it actually read.
+          slackSource: null,
           createdAt,
           updatedAt: row.updatedAt ?? createdAt,
           deletedAt: null,
@@ -3140,6 +3771,18 @@ export const make = Effect.gen(function* () {
     linkThread,
     unlinkThread,
     getThreadLinks,
+    slackSetToken,
+    slackGetStatus,
+    slackListChannels,
+    slackWatchCreate,
+    slackWatchUpdate,
+    slackWatchDelete,
+    triageAccept,
+    triageReject,
+    intakeCreateIssue,
+    intakeAddComment,
+    slackRecordPoll,
+    slackRecordOutboundPost,
     get stream() {
       return Stream.unwrap(
         Effect.gen(function* () {
@@ -3154,6 +3797,8 @@ export const make = Effect.gen(function* () {
             { _tag: "MilestonesChanged", milestones: snapshot.milestones },
             { _tag: "CyclesChanged", cycles: snapshot.cycles },
             { _tag: "ViewsChanged", views: snapshot.views },
+            { _tag: "SlackWatchesChanged", watches: snapshot.slackWatches },
+            { _tag: "SlackStatusChanged", status: snapshot.slackStatus },
             { _tag: "ConfigChanged", config: snapshot.config },
             ...snapshot.issues.map((issue) => ({ _tag: "IssueUpserted" as const, issue })),
           ];

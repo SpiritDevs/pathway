@@ -2304,6 +2304,48 @@ const makeWsRpcLayer = (
           observeRpcEffect(ISSUES_WS_METHODS.getThreadLinks, issueTracker.getThreadLinks(input), {
             "rpc.aggregate": "issues",
           }),
+        [ISSUES_WS_METHODS.slackSetToken]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.slackSetToken, issueTracker.slackSetToken(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.slackGetStatus]: (_input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.slackGetStatus, issueTracker.slackGetStatus(), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.slackListChannels]: (_input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.slackListChannels, issueTracker.slackListChannels(), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.slackWatchCreate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.slackWatchCreate,
+            issueTracker.slackWatchCreate(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.slackWatchUpdate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.slackWatchUpdate,
+            issueTracker.slackWatchUpdate(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.slackWatchDelete]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.slackWatchDelete,
+            issueTracker.slackWatchDelete(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.triageAccept]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.triageAccept,
+            issueTracker.triageAccept(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.triageReject]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.triageReject,
+            issueTracker.triageReject(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
         [ISSUES_WS_METHODS.stream]: (_input) =>
           observeRpcStream(ISSUES_WS_METHODS.stream, issueTracker.stream, {
             "rpc.aggregate": "issues",

@@ -13,6 +13,7 @@ import {
   IssueTodoId,
   IssueViewId,
   ProjectId,
+  SlackChannelWatchId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -37,6 +38,8 @@ import { IssueThreadLinkRepositoryLive } from "./IssueThreadLinks.ts";
 import { IssueTodoRepositoryLive } from "./IssueTodos.ts";
 import { IssueTrackerConfigRepositoryLive } from "./IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "./IssueViews.ts";
+import { SlackChannelWatchRepositoryLive } from "./SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "./SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { IssueCommentRepository } from "../Services/IssueComments.ts";
 import { IssueCycleRepository } from "../Services/IssueCycles.ts";
@@ -51,6 +54,8 @@ import { IssueThreadLinkRepository } from "../Services/IssueThreadLinks.ts";
 import { IssueTodoRepository } from "../Services/IssueTodos.ts";
 import { IssueTrackerConfigRepository } from "../Services/IssueTrackerConfig.ts";
 import { IssueViewRepository } from "../Services/IssueViews.ts";
+import { SlackChannelWatchRepository } from "../Services/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepository } from "../Services/SlackIntakeLedger.ts";
 
 // One in-memory database behind every repository: these tables reference each other.
 const issueTrackerLayer = it.layer(
@@ -68,6 +73,8 @@ const issueTrackerLayer = it.layer(
     IssueViewRepositoryLive,
     IssueEnrichmentRunRepositoryLive,
     IssueThreadLinkRepositoryLive,
+    SlackChannelWatchRepositoryLive,
+    SlackIntakeLedgerRepositoryLive,
   ).pipe(Layer.provideMerge(SqlitePersistenceMemory)),
 );
 
@@ -105,6 +112,7 @@ const makeIssue = (overrides: Partial<IssueRecord> = {}): IssueRecord => ({
   sortOrder: "a0",
   dueDate: null,
   triage: false,
+  slackSource: null,
   createdAt: "2026-08-12T00:00:00.000Z",
   updatedAt: "2026-08-12T00:00:00.000Z",
   deletedAt: null,
@@ -751,6 +759,104 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         (yield* links.listByThread({ threadId })).map((link) => link.issueId),
         ["issue-other"],
       );
+    }),
+  );
+
+  it.effect("stores a watch's trigger as switches and reads it back as one struct", () =>
+    Effect.gen(function* () {
+      const watches = yield* SlackChannelWatchRepository;
+
+      yield* watches.upsert({
+        id: SlackChannelWatchId.make("watch-1"),
+        channelId: "C1",
+        channelName: "triage",
+        projectId: ProjectId.make("project-1"),
+        trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+        createdAt: "2026-08-12T00:00:00.000Z",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      });
+
+      const byChannel = yield* watches.getByChannel({ channelId: "C1" });
+      assert.deepStrictEqual(Option.isSome(byChannel) ? byChannel.value.trigger : null, {
+        emoji: "ticket",
+        everyMessage: false,
+        botMention: true,
+      });
+
+      // All three off is a paused watch, and a paused watch has to round-trip like any other.
+      yield* watches.upsert({
+        id: SlackChannelWatchId.make("watch-1"),
+        channelId: "C1",
+        channelName: "triage",
+        projectId: null,
+        trigger: { emoji: null, everyMessage: false, botMention: false },
+        createdAt: "2026-08-12T00:00:00.000Z",
+        updatedAt: "2026-08-12T00:01:00.000Z",
+      });
+      const paused = yield* watches.listAll();
+      assert.deepStrictEqual(
+        paused.map((watch) => watch.trigger),
+        [{ emoji: null, everyMessage: false, botMention: false }],
+      );
+      assert.isNull(paused[0]?.projectId ?? null);
+
+      yield* watches.deleteById({ watchId: SlackChannelWatchId.make("watch-1") });
+      assert.deepStrictEqual(yield* watches.listAll(), []);
+    }),
+  );
+
+  it.effect("keeps the cursor, the echo registry, and the dedupe ledger apart", () =>
+    Effect.gen(function* () {
+      const ledger = yield* SlackIntakeLedgerRepository;
+
+      assert.isTrue(Option.isNone(yield* ledger.getCursor({ channelId: "C1" })));
+      yield* ledger.setCursor({
+        channelId: "C1",
+        lastTs: "1723459300.000100",
+        // A reaction arrives after the message it decorates, so this trails the history mark.
+        reactionScanTs: "1723458000.000100",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+      });
+      const cursor = yield* ledger.getCursor({ channelId: "C1" });
+      assert.deepStrictEqual(
+        Option.isSome(cursor) ? [cursor.value.lastTs, cursor.value.reactionScanTs] : null,
+        ["1723459300.000100", "1723458000.000100"],
+      );
+
+      // The whole echo-suppression story: the poller asks this of every message it reads.
+      assert.isFalse(
+        yield* ledger.hasOutbound({ channelId: "C1", messageTs: "1723459400.000100" }),
+      );
+      yield* ledger.recordOutbound({
+        channelId: "C1",
+        messageTs: "1723459400.000100",
+        createdAt: "2026-08-12T00:00:00.000Z",
+      });
+      assert.isTrue(yield* ledger.hasOutbound({ channelId: "C1", messageTs: "1723459400.000100" }));
+      // The same ts in another channel is another message.
+      assert.isFalse(
+        yield* ledger.hasOutbound({ channelId: "C2", messageTs: "1723459400.000100" }),
+      );
+
+      // A message can be seen and deliberately not filed, and filed later when somebody adds the
+      // trigger reaction to it.
+      yield* ledger.recordProcessed({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        issueId: null,
+        createdAt: "2026-08-12T00:00:00.000Z",
+      });
+      yield* ledger.recordProcessed({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        issueId: IssueId.make("issue-1"),
+        createdAt: "2026-08-12T00:05:00.000Z",
+      });
+      const processed = yield* ledger.getProcessed({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+      });
+      assert.strictEqual(Option.isSome(processed) ? processed.value.issueId : null, "issue-1");
     }),
   );
 });

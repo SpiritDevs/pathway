@@ -15,6 +15,7 @@ import {
   IssueKey,
   IssueMilestoneId,
   IssuePriority,
+  IssueSlackSource,
   IssueStatusId,
   IssueAssignee,
   ProjectId,
@@ -42,6 +43,11 @@ export const IssueRecord = Schema.Struct({
   sortOrder: TrimmedNonEmptyString,
   dueDate: Schema.NullOr(IssueDate),
   triage: Schema.Boolean,
+  /**
+   * Four columns on this table rather than a side table, reassembled by the layer: the list draws
+   * a Slack marker on a triage item, and a join would make the snapshot's one read two.
+   */
+  slackSource: Schema.NullOr(IssueSlackSource),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

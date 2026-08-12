@@ -11,6 +11,7 @@ This is a living glossary for Pathway. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Issue tracker](#issue-tracker)
 - [Identity and onboarding](#identity-and-onboarding)
 
 ## Concepts
@@ -141,6 +142,50 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Issue tracker
+
+The plain-table domain behind `/issues`, written directly rather than derived from orchestration
+events. See [issue-tracker.md][25] and [decisions/0006][26].
+
+#### Issue key
+
+The durable public name of an issue, `PAT-12`. One configurable prefix per environment with one
+counter, in `issue_tracker_config`. Project is a separate field, so a key survives a move between
+projects, and renaming the prefix does not rewrite keys already minted. Contrast **issue id**, the
+internal row identifier that never appears in the UI.
+
+#### Triage
+
+State outside the workflow, not a status and not a sixth status category. A triage item is an issue
+with `triage` set and no meaningful status presence: it is excluded from every tab, board, and count
+(`countTriageIssues` and `groupIssuesForTab` in [state/issues.ts][29] both filter it). **Accepting**
+assigns status, project, and priority in one action and optionally fires enrichment; **rejecting**
+is a soft delete that leaves `triage` set, so restoring returns it to the queue rather than to the
+workflow. Slack intake is what fills it. See [IssueTrackerService.ts][27].
+
+#### Enrichment run
+
+One read-only investigation of an issue, owned by a row in `issue_enrichment_runs`: state, streamed
+transcript, structured result, model, duration. The record belongs to the tracker and the process
+belongs to [IssueEnrichmentEngine.ts][28], which reports back through a recorder bound to that run.
+Deliberately **not a thread**, which is why threads needed no `hidden` flag. Fires on triage accept
+and from the manual Investigate button, never on import.
+
+#### Rootless project
+
+A project whose `workspaceRoot` is null — created from a name alone, with no directory attached. It
+stays **visible everywhere**; a surface that genuinely needs a path prompts for one just in time and
+then continues the original action. Enrichment is the one feature that simply refuses
+(`rootless-project`), because there is nothing to read. See [decisions/0006][26].
+
+#### Watch
+
+One row of `slack_channel_watches`: a Slack channel the poller reads, its trigger combination
+(emoji, every message, bot mention — any combination, all off meaning paused), and the project
+filed issues are tagged with. Distinct from the **cursor** (`slack_cursors`), which is where reading
+resumed from, and from the **outbound registry** (`slack_outbound_posts`), which is how the poller
+recognises the bot's own messages. See [issue-tracker.md][25].
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -225,6 +270,7 @@ that change lands.
 - [Provider architecture][16]
 - [Permission modes][18]
 - [Workspace layout][2]
+- [Issue tracker][25]
 
 [1]: ../../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -250,3 +296,8 @@ that change lands.
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./issue-tracker.md
+[26]: ./decisions/0006-issue-tracker.md
+[27]: ../../apps/server/src/issues/IssueTrackerService.ts
+[28]: ../../apps/server/src/issues/IssueEnrichmentEngine.ts
+[29]: ../../apps/web/src/state/issues.ts

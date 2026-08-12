@@ -47,6 +47,7 @@ function issue(overrides: Partial<Issue> = {}): Issue {
     labelIds: [],
     dueDate: null,
     triage: false,
+    slackSource: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,

@@ -347,6 +347,10 @@ export function describeIssueEvent(
       return { actor, summary: "deleted this issue" };
     case "restored":
       return { actor, summary: "restored this issue" };
+    // A soft delete underneath, but "this never was an issue" is the ordinary outcome of intake
+    // and should not read in the feed as somebody destroying work.
+    case "triage_rejected":
+      return { actor, summary: "rejected this triage item" };
     case "field_changed":
       return { actor, summary: describeFieldChange(event, naming) };
   }

@@ -40,6 +40,7 @@ import { useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useSlackChannelNames } from "~/state/issues";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { ColorSelector } from "../color-selector";
@@ -68,6 +69,8 @@ import {
   IssueStatusGlyphFor,
 } from "./IssueSelectors";
 import { IssuePriorityMenu, IssueProjectMenu, IssueStatusMenu } from "./IssuePropertyMenus";
+import { IssueSlackSourceChip } from "./IssueSlackSourceChip";
+import { slackSourceChip } from "./triage.logic";
 import {
   issueAssigneeOptionValue,
   issueAssigneeOptions,
@@ -407,6 +410,7 @@ export function IssueDetailProperties({
   const cycle = cycles.find((candidate) => candidate.id === issue.cycleId) ?? null;
   const hasProject = issue.projectId !== null;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const channelNames = useSlackChannelNames();
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
 
   return (
@@ -542,6 +546,16 @@ export function IssueDetailProperties({
       <PropertyRow label="Due date">
         <IssueDueDateField issue={issue} onCommit={onDueDate} />
       </PropertyRow>
+
+      {/* Read-only, unlike every row above it: where an issue came from is a fact about how it got
+          here, and the thread the bot posts its updates into is keyed on it. */}
+      {issue.slackSource === null ? null : (
+        <PropertyRow label="Source">
+          <div className={cn(ROW_CONTROL_CLASS, "hover:bg-transparent")}>
+            <IssueSlackSourceChip chip={slackSourceChip(issue.slackSource, channelNames)} />
+          </div>
+        </PropertyRow>
+      )}
     </div>
   );
 }

@@ -186,6 +186,18 @@ export const RPC_REQUIRED_SCOPES = {
   [ISSUES_WS_METHODS.cancelEnrichment]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.linkThread]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.unlinkThread]: AuthOrchestrationOperateScope,
+  // Intake reads the same way the tracker does. `slackListChannels` is a read of Slack rather
+  // than of this database, but it is still a read, and it is what the channel picker calls.
+  [ISSUES_WS_METHODS.slackGetStatus]: AuthOrchestrationReadScope,
+  [ISSUES_WS_METHODS.slackListChannels]: AuthOrchestrationReadScope,
+  // Handing this server a bot token is the most consequential write on the tracker — it is what
+  // lets other people's messages become issues — so it takes operate like every other write.
+  [ISSUES_WS_METHODS.slackSetToken]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.slackWatchCreate]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.slackWatchUpdate]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.slackWatchDelete]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.triageAccept]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.triageReject]: AuthOrchestrationOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {

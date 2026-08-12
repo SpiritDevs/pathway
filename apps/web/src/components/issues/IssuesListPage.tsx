@@ -60,6 +60,7 @@ import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
 import { IssuesFilterBar } from "./IssuesFilterBar";
+import { IssuesTriageView } from "./IssuesTriageView";
 import { IssuesViewOptions } from "./IssuesViewOptions";
 import { NewIssueDialog } from "./NewIssueDialog";
 import { SaveIssueViewControl } from "./SaveIssueViewControl";
@@ -126,7 +127,26 @@ const ASSIGNEE_GROUP_LABELS = new Map(
 /** The board draws its own cards, so the flat row array is dead weight while it is up. */
 const NO_ISSUES_LIST_ROWS: ReadonlyArray<IssuesListRowModel> = [];
 
+/**
+ * `/issues`, in one of its two modes. Triage is branched at the top rather than folded into the
+ * list: it shares the URL and the detail sheet, and nothing else — no tabs, no filters, no board,
+ * and no status grouping, because a triage item has no status to group by.
+ */
 export function IssuesListPage({
+  search,
+  onSearch,
+}: {
+  search: IssuesSearch;
+  onSearch: (patch: IssuesSearchPatch) => void;
+}) {
+  return search.triage === true ? (
+    <IssuesTriageView onSearch={onSearch} search={search} />
+  ) : (
+    <IssuesListView onSearch={onSearch} search={search} />
+  );
+}
+
+function IssuesListView({
   search,
   onSearch,
 }: {

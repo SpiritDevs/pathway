@@ -98,6 +98,7 @@ function issue(id: string, overrides: Partial<Omit<Issue, "id">> = {}): Issue {
     labelIds: [],
     dueDate: null,
     triage: false,
+    slackSource: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,
@@ -142,6 +143,7 @@ describe("parseIssuesSearch", () => {
   it("keeps a bare route free of query params", () => {
     expect(parseIssuesSearch({})).toEqual({
       tab: undefined,
+      triage: undefined,
       issue: undefined,
       status: undefined,
       project: undefined,
@@ -176,6 +178,7 @@ describe("parseIssuesSearch", () => {
       }),
     ).toEqual({
       tab: "backlog",
+      triage: undefined,
       issue: "PAT-221",
       status: "s1,s2",
       project: "p1",
@@ -199,6 +202,14 @@ describe("parseIssuesSearch", () => {
       group: undefined,
       sort: undefined,
     });
+  });
+
+  it("reads triage as a mode, and writes the default as an absent param", () => {
+    // A link a person pastes carries the string; the router hands back the boolean.
+    expect(parseIssuesSearch({ triage: "true" }).triage).toBe(true);
+    expect(parseIssuesSearch({ triage: true }).triage).toBe(true);
+    expect(parseIssuesSearch({ triage: "false" }).triage).toBeUndefined();
+    expect(parseIssuesSearch({ triage: 1 }).triage).toBeUndefined();
   });
 
   it("canonicalises a hand-edited list param", () => {
