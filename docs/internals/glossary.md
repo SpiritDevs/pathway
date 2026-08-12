@@ -10,6 +10,7 @@ This is a living glossary for Pathway. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Model Context Protocol](#model-context-protocol)
 - [Checkpointing](#checkpointing)
 - [Issue tracker](#issue-tracker)
 - [Identity and onboarding](#identity-and-onboarding)
@@ -117,6 +118,20 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 #### Snapshot
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
+
+### Model Context Protocol
+
+#### Multi-round-trip request (MRTR)
+
+An MCP `2026-07-28` request that can pause with `input_required`, let the client satisfy embedded input requests, and resume with opaque request state. Pathway currently advertises the protocol capability but does not use MRTR for email waits; email waits use MCP tasks instead.
+
+#### MCP task
+
+A durable, client-declared extension result for work that outlives one HTTP response. Pathway uses `io.modelcontextprotocol/tasks` for `email_wait_for`: the initial tool call returns full task state, `tasks/get`, `tasks/update`, and `tasks/cancel` manage it, and task updates can arrive on a subscription stream.
+
+#### `subscriptions/listen`
+
+The MCP `2026-07-28` POST operation that opens a stateless SSE notification stream. The first event acknowledges the exact filters the server accepted. Pathway only sends opted-in notification types, including email inbox resource updates and task-state updates.
 
 ### Checkpointing
 

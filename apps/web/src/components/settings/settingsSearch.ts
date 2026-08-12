@@ -2,6 +2,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
+  | "/settings/projects"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -11,6 +12,7 @@ export type SettingsPath =
   | "/settings/issues-intake"
   | "/settings/issues-import"
   | "/settings/issues-enrichment"
+  | "/settings/email"
   | "/settings/connections"
   | "/settings/archived"
   | "/settings/diagnostics";
@@ -31,6 +33,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
+  "/settings/projects": "Projects",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -40,6 +43,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
+  "/settings/email": "Capture",
   "/settings/connections": "Connections",
   "/settings/archived": "Archive",
   "/settings/diagnostics": "Diagnostics",
@@ -57,11 +61,21 @@ export interface SettingsNavGroup {
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
     label: "Workspace",
-    paths: ["/settings/general", "/settings/appearance", "/settings/keybindings"],
+    paths: [
+      "/settings/general",
+      "/settings/appearance",
+      "/settings/keybindings",
+      "/settings/projects",
+    ],
   },
   {
     label: "Agents",
-    paths: ["/settings/providers", "/settings/source-control", "/settings/usage"],
+    paths: [
+      "/settings/providers",
+      "/settings/scheduled-tasks",
+      "/settings/source-control",
+      "/settings/usage",
+    ],
   },
   {
     label: "Issues",
@@ -72,6 +86,12 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ],
+  },
+  // Email is its own group rather than a System page: direct mailbox integration (Gmail, Outlook)
+  // lands beside local capture later, and it is plainly not a System concern.
+  {
+    label: "Email",
+    paths: ["/settings/email"],
   },
   {
     label: "System",
@@ -236,6 +256,37 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/keybindings",
   },
   {
+    id: "projects",
+    title: "Projects",
+    to: "/settings/projects",
+  },
+  // The settings themselves live on the per-project subpage, so the index section is the stable
+  // destination: the search hit gets you to the project list, and you pick a project from there.
+  {
+    id: "project-default-model",
+    title: "Project default model",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-new-thread-workspace",
+    title: "Project new-thread workspace",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-scripts",
+    title: "Project scripts",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-checkouts",
+    title: "Project checkouts",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
     id: "providers",
     title: "Providers",
     to: "/settings/providers",
@@ -294,6 +345,38 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "issue-enrichment-model",
     title: "Investigation model",
     to: "/settings/issues-enrichment",
+  },
+  {
+    id: "email-listener",
+    title: "Local SMTP capture",
+    to: "/settings/email",
+  },
+  {
+    id: "email-listener-port",
+    title: "Capture port",
+    to: "/settings/email",
+  },
+  {
+    id: "email-retention",
+    title: "Captured mail retention",
+    to: "/settings/email",
+  },
+  {
+    id: "email-clear-all",
+    title: "Clear captured mail",
+    to: "/settings/email",
+    // The row lives inside the retention section, which is the stable scroll target.
+    targetId: "email-retention",
+  },
+  {
+    id: "email-toasts",
+    title: "Captured mail toasts",
+    to: "/settings/email",
+  },
+  {
+    id: "email-trigger-rules",
+    title: "Mail trigger rules",
+    to: "/settings/email",
   },
   {
     id: "remote-environments",

@@ -1,0 +1,23 @@
+From: Pathway Tests <sender@example.com>
+To: Developer <dev@my-app.test>
+Subject: Your weekly Pathway summary
+Date: Wed, 12 Aug 2026 10:00:00 +0000
+Message-ID: <pass-fixture@example.com>
+Received-SPF: pass (example.com: sender is authorized)
+Authentication-Results: mx.example.test; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass header.from=example.com
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=mail; h=from:to:subject:date:message-id; bh=QWJjZA==; b=RWZnaA==
+List-Unsubscribe: <mailto:unsubscribe@example.com>, <https://example.com/unsubscribe>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="pathway-good"
+
+--pathway-good
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Your Pathway summary is ready. This plain-text alternative contains the same useful account information as the HTML version for mail clients that do not render rich content.
+--pathway-good
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+<!doctype html><html><body><p>Your Pathway summary is ready. This email contains enough useful account information to remain readable when images are disabled, and its structure uses ordinary email-safe markup.</p><img src=3D"cid:summary" width=3D"600" height=3D"240" alt=3D"Summary chart"></body></html>
+--pathway-good--

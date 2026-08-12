@@ -13,7 +13,7 @@ layer("047_048_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 56 }, (_, index) => index + 1),
+        Array.from({ length: 58 }, (_, index) => index + 1),
       );
     }),
   );
@@ -182,7 +182,7 @@ it.effect("upgrades a database already at released main migration 040", () =>
     assert.ok(snoozeColumns.some((column) => column.name === "snoozed_until"));
     assert.ok(snoozeColumns.some((column) => column.name === "snoozed_at"));
 
-    yield* runMigrations({ toMigrationInclusive: 54 });
+    yield* runMigrations({ toMigrationInclusive: 58 });
 
     const migrations = yield* sql<{
       readonly migration_id: number;
@@ -190,7 +190,7 @@ it.effect("upgrades a database already at released main migration 040", () =>
     }>`
       SELECT migration_id, name
       FROM effect_sql_migrations
-      WHERE migration_id BETWEEN 36 AND 54
+      WHERE migration_id BETWEEN 36 AND 58
       ORDER BY migration_id
     `;
     assert.deepStrictEqual(
@@ -215,6 +215,10 @@ it.effect("upgrades a database already at released main migration 040", () =>
         [52, "ApplicationEventSource"],
         [53, "OrchestrationV2EffectCancellation"],
         [54, "ScheduledTasks"],
+        [55, "RestoreIssueStatuses"],
+        [56, "IssueTrackerSlackReactionRouting"],
+        [57, "IssueAutomation"],
+        [58, "EmailTriggers"],
       ],
     );
 

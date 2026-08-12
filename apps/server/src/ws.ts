@@ -21,6 +21,7 @@ import {
   type DiscoveredLocalServerList,
   type IssueActor,
   ISSUES_WS_METHODS,
+  EMAIL_WS_METHODS,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -96,6 +97,8 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
+import * as EmailCapture from "./email/EmailCaptureService.ts";
+import * as EmailTrigger from "./email/EmailTriggerService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -493,6 +496,8 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
       const issueTracker = yield* IssueTrackerService.IssueTrackerService;
+      const emailCapture = yield* EmailCapture.EmailCaptureService;
+      const emailTriggers = yield* EmailTrigger.EmailTriggerService;
       // The only actor stage 1 has. The service takes one so the stage 4 MCP toolkit can pass an
       // agent without every handler changing shape.
       const issueActor: IssueActor = { kind: "user" };
@@ -2395,6 +2400,66 @@ const makeWsRpcLayer = (
           observeRpcStream(ISSUES_WS_METHODS.stream, issueTracker.stream, {
             "rpc.aggregate": "issues",
           }),
+        [EMAIL_WS_METHODS.list]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.list, emailCapture.list(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.get]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.get, emailCapture.get(input.messageId), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.triggerRulesList]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.triggerRulesList, emailTriggers.listRules(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.triggerRulesUpsert]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.triggerRulesUpsert, emailTriggers.upsertRule(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.triggerRulesDelete]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.triggerRulesDelete, emailTriggers.deleteRule(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.triggerFiringsList]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.triggerFiringsList, emailTriggers.listFirings(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.analytics]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.analytics, emailCapture.analytics(input), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.markRead]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.markRead, emailCapture.markRead(input.target, true), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.markUnread]: (input) =>
+          observeRpcEffect(
+            EMAIL_WS_METHODS.markUnread,
+            emailCapture.markRead(input.target, false),
+            { "rpc.aggregate": "email" },
+          ),
+        [EMAIL_WS_METHODS.clearInbox]: (input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.clearInbox, emailCapture.clearInbox(input.scope), {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.getSettings]: (_input) =>
+          observeRpcEffect(EMAIL_WS_METHODS.getSettings, emailCapture.getSettings, {
+            "rpc.aggregate": "email",
+          }),
+        [EMAIL_WS_METHODS.updateSettings]: (input) =>
+          observeRpcEffect(
+            EMAIL_WS_METHODS.updateSettings,
+            emailCapture.updateSettings(input.settings),
+            { "rpc.aggregate": "email" },
+          ),
+        [EMAIL_WS_METHODS.stream]: (_input) =>
+          observeRpcStream(
+            EMAIL_WS_METHODS.stream,
+            Stream.merge(emailCapture.stream, emailTriggers.notices),
+            {
+              "rpc.aggregate": "email",
+            },
+          ),
       });
       return handlers;
     }),

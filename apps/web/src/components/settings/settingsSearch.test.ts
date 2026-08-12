@@ -141,6 +141,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "Workspace",
       "Agents",
       "Issues",
+      "Email",
       "System",
     ]);
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
@@ -150,5 +151,38 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ]);
+  });
+
+  it("keeps Projects in the Workspace group with its own settings page", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Workspace")?.paths).toEqual([
+      "/settings/general",
+      "/settings/appearance",
+      "/settings/keybindings",
+      "/settings/projects",
+    ]);
+    expect(searchSettings("projects")[0]).toMatchObject({
+      id: "projects",
+      to: "/settings/projects",
+    });
+    // The per-project settings live on the subpage, so their search hits land on the index section.
+    expect(searchSettings("project scripts")[0]).toMatchObject({
+      id: "project-scripts",
+      to: "/settings/projects",
+      targetId: "projects",
+    });
+  });
+
+  it("gives capture its own group, so mailbox integrations have a home to land in", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Email")?.paths).toEqual([
+      "/settings/email",
+    ]);
+    expect(searchSettings("capture port")[0]).toMatchObject({
+      id: "email-listener-port",
+      to: "/settings/email",
+    });
+    expect(searchSettings("trigger rules")[0]).toMatchObject({
+      id: "email-trigger-rules",
+      to: "/settings/email",
+    });
   });
 });

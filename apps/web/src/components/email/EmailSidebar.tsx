@@ -1,15 +1,70 @@
+/**
+ * The `/email` secondary sidebar: the source toggle, then the inbox list.
+ *
+ * Navigation is search-param state, not routes — every row writes the same `/email` params the
+ * view reads, the way `IssuesSidebar` drives the issue list. Selecting an inbox drops the open
+ * message: a message id belongs to exactly one inbox, so carrying it across would leave the
+ * reading pane on something the list beside it no longer shows.
+ *
+ * The Gmail side keeps its placeholder; direct mailbox integration is separate work.
+ *
+ * @module components/email/EmailSidebar
+ */
+import type { EmailInboxScope, ProjectId } from "@t3tools/contracts";
+import { useLocation, useNavigate } from "@tanstack/react-router";
+import {
+  BarChart3Icon,
+  BellIcon,
+  BellOffIcon,
+  FolderIcon,
+  InboxIcon,
+  MailQuestionIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { useProjects } from "../../state/entities";
+import {
+  ALL_EMAIL_SCOPE,
+  emailScopeKey,
+  findEmailInbox,
+  UNASSIGNED_EMAIL_SCOPE,
+  useEmailInboxSummaries,
+  useEmailSettings,
+  useUpdateEmailSettings,
+} from "../../state/email";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarContent, SidebarGroup } from "../ui/sidebar";
+import {
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
+import { reportEmailWriteFailure } from "./emailWrites";
+import {
+  emailScopeFromParam,
+  emailScopeParam,
+  parseEmailSearch,
+  type EmailSearchPatch,
+} from "./emailView.logic";
 
 type EmailSource = "local-smtp" | "gmail";
 
-export function EmailSourceToggle() {
-  const [source, setSource] = useState<EmailSource>("local-smtp");
-
+export function EmailSourceToggle({
+  source,
+  onSource,
+}: {
+  source: EmailSource;
+  onSource: (source: EmailSource) => void;
+}) {
   return (
     <ToggleGroup
       aria-label="Email source"
@@ -17,11 +72,9 @@ export function EmailSourceToggle() {
       size="sm"
       value={[source]}
       variant="default"
-      onValueChange={(value) => {
-        const nextSource = value[0];
-        if (nextSource === "local-smtp" || nextSource === "gmail") {
-          setSource(nextSource);
-        }
+      onValueChange={(next) => {
+        const nextSource = next[0];
+        if (nextSource === "local-smtp" || nextSource === "gmail") onSource(nextSource);
       }}
     >
       <span
@@ -48,14 +101,213 @@ export function EmailSourceToggle() {
 }
 
 export function EmailSidebar() {
+  const [source, setSource] = useState<EmailSource>("local-smtp");
+
   return (
     <>
       <ContextualSidebarHeader title="Email" />
       <SidebarContent>
         <SidebarGroup className="p-[var(--sidebar-content-inset)]">
-          <EmailSourceToggle />
+          <EmailSourceToggle onSource={setSource} source={source} />
         </SidebarGroup>
+        {source === "local-smtp" ? <LocalSmtpInboxes /> : <GmailPlaceholder />}
       </SidebarContent>
+    </>
+  );
+}
+
+function GmailPlaceholder() {
+  return (
+    <SidebarGroup>
+      <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
+        Connecting a Gmail mailbox is not available yet.
+      </p>
+    </SidebarGroup>
+  );
+}
+
+function LocalSmtpInboxes() {
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const onEmail = pathname === "/email";
+  const projects = useProjects();
+  const { settings } = useEmailSettings();
+  const updateSettings = useUpdateEmailSettings();
+
+  // The same atom the list pane reads, so the badges never disagree with the rows beside them.
+  const scope = emailScopeFromParam(search.inbox);
+  const inboxes = useEmailInboxSummaries(scope);
+  const activeKey = onEmail && search.analytics !== true ? emailScopeKey(scope) : null;
+
+  const toggleProjectMute = async (projectId: ProjectId) => {
+    // A project the server has not derived an entry for yet has nothing to mute; the entry appears
+    // on the next settings read.
+    const project = findEmailProjectSettings(settings, projectId);
+    if (settings === null || project === null) return;
+    const result = await updateSettings({
+      settings: withEmailProjectSettings(settings, projectId, { toastMuted: !project.toastMuted }),
+    });
+    reportEmailWriteFailure("Could not change capture toasts", result);
+  };
+
+  const toggleToastMaster = async () => {
+    if (settings === null) return;
+    const result = await updateSettings({
+      settings: { ...settings, toastsEnabled: !settings.toastsEnabled },
+    });
+    reportEmailWriteFailure("Could not change capture toasts", result);
+  };
+
+  const navigateWith = (patch: EmailSearchPatch) => {
+    if (isMobile) setOpenMobile(false);
+    void navigate({ to: "/email", replace: true, search: { ...search, ...patch } });
+  };
+
+  // A row lands on an inbox and nothing else: the message and the tab belong to whatever was open
+  // in the inbox being left.
+  const selectInbox = (target: EmailInboxScope) =>
+    navigateWith({
+      inbox: emailScopeParam(target),
+      message: undefined,
+      tab: undefined,
+      analytics: undefined,
+    });
+
+  const unreadFor = (target: EmailInboxScope) => findEmailInbox(inboxes, target)?.unreadCount ?? 0;
+
+  const unassignedUnread = unreadFor(UNASSIGNED_EMAIL_SCOPE);
+
+  return (
+    <>
+      <SidebarGroup>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={activeKey === emailScopeKey(ALL_EMAIL_SCOPE)}
+              onClick={() => selectInbox(ALL_EMAIL_SCOPE)}
+            >
+              <InboxIcon />
+              <span>All mail</span>
+              {unreadFor(ALL_EMAIL_SCOPE) > 0 ? (
+                <SidebarMenuBadge>{unreadFor(ALL_EMAIL_SCOPE)}</SidebarMenuBadge>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarGroupLabel>Projects</SidebarGroupLabel>
+        <SidebarMenu>
+          {projects.length === 0 ? (
+            <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">No projects yet.</p>
+          ) : (
+            projects.map((project) => {
+              const projectScope: EmailInboxScope = { type: "project", projectId: project.id };
+              const unread = unreadFor(projectScope);
+              // The settings document is the authority on a mute — it is what the toast host reads
+              // — with the inbox summary answering until the first settings read lands.
+              const muted =
+                findEmailProjectSettings(settings, project.id)?.toastMuted ??
+                findEmailInbox(inboxes, projectScope)?.toastMuted ??
+                false;
+              return (
+                <SidebarMenuItem key={project.id}>
+                  <SidebarMenuButton
+                    isActive={activeKey === emailScopeKey(projectScope)}
+                    onClick={() => selectInbox(projectScope)}
+                  >
+                    <FolderIcon />
+                    <span className="truncate">{project.title}</span>
+                    {/* Shifted left of the mute control, which owns the right edge of the row. */}
+                    {unread > 0 ? (
+                      <SidebarMenuBadge className="right-7">{unread}</SidebarMenuBadge>
+                    ) : null}
+                  </SidebarMenuButton>
+                  {/* A mute stays visible; an unmuted project only shows the control on hover, so a
+                      quiet sidebar does not grow a column of bells. */}
+                  <SidebarMenuAction
+                    aria-label={
+                      muted
+                        ? `Unmute capture toasts for ${project.title}`
+                        : `Mute capture toasts for ${project.title}`
+                    }
+                    aria-pressed={muted}
+                    className={cn(muted && "text-sidebar-muted-foreground")}
+                    disabled={settings === null}
+                    onClick={() => void toggleProjectMute(project.id)}
+                    showOnHover={!muted}
+                  >
+                    {muted ? <BellOffIcon /> : <BellIcon />}
+                  </SidebarMenuAction>
+                </SidebarMenuItem>
+              );
+            })
+          )}
+        </SidebarMenu>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={activeKey === emailScopeKey(UNASSIGNED_EMAIL_SCOPE)}
+              onClick={() => selectInbox(UNASSIGNED_EMAIL_SCOPE)}
+            >
+              <MailQuestionIcon />
+              <span>Unassigned</span>
+              {unassignedUnread > 0 ? (
+                <SidebarMenuBadge>{unassignedUnread}</SidebarMenuBadge>
+              ) : null}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {/* Analytics keeps the selected inbox rather than resetting it, which is what makes it a
+              lens on the scope above instead of a second top-level view. */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={onEmail && search.analytics === true}
+              onClick={() => navigateWith({ analytics: true, message: undefined, tab: undefined })}
+            >
+              <BarChart3Icon />
+              <span>Analytics</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+
+      <SidebarGroup className="mt-auto">
+        <SidebarMenu>
+          {/* The master switch sits beside the per-project mutes it overrides, rather than only in
+              Settings, because muting everything is the thing you reach for mid-flood. */}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              aria-pressed={settings?.toastsEnabled ?? true}
+              disabled={settings === null}
+              onClick={() => void toggleToastMaster()}
+            >
+              {settings?.toastsEnabled === false ? <BellOffIcon /> : <BellIcon />}
+              <span>Capture toasts</span>
+              <span className="ms-auto text-xs text-sidebar-muted-foreground">
+                {settings?.toastsEnabled === false ? "Off" : "On"}
+              </span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={() => {
+                if (isMobile) setOpenMobile(false);
+                void navigate({ to: "/settings/email" });
+              }}
+            >
+              <SettingsIcon />
+              <span>Capture settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
     </>
   );
 }

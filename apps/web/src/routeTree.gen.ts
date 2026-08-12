@@ -27,6 +27,7 @@ import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
 import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
@@ -34,6 +35,7 @@ import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issu
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
 import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
+import { Route as SettingsEmailRouteImport } from './routes/settings.email'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
@@ -42,6 +44,7 @@ import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$proje
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
+import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatThreadsDraftDraftIdRouteImport } from './routes/_chat.threads_.draft.$draftId'
@@ -136,6 +139,11 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   path: '/providers',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
@@ -170,6 +178,11 @@ const SettingsIssuesEnrichmentRoute =
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: '/general',
   path: '/general',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsEmailRoute = SettingsEmailRouteImport.update({
+  id: '/email',
+  path: '/email',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
@@ -212,6 +225,12 @@ const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   path: '/pull-requests',
   getParentRoute: () => ChatRoute,
 } as any)
+const SettingsProjectsProjectKeyRoute =
+  SettingsProjectsProjectKeyRouteImport.update({
+    id: '/projects_/$projectKey',
+    path: '/projects/$projectKey',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -257,6 +276,7 @@ export interface FileRoutesByFullPath {
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/email': typeof SettingsEmailRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -264,12 +284,14 @@ export interface FileRoutesByFullPath {
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
@@ -295,6 +317,7 @@ export interface FileRoutesByTo {
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/email': typeof SettingsEmailRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -302,12 +325,14 @@ export interface FileRoutesByTo {
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
@@ -335,6 +360,7 @@ export interface FileRoutesById {
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/email': typeof SettingsEmailRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -342,12 +368,14 @@ export interface FileRoutesById {
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/_chat/threads_/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
 }
@@ -375,6 +403,7 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/email'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -382,12 +411,14 @@ export interface FileRouteTypes {
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
@@ -413,6 +444,7 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/email'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -420,12 +452,14 @@ export interface FileRouteTypes {
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
   id:
@@ -452,6 +486,7 @@ export interface FileRouteTypes {
     | '/settings/archived'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/email'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -459,12 +494,14 @@ export interface FileRouteTypes {
     | '/settings/issues-labels'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
+    | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/settings/projects_/$projectKey'
     | '/_chat/threads_/$environmentId/$threadId'
     | '/_chat/threads_/draft/$draftId'
   fileRoutesById: FileRoutesById
@@ -616,6 +653,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProvidersRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/projects': {
+      id: '/settings/projects'
+      path: '/projects'
+      fullPath: '/settings/projects'
+      preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/keybindings': {
       id: '/settings/keybindings'
       path: '/keybindings'
@@ -663,6 +707,13 @@ declare module '@tanstack/react-router' {
       path: '/general'
       fullPath: '/settings/general'
       preLoaderRoute: typeof SettingsGeneralRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/email': {
+      id: '/settings/email'
+      path: '/email'
+      fullPath: '/settings/email'
+      preLoaderRoute: typeof SettingsEmailRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/diagnostics': {
@@ -721,6 +772,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPullRequestsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/settings/projects_/$projectKey': {
+      id: '/settings/projects_/$projectKey'
+      path: '/projects/$projectKey'
+      fullPath: '/settings/projects/$projectKey'
+      preLoaderRoute: typeof SettingsProjectsProjectKeyRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -777,6 +835,7 @@ interface SettingsRouteChildren {
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
+  SettingsEmailRoute: typeof SettingsEmailRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
@@ -784,10 +843,12 @@ interface SettingsRouteChildren {
   SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
+  SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -795,6 +856,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
+  SettingsEmailRoute: SettingsEmailRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,
@@ -802,10 +864,12 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsUsageRoute: SettingsUsageRoute,
+  SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(

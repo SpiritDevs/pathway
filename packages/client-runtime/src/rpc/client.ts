@@ -1,4 +1,9 @@
-import { ISSUES_WS_METHODS, ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import {
+  EMAIL_WS_METHODS,
+  ISSUES_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -42,6 +47,7 @@ type RpcMethod<TTag extends EnvironmentRpcTag> = WsRpcProtocolClient[TTag];
 export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribeShell
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread
+  | typeof EMAIL_WS_METHODS.stream
   | typeof ISSUES_WS_METHODS.stream
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig

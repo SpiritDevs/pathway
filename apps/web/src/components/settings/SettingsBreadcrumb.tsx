@@ -9,7 +9,13 @@ const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = SETTINGS_SE
 
 function settingsBreadcrumbLabel(pathname: string): string | null {
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
-  return SETTINGS_BREADCRUMB_LABELS[normalizedPathname] ?? null;
+  const exactLabel = SETTINGS_BREADCRUMB_LABELS[normalizedPathname];
+  if (exactLabel !== undefined) return exactLabel;
+  // Nested routes such as /settings/projects/$projectKey stay under their section's crumb.
+  const section = Object.keys(SETTINGS_BREADCRUMB_LABELS).find((path) =>
+    normalizedPathname.startsWith(`${path}/`),
+  );
+  return section === undefined ? null : (SETTINGS_BREADCRUMB_LABELS[section] ?? null);
 }
 
 export function SettingsBreadcrumb({ pathname }: { pathname: string }) {

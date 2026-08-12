@@ -1549,8 +1549,8 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  // There is no projects listing page; the action targets the contextual
-  // project (active thread/draft, falling back to the first sidebar group).
+  // Settings → Projects lists every project, but this action skips the list and jumps straight to
+  // the contextual project (active thread/draft, falling back to the first sidebar group).
   const contextualProjectGroup =
     (contextualProjectRef
       ? projectGroupByTargetKey.get(

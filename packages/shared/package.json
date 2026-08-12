@@ -238,6 +238,10 @@
     "./issuesCsv": {
       "types": "./src/issuesCsv.ts",
       "import": "./src/issuesCsv.ts"
+    },
+    "./mailSlug": {
+      "types": "./src/mailSlug.ts",
+      "import": "./src/mailSlug.ts"
     }
   },
   "scripts": {

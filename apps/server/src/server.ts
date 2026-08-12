@@ -1,4 +1,5 @@
 import { EnvironmentHttpApi } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,6 +9,11 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as EmailCapture from "./email/EmailCaptureService.ts";
+import * as EmailTrigger from "./email/EmailTriggerService.ts";
+import * as EmailProjectCatalog from "./email/EmailProjectCatalog.ts";
+import * as EmailStore from "./email/EmailStore.ts";
+import * as EmailWaitStore from "./email/EmailWaitStore.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerConfig from "./config.ts";
 import {
@@ -257,7 +263,6 @@ const PlatformServicesLive = Layer.unwrap(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
-
 // One `SqlClient` behind every repository: these tables reference each other, and the
 // tracker's key counter is only unique per database. The repositories stay internal to the
 // service — nothing else reads the issue tables.
@@ -432,6 +437,7 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
 const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
+  Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
@@ -486,7 +492,32 @@ const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const EmailProjectCatalogLayerLive = EmailProjectCatalog.layer.pipe(
+  Layer.provide(RuntimeCoreDependenciesLive),
+);
+
+const EmailCaptureLayerLive = EmailCapture.layer.pipe(
+  Layer.provideMerge(EmailStore.layer),
+  Layer.provideMerge(EmailWaitStore.layer),
+  Layer.provideMerge(EmailProjectCatalogLayerLive),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.tap((context) => Context.get(context, EmailCapture.EmailCaptureService).start),
+);
+
+const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provide(RuntimeCoreDependenciesLive));
+
+const RuntimeWithEmailServicesLive = Layer.mergeAll(
+  RuntimeCoreDependenciesLive,
+  EmailCaptureLayerLive,
+  EmailTriggerLayerLive,
+);
+
+const RuntimeCoreWithEmailReactorLive = Layer.merge(
+  RuntimeWithEmailServicesLive,
+  EmailTrigger.reactorLayer.pipe(Layer.provide(RuntimeWithEmailServicesLive)),
+);
+
+const RuntimeDependenciesLive = RuntimeCoreWithEmailReactorLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
@@ -531,7 +562,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here.
-  McpHttpServer.layer,
+  McpHttpServer.layerWithSharedEmailPersistence,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.

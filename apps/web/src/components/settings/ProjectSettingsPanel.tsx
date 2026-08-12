@@ -72,6 +72,7 @@ import { primaryServerProvidersAtom, serverEnvironment } from "../../state/serve
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
+import { ProjectEmailCaptureSection } from "../email/ProjectEmailCaptureSection";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import {
@@ -305,6 +306,9 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
+  // Captured mail belongs to the machine the listener runs on, so the capture section follows this
+  // group's checkout on the primary environment and hides for a group that has none.
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
@@ -336,6 +340,9 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     group.memberProjects.find(
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
+  const captureProjectId =
+    group.memberProjects.find((member) => member.environmentId === primaryEnvironmentId)?.id ??
+    null;
   const faviconPath = representative.faviconPath ?? null;
 
   const threadCountByMember = useMemo(() => {
@@ -1163,6 +1170,13 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             />
           ) : null}
         </SettingsSection>
+
+        {captureProjectId === null ? null : (
+          <ProjectEmailCaptureSection
+            projectId={captureProjectId}
+            projectName={group.displayName}
+          />
+        )}
 
         <SettingsSection title="Danger">
           <SettingsRow

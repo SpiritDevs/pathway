@@ -15,6 +15,7 @@ import { memo, useCallback, useEffect, useRef, useState, type ComponentProps } f
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
+import { useEmailUnreadTotal } from "../../state/email";
 import { SidebarProviderUpdatePill } from "../sidebar/SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "../sidebar/SidebarUpdatePill";
 import { Button } from "../ui/button";
@@ -110,6 +111,8 @@ type NavigationRailButtonProps = {
   expanded: boolean;
   icon: LucideIcon;
   label: string;
+  /** Unread work behind this destination; zero renders nothing. */
+  badgeCount?: number;
   onClick?: ComponentProps<typeof Button>["onClick"];
 };
 
@@ -117,25 +120,34 @@ type MobileNavigationItem = {
   destination: PrimaryNavigationDestination;
   icon: LucideIcon;
   label: string;
+  badgeCount?: number;
   onNavigate: () => void;
 };
 
 type MobileNavigationExpansionMode = "closed" | "hover" | "engaged";
+
+/** Three digits never fit a rail button, and past ninety-nine the exact number stops mattering. */
+export function formatNavigationBadgeCount(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
 
 function NavigationRailButton({
   active = false,
   expanded,
   icon: Icon,
   label,
+  badgeCount = 0,
   onClick,
 }: NavigationRailButtonProps) {
+  const badgeLabel = badgeCount > 0 ? formatNavigationBadgeCount(badgeCount) : null;
+
   return (
     <Tooltip disabled={expanded}>
       <TooltipTrigger
         render={
           <Button
             aria-current={active ? "page" : undefined}
-            aria-label={label}
+            aria-label={badgeLabel === null ? label : `${label}, ${badgeCount} unread`}
             className={cn(
               "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
               "hover:[--control-icon-color:var(--sidebar-foreground)]",
@@ -152,11 +164,22 @@ function NavigationRailButton({
             {expanded ? (
               <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
             ) : null}
+            {badgeLabel === null ? null : expanded ? (
+              <span className="shrink-0 rounded-full bg-sidebar-accent px-1.5 text-[11px] leading-4 font-medium text-sidebar-accent-foreground tabular-nums">
+                {badgeLabel}
+              </span>
+            ) : (
+              // Inside the button's bounds: the rail clips its overflow, so a corner pill has to
+              // sit within it rather than straddle the edge.
+              <span className="absolute top-0.5 right-0.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
+                {badgeLabel}
+              </span>
+            )}
           </Button>
         }
       />
       <TooltipPopup side="right" sideOffset={8}>
-        {label}
+        {badgeLabel === null ? label : `${label} · ${badgeLabel} unread`}
       </TooltipPopup>
     </Tooltip>
   );
@@ -263,7 +286,7 @@ export function MobileNavigationToolbar({
         )}
       >
         <div className="flex min-w-0 max-w-full items-center justify-[safe_center] gap-0.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {items.map(({ destination, icon: Icon, label, onNavigate }, index) => (
+          {items.map(({ destination, icon: Icon, label, badgeCount = 0, onNavigate }, index) => (
             <div key={destination} className="contents">
               {index === PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT ? (
                 <span aria-hidden="true" className="mx-1 h-6 w-px shrink-0 bg-border/80" />
@@ -271,11 +294,11 @@ export function MobileNavigationToolbar({
               <Button
                 type="button"
                 aria-current={activeDestination === destination ? "page" : undefined}
-                aria-label={label}
+                aria-label={badgeCount > 0 ? `${label}, ${badgeCount} unread` : label}
                 title={label}
                 data-mobile-navigation-item=""
                 className={cn(
-                  "size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)]",
+                  "relative size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)]",
                   activeDestination === destination &&
                     "bg-accent text-accent-foreground [--control-icon-color:var(--accent-foreground)]",
                 )}
@@ -288,6 +311,11 @@ export function MobileNavigationToolbar({
                 variant="ghost"
               >
                 <Icon className="size-5" />
+                {badgeCount > 0 ? (
+                  <span className="absolute top-1.5 right-1.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
+                    {formatNavigationBadgeCount(badgeCount)}
+                  </span>
+                ) : null}
               </Button>
             </div>
           ))}
@@ -307,6 +335,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const activeDestination = resolvePrimaryNavigationDestination(pathname);
+  // Captured mail is the one destination that accumulates unread work while you are elsewhere.
+  const emailUnreadCount = useEmailUnreadTotal();
   const rememberedThreadRouteRef = useRef<RememberedThreadRoute | null>(
     resolveRememberedThreadRoute(pathname, null),
   );
@@ -355,7 +385,10 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     void navigate({ to: "/calendar" });
   }, [navigate]);
   const navigateToEmail = useCallback(() => {
-    void navigate({ to: "/email" });
+    void navigate({
+      to: "/email",
+      search: { inbox: undefined, message: undefined, tab: undefined, analytics: undefined },
+    });
   }, [navigate]);
   const navigateToOrchestrator = useCallback(() => {
     void navigate({ to: "/orchestrator" });
@@ -398,6 +431,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       destination: "email",
       icon: MailIcon,
       label: "Email",
+      badgeCount: emailUnreadCount,
       onNavigate: navigateToEmail,
     },
     {
@@ -432,10 +466,11 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         >
           {navigationItems
             .slice(0, PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT)
-            .map(({ destination, icon, label, onNavigate }) => (
+            .map(({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
               <NavigationRailButton
                 key={destination}
                 active={activeDestination === destination}
+                badgeCount={badgeCount ?? 0}
                 expanded={expanded}
                 icon={icon}
                 label={label}
@@ -454,10 +489,11 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
           <SidebarUpdatePill expanded={expanded} />
           {navigationItems
             .slice(PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT)
-            .map(({ destination, icon, label, onNavigate }) => (
+            .map(({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
               <NavigationRailButton
                 key={destination}
                 active={activeDestination === destination}
+                badgeCount={badgeCount ?? 0}
                 expanded={expanded}
                 icon={icon}
                 label={label}
