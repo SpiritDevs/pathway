@@ -42,6 +42,7 @@ function settings(overrides?: Partial<EmailCaptureSettings>): EmailCaptureSettin
       {
         projectId: PROJECT_ID,
         mailSlug: "pathway" as EmailMailSlug,
+        capturePassword: null,
         retention: { maxMessages: null, maxAgeDays: null },
         toastMuted: false,
         twoFactorCodeRegex: null,
@@ -49,6 +50,7 @@ function settings(overrides?: Partial<EmailCaptureSettings>): EmailCaptureSettin
       {
         projectId: OTHER_PROJECT_ID,
         mailSlug: "storefront" as EmailMailSlug,
+        capturePassword: null,
         retention: { maxMessages: 50, maxAgeDays: null },
         toastMuted: true,
         twoFactorCodeRegex: null,

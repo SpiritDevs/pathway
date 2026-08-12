@@ -19,6 +19,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import nodemailer from "nodemailer";
 
@@ -37,6 +39,7 @@ const projectSettings = (
 ): EmailProjectSettings => ({
   projectId,
   mailSlug: EmailMailSlug.make(mailSlug),
+  capturePassword: `${mailSlug}-password`,
   retention: { maxMessages: null, maxAgeDays: null },
   toastMuted: false,
   twoFactorCodeRegex: null,
@@ -86,6 +89,7 @@ const layerFor = (databasePath: string, port: number) => {
 const sendMail = (input: {
   readonly port: number;
   readonly authUsername?: string;
+  readonly authPassword?: string;
   readonly to: string;
   readonly subject: string;
   readonly text?: string;
@@ -102,9 +106,14 @@ const sendMail = (input: {
         requireTLS: input.requireTls ?? false,
         ignoreTLS: !(input.requireTls ?? false),
         tls: { rejectUnauthorized: false },
-        ...(input.authUsername === undefined
+        ...(input.authUsername === undefined && input.authPassword === undefined
           ? {}
-          : { auth: { user: input.authUsername, pass: "accepted-without-validation" } }),
+          : {
+              auth: {
+                user: input.authUsername ?? "fixed-account",
+                pass: input.authPassword ?? "accepted-without-validation",
+              },
+            }),
       }),
     ),
     (transport) =>
@@ -180,6 +189,13 @@ describe("EmailCaptureService SMTP listener", () => {
             subject: "AUTH route",
             requireTls: true,
           });
+          const password = yield* sendAndReceive(capture, {
+            port,
+            authUsername: "fixed-account",
+            authPassword: "beta-password",
+            to: "person@example.com",
+            subject: "AUTH password route",
+          });
           const domain = yield* sendAndReceive(capture, {
             port,
             to: "person@beta.test",
@@ -219,12 +235,13 @@ describe("EmailCaptureService SMTP listener", () => {
           });
 
           const messages = yield* Effect.forEach(
-            [auth, domain, plus, unmatched, malformed, attachment],
+            [auth, password, domain, plus, unmatched, malformed, attachment],
             (receipt) => store.getMessage(receipt.messageId),
           );
           assert(messages.every((message) => message !== null));
           expect(messages.map((message) => message?.attribution.matchedBy)).toEqual([
             "auth-username",
+            "auth-password",
             "recipient-domain",
             "recipient-plus-tag",
             "unassigned",
@@ -232,16 +249,17 @@ describe("EmailCaptureService SMTP listener", () => {
             "recipient-domain",
           ]);
           expect(messages[0]?.envelope.authUsername).toBe("alpha");
-          expect(messages[4]?.textBody).toContain("still captured");
-          expect(messages[5]?.attachments[0]?.filename).toBe("proof.txt");
-          expect(messages[5]?.isRead).toBe(false);
+          expect(messages[1]?.attribution.matchedValue).toBe("beta-password");
+          expect(messages[5]?.textBody).toContain("still captured");
+          expect(messages[6]?.attachments[0]?.filename).toBe("proof.txt");
+          expect(messages[6]?.isRead).toBe(false);
           expect(
             messages[0]?.smtpTransactionLog.some(({ line }) => line.startsWith("AUTH PLAIN")),
           ).toBe(true);
           expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
             true,
           );
-          const attachmentId = messages[5]?.attachments[0]?.id;
+          const attachmentId = messages[6]?.attachments[0]?.id;
           assert(attachmentId !== undefined);
           expect(
             existsSync(join(directory, "mail", "attachments", attachment.messageId, attachmentId)),
@@ -265,7 +283,7 @@ describe("EmailCaptureService SMTP listener", () => {
           const cleared = yield* capture.clearInbox({ type: "project", projectId: betaProjectId });
           const clearReceipt = Option.getOrThrow(yield* Fiber.join(clearFiber));
           expect(clearReceipt._tag).toBe("EmailInboxClearCompleted");
-          expect(cleared.clearedCount).toBe(3);
+          expect(cleared.clearedCount).toBe(4);
           expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
             false,
           );
@@ -277,6 +295,69 @@ describe("EmailCaptureService SMTP listener", () => {
             ),
           ),
         );
+      }),
+    ),
+  );
+
+  it.effect("persists and broadcasts settings for a project added after startup", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const directory = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-smtp-project-settings-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        );
+        const catalogProjects = yield* Ref.make<ReadonlyArray<EmailProjectCatalog.EmailProject>>([
+          projects[0],
+        ]);
+        const catalogChanges = yield* PubSub.unbounded<void>();
+        const catalogLayer = Layer.succeed(
+          EmailProjectCatalog.EmailProjectCatalog,
+          EmailProjectCatalog.EmailProjectCatalog.of({
+            list: Ref.get(catalogProjects),
+            streamChanges: Stream.fromPubSub(catalogChanges),
+          }),
+        );
+        const dependencies = Layer.mergeAll(
+          emailStoreLayerAtPath(join(directory, "mail.sqlite")),
+          emailWaitStoreLayerAtPath(join(directory, "mail.sqlite")),
+          catalogLayer,
+          ServerSettings.layerTest({
+            emailCapture: {
+              ...DEFAULT_EMAIL_CAPTURE_SETTINGS,
+              listener: { ...DEFAULT_EMAIL_CAPTURE_SETTINGS.listener, enabled: false },
+              projects: [projectSettings(alphaProjectId, "alpha")],
+            },
+          }),
+        );
+        const testLayer = Layer.merge(
+          dependencies,
+          emailCaptureLayer.pipe(Layer.provide(dependencies)),
+        ).pipe(Layer.provideMerge(NodeCrypto.layer), Layer.provideMerge(NodeServices.layer));
+
+        yield* Effect.gen(function* () {
+          const capture = yield* EmailCaptureService;
+          yield* capture.start;
+          const updateFiber = yield* capture.stream.pipe(
+            Stream.filter((event) => event._tag === "EmailSettingsChanged"),
+            Stream.runHead,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+
+          yield* Ref.set(catalogProjects, projects);
+          yield* PubSub.publish(catalogChanges, undefined);
+
+          const event = Option.getOrThrow(yield* Fiber.join(updateFiber));
+          assert(event._tag === "EmailSettingsChanged");
+          expect(event.snapshot.settings.projects.map(({ projectId }) => projectId)).toEqual([
+            alphaProjectId,
+            betaProjectId,
+          ]);
+          expect(event.snapshot.settings.projects[1]?.capturePassword).toBeNull();
+          expect(
+            (yield* capture.getSettings).settings.projects.map(({ projectId }) => projectId),
+          ).toEqual([alphaProjectId, betaProjectId]);
+        }).pipe(Effect.provide(testLayer));
       }),
     ),
   );

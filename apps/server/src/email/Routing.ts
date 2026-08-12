@@ -53,6 +53,7 @@ export function deriveMissingProjectSettings(input: {
     next.push({
       projectId: project.projectId,
       mailSlug,
+      capturePassword: null,
       retention: { maxMessages: null, maxAgeDays: null },
       toastMuted: false,
       twoFactorCodeRegex: null,
@@ -72,6 +73,7 @@ function matchingProject(
 
 export function routeEmail(input: {
   readonly authUsername: string | null;
+  readonly authPassword: string | null;
   readonly recipients: ReadonlyArray<string>;
   readonly projects: ReadonlyArray<EmailProjectSettings>;
 }): EmailProjectAttribution {
@@ -83,6 +85,21 @@ export function routeEmail(input: {
         mailSlug: project.mailSlug,
         matchedBy: "auth-username",
         matchedValue: input.authUsername,
+      };
+    }
+  }
+
+  if (input.authPassword) {
+    const password = input.authPassword.trim();
+    const project = input.projects.find(
+      ({ capturePassword }) => capturePassword !== null && capturePassword === password,
+    );
+    if (project) {
+      return {
+        projectId: project.projectId,
+        mailSlug: project.mailSlug,
+        matchedBy: "auth-password",
+        matchedValue: password,
       };
     }
   }

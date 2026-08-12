@@ -179,25 +179,34 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
   });
   const appliedListenerKey = yield* Ref.make("");
   const transactionLogs = new Map<string, EmailSmtpTransactionEntry[]>();
+  const authPasswords = new Map<string, string>();
+
+  const reconcileProjectSettings = Effect.fn("EmailCaptureService.reconcileProjectSettings")(
+    function* () {
+      const current = yield* serverSettings.getSettings.pipe(
+        Effect.mapError((cause) => captureError("storage", cause.message)),
+      );
+      const catalog = yield* projects.list.pipe(
+        Effect.mapError((cause) => captureError("storage", errorText(cause))),
+      );
+      const derived = deriveMissingProjectSettings({
+        projects: catalog,
+        configured: current.emailCapture.projects,
+      });
+      if (derived.length === current.emailCapture.projects.length) {
+        return { settings: current.emailCapture, changed: false } as const;
+      }
+      const updated = yield* serverSettings
+        .updateSettings({
+          emailCapture: { ...current.emailCapture, projects: derived },
+        })
+        .pipe(Effect.mapError((cause) => captureError("storage", cause.message)));
+      return { settings: updated.emailCapture, changed: true } as const;
+    },
+  );
 
   const readSettings = Effect.fn("EmailCaptureService.readSettings")(function* () {
-    const current = yield* serverSettings.getSettings.pipe(
-      Effect.mapError((cause) => captureError("storage", cause.message)),
-    );
-    const catalog = yield* projects.list.pipe(
-      Effect.mapError((cause) => captureError("storage", errorText(cause))),
-    );
-    const derived = deriveMissingProjectSettings({
-      projects: catalog,
-      configured: current.emailCapture.projects,
-    });
-    if (derived.length === current.emailCapture.projects.length) return current.emailCapture;
-    const updated = yield* serverSettings
-      .updateSettings({
-        emailCapture: { ...current.emailCapture, projects: derived },
-      })
-      .pipe(Effect.mapError((cause) => captureError("storage", cause.message)));
-    return updated.emailCapture;
+    return (yield* reconcileProjectSettings()).settings;
   });
 
   const inboxes = Effect.fn("EmailCaptureService.inboxes")(function* (
@@ -322,6 +331,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     const recipients = session.envelope.rcptTo.map(({ address }) => address);
     const attribution = routeEmail({
       authUsername: typeof session.user === "string" ? session.user : null,
+      authPassword: authPasswords.get(session.id) ?? null,
       recipients,
       projects: settings.projects,
     });
@@ -389,7 +399,10 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       },
       onAuth(auth, session, callback) {
         const username = auth.username?.trim() || "unassigned";
+        const password = auth.password?.trim();
         session.user = username;
+        if (password) authPasswords.set(session.id, password);
+        else authPasswords.delete(session.id);
         transactionLogs
           .get(session.id)
           ?.push(
@@ -443,6 +456,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       // invoking it would throw an uncaught TypeError on every connection close.
       onClose(session, callback) {
         transactionLogs.delete(session.id);
+        authPasswords.delete(session.id);
         if (typeof callback === "function") callback();
       },
     });
@@ -521,7 +535,8 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
   });
 
   const start = Effect.gen(function* () {
-    const settings = yield* readSettings().pipe(
+    const settings = yield* reconcileProjectSettings().pipe(
+      Effect.map(({ settings }) => settings),
       Effect.catch((cause) =>
         publishStatus({
           state: "error",
@@ -532,6 +547,27 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       ),
     );
     yield* applyListener(settings);
+    yield* Stream.runForEach(projects.streamChanges, () =>
+      reconcileProjectSettings().pipe(
+        Effect.flatMap(({ settings: next, changed }) =>
+          changed
+            ? Effect.gen(function* () {
+                const snapshot = {
+                  settings: next,
+                  listenerStatus: yield* Ref.get(listenerStatus),
+                };
+                yield* PubSub.publish(events, { _tag: "EmailSettingsChanged", snapshot });
+              })
+            : Effect.void,
+        ),
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not derive SMTP capture settings for project changes", {
+            cause,
+          }),
+        ),
+      ),
+    ).pipe(Effect.forkScoped);
+    yield* Effect.yieldNow;
     yield* Stream.runForEach(serverSettings.streamChanges, (next) =>
       Effect.gen(function* () {
         const key = listenerKey(next.emailCapture.listener);
