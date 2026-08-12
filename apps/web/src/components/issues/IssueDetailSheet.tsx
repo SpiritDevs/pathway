@@ -14,6 +14,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type {
+  ChatAttachmentId,
   Issue,
   IssueAssignee,
   IssueComment,
@@ -114,6 +115,7 @@ import { Textarea } from "../ui/textarea";
 import { IssueActivityFeed } from "./IssueActivityFeed";
 import { IssueActionPanel } from "./IssueActionPanel";
 import { IssueAgentSection } from "./IssueAgentSection";
+import { IssueAttachments } from "./IssueAttachments";
 import { IssueComments } from "./IssueComments";
 import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
 import { IssueDetailProperties } from "./IssueDetailProperties";
@@ -601,6 +603,18 @@ function IssueDetailBody({
     setRelationOpenRequest((current) => current + 1);
   }, []);
 
+  const handleCreateComment = useCallback(
+    (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) =>
+      runWrite("Failed to post the comment", () =>
+        createComment({
+          issueId: issue.id,
+          body,
+          ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+        }),
+      ),
+    [createComment, issue.id, runWrite],
+  );
+
   const handleCancelRun = useCallback(
     (runId: IssueEnrichmentRunId) => {
       void (async () => {
@@ -755,6 +769,12 @@ function IssueDetailBody({
                 value={issue.description}
               />
 
+              <IssueAttachments
+                comments={comments}
+                issueId={issue.id}
+                onCreateComment={handleCreateComment}
+              />
+
               <IssueDetailTabs
                 activityCount={events.length + comments.length}
                 investigating={activeRun !== null}
@@ -840,15 +860,7 @@ function IssueDetailBody({
                     comments={comments}
                     isPending={detailPending}
                     issueId={issue.id}
-                    onCreate={(body, attachmentIds) =>
-                      runWrite("Failed to post the comment", () =>
-                        createComment({
-                          issueId: issue.id,
-                          body,
-                          ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
-                        }),
-                      )
-                    }
+                    onCreate={handleCreateComment}
                     onDelete={(commentId: IssueCommentId) =>
                       runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
                     }

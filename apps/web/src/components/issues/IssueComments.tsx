@@ -22,35 +22,26 @@ import type {
   IssueCommentId,
   IssueId,
 } from "@t3tools/contracts";
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES } from "@t3tools/contracts";
-import { ImagePlusIcon, PencilIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { useClientSettings } from "~/hooks/useSettings";
-import { compressImageToByteLimit } from "~/lib/imageCompression";
-import { cn, randomUUID } from "~/lib/utils";
+import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { useUploadIssueCommentAttachment } from "~/state/issues";
 import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
 import ChatMarkdown from "../ChatMarkdown";
-import { readFileAsDataUrl } from "../ChatView.logic";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
-import { stackedThreadToast, toastManager } from "../ui/toast";
 import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
-import {
-  issueCommentAttachmentDataUrlRejection,
-  issueCommentAttachmentIds,
-  issueCommentAttachmentIntake,
-  issueCommentAttachmentTooLargeMessage,
-  issueCommentComposerState,
-  type IssueCommentAttachmentDraft,
-} from "./issueCommentAttachments";
+import { issueCommentAttachmentIds, issueCommentComposerState } from "./issueCommentAttachments";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
-import { reportIssueWriteFailure } from "./issueWriteFeedback";
+import {
+  PendingIssueImageAttachment,
+  useIssueImageAttachmentDrafts,
+} from "./useIssueImageAttachmentDrafts";
 
 const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition.label]),
@@ -218,39 +209,6 @@ function CommentRow({
   );
 }
 
-/** One staged image, with its own remove control and a spinner until the upload lands. */
-function PendingAttachment({
-  attachment,
-  onRemove,
-}: {
-  attachment: IssueCommentAttachmentDraft;
-  onRemove: (draftId: string) => void;
-}) {
-  return (
-    <li className="relative">
-      <img
-        alt={attachment.name}
-        className="size-16 rounded-md border border-border/60 object-cover"
-        src={attachment.previewUrl}
-      />
-      {attachment.status === "uploading" ? (
-        <span className="absolute inset-0 grid place-items-center rounded-md bg-background/60">
-          <Spinner className="size-3.5 text-muted-foreground" />
-        </span>
-      ) : null}
-      <Button
-        aria-label={`Remove ${attachment.name}`}
-        className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background"
-        onClick={() => onRemove(attachment.draftId)}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <XIcon />
-      </Button>
-    </li>
-  );
-}
-
 export function IssueComments({
   comments,
   isPending,
@@ -273,111 +231,13 @@ export function IssueComments({
   // discards a half-written comment rather than carrying it to the next issue. Staged images go
   // with it — they are already in the store, and an orphan there costs a file, not a row.
   const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<ReadonlyArray<IssueCommentAttachmentDraft>>([]);
   const [isDropTarget, setIsDropTarget] = useState(false);
-  const uploadAttachment = useUploadIssueCommentAttachment();
+  const { attachments, addFiles, removeAttachment, clearAttachments } =
+    useIssueImageAttachmentDrafts(issueId);
   const composer = issueCommentComposerState({ draft, attachments });
 
-  // Revoking on unmount needs the *last* list, and the cleanup below must not re-run per change.
-  const attachmentsRef = useRef(attachments);
-  attachmentsRef.current = attachments;
-  useEffect(
-    () => () => {
-      for (const attachment of attachmentsRef.current) {
-        URL.revokeObjectURL(attachment.previewUrl);
-      }
-    },
-    [],
-  );
-
-  // The revoke is deliberately outside the updater: an updater has to stay pure, and StrictMode
-  // runs it twice.
-  const dropAttachment = useCallback((draftId: string) => {
-    const removed = attachmentsRef.current.find((attachment) => attachment.draftId === draftId);
-    if (removed) URL.revokeObjectURL(removed.previewUrl);
-    setAttachments((current) => current.filter((attachment) => attachment.draftId !== draftId));
-  }, []);
-
-  const reportRejection = useCallback((description: string) => {
-    toastManager.add(
-      stackedThreadToast({ type: "error", title: "Image not attached", description }),
-    );
-  }, []);
-
-  const uploadFile = useCallback(
-    async (file: File) => {
-      const draftId = randomUUID();
-      const previewUrl = URL.createObjectURL(file);
-      const name = file.name.trim().length === 0 ? "Pasted image" : file.name;
-      setAttachments((current) => [...current, { draftId, name, previewUrl, status: "uploading" }]);
-
-      // Not `dropAttachment`: this row may not have made it to a render yet, so the preview URL
-      // has to be revoked from the closure rather than looked up.
-      const discard = () => {
-        URL.revokeObjectURL(previewUrl);
-        setAttachments((current) => current.filter((attachment) => attachment.draftId !== draftId));
-      };
-      const fail = (description: string) => {
-        discard();
-        reportRejection(description);
-      };
-
-      // Same rescue the chat composer performs: an oversized screenshot is re-encoded to fit
-      // rather than refused, and only an image that cannot be shrunk is turned away.
-      const compressed = await compressImageToByteLimit(file, ISSUE_COMMENT_ATTACHMENT_MAX_BYTES);
-      if (!compressed.ok) {
-        fail(
-          compressed.reason === "too-large"
-            ? issueCommentAttachmentTooLargeMessage(name)
-            : `${name} could not be read as an image.`,
-        );
-        return;
-      }
-      const dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
-      if (dataUrl === null) {
-        fail(`${name} could not be read as an image.`);
-        return;
-      }
-      const rejection = issueCommentAttachmentDataUrlRejection({ name, dataUrl });
-      if (rejection !== null) {
-        fail(rejection);
-        return;
-      }
-
-      const result = await uploadAttachment({ issueId, dataUrl });
-      if (result._tag !== "Success") {
-        discard();
-        reportIssueWriteFailure("Failed to attach the image", result);
-        return;
-      }
-      const { attachmentId } = result.value;
-      setAttachments((current) =>
-        current.map((attachment) =>
-          attachment.draftId === draftId
-            ? { ...attachment, status: "uploaded", attachmentId }
-            : attachment,
-        ),
-      );
-    },
-    [issueId, reportRejection, uploadAttachment],
-  );
-
-  const addFiles = useCallback(
-    (files: ReadonlyArray<File>) => {
-      const intake = issueCommentAttachmentIntake({ files, currentCount: attachments.length });
-      if (intake.rejection !== null) reportRejection(intake.rejection);
-      for (const file of intake.accepted) {
-        void uploadFile(file);
-      }
-    },
-    [attachments.length, reportRejection, uploadFile],
-  );
-
   const clearComposer = () => {
-    for (const attachment of attachments) {
-      URL.revokeObjectURL(attachment.previewUrl);
-    }
-    setAttachments([]);
+    clearAttachments();
     setDraft("");
   };
 
@@ -437,10 +297,10 @@ export function IssueComments({
         {attachments.length === 0 ? null : (
           <ul className="flex flex-wrap gap-2">
             {attachments.map((attachment) => (
-              <PendingAttachment
+              <PendingIssueImageAttachment
                 attachment={attachment}
                 key={attachment.draftId}
-                onRemove={dropAttachment}
+                onRemove={removeAttachment}
               />
             ))}
           </ul>

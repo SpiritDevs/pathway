@@ -2,10 +2,15 @@ import {
   ChatAttachmentId,
   ISSUE_COMMENT_ATTACHMENT_MAX_DATA_URL_CHARS,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
+  IssueCommentId,
+  IssueId,
+  type IssueComment,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  issueAttachmentComment,
+  issueAttachmentIds,
   issueCommentAttachmentDataUrlRejection,
   issueCommentAttachmentIds,
   issueCommentAttachmentIntake,
@@ -115,6 +120,32 @@ describe("issueCommentAttachmentIds", () => {
       "iss_a",
       "iss_c",
     ]);
+  });
+});
+
+describe("issue attachment shelf", () => {
+  const comment = (id: string, attachmentIds: ReadonlyArray<ChatAttachmentId>): IssueComment => ({
+    id: IssueCommentId.make(id),
+    issueId: IssueId.make("issue-1"),
+    author: { kind: "user" },
+    body: "Images",
+    attachmentIds,
+    createdAt: "2026-08-13T00:00:00.000Z",
+    editedAt: null,
+  });
+
+  it("collects unique images across comments in activity order", () => {
+    const first = ChatAttachmentId.make("iss_first");
+    const second = ChatAttachmentId.make("iss_second");
+    expect(issueAttachmentIds([comment("c1", [first]), comment("c2", [first, second])])).toEqual([
+      first,
+      second,
+    ]);
+  });
+
+  it("describes shelf uploads in singular and plural", () => {
+    expect(issueAttachmentComment(1)).toBe("Added an image to this issue.");
+    expect(issueAttachmentComment(3)).toBe("Added 3 images to this issue.");
   });
 });
 

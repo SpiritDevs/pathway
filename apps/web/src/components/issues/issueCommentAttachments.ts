@@ -18,6 +18,7 @@ import {
   ISSUE_COMMENT_ATTACHMENT_MAX_DATA_URL_CHARS,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
   type ChatAttachmentId,
+  type IssueComment,
 } from "@t3tools/contracts";
 
 import { issueCommentCreateBody } from "./issueDetail.logic";
@@ -129,6 +130,27 @@ export function issueCommentAttachmentIds(
   return attachments.flatMap((attachment) =>
     attachment.status === "uploaded" ? [attachment.attachmentId] : [],
   );
+}
+
+/** Every image on an issue, in comment order and without duplicate ids. */
+export function issueAttachmentIds(
+  comments: ReadonlyArray<IssueComment>,
+): ReadonlyArray<ChatAttachmentId> {
+  const seen = new Set<ChatAttachmentId>();
+  const attachmentIds: ChatAttachmentId[] = [];
+  for (const comment of comments) {
+    for (const attachmentId of comment.attachmentIds) {
+      if (seen.has(attachmentId)) continue;
+      seen.add(attachmentId);
+      attachmentIds.push(attachmentId);
+    }
+  }
+  return attachmentIds;
+}
+
+/** The visible Activity comment that owns images added from the description attachment shelf. */
+export function issueAttachmentComment(count: number): string {
+  return count === 1 ? "Added an image to this issue." : `Added ${count} images to this issue.`;
 }
 
 export interface IssueCommentComposerState {
