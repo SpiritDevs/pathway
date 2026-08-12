@@ -26,7 +26,11 @@ import { cn } from "../../lib/utils";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
-import { EnvironmentProviderUsage, supportsProviderUsage } from "../usage/ProviderUsage";
+import {
+  EnvironmentProviderUsage,
+  EnvironmentProviderUsageList,
+  supportsProviderUsage,
+} from "../usage/ProviderUsage";
 
 interface VersionMismatchIssue {
   readonly clientVersion: string;
@@ -246,7 +250,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </section>
         ) : null}
 
-        {usageProvider ? (
+        {props.draftId ? (
+          <EnvironmentProviderUsageList
+            environmentId={props.environmentId}
+            enabled={props.resourcesEnabled}
+          />
+        ) : usageProvider ? (
           <EnvironmentProviderUsage
             environmentId={props.environmentId}
             provider={usageProvider}

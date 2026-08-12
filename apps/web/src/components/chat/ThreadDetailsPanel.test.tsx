@@ -11,6 +11,7 @@ const testState = vi.hoisted(() => ({
   useT3ProjectFileScripts: vi.fn(),
   projectScriptsControl: vi.fn(),
   providerUsage: vi.fn(),
+  providerUsageList: vi.fn(),
   runtimeControls: vi.fn(),
 }));
 
@@ -40,6 +41,10 @@ vi.mock("../usage/ProviderUsage", () => ({
     testState.providerUsage(props);
     return null;
   },
+  EnvironmentProviderUsageList: (props: unknown) => {
+    testState.providerUsageList(props);
+    return null;
+  },
 }));
 vi.mock("./ThreadAutomationsPanel", () => ({
   ThreadAutomationsPanel: () => null,
@@ -55,6 +60,7 @@ describe("ThreadDetailsPanel", () => {
     testState.useT3ProjectFileScripts.mockReset();
     testState.projectScriptsControl.mockReset();
     testState.providerUsage.mockReset();
+    testState.providerUsageList.mockReset();
     testState.runtimeControls.mockReset();
   });
 
@@ -169,5 +175,56 @@ describe("ThreadDetailsPanel", () => {
       enabled: true,
       displayMode: "panel",
     });
+    expect(testState.providerUsageList).not.toHaveBeenCalled();
+  });
+
+  it("shows every supported provider on a new thread without depending on the picker selection", () => {
+    const environmentId = "environment:new-thread" as EnvironmentId;
+    const threadId = "thread:new-thread" as ThreadId;
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+
+    const props: ThreadDetailsPanelProps = {
+      mode: "popover",
+      environmentId,
+      environmentConnection: null,
+      threadId,
+      draftId: "draft:new-thread" as NonNullable<ThreadDetailsPanelProps["draftId"]>,
+      activeProjectName: undefined,
+      activeProjectScripts: undefined,
+      activeProvider: {
+        driver: "codex",
+        instanceId: "codex:default",
+      } as ServerProvider,
+      resourcesEnabled: true,
+      preferredScriptId: null,
+      keybindings: [],
+      availableEditors: [],
+      showOpenInPicker: false,
+      gitCwd: null,
+      isGitRepo: false,
+      envLocked: false,
+      availableEnvironments: [],
+      onEnvironmentChange: vi.fn(),
+      onEnvModeChange: vi.fn(),
+      startFromOrigin: false,
+      onStartFromOriginChange: vi.fn(),
+      onComposerFocusRequest: vi.fn(),
+      onReconnectEnvironment: vi.fn(),
+      onOpenConnectionSettings: vi.fn(),
+      versionMismatch: null,
+      onDismissVersionMismatch: vi.fn(),
+      onRunProjectScript: vi.fn(),
+      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+    };
+
+    renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+
+    expect(testState.providerUsageList).toHaveBeenCalledWith({
+      environmentId,
+      enabled: true,
+    });
+    expect(testState.providerUsage).not.toHaveBeenCalled();
   });
 });

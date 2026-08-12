@@ -22,12 +22,18 @@ Completed agent responses also have a **Continue in a new chat** action. Choose 
 new chat, then continue in the current checkout or a new worktree. A new worktree starts from the
 source checkout's committed `HEAD`; uncommitted files remain only in the source checkout.
 
-When the active provider supports live quota reporting, **Usage** shows its remaining allowance and
-reset time. Providers with multiple limits can be expanded to see every window and any credit
-balance reported by that provider.
+On a new thread, **Usage** shows every enabled provider account that supports live quota reporting,
+so you can compare remaining allowance and reset times before choosing a provider. Changing the
+provider picker does not refresh these limits. After the thread starts, **Usage** follows the active
+provider. Providers with multiple limits can be expanded to see every window and any credit balance
+reported by that provider.
 
 The bottom of **Settings → Providers** shows the same limits for every supported account on the
 selected environment. Provider credentials remain on the environment that owns them.
+
+The profile menu's **Provider usage** submenu shows supported accounts from every environment that
+is currently connected. Accounts stay grouped by environment so limits from different machines or
+sign-ins are not combined.
 
 For remote projects, both lists describe processes running in the remote environment rather than on
 the device displaying Pathway.

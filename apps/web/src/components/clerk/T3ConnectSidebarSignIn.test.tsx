@@ -26,6 +26,9 @@ vi.mock("../ui/menu", () => ({
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuItem: ({ children }: { children: ReactNode }) => <button>{children}</button>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuSub: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubTrigger: ({ children }: { children: ReactNode }) => <button>{children}</button>,
   DropdownMenuTrigger: ({ children, ...props }: { children: ReactNode }) => (
     <button {...props}>{children}</button>
   ),
@@ -33,6 +36,10 @@ vi.mock("../ui/menu", () => ({
 
 vi.mock("./MobileClientsUserProfilePage", () => ({
   MobileClientsUserProfilePage: () => <div>Mobile clients</div>,
+}));
+
+vi.mock("../usage/ProviderUsage", () => ({
+  ConnectedProviderUsageMenu: () => <div>Connected provider limits</div>,
 }));
 
 import { T3ConnectProfileButton } from "./T3ConnectSidebarSignIn";
@@ -44,6 +51,8 @@ describe("T3ConnectProfileButton", () => {
     expect(markup).toContain("Open profile menu for Corey Baines");
     expect(markup).toContain("https://example.test/corey.png");
     expect(markup).toContain("corey@example.test");
+    expect(markup).toContain("Provider usage");
+    expect(markup).toContain("Connected provider limits");
     expect(markup).toContain("Manage account");
     expect(markup).toContain("Sign out");
     expect(markup).not.toContain("cl-userButton");

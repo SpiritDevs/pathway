@@ -12,6 +12,7 @@ import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { useEnvironments } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -163,11 +164,13 @@ export function EnvironmentProviderUsage({
   provider,
   enabled,
   displayMode = "card",
+  grouped = false,
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
   enabled: boolean;
   displayMode?: "card" | "panel";
+  grouped?: boolean;
 }) {
   const isPanel = displayMode === "panel";
   const [open, setOpen] = useState(false);
@@ -177,6 +180,7 @@ export function EnvironmentProviderUsage({
     provider: provider.driver as ProviderUsageDriver,
     enabled,
   });
+  const displayName = provider.displayName ?? providerName(provider.driver as ProviderUsageDriver);
   const primary = selectPrimaryProviderUsageLimit(usage.data);
   const limits = usage.data?.status === "ok" ? deriveProviderUsageLimits(usage.data.limits) : [];
   const summary =
@@ -192,10 +196,13 @@ export function EnvironmentProviderUsage({
   if (!shouldCollapseProviderUsage(limits)) {
     return (
       <section
-        aria-label="Provider usage"
-        className={cn("border-t", isPanel ? "border-border/65" : "border-border/70 py-2")}
+        aria-label={`${displayName} provider usage`}
+        className={cn(
+          !grouped && "border-t",
+          !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
+        )}
       >
-        {isPanel ? (
+        {grouped ? null : isPanel ? (
           <div className="px-3.5 pb-1 pt-3">
             <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
           </div>
@@ -207,14 +214,15 @@ export function EnvironmentProviderUsage({
             <div className="flex items-start gap-2 px-2 py-1.5">
               <ProviderInstanceIcon
                 driverKind={provider.driver}
-                displayName={
-                  provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
-                }
+                displayName={displayName}
                 accentColor={provider.accentColor}
                 className="mt-0.5 size-4"
                 iconClassName="size-4"
               />
               <div className="min-w-0 flex-1">
+                {grouped ? (
+                  <p className="mb-1 truncate text-xs font-medium text-foreground">{displayName}</p>
+                ) : null}
                 <UsageLimitRow limit={primary} compact resetInline />
                 {usage.data?.status === "ok" && usage.data.usageLines.length > 0 ? (
                   <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
@@ -250,10 +258,13 @@ export function EnvironmentProviderUsage({
 
   return (
     <section
-      aria-label="Provider usage"
-      className={cn("border-t", isPanel ? "border-border/65" : "border-border/70 py-2")}
+      aria-label={`${displayName} provider usage`}
+      className={cn(
+        !grouped && "border-t",
+        !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
+      )}
     >
-      {isPanel ? (
+      {grouped ? null : isPanel ? (
         <div className="px-3.5 pb-1 pt-3">
           <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
         </div>
@@ -275,14 +286,17 @@ export function EnvironmentProviderUsage({
           >
             <ProviderInstanceIcon
               driverKind={provider.driver}
-              displayName={
-                provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
-              }
+              displayName={displayName}
               accentColor={provider.accentColor}
               className="size-4"
               iconClassName="size-4"
             />
-            <span className="min-w-0 flex-1 truncate">{summary}</span>
+            <span className="min-w-0 flex-1 truncate">{grouped ? displayName : summary}</span>
+            {grouped ? (
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {summary}
+              </span>
+            ) : null}
             {primary?.resetLabel ? (
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                 {primary.resetLabel}
@@ -308,6 +322,53 @@ export function EnvironmentProviderUsage({
           </CollapsiblePanel>
         </Collapsible>
       </div>
+    </section>
+  );
+}
+
+export function EnvironmentProviderUsageList({
+  environmentId,
+  enabled,
+}: {
+  environmentId: EnvironmentId;
+  enabled: boolean;
+}) {
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const supported = (providers ?? []).filter(
+    (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+  );
+
+  if (providers !== null && supported.length === 0) return null;
+
+  return (
+    <section
+      aria-labelledby="new-thread-provider-usage-heading"
+      className="border-t border-border/65"
+    >
+      <div className="px-3.5 pb-1 pt-3">
+        <h3
+          id="new-thread-provider-usage-heading"
+          className="text-[11px] font-medium text-muted-foreground"
+        >
+          Usage
+        </h3>
+      </div>
+      {providers === null ? (
+        <p className="px-4 pb-3 pt-1 text-xs text-muted-foreground">Loading provider accounts…</p>
+      ) : (
+        <div className="divide-y divide-border/70">
+          {supported.map((provider) => (
+            <EnvironmentProviderUsage
+              key={provider.instanceId}
+              environmentId={environmentId}
+              provider={provider}
+              enabled={enabled}
+              displayMode="panel"
+              grouped
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -433,6 +494,115 @@ function EnvironmentProviderUsageCards({
               environmentId={environmentId}
               provider={provider}
               refreshVersion={refreshVersion}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectedEnvironmentProviderUsage({
+  environmentId,
+  label,
+}: {
+  environmentId: EnvironmentId;
+  label: string;
+}) {
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const supported = (providers ?? []).filter(
+    (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+  );
+
+  return (
+    <section aria-label={`${label} provider usage`} className="space-y-2 px-2 py-2">
+      <p className="truncate px-1 text-[11px] font-medium text-muted-foreground">{label}</p>
+      {providers === null ? (
+        <p className="px-1 py-1 text-xs text-muted-foreground">Loading provider accounts…</p>
+      ) : supported.length === 0 ? (
+        <p className="px-1 py-1 text-xs text-muted-foreground">No supported accounts found.</p>
+      ) : (
+        <div className="space-y-1">
+          {supported.map((provider) => (
+            <ConnectedProviderUsageRow
+              key={provider.instanceId}
+              environmentId={environmentId}
+              provider={provider}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ConnectedProviderUsageRow({
+  environmentId,
+  provider,
+}: {
+  environmentId: EnvironmentId;
+  provider: ServerProvider;
+}) {
+  const usageProvider = provider.driver as ProviderUsageDriver;
+  const usage = useProviderUsage({
+    environmentId,
+    instanceId: provider.instanceId,
+    provider: usageProvider,
+    enabled: true,
+  });
+  const label = provider.displayName ?? providerName(usageProvider);
+
+  return (
+    <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
+      <div className="mb-2 flex min-w-0 items-center gap-2">
+        <ProviderInstanceIcon
+          driverKind={provider.driver}
+          displayName={label}
+          accentColor={provider.accentColor}
+          className="size-4"
+          iconClassName="size-4"
+        />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{label}</span>
+        {usage.data?.status === "ok" && usage.data.planName ? (
+          <span className="shrink-0 text-[10px] text-muted-foreground">{usage.data.planName}</span>
+        ) : null}
+      </div>
+      <ProviderUsageDetails
+        snapshot={usage.data}
+        loading={usage.isPending}
+        error={usage.error}
+        compact
+      />
+    </div>
+  );
+}
+
+export function ConnectedProviderUsageMenu() {
+  const { isReady, environments } = useEnvironments();
+  const connected = environments.filter(
+    (environment) => environment.connection.phase === "connected",
+  );
+
+  return (
+    <div className="min-w-0">
+      <div className="px-3 pb-2 pt-2">
+        <p className="text-sm font-medium text-foreground">Provider usage</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Live subscription limits from connected environments.
+        </p>
+      </div>
+      <div className="mx-2 h-px bg-border" />
+      {!isReady ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">Loading environments…</p>
+      ) : connected.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">No environments connected.</p>
+      ) : (
+        <div className="divide-y divide-border/70">
+          {connected.map((environment) => (
+            <ConnectedEnvironmentProviderUsage
+              key={environment.environmentId}
+              environmentId={environment.environmentId}
+              label={environment.label}
             />
           ))}
         </div>

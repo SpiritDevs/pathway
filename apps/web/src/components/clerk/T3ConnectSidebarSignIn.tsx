@@ -1,5 +1,5 @@
 import { useAuth, useClerk, useUser } from "@clerk/react";
-import { LogInIcon, LogOutIcon, SmartphoneIcon, UserRoundIcon } from "lucide-react";
+import { GaugeIcon, LogInIcon, LogOutIcon, SmartphoneIcon, UserRoundIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -9,8 +9,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/menu";
+import { ConnectedProviderUsageMenu } from "../usage/ProviderUsage";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { useT3ConnectAuthPrompt } from "./useT3ConnectAuthPrompt";
@@ -92,6 +96,15 @@ function ConfiguredT3ConnectProfileButton() {
           </div>
         </div>
         <DropdownMenuSeparator />
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <GaugeIcon />
+            <span>Provider usage</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-80">
+            <ConnectedProviderUsageMenu />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
         <DropdownMenuItem
           onClick={() =>
             openUserProfile(
