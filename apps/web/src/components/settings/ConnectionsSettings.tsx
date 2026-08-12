@@ -1395,7 +1395,7 @@ function SavedBackendListRow({
       : null;
   const metadataBits = [
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
-    environment.relayManaged ? "T3 Connect" : null,
+    environment.relayManaged ? "Pathway Connect" : null,
   ].filter((value): value is string => value !== null);
 
   // The WSL backend is a desktop-managed local backend (it surfaces as a bearer
@@ -1565,7 +1565,7 @@ function CloudLinkSwitch({
   disabled,
   disabledReason,
   onCheckedChange,
-  ariaLabel = "Enable T3 Connect",
+  ariaLabel = "Enable Pathway Connect",
 }: {
   readonly checked: boolean;
   readonly disabled: boolean;
@@ -1604,9 +1604,9 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
 
   const disabledReason = !isSignedIn
-    ? "Sign in to T3 Connect to manage this environment."
+    ? "Sign in to Pathway Connect to manage this environment."
     : !canManageRelay
-      ? "Your session does not have permission to manage T3 Connect access."
+      ? "Your session does not have permission to manage Pathway Connect access."
       : null;
   const isBusy = isUpdating || isUpdatingPreference;
 
@@ -1619,15 +1619,15 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       toastManager.add({
         type: "success",
         title: enabled
-          ? "T3 Connect linked"
+          ? "Pathway Connect linked"
           : publishAgentActivity
-            ? "T3 Connect tunnel disabled"
-            : "T3 Connect unlinked",
+            ? "Pathway Connect tunnel disabled"
+            : "Pathway Connect unlinked",
         description: enabled
-          ? "This environment is available through T3 Connect."
+          ? "This environment is available through Pathway Connect."
           : publishAgentActivity
             ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through T3 Connect.",
+            : "This environment is no longer available through Pathway Connect.",
       });
     }
     setIsUpdating(false);
@@ -1651,11 +1651,11 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   return (
     <>
       <SettingsRow
-        title="T3 Connect"
+        title="Pathway Connect"
         description={
           managedTunnelActive
-            ? "This environment is available to your other devices through T3 Connect."
-            : "Make this environment available to your other devices through T3 Connect."
+            ? "This environment is available to your other devices through Pathway Connect."
+            : "Make this environment available to your other devices through Pathway Connect."
         }
         status={operationError ?? primaryCloudLinkState.error}
         control={
@@ -1669,7 +1669,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       />
       <SettingsRow
         title="Publish agent activity"
-        description="Send activity from this environment to your mobile clients for push notifications and Live Activities. Works without a T3 Connect tunnel."
+        description="Send activity from this environment to your mobile clients for push notifications and Live Activities. Works without a Pathway Connect tunnel."
         control={
           <CloudLinkSwitch
             ariaLabel="Publish agent activity to mobile clients"
@@ -1698,7 +1698,7 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
         <EmptyTitle>No saved remote environments</EmptyTitle>
         <EmptyDescription>
           {cloudEnabled
-            ? "Click “Add environment” to pair another environment, or connect one from T3 Connect."
+            ? "Click “Add environment” to pair another environment, or connect one from Pathway Connect."
             : "Click “Add environment” to pair another environment."}
         </EmptyDescription>
       </EmptyHeader>

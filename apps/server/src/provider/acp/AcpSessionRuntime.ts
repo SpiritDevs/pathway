@@ -886,7 +886,7 @@ export function terminatePosixOwnedProcessTree(input: {
     discover(table);
     const byPid = new Map(table.map((entry) => [entry.pid, entry]));
     const current = input.controller.identity(process.pid);
-    if (current === undefined) throw fail("Cannot identify the current T3 process group");
+    if (current === undefined) throw fail("Cannot identify the current Pathway process group");
     const ledgerByPid = new Map(
       [...ledger.values()].map((process) => [process.pid, process] as const),
     );

@@ -158,7 +158,7 @@ export function makeGrokAcpAdapterFlavor(options: GrokAdapterV2Options): AcpAdap
     driver: GROK_PROVIDER,
     capabilities: GrokProviderCapabilitiesV2,
     // Idle settle over-settled preamble-before-tools turns and cancelled the
-    // prompt while Grok continued, freezing T3 projection mid-turn.
+    // prompt while Grok continued, freezing Pathway projection mid-turn.
     settleRootTurnWhenIdle: false,
     interruptPromptOnCancel: false,
     // User Stop (requestRuntimeRestart) still hard-kills the process group and

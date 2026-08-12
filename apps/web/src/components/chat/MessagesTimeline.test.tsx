@@ -1460,7 +1460,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Inherited");
   });
 
-  it("renders T3 MCP dynamic tools with the product logo and pretty name", async () => {
+  it("renders Pathway MCP dynamic tools with the product logo and pretty name", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const item = {
       id: "tool-t3-thread-read",
@@ -1519,7 +1519,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-tool-logo="t3-code"');
     expect(markup).toContain('src="/apple-touch-icon.png"');
-    expect(markup).toContain("Read a T3 thread");
+    expect(markup).toContain("Read a Pathway thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });
 

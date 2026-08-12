@@ -4076,7 +4076,7 @@ export function makeClaudeAdapterV2(
 
           // The converse of the drop above, and the case actually worth
           // watching: a positive-turn task-notification result settling a turn
-          // T3 did not mark as a continuation. That is the hang fix working,
+          // Pathway did not mark as a continuation. That is the hang fix working,
           // but it is also the shape a stale result would take if one ever
           // carried model turns, which nothing on the wire lets us rule out.
           if (

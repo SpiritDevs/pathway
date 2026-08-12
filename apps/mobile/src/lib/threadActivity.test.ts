@@ -396,7 +396,7 @@ describe("buildThreadFeed", () => {
     });
   });
 
-  it("pretty prints T3 MCP dynamic tool activities and attaches the product logo", () => {
+  it("pretty prints Pathway MCP dynamic tool activities and attaches the product logo", () => {
     const toolItem: OrchestrationV2TurnItem = {
       ...base("item-t3-tool", "2026-06-20T00:00:04.000Z", 3),
       type: "dynamic_tool",
@@ -408,9 +408,9 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([projected(toolItem, 0)]);
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
-    expect(activity?.summary).toBe("Read a T3 thread");
+    expect(activity?.summary).toBe("Read a Pathway thread");
     expect(activity?.logo).toBe("t3-code");
-    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a T3 thread");
+    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a Pathway thread");
   });
 });
 

@@ -104,7 +104,7 @@ mail actually landed.
 
 ## Storage
 
-A separate `mail.sqlite` under T3 home, with raw `.eml` and attachments on disk
+A separate `mail.sqlite` under Pathway home, with raw `.eml` and attachments on disk
 following the existing `attachmentStore` pattern.
 
 Keeping disposable dev mail out of `state.sqlite` matters: that database is

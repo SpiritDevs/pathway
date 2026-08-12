@@ -23,6 +23,7 @@ import type { IssueRelationDisplay } from "~/state/issues";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuGroup,
   MenuGroupLabel,
   MenuPopup,
   MenuRadioGroup,
@@ -96,17 +97,19 @@ function AddRelationPopover({
             }
           />
           <MenuPopup align="start" className="min-w-44" side="bottom">
-            <MenuGroupLabel>Relation</MenuGroupLabel>
-            <MenuRadioGroup
-              onValueChange={(next) => setChoiceValue(next as IssueRelationChoiceValue)}
-              value={choiceValue}
-            >
-              {ISSUE_RELATION_CHOICES.map((option) => (
-                <MenuRadioItem key={option.value} value={option.value}>
-                  {option.label}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
+            <MenuGroup>
+              <MenuGroupLabel>Relation</MenuGroupLabel>
+              <MenuRadioGroup
+                onValueChange={(next) => setChoiceValue(next as IssueRelationChoiceValue)}
+                value={choiceValue}
+              >
+                {ISSUE_RELATION_CHOICES.map((option) => (
+                  <MenuRadioItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
           </MenuPopup>
         </Menu>
         <IssueSearchList

@@ -205,7 +205,7 @@ export interface ProviderSessionManagerV2LayerOptions {
   readonly idleTimeoutMs?: number;
   /** Cap on how long idle release may be deferred for pending background work. */
   readonly maxIdlePinMs?: number;
-  /** Test replay harnesses can omit T3's MCP server from provider protocol fixtures. */
+  /** Test replay harnesses can omit Pathway's MCP server from provider protocol fixtures. */
   readonly configureMcp?: boolean;
 }
 

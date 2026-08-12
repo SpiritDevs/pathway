@@ -47,7 +47,7 @@ with a visible control.
 end, so a refresh, crash, or device switch resumes in place. Because the state is on the Clerk
 user, resumption crosses devices for free ([0003](0003-profile-in-clerk-user.md)).
 
-**Ordering against T3 Connect.** `ConnectOnboardingDialog` must not render while the profile
+**Ordering against Pathway Connect.** `ConnectOnboardingDialog` must not render while the profile
 stepper is incomplete. The gate handles this naturally — the dialog lives inside the authenticated
 shell, which an onboarding user never reaches — but the ordering is a requirement, not an
 accident, and is why the stepper is a route rather than another dialog.

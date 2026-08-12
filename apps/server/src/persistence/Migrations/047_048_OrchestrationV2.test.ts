@@ -215,7 +215,8 @@ it.effect("upgrades a database already at released main migration 040", () =>
         [52, "ApplicationEventSource"],
         [53, "OrchestrationV2EffectCancellation"],
         [54, "ScheduledTasks"],
-        [55, "EmailTriggers"],
+        [55, "RestoreIssueStatuses"],
+        [56, "EmailTriggers"],
       ],
     );
 

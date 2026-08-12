@@ -5,6 +5,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
+  DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
   ServerSettingsPatch,
@@ -15,6 +16,26 @@ const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
+
+describe("ClientSettings development server ports", () => {
+  it("defaults to the common development range and accepts a custom range", () => {
+    expect(decodeClientSettings({}).developmentServerPortRange).toEqual(
+      DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
+    );
+    expect(
+      decodeClientSettingsPatch({ developmentServerPortRange: { from: 4_000, to: 20_000 } })
+        .developmentServerPortRange,
+    ).toEqual({ from: 4_000, to: 20_000 });
+  });
+
+  it.each([
+    { from: 0, to: 9_999 },
+    { from: 3_000, to: 65_536 },
+    { from: 9_999, to: 3_000 },
+  ])("rejects an invalid range: $from-$to", (developmentServerPortRange) => {
+    expect(() => decodeClientSettingsPatch({ developmentServerPortRange })).toThrow();
+  });
+});
 
 describe("ClientSettings composer context strip", () => {
   it("defaults to draft-only and accepts a persistent strip preference", () => {

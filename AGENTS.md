@@ -14,7 +14,7 @@ Lots of apps have gotten bogged down with bad tech decisions and "slop". We have
 
 ### 2. Remote ready
 
-The architecture of Pathway's websocket layer (npx t3) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with T3 Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
+The architecture of Pathway's websocket layer (npx t3) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with Pathway Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
 
 ### 3. Multi-surface
 
@@ -46,11 +46,11 @@ We need to be on the same page with terminology. When communicating, use this la
 - **agent** means the coding agent a user runs inside Pathway. Depending on context, that may also include you.
 - **provider** means the agent runtime or harness Pathway talks to, such as Codex, Claude, Cursor, or OpenCode.
 - **client** means the web, desktop, or mobile UI.
-- **environment** means one running T3 server and the machine, filesystem, provider credentials, and state it owns.
+- **environment** means one running Pathway server and the machine, filesystem, provider credentials, and state it owns.
 - **project** means an environment-local workspace record rooted at a directory.
 - **thread** means the durable conversation and work history for a project.
 - **turn** means one user-to-agent cycle, including follow-up work such as checkpointing.
-- **T3 home** means the base data directory. Runtime state normally lives below its userdata directory.
+- **Pathway home** means the base data directory. Runtime state normally lives below its userdata directory.
 
 ## The three ways to hurt yourself
 

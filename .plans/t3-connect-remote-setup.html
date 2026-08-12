@@ -91,7 +91,7 @@
 
 <div class="terminal">
 $ npx t3 connect<br><br>
-To set up T3 Connect, open this URL and sign in:<br>
+To set up Pathway Connect, open this URL and sign in:<br>
 &nbsp;&nbsp;<span class="b">https://app.t3.codes/connect#B64URL_STATE_AND_CHALLENGE</span><br><br>
 Enter your authentication code: <span class="dim">[code]</span><br><br>
 <span class="g">Connected as theo@t3.gg!</span><br><br>
@@ -237,7 +237,7 @@ loginctl enable-linger $USER            &larr; survives SSH logout / reboot</cod
 <ul>
   <li><span class="warn">&#9888;</span> <strong>Clerk redirect URI:</strong> confirm the CLI OAuth client accepts the hosted redirect and that the token endpoint honors PKCE exchange for codes issued to it. Verify in staging before the phase 2 commit. <em>(Only external dependency in the plan.)</em></li>
   <li><span class="warn">&#9888;</span> <strong>systemd user env is minimal:</strong> always write absolute paths for node + t3 into the unit; never rely on PATH. Service failures are invisible by default &mdash; hence the phase 3 requirement to log to a printed file path.</li>
-  <li><span class="warn">&#9888;</span> <strong>Linger prompt honesty:</strong> the y/n prompt should say the machine becomes reachable via T3 Connect whenever powered on &mdash; that's the feature, but say it.</li>
+  <li><span class="warn">&#9888;</span> <strong>Linger prompt honesty:</strong> the y/n prompt should say the machine becomes reachable via Pathway Connect whenever powered on &mdash; that's the feature, but say it.</li>
   <li><span class="ok">&#10003;</span> Re-running <code>connect</code> when linked &#8594; idempotent: refresh token, re-confirm service, done.</li>
 </ul>
 
@@ -246,7 +246,7 @@ loginctl enable-linger $USER            &larr; survives SSH logout / reboot</cod
   <li>Auth: hosted out-of-band OAuth redirect on Clerk PKCE (not relay-brokered pairing, not device grant) &mdash; chosen for minimal new surface.</li>
   <li>URL: stateless static page, no backend short-link.</li>
   <li>Service: real per-user login service (systemd user + linger first); detect + offer install, never silent.</li>
-  <li>Binary: pinned managed runtime under <code>~/.t3</code>; interactive <code>npx</code> usage untouched.</li>
+  <li>Binary: pinned managed runtime under <code>~/.pathway</code>; interactive <code>npx</code> usage untouched.</li>
   <li>Updates: not always-latest; web UI surfaces available updates with one-click trigger (phase 4 follow-up).</li>
   <li>Delivery: one PR with a commit per phase (green tree at every boundary), not separate PRs.</li>
   <li>Workspace: assumed already set up; no auto-registration.</li>

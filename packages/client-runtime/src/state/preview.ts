@@ -42,6 +42,10 @@ export function createPreviewEnvironmentAtoms<R, E>(
       label: "environment-data:preview:discovered-servers",
       tag: WS_METHODS.subscribeDiscoveredLocalServers,
     }),
+    stopDiscoveredServer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:stop-discovered-server",
+      tag: WS_METHODS.previewStopDiscoveredServer,
+    }),
     automationRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:preview:automation-requests",
       tag: WS_METHODS.previewAutomationConnect,

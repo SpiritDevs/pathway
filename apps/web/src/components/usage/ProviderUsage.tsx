@@ -18,6 +18,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { SettingsSection } from "../settings/settingsLayout";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
   deriveProviderUsageLimits,
   selectPrimaryProviderUsageLimit,
@@ -161,11 +162,14 @@ export function EnvironmentProviderUsage({
   environmentId,
   provider,
   enabled,
+  displayMode = "card",
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
   enabled: boolean;
+  displayMode?: "card" | "panel";
 }) {
+  const isPanel = displayMode === "panel";
   const [open, setOpen] = useState(false);
   const usage = useProviderUsage({
     environmentId,
@@ -187,95 +191,123 @@ export function EnvironmentProviderUsage({
 
   if (!shouldCollapseProviderUsage(limits)) {
     return (
-      <section aria-label="Provider usage" className="border-t border-border/70 py-2">
+      <section
+        aria-label="Provider usage"
+        className={cn("border-t", isPanel ? "border-border/65" : "border-border/70 py-2")}
+      >
+        {isPanel ? (
+          <div className="px-3.5 pb-1 pt-3">
+            <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
+          </div>
+        ) : (
+          <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
+        )}
+        <div className={isPanel ? "px-2 pb-2.5" : undefined}>
+          {primary ? (
+            <div className="flex items-start gap-2 px-2 py-1.5">
+              <ProviderInstanceIcon
+                driverKind={provider.driver}
+                displayName={
+                  provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
+                }
+                accentColor={provider.accentColor}
+                className="mt-0.5 size-4"
+                iconClassName="size-4"
+              />
+              <div className="min-w-0 flex-1">
+                <UsageLimitRow limit={primary} compact resetInline />
+                {usage.data?.status === "ok" && usage.data.usageLines.length > 0 ? (
+                  <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
+                    {usage.data.usageLines.map((line) => (
+                      <div
+                        key={`${line.label}:${line.value}`}
+                        className="flex items-baseline justify-between gap-3 text-xs"
+                      >
+                        <span className="text-muted-foreground">{line.label}</span>
+                        <span className="text-right tabular-nums text-foreground">
+                          {line.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="px-2 py-1.5">
+              <ProviderUsageDetails
+                snapshot={usage.data}
+                loading={usage.isPending}
+                error={usage.error}
+                compact
+              />
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      aria-label="Provider usage"
+      className={cn("border-t", isPanel ? "border-border/65" : "border-border/70 py-2")}
+    >
+      {isPanel ? (
+        <div className="px-3.5 pb-1 pt-3">
+          <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
+        </div>
+      ) : (
         <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
-        {primary ? (
-          <div className="flex items-start gap-2 px-2 py-1.5">
+      )}
+      <div className={isPanel ? "px-2 pb-2.5" : undefined}>
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <button
+            type="button"
+            data-keep-action-card-open
+            aria-expanded={open}
+            className={cn(
+              isPanel
+                ? THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS
+                : "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+            onClick={() => setOpen((value) => !value)}
+          >
             <ProviderInstanceIcon
               driverKind={provider.driver}
               displayName={
                 provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
               }
               accentColor={provider.accentColor}
-              className="mt-0.5 size-4"
+              className="size-4"
               iconClassName="size-4"
             />
-            <div className="min-w-0 flex-1">
-              <UsageLimitRow limit={primary} compact resetInline />
-              {usage.data?.status === "ok" && usage.data.usageLines.length > 0 ? (
-                <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
-                  {usage.data.usageLines.map((line) => (
-                    <div
-                      key={`${line.label}:${line.value}`}
-                      className="flex items-baseline justify-between gap-3 text-xs"
-                    >
-                      <span className="text-muted-foreground">{line.label}</span>
-                      <span className="text-right tabular-nums text-foreground">{line.value}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+            <span className="min-w-0 flex-1 truncate">{summary}</span>
+            {primary?.resetLabel ? (
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {primary.resetLabel}
+              </span>
+            ) : null}
+            <ChevronDownIcon
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+                open && "rotate-180",
+              )}
+              aria-hidden="true"
+            />
+          </button>
+          <CollapsiblePanel>
+            <div className="px-2 pt-2 pb-1">
+              <ProviderUsageDetails
+                snapshot={usage.data}
+                loading={usage.isPending}
+                error={usage.error}
+                compact
+              />
             </div>
-          </div>
-        ) : (
-          <div className="px-2 py-1.5">
-            <ProviderUsageDetails
-              snapshot={usage.data}
-              loading={usage.isPending}
-              error={usage.error}
-              compact
-            />
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  return (
-    <section aria-label="Provider usage" className="border-t border-border/70 py-2">
-      <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <button
-          type="button"
-          data-keep-action-card-open
-          aria-expanded={open}
-          className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => setOpen((value) => !value)}
-        >
-          <ProviderInstanceIcon
-            driverKind={provider.driver}
-            displayName={
-              provider.displayName ?? providerName(provider.driver as ProviderUsageDriver)
-            }
-            accentColor={provider.accentColor}
-            className="size-4"
-            iconClassName="size-4"
-          />
-          <span className="min-w-0 flex-1 truncate">{summary}</span>
-          {primary?.resetLabel ? (
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {primary.resetLabel}
-            </span>
-          ) : null}
-          <ChevronDownIcon
-            className={cn(
-              "size-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
-              open && "rotate-180",
-            )}
-            aria-hidden="true"
-          />
-        </button>
-        <CollapsiblePanel>
-          <div className="px-2 pt-2 pb-1">
-            <ProviderUsageDetails
-              snapshot={usage.data}
-              loading={usage.isPending}
-              error={usage.error}
-              compact
-            />
-          </div>
-        </CollapsiblePanel>
-      </Collapsible>
+          </CollapsiblePanel>
+        </Collapsible>
+      </div>
     </section>
   );
 }

@@ -1,10 +1,17 @@
-import type { EnvironmentId, T3ProjectFileScript, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ServerProvider,
+  T3ProjectFileScript,
+  ThreadId,
+} from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   useT3ProjectFileScripts: vi.fn(),
   projectScriptsControl: vi.fn(),
+  providerUsage: vi.fn(),
+  runtimeControls: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
@@ -17,6 +24,20 @@ vi.mock("../BranchToolbar", () => ({
 vi.mock("../ProjectScriptsControl", () => ({
   default: (props: unknown) => {
     testState.projectScriptsControl(props);
+    return null;
+  },
+}));
+vi.mock("../EnvironmentRuntimeControls", () => ({
+  EnvironmentRuntimeControls: (props: unknown) => {
+    testState.runtimeControls(props);
+    return null;
+  },
+}));
+vi.mock("../usage/ProviderUsage", () => ({
+  supportsProviderUsage: (provider: { driver?: string } | undefined) =>
+    provider?.driver === "codex",
+  EnvironmentProviderUsage: (props: unknown) => {
+    testState.providerUsage(props);
     return null;
   },
 }));
@@ -33,6 +54,8 @@ describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
     testState.useT3ProjectFileScripts.mockReset();
     testState.projectScriptsControl.mockReset();
+    testState.providerUsage.mockReset();
+    testState.runtimeControls.mockReset();
   });
 
   it("passes checked-in t3.json scripts to the project scripts control", () => {
@@ -54,6 +77,8 @@ describe("ThreadDetailsPanel", () => {
       threadId: "thread:thread-details" as ThreadId,
       activeProjectName: undefined,
       activeProjectScripts: [],
+      activeProvider: null,
+      resourcesEnabled: true,
       preferredScriptId: null,
       keybindings: [],
       availableEditors: [],
@@ -77,8 +102,9 @@ describe("ThreadDetailsPanel", () => {
       onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
     };
 
-    renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+    const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
+    expect(html).toContain("Actions");
     expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
     expect(testState.projectScriptsControl).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -87,5 +113,61 @@ describe("ThreadDetailsPanel", () => {
         fileScripts,
       }),
     );
+    expect(testState.runtimeControls).toHaveBeenCalledWith({
+      threadRef: { environmentId, threadId: props.threadId },
+      enabled: true,
+      displayMode: "panel",
+    });
+  });
+
+  it("restores provider usage for the active environment", () => {
+    const environmentId = "environment:thread-details" as EnvironmentId;
+    const threadId = "thread:thread-details" as ThreadId;
+    const activeProvider = {
+      driver: "codex",
+      instanceId: "codex:default",
+    } as ServerProvider;
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+
+    const props: ThreadDetailsPanelProps = {
+      mode: "popover",
+      environmentId,
+      environmentConnection: null,
+      threadId,
+      activeProjectName: undefined,
+      activeProjectScripts: undefined,
+      activeProvider,
+      resourcesEnabled: true,
+      preferredScriptId: null,
+      keybindings: [],
+      availableEditors: [],
+      showOpenInPicker: false,
+      gitCwd: null,
+      isGitRepo: false,
+      envLocked: false,
+      availableEnvironments: [],
+      onEnvironmentChange: vi.fn(),
+      onEnvModeChange: vi.fn(),
+      startFromOrigin: false,
+      onStartFromOriginChange: vi.fn(),
+      onComposerFocusRequest: vi.fn(),
+      onReconnectEnvironment: vi.fn(),
+      onOpenConnectionSettings: vi.fn(),
+      versionMismatch: null,
+      onDismissVersionMismatch: vi.fn(),
+      onRunProjectScript: vi.fn(),
+      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+    };
+
+    renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+
+    expect(testState.providerUsage).toHaveBeenCalledWith({
+      environmentId,
+      provider: activeProvider,
+      enabled: true,
+      displayMode: "panel",
+    });
   });
 });

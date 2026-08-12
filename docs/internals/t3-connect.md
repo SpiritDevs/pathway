@@ -1,8 +1,8 @@
-# T3 Connect
+# Pathway Connect
 
 > For maintainers. Using Pathway? See [docs/user](../user/).
 
-T3 Connect uses one Clerk application for web, desktop, and mobile authentication. The relay verifies
+Pathway Connect uses one Clerk application for web, desktop, and mobile authentication. The relay verifies
 two kinds of bearer credential: template JWTs generated from the `t3-relay` template with the shared
 `t3-code-relay` audience, and Clerk OAuth tokens issued to the CLI. `verifyRelayClientBearerToken` in
 `infra/relay/src/http/Api.ts` tries the template/session path first and falls back to OAuth
@@ -14,7 +14,7 @@ For the wider system diagram, see
 
 ## Application Keys
 
-T3 Connect is disabled in a fresh clone. To enable it for source builds against the production
+Pathway Connect is disabled in a fresh clone. To enable it for source builds against the production
 deployment, copy the repository-root example file:
 
 ```sh
@@ -54,7 +54,7 @@ environment.
 The Clerk publishable key is mandatory in this fork: the app requires an account to open, and a
 build without the key fails closed to a misconfiguration screen rather than running open
 ([decisions/0001](./decisions/0001-mandatory-account-gate.md)). The remaining public values stay
-optional — when the relay URL or JWT template is absent, T3 Connect cloud UI is omitted while
+optional — when the relay URL or JWT template is absent, Pathway Connect cloud UI is omitted while
 identity keeps working. The `t3 connect` command group is
 always registered: when the CLI public values are absent, `makeCli` in `apps/server/src/bin.ts`
 registers a hidden fallback `connect` command that reports the missing configuration instead of
@@ -82,7 +82,7 @@ This uses an OAuth public client with PKCE, so the CLI stores no client secret.
 
 In **Clerk Dashboard > OAuth applications**:
 
-1. Create an OAuth application for the T3 CLI.
+1. Create an OAuth application for the Pathway CLI.
 2. Enable the **Public** option so authorization-code exchange uses PKCE.
 3. Add **both** allowed redirect URIs:
    - `http://127.0.0.1:34338/callback` for the loopback listener;
@@ -115,7 +115,7 @@ t3 connect logout
 `t3 connect login` opens the Clerk authorization flow and stores the CLI credential without enabling
 cloud exposure. `t3 connect link` installs the pinned managed `cloudflared` binary when needed,
 authorizes when needed, and records durable intent to expose the environment. It works without a
-running T3 server. The next `t3 serve` or `t3 start` reconciles the relay link and launches the
+running Pathway server. The next `t3 serve` or `t3 start` reconciles the relay link and launches the
 managed tunnel. `t3 connect unlink` records disabled intent immediately, stops a reachable running
 connector, and attempts to revoke the relay-side environment record. It retains the stored CLI
 authorization so `t3 connect link` can re-enable exposure without another browser flow. `t3 connect
@@ -243,9 +243,9 @@ flow uses a custom redirect URI, add that exact URI to the same allowlist.
 
 ## Sign-in Surfaces
 
-Signed-in users manage T3 Connect under **Connections**. The settings sidebar also has dedicated
+Signed-in users manage Pathway Connect under **Connections**. The settings sidebar also has dedicated
 controls, rendered by `SettingsSidebarNav.tsx`: `T3ConnectSidebarSignIn` in the footer shows a
-**Sign in to T3 Connect** button while signed out, and `T3ConnectSidebarAvatar` shows a Clerk
+**Sign in to Pathway Connect** button while signed out, and `T3ConnectSidebarAvatar` shows a Clerk
 `UserButton` account control while signed in. Both are gated on cloud public configuration.
 Desktop renders the same web bundle, so it has them too. The waitlist enrollment flow from the
 private beta was removed when Connect went GA; sign-up is open unless a Clerk restriction below is

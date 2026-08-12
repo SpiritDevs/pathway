@@ -60,7 +60,7 @@ function mockProcess(exit: number | PlatformError.PlatformError) {
 
 const devServerInput = {
   mode: "dev:server",
-  t3Home: "/tmp/pathway-dev-runner",
+  pathwayHome: "/tmp/pathway-dev-runner",
   browser: undefined,
   autoBootstrapProjectFromCwd: undefined,
   logWebSocketEvents: undefined,
@@ -144,7 +144,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -165,7 +165,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: true,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -185,7 +185,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { PATHWAY_NO_BROWSER: "0" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: false,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -206,7 +206,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: "/tmp/custom-t3",
+          pathwayHome: "/tmp/custom-pathway",
           browser: false,
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: true,
@@ -215,7 +215,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: new URL("http://localhost:7331"),
         });
 
-        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/custom-t3"));
+        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/custom-pathway"));
         assert.equal(env.PATHWAY_PORT, "4222");
         assert.equal(env.VITE_HTTP_URL, "http://localhost:4222");
         assert.equal(env.VITE_WS_URL, "ws://localhost:4222");
@@ -237,7 +237,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -260,7 +260,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -283,7 +283,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: false,
@@ -296,7 +296,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("uses custom t3Home when provided", () =>
+    it.effect("uses custom pathwayHome when provided", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const env = yield* createDevRunnerEnv({
@@ -304,7 +304,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: "/tmp/my-t3",
+          pathwayHome: "/tmp/my-pathway",
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -313,7 +313,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/my-t3"));
+        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/my-pathway"));
       }),
     );
 
@@ -332,7 +332,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: "/tmp/my-t3",
+          pathwayHome: "/tmp/my-pathway",
           browser: true,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -341,7 +341,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           devUrl: undefined,
         });
 
-        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/my-t3"));
+        assert.equal(env.PATHWAY_HOME, path.resolve("/tmp/my-pathway"));
         assert.equal(env.PORT, "5733");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://127.0.0.1:5733");
         assert.equal(env.HOST, "127.0.0.1");
@@ -361,7 +361,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -389,7 +389,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             },
             serverOffset: 0,
             webOffset: 0,
-            t3Home: undefined,
+            pathwayHome: undefined,
             browser: undefined,
             autoBootstrapProjectFromCwd: undefined,
             logWebSocketEvents: undefined,
@@ -418,7 +418,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { PATHWAY_SINGLE_ORIGIN_DEV: "1" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -439,7 +439,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { PATHWAY_SINGLE_ORIGIN_DEV: "1" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -464,7 +464,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             baseEnv: { HOST: "0.0.0.0" },
             serverOffset: 0,
             webOffset: 0,
-            t3Home: undefined,
+            pathwayHome: undefined,
             browser: undefined,
             autoBootstrapProjectFromCwd: undefined,
             logWebSocketEvents: undefined,
@@ -487,7 +487,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { HOST: "0.0.0.0" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -509,7 +509,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { HOST: "0.0.0.0" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -529,7 +529,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: {},
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -874,10 +874,10 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
     // `tailscale serve` config outlives the process, so a dry run that shared
     // would replace and then tear down whatever mapping the port already had.
-    // Base-dir precedence (--home-dir > worktree .pathway > ambient PATHWAY_HOME)
-    // lives in runDevRunnerWithInput; the env builder must not consult the
-    // ambient variable on its own, or it would silently outrank the worktree
-    // default and land dev state on the user's real database.
+    // Base-dir precedence (--home-dir > worktree .pathway) lives in
+    // runDevRunnerWithInput; the env builder must not consult the ambient
+    // variable on its own, or it would silently outrank the worktree default
+    // and land dev state on the user's real database.
     it.effect("ignores an ambient PATHWAY_HOME when no home is resolved", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
@@ -885,7 +885,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           baseEnv: { PATHWAY_HOME: "/home/user/.pathway" },
           serverOffset: 0,
           webOffset: 0,
-          t3Home: undefined,
+          pathwayHome: undefined,
           browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
@@ -1220,7 +1220,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       );
 
       const spawnedHome = (input: {
-        readonly t3Home: string | undefined;
+        readonly pathwayHome: string | undefined;
         readonly cwd: string;
         readonly ambientHome: string | undefined;
       }) =>
@@ -1238,7 +1238,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             }),
           );
 
-          yield* runDevRunnerWithInput({ ...devServerInput, t3Home: input.t3Home }).pipe(
+          yield* runDevRunnerWithInput({ ...devServerInput, pathwayHome: input.pathwayHome }).pipe(
             Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
             Effect.provideService(HostProcessPlatform, "linux"),
             Effect.provideService(HostProcessWorkingDirectory, input.cwd),
@@ -1256,7 +1256,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = yield* spawnedHome({
-            t3Home: "/tmp/explicit-home",
+            pathwayHome: "/tmp/explicit-home",
             cwd: root,
             ambientHome: "/home/user/.pathway",
           });
@@ -1269,7 +1269,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = yield* spawnedHome({
-            t3Home: "   ",
+            pathwayHome: "   ",
             cwd: root,
             ambientHome: "/home/user/.pathway",
           });
@@ -1282,7 +1282,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = yield* spawnedHome({
-            t3Home: undefined,
+            pathwayHome: undefined,
             cwd: root,
             ambientHome: "/home/user/.pathway",
           });
@@ -1290,22 +1290,21 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }).pipe(Effect.scoped),
       );
 
-      it.effect("falls back to an ambient PATHWAY_HOME outside a worktree", () =>
+      it.effect("does not inherit an ambient PATHWAY_HOME outside a worktree", () =>
         Effect.gen(function* () {
-          const path = yield* Path.Path;
           const home = yield* spawnedHome({
-            t3Home: undefined,
+            pathwayHome: undefined,
             cwd: NodeOS.tmpdir(),
             ambientHome: "/home/user/.pathway",
           });
-          assert.equal(home, path.resolve("/home/user/.pathway"));
+          assert.equal(home, undefined);
         }),
       );
 
       it.effect("leaves the home implicit with no worktree and no ambient value", () =>
         Effect.gen(function* () {
           const home = yield* spawnedHome({
-            t3Home: undefined,
+            pathwayHome: undefined,
             cwd: NodeOS.tmpdir(),
             ambientHome: undefined,
           });

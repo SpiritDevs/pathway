@@ -104,7 +104,7 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.port("PATHWAY_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("PATHWAY_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  t3Home: Config.string("PATHWAY_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  pathwayHome: Config.string("PATHWAY_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.string("PATHWAY_DEV_ALLOWED_ORIGINS").pipe(
     Config.withDefault(""),
@@ -272,11 +272,11 @@ export const resolveServerConfig = (
     );
     const explicitBaseDir = resolveOptionPrecedence(
       normalizedFlags.baseDir,
-      Option.fromUndefinedOr(env.t3Home),
+      Option.fromUndefinedOr(env.pathwayHome),
     ).pipe(Option.filter((value) => value.trim().length > 0));
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(
-        resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
+        resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.pathwayHome)),
       ),
     );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());

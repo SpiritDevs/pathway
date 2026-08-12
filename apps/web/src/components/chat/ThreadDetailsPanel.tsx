@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   ProjectScript,
   ResolvedKeybindingsConfig,
+  ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
@@ -13,6 +14,7 @@ import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
+import { EnvironmentRuntimeControls } from "../EnvironmentRuntimeControls";
 import GitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
   type NewProjectScriptInput,
@@ -24,6 +26,7 @@ import { cn } from "../../lib/utils";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { EnvironmentProviderUsage, supportsProviderUsage } from "../usage/ProviderUsage";
 
 interface VersionMismatchIssue {
   readonly clientVersion: string;
@@ -40,6 +43,8 @@ export interface ThreadDetailsPanelProps {
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
+  activeProvider: ServerProvider | null;
+  resourcesEnabled: boolean;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
@@ -76,6 +81,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentId,
     props.activeProjectScripts ? props.gitCwd : null,
   );
+  const activeProvider = props.activeProvider ?? undefined;
+  const usageProvider = supportsProviderUsage(activeProvider) ? activeProvider : null;
   const connectionIssue =
     props.environmentConnection !== null &&
     props.environmentConnection.phase !== "connected" &&
@@ -206,8 +213,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 displayMode="panel"
               />
             ) : null}
+          </div>
+        </section>
 
-            {props.activeProjectScripts ? (
+        {props.activeProjectScripts ? (
+          <section
+            aria-labelledby="thread-details-actions-heading"
+            className="border-t border-border/65"
+          >
+            <div className="px-3.5 pb-1 pt-3">
+              <h3
+                id="thread-details-actions-heading"
+                className="text-[11px] font-medium text-muted-foreground"
+              >
+                Actions
+              </h3>
+            </div>
+            <div className="flex flex-col px-2 pb-2.5">
               <ProjectScriptsControl
                 displayMode="panel"
                 scripts={props.activeProjectScripts}
@@ -219,9 +241,24 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 onUpdateScript={props.onUpdateProjectScript}
                 onDeleteScript={props.onDeleteProjectScript}
               />
-            ) : null}
-          </div>
-        </section>
+            </div>
+          </section>
+        ) : null}
+
+        {usageProvider ? (
+          <EnvironmentProviderUsage
+            environmentId={props.environmentId}
+            provider={usageProvider}
+            enabled={props.resourcesEnabled}
+            displayMode="panel"
+          />
+        ) : null}
+
+        <EnvironmentRuntimeControls
+          threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+          enabled={props.resourcesEnabled}
+          displayMode="panel"
+        />
 
         {props.gitCwd ? (
           <section

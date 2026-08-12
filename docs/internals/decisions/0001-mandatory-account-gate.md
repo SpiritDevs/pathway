@@ -5,7 +5,7 @@ Date: 2026-08-11
 
 ## Context
 
-Upstream Pathway treats identity as a T3 Connect concern. Clerk exists so the relay can verify a
+Upstream Pathway treats identity as a Pathway Connect concern. Clerk exists so the relay can verify a
 bearer token ([t3-connect.md](../t3-connect.md)); the app itself runs with no account, and cloud UI
 is omitted entirely when `PATHWAY_CLERK_PUBLISHABLE_KEY` is absent. `AGENTS.md` states the project
 is "open at the core" and that a large number of users run forks.

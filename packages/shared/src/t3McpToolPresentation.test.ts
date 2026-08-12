@@ -3,28 +3,28 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveT3McpToolPresentation } from "./t3McpToolPresentation.ts";
 
 describe("resolveT3McpToolPresentation", () => {
-  it("pretty prints Claude and Cursor T3 MCP tool names", () => {
+  it("pretty prints Claude and Cursor Pathway MCP tool names", () => {
     expect(resolveT3McpToolPresentation("mcp__t3-code__t3_thread_read")).toEqual({
-      displayName: "Read a T3 thread",
+      displayName: "Read a Pathway thread",
       logo: "t3-code",
     });
   });
 
-  it("pretty prints Codex T3 MCP tool names", () => {
+  it("pretty prints Codex Pathway MCP tool names", () => {
     expect(resolveT3McpToolPresentation("t3-code.create_threads")).toEqual({
-      displayName: "Create T3 threads",
+      displayName: "Create Pathway threads",
       logo: "t3-code",
     });
   });
 
-  it("pretty prints bare T3 MCP toolkit names", () => {
+  it("pretty prints bare Pathway MCP toolkit names", () => {
     expect(resolveT3McpToolPresentation("list_scheduled_tasks")).toEqual({
       displayName: "List scheduled tasks",
       logo: "t3-code",
     });
   });
 
-  it("pretty prints worktree T3 MCP tool names", () => {
+  it("pretty prints worktree Pathway MCP tool names", () => {
     expect(resolveT3McpToolPresentation("mcp__t3-code__t3_worktree_handoff")).toEqual({
       displayName: "Hand off thread to a git worktree",
       logo: "t3-code",
@@ -35,8 +35,8 @@ describe("resolveT3McpToolPresentation", () => {
     });
   });
 
-  it("pretty prints preview T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("T3-code.preview_open")).toEqual({
+  it("pretty prints preview Pathway MCP tool names", () => {
+    expect(resolveT3McpToolPresentation("t3-code.preview_open")).toEqual({
       displayName: "Open a page in the preview browser",
       logo: "t3-code",
     });

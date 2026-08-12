@@ -3,6 +3,8 @@ import { useMemo } from "react";
 
 import { previewEnvironment } from "./state/preview";
 import { useEnvironmentQuery } from "./state/query";
+import { useClientSettings } from "./hooks/useSettings";
+import { filterDiscoveredPorts } from "./portDiscoveryState.logic";
 
 const EMPTY_PORTS: ReadonlyArray<DiscoveredLocalServer> = Object.freeze([]);
 
@@ -15,7 +17,9 @@ export function useDiscoveredPorts(
       ? null
       : previewEnvironment.discoveredServers({ environmentId, input: {} }),
   );
-  return query.data?.servers ?? EMPTY_PORTS;
+  const range = useClientSettings((settings) => settings.developmentServerPortRange);
+  const ports = query.data?.servers ?? EMPTY_PORTS;
+  return useMemo(() => filterDiscoveredPorts(ports, range), [ports, range]);
 }
 
 export function useThreadDiscoveredPorts(input: {

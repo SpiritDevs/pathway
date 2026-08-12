@@ -23,10 +23,10 @@ export type ThreadPanelPresentation = "inline" | "popover";
 export function resolveThreadPanelPresentation(
   workspaceWidth: number | null,
   occupiedRightPanelWidth: number,
-  rightPanelMaximized: boolean,
+  rightPanelOverlaysChat: boolean,
 ): ThreadPanelPresentation {
   if (workspaceWidth === null) return "inline";
 
-  const chatPaneWidth = rightPanelMaximized ? 0 : workspaceWidth - occupiedRightPanelWidth;
+  const chatPaneWidth = rightPanelOverlaysChat ? 0 : workspaceWidth - occupiedRightPanelWidth;
   return chatPaneWidth < THREAD_PANEL_INLINE_MIN_WIDTH ? "popover" : "inline";
 }

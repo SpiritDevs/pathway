@@ -6,6 +6,7 @@ import {
   Files,
   GitPullRequest,
   Globe2,
+  MessageSquare,
   Plus,
   TerminalSquare,
   X,
@@ -30,8 +31,6 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { faviconUrlForOrigin } from "~/lib/favicon";
 import { useTheme } from "~/hooks/useTheme";
 import type { PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
-
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 
@@ -49,6 +48,8 @@ interface RightPanelTabsProps {
   pendingSurfaceIds: ReadonlySet<string>;
   previewSessions: Readonly<Record<string, PreviewSessionSnapshot>>;
   terminalLabelsById: ReadonlyMap<string, string>;
+  /** Live thread titles keyed by thread id; thread identities remain the only persisted data. */
+  threadTitlesById?: ReadonlyMap<string, string>;
   onActivate: (surface: RightPanelSurface) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
@@ -258,10 +259,11 @@ function RightPanelEmptyState(props: {
   );
 }
 
-function surfaceTitle(
+export function resolveRightPanelSurfaceTitle(
   surface: RightPanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
+  threadTitlesById?: ReadonlyMap<string, string>,
 ): string {
   switch (surface.kind) {
     case "diff":
@@ -279,6 +281,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "thread":
+      return threadTitlesById?.get(surface.resourceId)?.trim() || "Side chat";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -356,6 +360,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "thread":
+      return <MessageSquare className="size-3 shrink-0" />;
   }
 }
 
@@ -470,7 +476,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             {props.surfaces.map((surface) => {
               const active = surface.id === props.activeSurfaceId;
               const pending = props.pendingSurfaceIds.has(surface.id);
-              const title = surfaceTitle(surface, props.previewSessions, props.terminalLabelsById);
+              const title = resolveRightPanelSurfaceTitle(
+                surface,
+                props.previewSessions,
+                props.terminalLabelsById,
+                props.threadTitlesById,
+              );
               return (
                 <div
                   key={surface.id}

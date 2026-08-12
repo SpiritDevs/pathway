@@ -1,11 +1,15 @@
 # Environment actions
 
-Open the Environment menu from the source control controls in a thread header to see actions and
-live resources for that thread's environment.
+Open the thread details menu in a thread header to see workspace actions and live resources for
+that thread's environment.
 
-When local development servers are listening, the **Servers** section shows their process names and
-localhost ports. Expand **Local servers**, then choose a server to open it in Pathway's browser
-panel.
+When local development servers are listening, the **Development environments** section shows their
+process names and localhost ports. Expand **Local servers**, then choose a server to open it in
+Pathway's browser panel. Hover a server to open it, copy its URL, or stop its owning process. Stop is
+unavailable when the environment cannot identify that process safely.
+
+Use **Settings → General → Development server ports** to choose the inclusive port range Pathway
+shows across its development-server lists. The default range is `3000` through `9999`.
 
 When the current thread has active terminal sessions, the **Terminals** section lists them under
 **Running terminals**. Choose a terminal to return to it in the terminal drawer or right panel.

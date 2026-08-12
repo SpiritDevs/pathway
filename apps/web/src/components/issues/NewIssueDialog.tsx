@@ -101,6 +101,7 @@ const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 const PICKER_OPTION_CLASS =
   "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
+const PICKER_VIEWPORT_CLASS = "p-1.5 [--viewport-inline-padding:--spacing(1.5)]";
 const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
 
 function PickerPopover({
@@ -122,7 +123,7 @@ function PickerPopover({
         align="start"
         className={cn("w-60", className)}
         side="bottom"
-        viewportClassName="p-1.5"
+        viewportClassName={PICKER_VIEWPORT_CLASS}
       >
         <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{title}</p>
         {children(() => setOpen(false))}
@@ -219,7 +220,7 @@ function ParentPicker({
       open={open}
     >
       <PopoverTrigger render={trigger} />
-      <PopoverPopup align="start" className="w-72 p-1.5">
+      <PopoverPopup align="start" className="w-72" viewportClassName={PICKER_VIEWPORT_CLASS}>
         <IssueSearchList
           emptyHint="No issue can take a sub-issue here."
           onPick={(picked) => {

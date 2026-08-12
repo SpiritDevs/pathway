@@ -263,7 +263,7 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
-  it.effect("derives concrete Codex turn policies from every T3 runtime mode", () =>
+  it.effect("derives concrete Codex turn policies from every Pathway runtime mode", () =>
     Effect.gen(function* () {
       const build = (
         runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access",
@@ -327,36 +327,38 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
-  it.effect("adds default-mode developer instructions when the T3 MCP server is attached", () =>
-    Effect.gen(function* () {
-      const params = yield* buildCodexTurnStartParams({
-        nativeThreadId: "native-orchestration-instructions",
-        codexInput: [{ type: "text", text: "delegate this task" }],
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: null,
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-        },
-        hasT3Mcp: true,
-      });
+  it.effect(
+    "adds default-mode developer instructions when the Pathway MCP server is attached",
+    () =>
+      Effect.gen(function* () {
+        const params = yield* buildCodexTurnStartParams({
+          nativeThreadId: "native-orchestration-instructions",
+          codexInput: [{ type: "text", text: "delegate this task" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: null,
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+          },
+          hasT3Mcp: true,
+        });
 
-      assert.equal(params.collaborationMode?.mode, "default");
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "use `delegate_task`",
-      );
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "structured object, never as JSON text",
-      );
-    }),
+        assert.equal(params.collaborationMode?.mode, "default");
+        assert.include(
+          params.collaborationMode?.settings.developer_instructions ?? "",
+          "use `delegate_task`",
+        );
+        assert.include(
+          params.collaborationMode?.settings.developer_instructions ?? "",
+          "structured object, never as JSON text",
+        );
+      }),
   );
 
-  it.effect("omits default-mode collaboration settings without the T3 MCP server", () =>
+  it.effect("omits default-mode collaboration settings without the Pathway MCP server", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({
         nativeThreadId: "native-default-without-t3-mcp",
@@ -377,36 +379,38 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
-  it.effect("adds T3 plan-mode developer instructions when the T3 MCP server is attached", () =>
-    Effect.gen(function* () {
-      const params = yield* buildCodexTurnStartParams({
-        nativeThreadId: "native-plan-with-t3-mcp",
-        codexInput: [{ type: "text", text: "plan this task" }],
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "plan",
-          cwd: null,
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-        },
-        hasT3Mcp: true,
-      });
+  it.effect(
+    "adds Pathway plan-mode developer instructions when the Pathway MCP server is attached",
+    () =>
+      Effect.gen(function* () {
+        const params = yield* buildCodexTurnStartParams({
+          nativeThreadId: "native-plan-with-t3-mcp",
+          codexInput: [{ type: "text", text: "plan this task" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            cwd: null,
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+          },
+          hasT3Mcp: true,
+        });
 
-      assert.equal(params.collaborationMode?.mode, "plan");
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "request_user_input",
-      );
-      assert.include(
-        params.collaborationMode?.settings.developer_instructions ?? "",
-        "preview_status",
-      );
-    }),
+        assert.equal(params.collaborationMode?.mode, "plan");
+        assert.include(
+          params.collaborationMode?.settings.developer_instructions ?? "",
+          "request_user_input",
+        );
+        assert.include(
+          params.collaborationMode?.settings.developer_instructions ?? "",
+          "preview_status",
+        );
+      }),
   );
 
-  it.effect("keeps Codex in plan mode without referencing unavailable T3 MCP tools", () =>
+  it.effect("keeps Codex in plan mode without referencing unavailable Pathway MCP tools", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({
         nativeThreadId: "native-plan-without-t3-mcp",

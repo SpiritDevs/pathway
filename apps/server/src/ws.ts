@@ -1973,6 +1973,10 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "preview" },
           ),
+        [WS_METHODS.previewStopDiscoveredServer]: (input) =>
+          observeRpcEffect(WS_METHODS.previewStopDiscoveredServer, portDiscovery.stop(input), {
+            "rpc.aggregate": "preview",
+          }),
         [WS_METHODS.subscribeServerConfig]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
