@@ -51,6 +51,7 @@ const projectSettings: ReadonlyArray<EmailProjectSettings> = [
   {
     projectId: projectA,
     mailSlug: EmailMailSlug.make("project-a"),
+    capturePassword: null,
     retention: { maxMessages: null, maxAgeDays: null },
     toastMuted: false,
     twoFactorCodeRegex: null,
@@ -58,6 +59,7 @@ const projectSettings: ReadonlyArray<EmailProjectSettings> = [
   {
     projectId: projectB,
     mailSlug: EmailMailSlug.make("project-b"),
+    capturePassword: null,
     retention: { maxMessages: null, maxAgeDays: null },
     toastMuted: false,
     twoFactorCodeRegex: null,
