@@ -2,6 +2,8 @@
 
 Status: Accepted
 Date: 2026-08-12
+Shipped: stages 1–5, 2026-08-12. The staging section below is history; what actually landed and
+where the seams are is [issue-tracker.md](../issue-tracker.md).
 
 ## Context
 

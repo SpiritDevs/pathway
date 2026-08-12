@@ -7,6 +7,7 @@ export type SettingsPath =
   | "/settings/usage"
   | "/settings/issues-statuses"
   | "/settings/issues-labels"
+  | "/settings/issues-intake"
   | "/settings/issues-import"
   | "/settings/issues-enrichment"
   | "/settings/connections"
@@ -34,6 +35,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/usage": "Usage",
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
+  "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
   "/settings/connections": "Connections",
@@ -64,6 +66,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     paths: [
       "/settings/issues-statuses",
       "/settings/issues-labels",
+      "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ],
@@ -249,6 +252,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "issue-import",
     title: "Import issues",
     to: "/settings/issues-import",
+  },
+  {
+    id: "issue-intake",
+    title: "Slack intake",
+    to: "/settings/issues-intake",
+  },
+  {
+    id: "slack-bot-token",
+    title: "Slack bot token",
+    to: "/settings/issues-intake",
+  },
+  {
+    id: "slack-watched-channels",
+    title: "Watched Slack channels",
+    to: "/settings/issues-intake",
   },
   {
     id: "issue-enrichment",

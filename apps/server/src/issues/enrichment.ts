@@ -9,6 +9,7 @@
  * @module issues/enrichment
  */
 import {
+  ISSUE_DESCRIPTION_MAX_CHARS,
   ISSUE_ENRICHMENT_MAX_LIKELY_FILES,
   ISSUE_ENRICHMENT_MAX_RELATED_ISSUES,
   ISSUE_ENRICHMENT_MAX_SUGGESTED_LABELS,
@@ -384,14 +385,51 @@ export function buildInvestigationBlock(input: InvestigationBlockInput): string 
   ].join("\n");
 }
 
+/** What separates a block from whatever is already on the description. */
+const INVESTIGATION_BLOCK_SEPARATOR = "\n\n---\n\n";
+const INVESTIGATION_TRUNCATION_NOTE = "\n\n[truncated]";
 /**
- * Append an investigation block to a description.
+ * The smallest block worth appending. Under this there is no room for a heading and a sentence,
+ * and a stub that says nothing is worse on a description than nothing at all.
+ */
+const MIN_INVESTIGATION_BLOCK_CHARS = 400;
+
+/** Cut a block to a hard budget, with the note counted *inside* it rather than added past it. */
+function clampInvestigationBlock(block: string, budget: number): string {
+  if (block.length <= budget) return block;
+  const room = budget - INVESTIGATION_TRUNCATION_NOTE.length;
+  return room <= 0
+    ? block.slice(0, Math.max(0, budget))
+    : `${block.slice(0, room)}${INVESTIGATION_TRUNCATION_NOTE}`;
+}
+
+/**
+ * Append an investigation block to a description, within the bound a description has.
  *
  * Appended, never replacing: two runs on one issue are two readings of a tree that moved between
  * them, and the older one is the record of what was true then. A horizontal rule separates the
  * block from whatever a human wrote above it.
+ *
+ * The bound is the load-bearing part. `IssuePatch.description` refuses anything over
+ * {@link ISSUE_DESCRIPTION_MAX_CHARS} at the wire, but this write reaches the service directly,
+ * so nothing else would stop the tenth investigation on one issue from producing a description no
+ * client can ever send back — the editor round-trips the whole body, so one character over the
+ * limit makes the field permanently unsavable. Whatever a human wrote is never touched: the block
+ * is cut to the room that is left, and when there is not enough room for a readable one the
+ * description is returned unchanged. Nothing is lost either way — the result lives on the run row,
+ * which is what the panel renders.
  */
-export function appendInvestigationBlock(description: string, block: string): string {
+export function appendInvestigationBlock(
+  description: string,
+  block: string,
+  maxChars: number = ISSUE_DESCRIPTION_MAX_CHARS,
+): string {
   const body = description.replace(/\s+$/, "");
-  return body.length === 0 ? block : `${body}\n\n---\n\n${block}`;
+  if (body.length === 0) return clampInvestigationBlock(block, maxChars);
+
+  const budget = maxChars - body.length - INVESTIGATION_BLOCK_SEPARATOR.length;
+  // Returned as it came in, not as `body`: an unchanged string is a no-op patch, and the update
+  // path skips it without writing a change-log row that would claim the description moved.
+  if (budget < MIN_INVESTIGATION_BLOCK_CHARS) return description;
+  return `${body}${INVESTIGATION_BLOCK_SEPARATOR}${clampInvestigationBlock(block, budget)}`;
 }

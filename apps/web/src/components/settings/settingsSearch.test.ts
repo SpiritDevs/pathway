@@ -132,6 +132,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
       "/settings/issues-statuses",
       "/settings/issues-labels",
+      "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ]);

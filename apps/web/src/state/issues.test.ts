@@ -11,6 +11,7 @@ import {
   IssueViewId,
   ProjectId,
   ProviderInstanceId,
+  SlackChannelWatchId,
   ThreadId,
   type Issue,
   type IssueComment,
@@ -29,6 +30,8 @@ import {
   type IssueView,
   type IssueViewConfig,
   type IssuesStreamEvent,
+  type SlackChannelWatch,
+  type SlackIntakeStatus,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -52,8 +55,10 @@ import {
   issueMilestonesForProject,
   issueRelationDisplays,
   issueSortOrderForDrop,
+  listTriageIssues,
   mergeIssueDetail,
   mergeIssueEnrichmentRuns,
+  slackChannelNames,
   todayIssueDate,
   upcomingIssueCycles,
   type IssueAgentState,
@@ -99,6 +104,7 @@ function issue(id: string, overrides: Partial<Omit<Issue, "id">> = {}): Issue {
     labelIds: [],
     dueDate: null,
     triage: false,
+    slackSource: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,
@@ -382,6 +388,80 @@ describe("groupIssuesForTab", () => {
 
     expect(grouping.groups).toHaveLength(0);
     expect(grouping.total).toBe(0);
+  });
+});
+
+describe("Slack intake in the store", () => {
+  function watch(id: string, channelId: string, channelName: string): SlackChannelWatch {
+    return {
+      id: SlackChannelWatchId.make(id),
+      channelId,
+      channelName,
+      projectId: null,
+      trigger: { emoji: "ticket", everyMessage: false, botMention: false },
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+  }
+
+  const CONNECTED: SlackIntakeStatus = {
+    configured: true,
+    lastPollAt: NOW,
+    lastError: null,
+    workspaceName: "Acme",
+  };
+
+  it("starts unconfigured, which is the truth on a server with no token", () => {
+    expect(EMPTY_ISSUES_STORE.slackStatus.configured).toBe(false);
+    expect(EMPTY_ISSUES_STORE.slackWatches).toHaveLength(0);
+  });
+
+  it("holds the watches by channel name, not in the order they were added", () => {
+    const store = applyIssuesStreamEvent(EMPTY_ISSUES_STORE, {
+      _tag: "SlackWatchesChanged",
+      watches: [watch("w2", "C2", "support"), watch("w1", "C1", "design")],
+    });
+
+    expect(store.slackWatches.map((value) => value.channelName)).toEqual(["design", "support"]);
+  });
+
+  it("replaces the status outright, since the server publishes the whole thing", () => {
+    const store = applyIssuesStreamEvents(EMPTY_ISSUES_STORE, [
+      { _tag: "SlackStatusChanged", status: CONNECTED },
+      { _tag: "SlackStatusChanged", status: { ...CONNECTED, lastError: "invalid_auth" } },
+    ]);
+
+    expect(store.slackStatus.lastError).toBe("invalid_auth");
+    expect(store.slackStatus.workspaceName).toBe("Acme");
+  });
+
+  it("names a channel from the watch table, which is all a source chip has to go on", () => {
+    const store = applyIssuesStreamEvent(EMPTY_ISSUES_STORE, {
+      _tag: "SlackWatchesChanged",
+      watches: [watch("w1", "C1", "design")],
+    });
+
+    expect(slackChannelNames(store).get("C1")).toBe("design");
+    expect(slackChannelNames(store).get("C-gone")).toBeUndefined();
+  });
+});
+
+describe("listTriageIssues", () => {
+  it("is newest first, and excludes rejected items", () => {
+    const store = storeOf([
+      issue("1", { triage: true, createdAt: "2026-08-10T00:00:00.000Z" }),
+      issue("2", { triage: true, createdAt: "2026-08-12T00:00:00.000Z" }),
+      issue("3", { triage: true, deletedAt: NOW }),
+      issue("4"),
+    ]);
+
+    expect(listTriageIssues(store).map((value) => value.id)).toEqual(["2", "1"]);
+  });
+
+  it("breaks a same-instant tie on the id, so the order is total", () => {
+    const store = storeOf([issue("a", { triage: true }), issue("b", { triage: true })]);
+
+    expect(listTriageIssues(store).map((value) => value.id)).toEqual(["b", "a"]);
   });
 });
 

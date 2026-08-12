@@ -1,4 +1,4 @@
-import { IssueAssignee } from "@t3tools/contracts";
+import { IssueAssignee, IssueSlackSource } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -25,9 +25,13 @@ const IssueDbRow = IssueRecord.mapFields(
   Struct.assign({
     assignee: Schema.NullOr(Schema.fromJsonString(IssueAssignee)),
     triage: Schema.BooleanFromBit,
+    slackSource: Schema.NullOr(Schema.fromJsonString(IssueSlackSource)),
   }),
 );
 
+// The Slack source is four columns rather than one blob — the poller may want to ask which issue
+// a channel and ts became — and is reassembled here so nothing above the repository sees them
+// apart. `slack_channel_id` is the presence flag: an issue that did not come from Slack has none.
 const ISSUE_COLUMNS = `
   id,
   key,
@@ -43,6 +47,16 @@ const ISSUE_COLUMNS = `
   sort_order AS "sortOrder",
   due_date AS "dueDate",
   triage,
+  CASE
+    WHEN slack_channel_id IS NULL THEN NULL
+    ELSE json_object(
+      'issueId', id,
+      'channelId', slack_channel_id,
+      'messageTs', slack_message_ts,
+      'permalink', slack_permalink,
+      'authorName', slack_author_name
+    )
+  END AS "slackSource",
   created_at AS "createdAt",
   updated_at AS "updatedAt",
   deleted_at AS "deletedAt"
@@ -71,6 +85,10 @@ const makeIssueRepository = Effect.gen(function* () {
           sort_order,
           due_date,
           triage,
+          slack_channel_id,
+          slack_message_ts,
+          slack_permalink,
+          slack_author_name,
           created_at,
           updated_at,
           deleted_at
@@ -90,6 +108,10 @@ const makeIssueRepository = Effect.gen(function* () {
           ${row.sortOrder},
           ${row.dueDate},
           ${row.triage ? 1 : 0},
+          ${row.slackSource?.channelId ?? null},
+          ${row.slackSource?.messageTs ?? null},
+          ${row.slackSource?.permalink ?? null},
+          ${row.slackSource?.authorName ?? null},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -109,6 +131,10 @@ const makeIssueRepository = Effect.gen(function* () {
           sort_order = excluded.sort_order,
           due_date = excluded.due_date,
           triage = excluded.triage,
+          slack_channel_id = excluded.slack_channel_id,
+          slack_message_ts = excluded.slack_message_ts,
+          slack_permalink = excluded.slack_permalink,
+          slack_author_name = excluded.slack_author_name,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at

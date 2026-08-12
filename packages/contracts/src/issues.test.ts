@@ -28,9 +28,16 @@ import {
   IssueEnrichmentResult,
   IssueThreadLink,
   IssuesImportCsvInput,
+  IssueSlackSource,
+  IssueTriageAcceptInput,
   IssuesSnapshot,
   IssuesStreamEvent,
+  SlackChannelWatch,
+  SlackIntakeStatus,
+  SlackIntakeTrigger,
+  SlackSetTokenInput,
   issueCycleStatusOn,
+  isSlackIntakeTriggerActive,
   ISSUES_IMPORT_CSV_MAX_CHARS,
   ISSUE_BULK_UPDATE_MAX_ISSUES,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
@@ -41,6 +48,7 @@ import {
   ISSUE_ENRICHMENT_MAX_LIKELY_FILES,
   ISSUE_ENRICHMENT_TRANSCRIPT_MAX_CHARS,
   ISSUE_VIEW_FILTER_MAX_VALUES,
+  SLACK_BOT_TOKEN_MAX_CHARS,
 } from "./issues.ts";
 
 const decodeIssue = Schema.decodeUnknownSync(Issue);
@@ -115,6 +123,7 @@ const ISSUE_JSON = {
   labelIds: ["label-backend"],
   dueDate: "2026-08-20",
   triage: false,
+  slackSource: null,
   createdAt: "2026-08-12T00:00:00Z",
   updatedAt: "2026-08-12T00:00:00Z",
   deletedAt: null,
@@ -138,6 +147,31 @@ const LABEL_JSON = {
 };
 
 const CONFIG_JSON = { keyPrefix: "PAT", nextNumber: 222 };
+
+const SLACK_SOURCE_JSON = {
+  issueId: "issue-1",
+  channelId: "C0123ABCD",
+  messageTs: "1723459200.001900",
+  permalink: "https://pathway.slack.com/archives/C0123ABCD/p1723459200001900",
+  authorName: "Corey",
+};
+
+const SLACK_WATCH_JSON = {
+  id: "watch-1",
+  channelId: "C0123ABCD",
+  channelName: "triage",
+  projectId: "project-1",
+  trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+  createdAt: "2026-08-12T00:00:00Z",
+  updatedAt: "2026-08-12T00:00:00Z",
+};
+
+const SLACK_STATUS_JSON = {
+  configured: true,
+  lastPollAt: "2026-08-12T00:00:30Z",
+  lastError: null,
+  workspaceName: "Pathway HQ",
+};
 
 const MILESTONE_JSON = {
   id: "milestone-1",
@@ -393,6 +427,8 @@ describe("IssuesSnapshot", () => {
       milestones: [MILESTONE_JSON],
       cycles: [CYCLE_JSON],
       views: [VIEW_JSON],
+      slackWatches: [SLACK_WATCH_JSON],
+      slackStatus: SLACK_STATUS_JSON,
       config: CONFIG_JSON,
     });
 
@@ -804,5 +840,124 @@ describe("IssueThreadLink", () => {
     // Assignment records intent and a link records the thread that followed; nothing auto-spawns,
     // so there is no origin standing for one.
     expect(() => decodeThreadLink({ ...THREAD_LINK_JSON, origin: "auto" })).toThrow();
+  });
+});
+
+describe("Slack intake", () => {
+  const decodeWatch = Schema.decodeUnknownSync(SlackChannelWatch);
+  const decodeTrigger = Schema.decodeUnknownSync(SlackIntakeTrigger);
+  const decodeSlackStatus = Schema.decodeUnknownSync(SlackIntakeStatus);
+  const decodeSlackSource = Schema.decodeUnknownSync(IssueSlackSource);
+  const decodeTriageAccept = Schema.decodeUnknownSync(IssueTriageAcceptInput);
+  const decodeSetToken = Schema.decodeUnknownSync(SlackSetTokenInput);
+
+  it("round-trips a watch through the JSON codec the RPC serializes with", () => {
+    const codec = Schema.toCodecJson(SlackChannelWatch);
+    const watch = decodeWatch(SLACK_WATCH_JSON);
+
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(watch))).toStrictEqual(
+      watch,
+    );
+  });
+
+  // A channel can file on a reaction *and* on a mention, and all three off is a paused watch
+  // rather than an invalid one: pausing and forgetting the configuration are different things.
+  it("takes any combination of triggers, including none at all", () => {
+    expect(isSlackIntakeTriggerActive(decodeTrigger(SLACK_WATCH_JSON.trigger))).toBe(true);
+    expect(
+      isSlackIntakeTriggerActive(
+        decodeTrigger({ emoji: null, everyMessage: true, botMention: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isSlackIntakeTriggerActive(
+        decodeTrigger({ emoji: null, everyMessage: false, botMention: false }),
+      ),
+    ).toBe(false);
+  });
+
+  // The poller compares this against `reaction.name` verbatim, so a decorated value never matches.
+  it("spells an emoji the way Slack does, with no colons", () => {
+    expect(decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "+1" }).emoji).toBe("+1");
+    expect(decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "white_check_mark" }).emoji).toBe(
+      "white_check_mark",
+    );
+    expect(() => decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: ":ticket:" })).toThrow();
+    expect(() => decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "Ticket" })).toThrow();
+  });
+
+  it("carries no token on the status, only whether there is one", () => {
+    const status = decodeSlackStatus(SLACK_STATUS_JSON);
+
+    expect(status.configured).toBe(true);
+    expect(Object.keys(SlackIntakeStatus.fields)).not.toContain("token");
+  });
+
+  // An empty string clears the token, so this is the one input that accepts one.
+  it("lets the token input be empty, because clearing is the same write as setting", () => {
+    expect(decodeSetToken({ token: "" }).token).toBe("");
+    expect(decodeSetToken({ token: "xoxb-1-2-abc" }).token).toBe("xoxb-1-2-abc");
+    expect(() => decodeSetToken({ token: "x".repeat(SLACK_BOT_TOKEN_MAX_CHARS + 1) })).toThrow();
+  });
+
+  it("hangs the source off the issue row rather than a side table", () => {
+    const issue = decodeIssue({ ...ISSUE_JSON, slackSource: SLACK_SOURCE_JSON });
+
+    expect(issue.slackSource?.messageTs).toBe("1723459200.001900");
+    // A permalink is a nicety, not a requirement to file.
+    expect(
+      decodeSlackSource({ ...SLACK_SOURCE_JSON, permalink: null, authorName: null }).permalink,
+    ).toBeNull();
+  });
+
+  // Status, project, and priority in one write: applying them separately would put a half-triaged
+  // issue on the board, which is the state triage exists to keep out of it.
+  it("accepts a triage item in one action, with the project optional and nullable", () => {
+    const accepted = decodeTriageAccept({
+      issueId: "issue-1",
+      statusId: "status-todo",
+      projectId: null,
+      priority: "high",
+      runEnrichment: true,
+    });
+
+    expect(accepted.projectId).toBeNull();
+    // Absent keeps whatever the channel auto-tagged, which is not the same as clearing it.
+    expect(
+      decodeTriageAccept({ issueId: "issue-1", statusId: "status-todo", runEnrichment: false })
+        .projectId,
+    ).toBeUndefined();
+    // A triage item leaves triage by landing in the workflow, and the workflow is statuses.
+    expect(() => decodeTriageAccept({ issueId: "issue-1", runEnrichment: false })).toThrow();
+  });
+
+  it("carries intake on the stream and in the snapshot, not as a separate read", () => {
+    expect(
+      decodeStreamEvent({ _tag: "SlackWatchesChanged", watches: [SLACK_WATCH_JSON] })._tag,
+    ).toBe("SlackWatchesChanged");
+    expect(decodeStreamEvent({ _tag: "SlackStatusChanged", status: SLACK_STATUS_JSON })._tag).toBe(
+      "SlackStatusChanged",
+    );
+
+    const fields = Object.keys(IssuesSnapshot.fields);
+    expect(fields).toContain("slackWatches");
+    expect(fields).toContain("slackStatus");
+  });
+
+  // A soft delete underneath, but the feed has to tell "this never was an issue" apart from
+  // "somebody deleted this issue".
+  it("logs a rejection as its own event kind", () => {
+    const rejected = decodeEvent({
+      id: "event-3",
+      issueId: "issue-1",
+      actor: { kind: "user" },
+      kind: "triage_rejected",
+      field: null,
+      before: null,
+      after: null,
+      createdAt: "2026-08-12T00:00:02Z",
+    });
+
+    expect(rejected.kind).toBe("triage_rejected");
   });
 });

@@ -10,8 +10,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
@@ -20,12 +23,14 @@ import {
   ProviderDriverKind,
   TextGenerationError,
   type IssueActor,
+  type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
   type IssueId,
 } from "@t3tools/contracts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { IssueCommentRepositoryLive } from "../persistence/Layers/IssueComments.ts";
 import { IssueCycleRepositoryLive } from "../persistence/Layers/IssueCycles.ts";
@@ -41,11 +46,14 @@ import { IssueTodoRepositoryLive } from "../persistence/Layers/IssueTodos.ts";
 import { IssueTrackerConfigRepositoryLive } from "../persistence/Layers/IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "../persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "../persistence/Layers/ProjectionProjects.ts";
+import { SlackChannelWatchRepositoryLive } from "../persistence/Layers/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as IssueEnrichmentEngineLive from "./IssueEnrichmentEngineLive.ts";
+import * as SlackIntakeEngine from "./slack/SlackIntakeEngine.ts";
 import { IssueTrackerService, layer as issueTrackerLayer } from "./IssueTrackerService.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
@@ -83,9 +91,12 @@ const DependenciesLive = Layer.mergeAll(
   IssueViewRepositoryLive,
   IssueEnrichmentRunRepositoryLive,
   IssueThreadLinkRepositoryLive,
+  SlackChannelWatchRepositoryLive,
+  SlackIntakeLedgerRepositoryLive,
   ProjectionProjectRepositoryLive,
 ).pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
+  Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-enrichment-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -97,9 +108,7 @@ const DependenciesLive = Layer.mergeAll(
  */
 const buildTracker = (investigate: Investigate) =>
   Effect.provide(
-    Effect.gen(function* () {
-      return yield* IssueTrackerService;
-    }),
+    IssueTrackerService,
     issueTrackerLayer.pipe(
       Layer.provide(
         IssueEnrichmentEngineLive.layer.pipe(
@@ -109,6 +118,8 @@ const buildTracker = (investigate: Investigate) =>
           Layer.provide(serverSettingsLayerTest()),
         ),
       ),
+      // Intake is not what these tests are about; the stub is enough to satisfy the tracker.
+      Layer.provide(SlackIntakeEngine.layerStub),
     ),
   );
 
@@ -217,6 +228,53 @@ describe("IssueEnrichmentEngineLive", () => {
         kind: "agent",
         provider: ProviderDriverKind.make("codex"),
       });
+    }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
+  );
+
+  it.effect("coalesces a chatty provider into one transcript publish per window", () =>
+    Effect.gen(function* () {
+      const CHUNKS = 60;
+      const tracker = yield* buildTracker(({ onOutput }) =>
+        Effect.gen(function* () {
+          // Emitted back to back, the way a model streams tokens. Nothing here sleeps, so the
+          // whole burst lands inside one 250ms window.
+          for (let index = 0; index < CHUNKS; index += 1) {
+            yield* onOutput?.(`token-${index} `) ?? Effect.void;
+          }
+          return { text: encodeAnswer(ANSWER) };
+        }),
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create({ title: "Chatty", projectId: PROJECT }, ACTOR);
+
+      const seen = yield* Ref.make<Array<IssueEnrichmentRun>>([]);
+      const subscription = yield* Effect.forkChild(
+        tracker.stream.pipe(
+          Stream.runForEach((event) =>
+            event._tag === "EnrichmentRunChanged"
+              ? Ref.update(seen, (current) => [...current, event.run])
+              : Effect.void,
+          ),
+        ),
+      );
+
+      const { run } = yield* tracker.startEnrichment({ issueId: issue.id });
+      const finished = yield* awaitFinished(tracker, issue.id, run.id);
+      assert.strictEqual(finished.state, "done");
+      yield* Fiber.interrupt(subscription);
+
+      const published = (yield* Ref.get(seen)).filter((candidate) => candidate.id === run.id);
+      const withTranscript = published.filter((candidate) => candidate.transcript.length > 0);
+
+      // The point of the pump: `appendTranscript` republishes the whole row, so an unthrottled
+      // `onOutput` would put all 60 of these on the socket. A window's worth is one publish.
+      assert.isAtLeast(withTranscript.length, 1);
+      assert.isBelow(withTranscript.length, 5);
+      // Coalesced, not dropped: every token still reached the record, in order.
+      assert.strictEqual(
+        finished.transcript,
+        Array.from({ length: CHUNKS }, (_unused, index) => `token-${index} `).join(""),
+      );
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 

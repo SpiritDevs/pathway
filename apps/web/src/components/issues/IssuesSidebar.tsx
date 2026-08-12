@@ -141,10 +141,21 @@ export function IssuesSidebar() {
 
   const filter = issuesSearchFilter(search);
 
+  /**
+   * `triage` is cleared unless the patch names it: every row here is a lens on the *list*, and
+   * landing on one while the triage queue is up should leave the queue rather than filter it —
+   * triage items match no status, project, or cycle chip by construction.
+   */
   const navigateWith = (patch: IssuesSearchPatch) => {
     if (isMobile) setOpenMobile(false);
-    void navigate({ to: "/issues", replace: true, search: { ...search, ...patch } });
+    void navigate({
+      to: "/issues",
+      replace: true,
+      search: { ...search, triage: undefined, ...patch },
+    });
   };
+
+  const onTriage = onIssues && search.triage === true;
 
   /**
    * A row sets its own field to the one value it names and leaves every other chip alone. Stage 2
@@ -161,9 +172,8 @@ export function IssuesSidebar() {
 
   // Which row lights up is a question about the params, not about what was last pressed: edit one
   // chip on an applied view and it stops being that view, which is what the sidebar should say.
-  const activeView = onIssues
-    ? findIssueViewForConfig(views, issuesSearchViewConfig(search))
-    : null;
+  const activeView =
+    onIssues && !onTriage ? findIssueViewForConfig(views, issuesSearchViewConfig(search)) : null;
 
   const writeView = (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
     void (async () => {
@@ -203,7 +213,10 @@ export function IssuesSidebar() {
         <SidebarGroup>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton isActive={onIssues && noFilter} onClick={clearFilters}>
+              <SidebarMenuButton
+                isActive={onIssues && !onTriage && noFilter}
+                onClick={clearFilters}
+              >
                 <InboxIcon />
                 <span>All issues</span>
               </SidebarMenuButton>
@@ -211,7 +224,9 @@ export function IssuesSidebar() {
             <SidebarMenuItem>
               <SidebarMenuButton
                 isActive={
-                  onIssues && issuesFilterHasValue(filter, "assignee", ISSUE_ASSIGNEE_USER_VALUE)
+                  onIssues &&
+                  !onTriage &&
+                  issuesFilterHasValue(filter, "assignee", ISSUE_ASSIGNEE_USER_VALUE)
                 }
                 onClick={() => applyFilter("assignee", ISSUE_ASSIGNEE_USER_VALUE)}
               >
@@ -219,17 +234,24 @@ export function IssuesSidebar() {
                 <span>My issues</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {/* Triage is state outside the workflow, so it has no tab and no board to open: the
-                queue itself arrives with intake in stage 5. Until then this is a count. */}
+            {/* Triage is state outside the workflow, so it is a mode rather than a tab: it takes
+                none of the filters the rows above it set, which is why it clears them. */}
             <SidebarMenuItem>
-              <div
-                className="flex h-8 items-center gap-2 rounded-md px-2 text-sm text-sidebar-muted-foreground"
-                title="Triage intake arrives with Slack"
+              <SidebarMenuButton
+                isActive={onTriage}
+                onClick={() =>
+                  navigateWith({
+                    ...issuesFilterSearchPatch(NO_ISSUES_LIST_FILTER),
+                    triage: true,
+                    tab: undefined,
+                    view: undefined,
+                  })
+                }
               >
-                <InboxIcon className="size-4 shrink-0" />
+                <InboxIcon />
                 <span>Triage</span>
                 {triageCount > 0 ? <SidebarMenuBadge>{triageCount}</SidebarMenuBadge> : null}
-              </div>
+              </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>

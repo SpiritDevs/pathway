@@ -283,6 +283,28 @@ export function IssueAssigneeGlyph({
 }
 
 /**
+ * Slack's pinwheel, monochrome. Drawn rather than imported for the same reason the rest of this
+ * file is: it inherits `currentColor`, so one glyph reads correctly in a muted triage chip, in the
+ * properties rail, and on both themes, which a brand-coloured asset would not.
+ */
+export function IssueSlackGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden
+      className={cn("size-3.5 shrink-0", className)}
+      fill="currentColor"
+      role="img"
+      viewBox="0 0 16 16"
+    >
+      <rect height="6.6" rx="1.3" width="2.6" x="8.1" y="1.3" />
+      <rect height="2.6" rx="1.3" width="6.6" x="8.1" y="8.1" />
+      <rect height="6.6" rx="1.3" width="2.6" x="5.3" y="8.1" />
+      <rect height="2.6" rx="1.3" width="6.6" x="1.3" y="5.3" />
+    </svg>
+  );
+}
+
+/**
  * A chip that says an investigation is under way. Used in the sheet header and, in its smallest
  * form, next to an issue key in the list.
  */

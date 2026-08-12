@@ -56,6 +56,9 @@ import {
   type IssueView,
   type IssuesStreamEvent,
   type ProjectId,
+  type SlackChannelId,
+  type SlackChannelWatch,
+  type SlackIntakeStatus,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -91,6 +94,14 @@ export interface IssuesStore {
   readonly views: ReadonlyArray<IssueView>;
   /** Null until the stream's opening `ConfigChanged` lands. */
   readonly config: IssueTrackerConfig | null;
+  /**
+   * The watched Slack channels, ascending by channel name. Held in the list store rather than in
+   * the settings page that edits them because a triage row needs the channel *name* and the
+   * issue's `slackSource` only carries the id.
+   */
+  readonly slackWatches: ReadonlyArray<SlackChannelWatch>;
+  /** Intake's health, as the server has known it since it woke up. */
+  readonly slackStatus: SlackIntakeStatus;
 }
 
 const EMPTY_ISSUES: ReadonlyMap<IssueId, Issue> = new Map();
@@ -99,6 +110,18 @@ const EMPTY_LABELS: ReadonlyArray<IssueLabel> = Object.freeze([]);
 const EMPTY_MILESTONES: ReadonlyArray<IssueMilestone> = Object.freeze([]);
 const EMPTY_CYCLES: ReadonlyArray<IssueCycle> = Object.freeze([]);
 const EMPTY_VIEWS: ReadonlyArray<IssueView> = Object.freeze([]);
+const EMPTY_SLACK_WATCHES: ReadonlyArray<SlackChannelWatch> = Object.freeze([]);
+
+/**
+ * What intake looks like before the stream has said anything: not configured and never polled,
+ * which is also the truth on a server with no token on disk.
+ */
+export const UNCONFIGURED_SLACK_INTAKE_STATUS: SlackIntakeStatus = Object.freeze({
+  configured: false,
+  lastPollAt: null,
+  lastError: null,
+  workspaceName: null,
+});
 
 export const EMPTY_ISSUES_STORE: IssuesStore = {
   issuesById: EMPTY_ISSUES,
@@ -108,6 +131,8 @@ export const EMPTY_ISSUES_STORE: IssuesStore = {
   cycles: EMPTY_CYCLES,
   views: EMPTY_VIEWS,
   config: null,
+  slackWatches: EMPTY_SLACK_WATCHES,
+  slackStatus: UNCONFIGURED_SLACK_INTAKE_STATUS,
 };
 
 function sortStatuses(statuses: ReadonlyArray<IssueStatus>): ReadonlyArray<IssueStatus> {
@@ -144,6 +169,19 @@ function sortCycles(cycles: ReadonlyArray<IssueCycle>): ReadonlyArray<IssueCycle
 function sortViews(views: ReadonlyArray<IssueView>): ReadonlyArray<IssueView> {
   return [...views].sort(
     (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
+}
+
+/**
+ * By channel name, `id` breaking ties. The server answers in insertion order, which is the order
+ * channels happened to be watched in — a settings table and a name lookup both want the alphabet.
+ */
+function sortSlackWatches(
+  watches: ReadonlyArray<SlackChannelWatch>,
+): ReadonlyArray<SlackChannelWatch> {
+  return [...watches].sort(
+    (left, right) =>
+      left.channelName.localeCompare(right.channelName) || left.id.localeCompare(right.id),
   );
 }
 
@@ -196,6 +234,13 @@ export function applyIssuesStreamEvent(
       return { ...current, views: sortViews(event.views) };
     case "ConfigChanged":
       return { ...current, config: event.config };
+    // Intake is store state rather than settings-page state: the settings table is one reader, and
+    // the triage row is the other — it resolves the channel *name* an issue's `slackSource` only
+    // holds the id of.
+    case "SlackWatchesChanged":
+      return { ...current, slackWatches: sortSlackWatches(event.watches) };
+    case "SlackStatusChanged":
+      return { ...current, slackStatus: event.status };
     // The per-issue tails are not store state: they are read on demand and patched into whichever
     // detail is loaded, so the store must not re-render a list for a comment nobody is looking at.
     case "IssueTodosChanged":
@@ -306,6 +351,8 @@ export function applyIssueDetailStreamEvent(
     // part of this overlay: the run panel and the thread list hold their own.
     case "EnrichmentRunChanged":
     case "IssueThreadLinksChanged":
+    case "SlackWatchesChanged":
+    case "SlackStatusChanged":
       return current;
   }
 }
@@ -428,6 +475,8 @@ export function applyIssueAgentStreamEvent(
     case "IssueRelationsChanged":
     case "IssueCommentUpserted":
     case "IssueCommentDeleted":
+    case "SlackWatchesChanged":
+    case "SlackStatusChanged":
       return current;
   }
 }
@@ -630,6 +679,14 @@ export const issueTrackerConfigAtom = Atom.make(
   (get): IssueTrackerConfig | null => get(issuesStoreAtom).config,
 ).pipe(Atom.withLabel("web-issue-tracker-config"));
 
+export const slackWatchesAtom = Atom.make(
+  (get): ReadonlyArray<SlackChannelWatch> => get(issuesStoreAtom).slackWatches,
+).pipe(Atom.withLabel("web-issue-slack-watches"));
+
+export const slackIntakeStatusAtom = Atom.make(
+  (get): SlackIntakeStatus => get(issuesStoreAtom).slackStatus,
+).pipe(Atom.withLabel("web-issue-slack-status"));
+
 const issueDetailOverlaysAtom = Atom.make(
   (get): IssueDetailOverlays => get(issuesStreamViewAtom).state.details,
 ).pipe(Atom.withLabel("web-issue-detail-overlays"));
@@ -763,6 +820,29 @@ export function countTriageIssues(store: IssuesStore): number {
   return count;
 }
 
+/**
+ * The triage queue, newest first.
+ *
+ * Not `sortOrder`: nothing drags a triage item, and intake appends, so the fractional key is the
+ * arrival order read backwards. What a queue wants is the newest message at the top, and
+ * `createdAt` says that without depending on a key nobody wrote by hand.
+ */
+export function listTriageIssues(store: IssuesStore): ReadonlyArray<Issue> {
+  const triage: Array<Issue> = [];
+  for (const issue of store.issuesById.values()) {
+    if (issue.triage && issue.deletedAt === null) triage.push(issue);
+  }
+  return triage.sort(
+    (left, right) =>
+      right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+  );
+}
+
+/** Channel id → the name it was watched under, for a triage row's source chip. */
+export function slackChannelNames(store: IssuesStore): ReadonlyMap<SlackChannelId, string> {
+  return new Map(store.slackWatches.map((watch) => [watch.channelId, watch.channelName]));
+}
+
 /** Accepts either the human key (`PAT-221`, what the URL carries) or the row id. */
 export function findIssue(store: IssuesStore, issueKeyOrId: string): Issue | null {
   const byId = store.issuesById.get(issueKeyOrId as IssueId);
@@ -782,6 +862,14 @@ const issuesGroupedAtomFamily = Atom.family((tab: IssuesTab) =>
 export const triageCountAtom = Atom.make((get): number =>
   countTriageIssues(get(issuesStoreAtom)),
 ).pipe(Atom.withLabel("web-issues-triage-count"));
+
+export const triageIssuesAtom = Atom.make(
+  (get): ReadonlyArray<Issue> => listTriageIssues(get(issuesStoreAtom)),
+).pipe(Atom.withLabel("web-issues-triage"));
+
+export const slackChannelNamesAtom = Atom.make(
+  (get): ReadonlyMap<SlackChannelId, string> => slackChannelNames(get(issuesStoreAtom)),
+).pipe(Atom.withLabel("web-issues-slack-channel-names"));
 
 const issueAtomFamily = Atom.family((issueKeyOrId: string) =>
   Atom.make((get): Issue | null => findIssue(get(issuesStoreAtom), issueKeyOrId)).pipe(
@@ -1088,6 +1176,24 @@ export function useIssuesGrouped(tab: IssuesTab): IssuesGrouping {
 
 export function useTriageCount(): number {
   return useAtomValue(triageCountAtom);
+}
+
+/** The triage queue itself, newest first. */
+export function useTriageIssues(): ReadonlyArray<Issue> {
+  return useAtomValue(triageIssuesAtom);
+}
+
+export function useSlackWatches(): ReadonlyArray<SlackChannelWatch> {
+  return useAtomValue(slackWatchesAtom);
+}
+
+export function useSlackStatus(): SlackIntakeStatus {
+  return useAtomValue(slackIntakeStatusAtom);
+}
+
+/** For a source chip: the channel an issue came in from, named rather than identified. */
+export function useSlackChannelNames(): ReadonlyMap<SlackChannelId, string> {
+  return useAtomValue(slackChannelNamesAtom);
 }
 
 export function useIssue(issueKeyOrId: string | null): Issue | null {
@@ -1622,6 +1728,54 @@ export const issueCommands = {
     tag: ISSUES_WS_METHODS.unlinkThread,
     ...loggedWriteCommandOptions,
   }),
+  /**
+   * Intake. None of the four writes touches an issue, so none appends to a change log: they
+   * configure the poller, and the poller's own writes are what land in a feed.
+   */
+  slackSetToken: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:slack-set-token",
+    tag: ISSUES_WS_METHODS.slackSetToken,
+    ...writeCommandOptions,
+  }),
+  /**
+   * A read, but an imperative one: the picker asks Slack when it opens rather than on every
+   * render, and a second press while one is in flight should join it rather than start another.
+   */
+  slackListChannels: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:slack-list-channels",
+    tag: ISSUES_WS_METHODS.slackListChannels,
+    scheduler: issueCommandScheduler,
+    concurrency: {
+      mode: "singleFlight",
+      key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
+    },
+  }),
+  slackWatchCreate: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:slack-watch-create",
+    tag: ISSUES_WS_METHODS.slackWatchCreate,
+    ...writeCommandOptions,
+  }),
+  slackWatchUpdate: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:slack-watch-update",
+    tag: ISSUES_WS_METHODS.slackWatchUpdate,
+    ...writeCommandOptions,
+  }),
+  slackWatchDelete: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:slack-watch-delete",
+    tag: ISSUES_WS_METHODS.slackWatchDelete,
+    ...writeCommandOptions,
+  }),
+  /** Both write `issue_events` rows — status, project, priority, triage — so both refresh a feed. */
+  triageAccept: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:triage-accept",
+    tag: ISSUES_WS_METHODS.triageAccept,
+    ...loggedWriteCommandOptions,
+  }),
+  triageReject: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:triage-reject",
+    tag: ISSUES_WS_METHODS.triageReject,
+    ...loggedWriteCommandOptions,
+  }),
 } as const;
 
 type IssueCommandInput<C> =
@@ -1716,6 +1870,14 @@ export const useCancelIssueEnrichment = () =>
   usePrimaryIssueCommand(issueCommands.cancelEnrichment);
 export const useLinkIssueThread = () => usePrimaryIssueCommand(issueCommands.linkThread);
 export const useUnlinkIssueThread = () => usePrimaryIssueCommand(issueCommands.unlinkThread);
+/** An empty token disconnects; the server tests the connection before it writes either way. */
+export const useSlackSetToken = () => usePrimaryIssueCommand(issueCommands.slackSetToken);
+export const useSlackListChannels = () => usePrimaryIssueCommand(issueCommands.slackListChannels);
+export const useCreateSlackWatch = () => usePrimaryIssueCommand(issueCommands.slackWatchCreate);
+export const useUpdateSlackWatch = () => usePrimaryIssueCommand(issueCommands.slackWatchUpdate);
+export const useDeleteSlackWatch = () => usePrimaryIssueCommand(issueCommands.slackWatchDelete);
+export const useTriageAccept = () => usePrimaryIssueCommand(issueCommands.triageAccept);
+export const useTriageReject = () => usePrimaryIssueCommand(issueCommands.triageReject);
 
 // ── Drag ordering ──────────────────────────────────────────────────────
 

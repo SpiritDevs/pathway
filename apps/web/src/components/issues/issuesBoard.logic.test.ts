@@ -66,6 +66,7 @@ function issue(id: string, overrides: Partial<Omit<Issue, "id">> = {}): Issue {
     labelIds: [],
     dueDate: null,
     triage: false,
+    slackSource: null,
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,

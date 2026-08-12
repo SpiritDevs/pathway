@@ -121,6 +121,8 @@ import {
   IssueThreadUnlinkInput,
   IssueTrackerConfigResult,
   IssueTrackerError,
+  IssueTriageAcceptInput,
+  IssueTriageAcceptResult,
   IssueUpdateInput,
   IssueViewCreateInput,
   IssueViewDeleteInput,
@@ -134,6 +136,14 @@ import {
   IssuesResult,
   IssuesSnapshot,
   IssuesStreamEvent,
+  SlackChannelsResult,
+  SlackIntakeStatusResult,
+  SlackSetTokenInput,
+  SlackWatchCreateInput,
+  SlackWatchDeleteInput,
+  SlackWatchResult,
+  SlackWatchUpdateInput,
+  SlackWatchesResult,
 } from "./issues.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ServerGetProviderUsageInput, ServerProviderUsageSnapshot } from "./providerUsage.ts";
@@ -1308,6 +1318,54 @@ export const WsIssuesGetThreadLinksRpc = Rpc.make(ISSUES_WS_METHODS.getThreadLin
   error: IssuesRpcError,
 });
 
+export const WsIssuesSlackSetTokenRpc = Rpc.make(ISSUES_WS_METHODS.slackSetToken, {
+  payload: SlackSetTokenInput,
+  success: SlackIntakeStatusResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSlackGetStatusRpc = Rpc.make(ISSUES_WS_METHODS.slackGetStatus, {
+  payload: Schema.Struct({}),
+  success: SlackIntakeStatusResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSlackListChannelsRpc = Rpc.make(ISSUES_WS_METHODS.slackListChannels, {
+  payload: Schema.Struct({}),
+  success: SlackChannelsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSlackWatchCreateRpc = Rpc.make(ISSUES_WS_METHODS.slackWatchCreate, {
+  payload: SlackWatchCreateInput,
+  success: SlackWatchResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSlackWatchUpdateRpc = Rpc.make(ISSUES_WS_METHODS.slackWatchUpdate, {
+  payload: SlackWatchUpdateInput,
+  success: SlackWatchResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSlackWatchDeleteRpc = Rpc.make(ISSUES_WS_METHODS.slackWatchDelete, {
+  payload: SlackWatchDeleteInput,
+  success: SlackWatchesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTriageAcceptRpc = Rpc.make(ISSUES_WS_METHODS.triageAccept, {
+  payload: IssueTriageAcceptInput,
+  success: IssueTriageAcceptResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTriageRejectRpc = Rpc.make(ISSUES_WS_METHODS.triageReject, {
+  payload: IssueRefInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
 export const WsIssuesStreamRpc = Rpc.make(ISSUES_WS_METHODS.stream, {
   payload: Schema.Struct({}),
   success: IssuesStreamEvent,
@@ -1362,6 +1420,14 @@ export const IssuesRpcs = RpcGroup.make(
   WsIssuesLinkThreadRpc,
   WsIssuesUnlinkThreadRpc,
   WsIssuesGetThreadLinksRpc,
+  WsIssuesSlackSetTokenRpc,
+  WsIssuesSlackGetStatusRpc,
+  WsIssuesSlackListChannelsRpc,
+  WsIssuesSlackWatchCreateRpc,
+  WsIssuesSlackWatchUpdateRpc,
+  WsIssuesSlackWatchDeleteRpc,
+  WsIssuesTriageAcceptRpc,
+  WsIssuesTriageRejectRpc,
   WsIssuesStreamRpc,
 );
 

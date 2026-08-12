@@ -7,6 +7,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  IssueTrackerError,
   ThreadId,
   type IssueActor,
   type IssueDate,
@@ -21,9 +22,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import { IssueCommentRepositoryLive } from "../persistence/Layers/IssueComments.ts";
 import { IssueCycleRepositoryLive } from "../persistence/Layers/IssueCycles.ts";
@@ -39,10 +42,13 @@ import { IssueTodoRepositoryLive } from "../persistence/Layers/IssueTodos.ts";
 import { IssueTrackerConfigRepositoryLive } from "../persistence/Layers/IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "../persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "../persistence/Layers/ProjectionProjects.ts";
+import { SlackChannelWatchRepositoryLive } from "../persistence/Layers/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { IssueEnrichmentRunRepository } from "../persistence/Services/IssueEnrichmentRuns.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentEngineShape } from "./IssueEnrichmentEngine.ts";
+import { SlackIntakeEngine, type SlackIntakeEngineShape } from "./slack/SlackIntakeEngine.ts";
 import { IssueTrackerService, layer } from "./IssueTrackerService.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
@@ -87,6 +93,20 @@ const makeFakeEngine = (
 });
 
 /**
+ * Slack, faked. Every real call intake makes is HTTPS, and nothing in these tests may reach the
+ * network: the default answers plausibly, and a test that cares passes its own.
+ */
+const makeFakeSlackEngine = (
+  overrides: Partial<SlackIntakeEngineShape> = {},
+): SlackIntakeEngineShape => ({
+  testConnection: () => Effect.succeed({ workspaceName: "Pathway HQ" }),
+  listChannels: Effect.succeed([]),
+  notifyWatchesChanged: Effect.void,
+  postIssueUpdate: () => Effect.succeed({ messageTs: "1723459200.000100" }),
+  ...overrides,
+});
+
+/**
  * Everything the tracker reads, without the tracker itself. Merged out rather than provided, so a
  * test can seed a project or a leftover run and then build the tracker over the same database —
  * which is how the startup sweep is exercised at all.
@@ -106,9 +126,14 @@ const makeDependencyLayer = () =>
     IssueViewRepositoryLive,
     IssueEnrichmentRunRepositoryLive,
     IssueThreadLinkRepositoryLive,
+    SlackChannelWatchRepositoryLive,
+    SlackIntakeLedgerRepositoryLive,
     ProjectionProjectRepositoryLive,
   ).pipe(
     Layer.provideMerge(SqlitePersistenceMemory),
+    // The bot token is written through the same store every other secret uses, into the
+    // throwaway state directory `layerTest` makes below.
+    Layer.provideMerge(ServerSecretStore.layer),
     // A throwaway state directory, for the one write that puts bytes on disk: a comment
     // attachment. `layerTest` creates the attachments directory it names, and both this and the
     // platform services are merged out so a test can read back what the service wrote.
@@ -118,9 +143,13 @@ const makeDependencyLayer = () =>
   );
 
 /** A fresh in-memory tracker per test: the key counter and the seeded statuses are shared state. */
-const makeTestLayer = (engine: IssueEnrichmentEngineShape = makeFakeEngine()) =>
+const makeTestLayer = (
+  engine: IssueEnrichmentEngineShape = makeFakeEngine(),
+  slack: SlackIntakeEngineShape = makeFakeSlackEngine(),
+) =>
   layer.pipe(
     Layer.provide(Layer.succeed(IssueEnrichmentEngine, engine)),
+    Layer.provide(Layer.succeed(SlackIntakeEngine, slack)),
     Layer.provideMerge(makeDependencyLayer()),
   );
 
@@ -128,12 +157,16 @@ const makeTestLayer = (engine: IssueEnrichmentEngineShape = makeFakeEngine()) =>
  * Build a tracker over the database already in context. Two of these in one test is a restart:
  * the second build sweeps whatever the first left in flight.
  */
-const buildTracker = (engine: IssueEnrichmentEngineShape = makeFakeEngine()) =>
+const buildTracker = (
+  engine: IssueEnrichmentEngineShape = makeFakeEngine(),
+  slack: SlackIntakeEngineShape = makeFakeSlackEngine(),
+) =>
   Effect.provide(
-    Effect.gen(function* () {
-      return yield* IssueTrackerService;
-    }),
-    layer.pipe(Layer.provide(Layer.succeed(IssueEnrichmentEngine, engine))),
+    IssueTrackerService,
+    layer.pipe(
+      Layer.provide(Layer.succeed(IssueEnrichmentEngine, engine)),
+      Layer.provide(Layer.succeed(SlackIntakeEngine, slack)),
+    ),
   );
 
 /** A run as a killed server would have left it: queued, with nothing to show for itself. */
@@ -416,7 +449,7 @@ describe("IssueTrackerService", () => {
       // A rename to the prefix already in place publishes nothing, so the only event after the
       // opening replay is the one write that moved something.
       const events = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 7).pipe(
+        Stream.take(tracker.stream, 9).pipe(
           Stream.merge(
             Stream.fromEffect(
               tracker
@@ -435,6 +468,8 @@ describe("IssueTrackerService", () => {
           "MilestonesChanged",
           "CyclesChanged",
           "ViewsChanged",
+          "SlackWatchesChanged",
+          "SlackStatusChanged",
           "ConfigChanged",
           "ConfigChanged",
         ],
@@ -532,7 +567,7 @@ describe("IssueTrackerService", () => {
       const tracker = yield* IssueTrackerService;
       yield* tracker.create({ title: "Already here" }, ACTOR);
 
-      const opening = yield* Stream.runCollect(Stream.take(tracker.stream, 7));
+      const opening = yield* Stream.runCollect(Stream.take(tracker.stream, 9));
       assert.deepStrictEqual(
         opening.map((event) => event._tag),
         [
@@ -541,6 +576,8 @@ describe("IssueTrackerService", () => {
           "MilestonesChanged",
           "CyclesChanged",
           "ViewsChanged",
+          "SlackWatchesChanged",
+          "SlackStatusChanged",
           "ConfigChanged",
           "IssueUpserted",
         ],
@@ -548,7 +585,7 @@ describe("IssueTrackerService", () => {
 
       // Subscription happens before the read, so a write racing the read is repeated, not lost.
       const live = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 8).pipe(
+        Stream.take(tracker.stream, 10).pipe(
           Stream.merge(
             Stream.fromEffect(tracker.create({ title: "Arrived later" }, ACTOR)).pipe(Stream.drain),
           ),
@@ -1042,7 +1079,7 @@ describe("IssueTrackerService", () => {
       const other = yield* tracker.create({ title: "Other" }, ACTOR);
 
       const events = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 15).pipe(
+        Stream.take(tracker.stream, 17).pipe(
           Stream.merge(
             Stream.fromEffect(
               Effect.gen(function* () {
@@ -1069,8 +1106,8 @@ describe("IssueTrackerService", () => {
       );
 
       assert.deepStrictEqual(
-        // Six opening diffs and one `IssueUpserted` per issue that already existed.
-        events.slice(8).map((event) => event._tag),
+        // Eight opening diffs and one `IssueUpserted` per issue that already existed.
+        events.slice(10).map((event) => event._tag),
         [
           "MilestonesChanged",
           "CyclesChanged",
@@ -1089,10 +1126,10 @@ describe("IssueTrackerService", () => {
       const tracker = yield* IssueTrackerService;
       const { issue } = yield* tracker.create({ title: "Doomed" }, ACTOR);
 
-      // Eight events: the six opening diffs, the `IssueUpserted` replaying the issue that already
+      // Ten events: the eight opening diffs, the `IssueUpserted` replaying the issue that already
       // existed, and the one the delete publishes.
       const events = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 8).pipe(
+        Stream.take(tracker.stream, 10).pipe(
           Stream.merge(
             Stream.fromEffect(tracker.remove({ issueId: issue.id }, ACTOR)).pipe(Stream.drain),
           ),
@@ -1193,7 +1230,7 @@ describe("IssueTrackerService", () => {
       const tracker = yield* IssueTrackerService;
 
       const events = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 7).pipe(
+        Stream.take(tracker.stream, 9).pipe(
           Stream.merge(
             Stream.fromEffect(tracker.viewCreate({ name: "Board", config: VIEW_CONFIG })).pipe(
               Stream.drain,
@@ -1369,7 +1406,7 @@ describe("IssueTrackerService", () => {
       const threadId = ThreadId.make("thread-1");
 
       const events = yield* Stream.runCollect(
-        Stream.take(tracker.stream, 9).pipe(
+        Stream.take(tracker.stream, 11).pipe(
           Stream.merge(
             Stream.fromEffect(
               tracker
@@ -1555,5 +1592,376 @@ describe("IssueTrackerService", () => {
       // Nothing is in flight any more, so the issue can be investigated again.
       assert.deepStrictEqual(yield* runs.listUnfinished(), []);
     }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+  // ── Slack intake ─────────────────────────────────────────────────────
+
+  it.effect(
+    "writes the bot token into the secrets directory and clears it with an empty string",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* IssueTrackerService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const tokenPath = path.join(config.secretsDir, "slack-bot-token.bin");
+
+        const stored = yield* tracker.slackSetToken({ token: "  xoxb-1-2-abcdef  " });
+        assert.deepStrictEqual(
+          [stored.status.configured, stored.status.workspaceName, stored.status.lastError],
+          [true, "Pathway HQ", null],
+        );
+        // Trimmed on the way in: a pasted token carries whatever whitespace came with it.
+        assert.strictEqual(yield* fileSystem.readFileString(tokenPath), "xoxb-1-2-abcdef");
+
+        const cleared = yield* tracker.slackSetToken({ token: "" });
+        assert.deepStrictEqual(
+          [cleared.status.configured, cleared.status.workspaceName],
+          [false, null],
+        );
+        assert.isFalse(yield* fileSystem.exists(tokenPath));
+        assert.strictEqual((yield* tracker.slackGetStatus()).status.configured, false);
+      }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  // Tried before it is written, so `configured` never means "configured with something broken".
+  it.effect("refuses a token Slack will not accept, and leaves nothing on disk", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+
+      const refused = yield* Effect.flip(tracker.slackSetToken({ token: "xoxb-nope" }));
+      assert.strictEqual(refused.reason, "invalid");
+
+      assert.isFalse(yield* fileSystem.exists(path.join(config.secretsDir, "slack-bot-token.bin")));
+      const { status } = yield* tracker.slackGetStatus();
+      assert.strictEqual(status.configured, false);
+      // The settings page reads the status, so the refusal has to be visible there too.
+      assert.include(status.lastError ?? "", "invalid_auth");
+    }).pipe(
+      Effect.provide(
+        makeTestLayer(
+          makeFakeEngine(),
+          makeFakeSlackEngine({
+            testConnection: () =>
+              Effect.fail(new IssueTrackerError({ reason: "invalid", message: "invalid_auth" })),
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("creates, edits, and deletes a channel watch, publishing the whole set each time", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+
+      const created = yield* tracker.slackWatchCreate({
+        channelId: "C1",
+        channelName: "triage",
+        projectId: PROJECT,
+      });
+      // A watch created without a trigger is paused, not broken.
+      assert.deepStrictEqual(created.watch.trigger, {
+        emoji: null,
+        everyMessage: false,
+        botMention: false,
+      });
+
+      const updated = yield* tracker.slackWatchUpdate({
+        watchId: created.watch.id,
+        patch: {
+          projectId: null,
+          trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+        },
+      });
+      assert.isNull(updated.watch.projectId);
+      assert.deepStrictEqual(updated.watch.trigger, {
+        emoji: "ticket",
+        everyMessage: false,
+        botMention: true,
+      });
+      // Read back through the snapshot, so the round trip through SQLite is exercised.
+      assert.deepStrictEqual((yield* tracker.getSnapshot()).slackWatches, [updated.watch]);
+
+      // Two watches on one channel would poll it twice and file everything twice.
+      const duplicate = yield* Effect.flip(
+        tracker.slackWatchCreate({ channelId: "C1", channelName: "triage" }),
+      );
+      assert.strictEqual(duplicate.reason, "conflict");
+
+      const deleted = yield* tracker.slackWatchDelete({ watchId: created.watch.id });
+      assert.deepStrictEqual(deleted.watches, []);
+      const gone = yield* Effect.flip(tracker.slackWatchDelete({ watchId: created.watch.id }));
+      assert.strictEqual(gone.reason, "not-found");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("publishes the watch set on the stream and pokes the poller", () => {
+    // Counted outside the effect because the fake is baked into the layer, and the layer is what
+    // the tracker closes over: a service swapped in afterwards would never be the one it calls.
+    let pokes = 0;
+    return Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+
+      const events = yield* Stream.runCollect(
+        Stream.take(tracker.stream, 9).pipe(
+          Stream.merge(
+            Stream.fromEffect(
+              tracker.slackWatchCreate({ channelId: "C1", channelName: "triage" }),
+            ).pipe(Stream.drain),
+          ),
+        ),
+      );
+
+      const last = events.at(-1);
+      assert.strictEqual(last?._tag, "SlackWatchesChanged");
+      assert.deepStrictEqual(
+        last?._tag === "SlackWatchesChanged" ? last.watches.map((watch) => watch.channelName) : [],
+        ["triage"],
+      );
+      // The next pass would read the new configuration anyway; the poke only shortens the wait.
+      assert.strictEqual(pokes, 1);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer(
+          makeFakeEngine(),
+          makeFakeSlackEngine({
+            notifyWatchesChanged: Effect.sync(() => {
+              pokes += 1;
+            }),
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("files a watched message once, however many polls read it", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+
+      const filed = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "  The deploy   is stuck\non staging  ",
+        description: "The deploy is stuck on staging.",
+        projectId: PROJECT,
+        permalink: "https://pathway.slack.com/archives/C1/p1723459200000100",
+        authorName: "  Corey  ",
+      });
+
+      assert.isTrue(filed.created);
+      // A triage item has no status presence: it is in no board and no count until it is accepted.
+      assert.isTrue(filed.issue.triage);
+      assert.strictEqual(filed.issue.projectId, PROJECT);
+      // Newlines collapse, because a title is one line and the body keeps the full text.
+      assert.strictEqual(filed.issue.title, "The deploy is stuck on staging");
+      assert.deepStrictEqual(filed.issue.slackSource, {
+        issueId: filed.issue.id,
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        permalink: "https://pathway.slack.com/archives/C1/p1723459200000100",
+        authorName: "Corey",
+      });
+
+      // A poll window overlaps the last one by design, so the ledger is what stops a second file.
+      const again = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "The deploy is stuck on staging",
+      });
+      assert.isFalse(again.created);
+      assert.strictEqual(again.issue.id, filed.issue.id);
+      assert.strictEqual((yield* tracker.getSnapshot()).issues.length, 1);
+
+      // The same ts in another channel is another message: Slack's ts is unique per channel only.
+      const elsewhere = yield* tracker.intakeCreateIssue({
+        channelId: "C2",
+        messageTs: "1723459200.000100",
+        title: "Different room, same second",
+      });
+      assert.isTrue(elsewhere.created);
+
+      // The source survives the trip through SQLite, which is four columns and back.
+      const reread = (yield* tracker.getSnapshot()).issues.find(
+        (issue) => issue.id === filed.issue.id,
+      );
+      assert.strictEqual(reread?.slackSource?.messageTs, "1723459200.000100");
+      assert.strictEqual(reread?.slackSource?.channelId, "C1");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("routes a thread reply onto the issue its parent became, and only once", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const filed = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "The deploy is stuck",
+      });
+
+      const attached = yield* tracker.intakeAddComment({
+        channelId: "C1",
+        threadTs: "1723459200.000100",
+        messageTs: "1723459260.000200",
+        authorName: "Corey",
+        body: "Restarting the worker fixed it.",
+      });
+      assert.strictEqual(attached.comment?.issueId, filed.issue.id);
+      // The write is the tracker acting on somebody's behalf; the human's name rides in the body.
+      assert.deepStrictEqual(attached.comment?.author, { kind: "system", source: "slack" });
+      assert.strictEqual(attached.comment?.body, "**Corey:** Restarting the worker fixed it.");
+
+      const replayed = yield* tracker.intakeAddComment({
+        channelId: "C1",
+        threadTs: "1723459200.000100",
+        messageTs: "1723459260.000200",
+        body: "Restarting the worker fixed it.",
+      });
+      assert.isNull(replayed.comment);
+      assert.strictEqual(
+        (yield* tracker.commentsList({ issueId: filed.issue.id })).comments.length,
+        1,
+      );
+
+      // Most replies in a watched channel are on threads that never became issues.
+      const orphan = yield* tracker.intakeAddComment({
+        channelId: "C1",
+        threadTs: "1723459999.000900",
+        messageTs: "1723460000.000100",
+        body: "Talking about lunch.",
+      });
+      assert.isNull(orphan.comment);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  // ── Triage ───────────────────────────────────────────────────────────
+
+  it.effect("accepts a triage item in one write, with one event row per field that moved", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const filed = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "The deploy is stuck",
+      });
+
+      const accepted = yield* tracker.triageAccept(
+        {
+          issueId: filed.issue.id,
+          statusId: IssueStatusId.make("in-progress"),
+          projectId: PROJECT,
+          priority: "urgent",
+          runEnrichment: false,
+        },
+        ACTOR,
+      );
+
+      assert.isFalse(accepted.issue.triage);
+      assert.strictEqual(accepted.issue.statusId, "in-progress");
+      assert.strictEqual(accepted.issue.projectId, PROJECT);
+      assert.strictEqual(accepted.issue.priority, "urgent");
+      assert.isNull(accepted.enrichmentRun);
+      assert.isNull(accepted.enrichmentRefusal);
+
+      const { events } = yield* tracker.getEvents({ issueId: filed.issue.id });
+      assert.deepStrictEqual(
+        events.map((event) => [event.kind, event.field]),
+        [
+          ["created", null],
+          ["field_changed", "status"],
+          ["field_changed", "priority"],
+          ["field_changed", "project"],
+          ["field_changed", "triage"],
+        ],
+      );
+      // The write that made it, not a person: intake filed it as `system:slack`.
+      assert.deepStrictEqual(events[0]?.actor, { kind: "system", source: "slack" });
+
+      // Accepting something already accepted is a stale client, not a no-op.
+      const again = yield* Effect.flip(
+        tracker.triageAccept(
+          {
+            issueId: filed.issue.id,
+            statusId: IssueStatusId.make("done"),
+            runEnrichment: false,
+          },
+          ACTOR,
+        ),
+      );
+      assert.strictEqual(again.reason, "conflict");
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("fires enrichment on accept, and reports a refusal without undoing the accept", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      yield* seedProject(ROOTLESS_PROJECT, null);
+
+      const withRepo = yield* tracker.create({ title: "Has a directory", triage: true }, ACTOR);
+      const started = yield* tracker.triageAccept(
+        {
+          issueId: withRepo.issue.id,
+          statusId: IssueStatusId.make("in-progress"),
+          projectId: PROJECT,
+          runEnrichment: true,
+        },
+        ACTOR,
+      );
+      assert.strictEqual(started.enrichmentRun?.issueId, withRepo.issue.id);
+      assert.isNull(started.enrichmentRefusal);
+
+      // A project created from a name alone has no directory, and enrichment reads a directory.
+      const rootless = yield* tracker.create({ title: "No directory", triage: true }, ACTOR);
+      const accepted = yield* tracker.triageAccept(
+        {
+          issueId: rootless.issue.id,
+          statusId: IssueStatusId.make("in-progress"),
+          projectId: ROOTLESS_PROJECT,
+          runEnrichment: true,
+        },
+        ACTOR,
+      );
+
+      // The refusal is reported beside the accepted issue rather than raised: un-triaging an
+      // issue because the investigation could not start would be the wrong answer.
+      assert.isFalse(accepted.issue.triage);
+      assert.strictEqual(accepted.issue.statusId, "in-progress");
+      assert.isNull(accepted.enrichmentRun);
+      assert.include(accepted.enrichmentRefusal ?? "", "no directory");
+      assert.deepStrictEqual(
+        (yield* tracker.getEnrichmentRuns({ issueId: rootless.issue.id })).runs,
+        [],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("rejects a triage item as a soft delete with its own event kind", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const filed = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "Somebody said hello",
+      });
+
+      const rejected = yield* tracker.triageReject({ issueId: filed.issue.id }, ACTOR);
+      assert.isNotNull(rejected.issue.deletedAt);
+      // The flag stays set, so restoring the row puts it back in the queue rather than the backlog.
+      assert.isTrue(rejected.issue.triage);
+
+      const { events } = yield* tracker.getEvents({ issueId: filed.issue.id });
+      assert.deepStrictEqual(
+        events.map((event) => event.kind),
+        ["created", "triage_rejected"],
+      );
+
+      // Rejecting twice is not an error, and does not write a second row.
+      const again = yield* tracker.triageReject({ issueId: filed.issue.id }, ACTOR);
+      assert.strictEqual(again.issue.id, filed.issue.id);
+      assert.strictEqual((yield* tracker.getEvents({ issueId: filed.issue.id })).events.length, 2);
+    }).pipe(Effect.provide(makeTestLayer())),
   );
 });

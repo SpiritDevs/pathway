@@ -125,7 +125,10 @@ import { IssueTodoRepositoryLive } from "./persistence/Layers/IssueTodos.ts";
 import { IssueTrackerConfigRepositoryLive } from "./persistence/Layers/IssueTrackerConfig.ts";
 import { IssueViewRepositoryLive } from "./persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
+import { SlackChannelWatchRepositoryLive } from "./persistence/Layers/SlackChannelWatches.ts";
+import { SlackIntakeLedgerRepositoryLive } from "./persistence/Layers/SlackIntakeLedger.ts";
 import * as IssueEnrichmentEngine from "./issues/IssueEnrichmentEngine.ts";
+import * as SlackIntakeEngine from "./issues/slack/SlackIntakeEngine.ts";
 import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -311,10 +314,13 @@ const makeAuthTestLayer = () =>
           IssueViewRepositoryLive,
           IssueEnrichmentRunRepositoryLive,
           IssueThreadLinkRepositoryLive,
+          SlackChannelWatchRepositoryLive,
+          SlackIntakeLedgerRepositoryLive,
           ProjectionProjectRepositoryLive,
         ),
       ),
       Layer.provide(IssueEnrichmentEngine.layerStub),
+      Layer.provide(SlackIntakeEngine.layerStub),
     ),
   ).pipe(Layer.provide(SqlitePersistenceMemory), Layer.provide(ServerSecretStore.layer));
 
