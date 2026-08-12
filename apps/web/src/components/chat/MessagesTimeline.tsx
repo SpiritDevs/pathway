@@ -14,6 +14,8 @@ import {
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
+const NOOP_REQUEST_USER_MESSAGE_EDIT = async () => false;
+const NOOP_SUBMIT_USER_MESSAGE_EDIT = async () => false;
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   createContext,
@@ -57,6 +59,7 @@ import {
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
+  PencilIcon,
   MinusIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -83,6 +86,8 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  replaceEditableUserMessageText,
+  splitEditableUserMessageText,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -137,6 +142,15 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  editableUserMessageId: MessageId | null;
+  editingUserMessageId: MessageId | null;
+  editingUserMessageDraft: string;
+  isSubmittingUserMessageEdit: boolean;
+  canSubmitUserMessageEdit: boolean;
+  onBeginEditUserMessage: (messageId: MessageId, text: string) => void;
+  onChangeUserMessageEdit: (text: string) => void;
+  onCancelUserMessageEdit: () => void;
+  onSubmitUserMessageEdit: (messageId: MessageId, originalText: string) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -213,6 +227,10 @@ interface MessagesTimelineProps {
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  editableUserMessageId?: MessageId | null;
+  canSubmitUserMessageEdit?: boolean;
+  onRequestEditUserMessage?: (messageId: MessageId) => Promise<boolean>;
+  onSubmitUserMessageEdit?: (messageId: MessageId, text: string) => Promise<boolean>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -259,6 +277,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   latestTurn,
   runningTurnId,
   turnDiffSummaryByAssistantMessageId,
+  editableUserMessageId = null,
+  canSubmitUserMessageEdit = false,
+  onRequestEditUserMessage = NOOP_REQUEST_USER_MESSAGE_EDIT,
+  onSubmitUserMessageEdit = NOOP_SUBMIT_USER_MESSAGE_EDIT,
   routeThreadKey,
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
@@ -283,6 +305,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
+  const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
+  const [editingUserMessageDraft, setEditingUserMessageDraft] = useState("");
+  const [isSubmittingUserMessageEdit, setIsSubmittingUserMessageEdit] = useState(false);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const disclosureAnchorKeyRef = useRef<string | null>(null);
@@ -362,6 +387,59 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       });
     },
     [suspendEndScrollMaintenanceForDisclosure],
+  );
+  const onBeginEditUserMessage = useCallback(
+    (messageId: MessageId, text: string) => {
+      void (async () => {
+        if (messageId !== editableUserMessageId) {
+          return;
+        }
+        const editAccepted = await onRequestEditUserMessage(messageId);
+        if (!editAccepted) {
+          return;
+        }
+        setEditingUserMessageId(messageId);
+        setEditingUserMessageDraft(splitEditableUserMessageText(text).editableText);
+      })();
+    },
+    [editableUserMessageId, onRequestEditUserMessage],
+  );
+  const onCancelUserMessageEdit = useCallback(() => {
+    if (isSubmittingUserMessageEdit) {
+      return;
+    }
+    setEditingUserMessageId(null);
+    setEditingUserMessageDraft("");
+  }, [isSubmittingUserMessageEdit]);
+  const submitUserMessageEdit = useCallback(
+    (messageId: MessageId, originalText: string) => {
+      void (async () => {
+        const nextText = replaceEditableUserMessageText(originalText, editingUserMessageDraft);
+        if (
+          messageId !== editingUserMessageId ||
+          messageId !== editableUserMessageId ||
+          !canSubmitUserMessageEdit ||
+          nextText === originalText ||
+          editingUserMessageDraft.trim().length === 0
+        ) {
+          return;
+        }
+        setIsSubmittingUserMessageEdit(true);
+        const editSucceeded = await onSubmitUserMessageEdit(messageId, nextText);
+        setIsSubmittingUserMessageEdit(false);
+        if (editSucceeded) {
+          setEditingUserMessageId(null);
+          setEditingUserMessageDraft("");
+        }
+      })();
+    },
+    [
+      canSubmitUserMessageEdit,
+      editableUserMessageId,
+      editingUserMessageDraft,
+      editingUserMessageId,
+      onSubmitUserMessageEdit,
+    ],
   );
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
@@ -510,6 +588,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      editableUserMessageId,
+      editingUserMessageId,
+      editingUserMessageDraft,
+      isSubmittingUserMessageEdit,
+      canSubmitUserMessageEdit,
+      onBeginEditUserMessage,
+      onChangeUserMessageEdit: setEditingUserMessageDraft,
+      onCancelUserMessageEdit,
+      onSubmitUserMessageEdit: submitUserMessageEdit,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -526,6 +613,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      editableUserMessageId,
+      editingUserMessageId,
+      editingUserMessageDraft,
+      isSubmittingUserMessageEdit,
+      canSubmitUserMessageEdit,
+      onBeginEditUserMessage,
+      onCancelUserMessageEdit,
+      submitUserMessageEdit,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -979,10 +1074,19 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const editableText = splitEditableUserMessageText(row.message.text).editableText;
+  const canEditMessage =
+    ctx.editableUserMessageId === row.message.id && editableText.trim().length > 0;
+  const isEditingMessage = ctx.editingUserMessageId === row.message.id;
 
   return (
     <div className="group flex flex-col items-end gap-1">
-      <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
+      <div
+        className={cn(
+          "relative rounded-2xl bg-message p-3 text-message-foreground",
+          isEditingMessage ? "w-[min(32rem,80%)]" : "max-w-[80%]",
+        )}
+      >
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
@@ -1033,12 +1137,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ))}
           </div>
         ) : null}
-        <CollapsibleUserMessageBody
-          text={elementContextState.promptText}
-          terminalContexts={terminalContexts}
-          skills={ctx.skills}
-          markdownCwd={ctx.markdownCwd}
-        />
+        {isEditingMessage ? (
+          <InlineUserMessageEditor messageId={row.message.id} originalText={row.message.text} />
+        ) : (
+          <CollapsibleUserMessageBody
+            text={elementContextState.promptText}
+            terminalContexts={terminalContexts}
+            skills={ctx.skills}
+            markdownCwd={ctx.markdownCwd}
+          />
+        )}
       </div>
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
@@ -1051,6 +1159,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
+            {canEditMessage && !isEditingMessage ? (
+              <EditUserMessageButton messageId={row.message.id} text={row.message.text} />
+            ) : null}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
@@ -1058,6 +1169,141 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function EditUserMessageButton({ messageId, text }: { messageId: MessageId; text: string }) {
+  const ctx = use(TimelineRowCtx);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => ctx.onBeginEditUserMessage(messageId, text)}
+            aria-label="Edit message"
+          />
+        }
+      >
+        <PencilIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Edit and restart</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function InlineUserMessageEditor({
+  messageId,
+  originalText,
+}: {
+  messageId: MessageId;
+  originalText: string;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editedText = ctx.editingUserMessageDraft.trim();
+  const unchanged = replaceEditableUserMessageText(originalText, editedText) === originalText;
+  const submitDisabled =
+    editedText.length === 0 ||
+    unchanged ||
+    !ctx.canSubmitUserMessageEdit ||
+    ctx.editableUserMessageId !== messageId ||
+    ctx.isSubmittingUserMessageEdit;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }, []);
+
+  return (
+    <form
+      className="w-full min-w-0 max-w-full"
+      onSubmit={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!submitDisabled) {
+          ctx.onSubmitUserMessageEdit(messageId, originalText);
+        }
+      }}
+    >
+      <textarea
+        ref={textareaRef}
+        value={ctx.editingUserMessageDraft}
+        onChange={(event) => ctx.onChangeUserMessageEdit(event.target.value)}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            ctx.onCancelUserMessageEdit();
+          }
+        }}
+        disabled={ctx.isSubmittingUserMessageEdit}
+        aria-label="Edit message text"
+        className="field-sizing-content block max-h-64 min-h-20 w-full min-w-0 max-w-full resize-none overflow-y-auto bg-transparent text-sm leading-5 outline-none placeholder:text-message-foreground/50"
+      />
+      <UserMessageEditActions
+        status={
+          !ctx.canSubmitUserMessageEdit && ctx.editableUserMessageId === messageId
+            ? "Stopping task…"
+            : ctx.editableUserMessageId !== messageId
+              ? "Files changed, so this message can no longer be edited."
+              : null
+        }
+        submitDisabled={submitDisabled}
+        submitting={ctx.isSubmittingUserMessageEdit}
+        onCancel={ctx.onCancelUserMessageEdit}
+      />
+    </form>
+  );
+}
+
+export function UserMessageEditActions({
+  status,
+  submitDisabled,
+  submitting,
+  onCancel,
+}: {
+  status: string | null;
+  submitDisabled: boolean;
+  submitting: boolean;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="relative z-10 mt-2 flex min-h-7 w-full min-w-0 max-w-full items-center justify-end gap-1 overflow-hidden"
+      data-user-message-edit-actions="true"
+    >
+      {status ? (
+        <p className="me-auto min-w-0 truncate pe-2 text-[11px] text-message-foreground/60">
+          {status}
+        </p>
+      ) : null}
+      <Button
+        type="button"
+        size="xs"
+        variant="ghost"
+        disabled={submitting}
+        onClick={onCancel}
+        className="rounded-lg px-2.5 text-message-foreground"
+      >
+        Cancel
+      </Button>
+      <Button
+        type="submit"
+        size="xs"
+        disabled={submitDisabled}
+        className="min-w-14 rounded-lg px-3"
+      >
+        {submitting ? "Sending…" : "Send"}
+      </Button>
     </div>
   );
 }

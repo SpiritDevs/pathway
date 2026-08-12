@@ -12,6 +12,16 @@ export function toJsonSchemaObject(schema: Schema.Top): unknown {
   return document.schema;
 }
 
+/**
+ * How long an investigation may run before it is killed.
+ *
+ * Fifteen minutes, against the three the other operations get. Those summarise text that is
+ * already in hand; this one reads a repository, and a real answer on a large tree routinely takes
+ * longer than a naming task ever will. The cap exists so a wedged CLI cannot hold the single
+ * enrichment slot forever, not to bound the model's thinking.
+ */
+export const INVESTIGATION_TIMEOUT_MS = 900_000;
+
 /** Truncate a text section to `maxChars`, appending a `[truncated]` marker when needed. */
 export function limitSection(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;

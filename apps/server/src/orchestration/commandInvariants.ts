@@ -1,5 +1,7 @@
 import type {
+  MessageId,
   OrchestrationCommand,
+  OrchestrationMessage,
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
@@ -72,16 +74,25 @@ export function requireProjectAbsent(input: {
   );
 }
 
+/**
+ * One active project per directory. Rootless projects hold no directory, so any
+ * number of them coexist and none of them clashes with a rooted one: a null root
+ * is an absence, not a value to compare.
+ */
 export function requireActiveProjectWorkspaceRootAbsent(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
-  readonly workspaceRoot: string;
+  readonly workspaceRoot: string | null;
   readonly exceptProjectId?: ProjectId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (input.workspaceRoot === null) {
+    return Effect.void;
+  }
   const normalizedWorkspaceRoot = normalizeProjectPathForComparison(input.workspaceRoot);
   const existingProject = input.readModel.projects.find(
     (project) =>
       project.deletedAt === null &&
+      project.workspaceRoot !== null &&
       normalizeProjectPathForComparison(project.workspaceRoot) === normalizedWorkspaceRoot &&
       project.id !== input.exceptProjectId,
   );
@@ -92,6 +103,27 @@ export function requireActiveProjectWorkspaceRootAbsent(input: {
     invariantError(
       input.command.type,
       `Active project '${existingProject.id}' already exists for workspace root '${normalizedWorkspaceRoot}'.`,
+    ),
+  );
+}
+
+/**
+ * A thread runs commands in a directory, so it cannot belong to a rootless project.
+ * Clients prompt for a directory and send `project.meta.update` first; reaching here
+ * without one means that prompt was skipped.
+ */
+export function requireProjectWorkspaceRoot(input: {
+  readonly command: OrchestrationCommand;
+  readonly project: OrchestrationProject;
+}): Effect.Effect<string, OrchestrationCommandInvariantError> {
+  const workspaceRoot = input.project.workspaceRoot;
+  if (workspaceRoot !== null) {
+    return Effect.succeed(workspaceRoot);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Project '${input.project.id}' has no workspace root, so command '${input.command.type}' cannot run. Attach a directory to it first.`,
     ),
   );
 }
@@ -111,6 +143,49 @@ export function requireThread(input: {
       `Thread '${input.threadId}' does not exist for command '${input.command.type}'.`,
     ),
   );
+}
+
+export function requireEditableLatestUserMessage(input: {
+  readonly command: OrchestrationCommand;
+  readonly thread: OrchestrationThread;
+  readonly messageId: MessageId;
+}): Effect.Effect<OrchestrationMessage, OrchestrationCommandInvariantError> {
+  const latestUserMessage = input.thread.messages.findLast((message) => message.role === "user");
+  if (!latestUserMessage || latestUserMessage.id !== input.messageId) {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        "Only the latest user message can be edited and restarted.",
+      ),
+    );
+  }
+
+  if (input.thread.session?.status === "starting" || input.thread.session?.status === "running") {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        "The current turn must stop before its message can be edited and restarted.",
+      ),
+    );
+  }
+
+  const messageCreatedAt = Date.parse(latestUserMessage.createdAt);
+  const hasChangesSinceMessage = input.thread.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.files.length > 0 &&
+      (!Number.isFinite(messageCreatedAt) ||
+        Date.parse(checkpoint.completedAt) >= messageCreatedAt),
+  );
+  if (hasChangesSinceMessage) {
+    return Effect.fail(
+      invariantError(
+        input.command.type,
+        "This message cannot be edited because its turn changed files.",
+      ),
+    );
+  }
+
+  return Effect.succeed(latestUserMessage);
 }
 
 export function requireThreadArchived(input: {

@@ -22,6 +22,7 @@ import {
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { projectWorkspaceLabel } from "./projects/projectWorkspace.logic";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -90,7 +91,7 @@ import { openDiscoveredPort } from "./preview/openDiscoveredPort";
 import { useAtomCommand } from "../state/use-atom-command";
 import { previewEnvironment } from "../state/preview";
 import {
-  legacyProjectCwdPreferenceKey,
+  legacyProjectCwdPreferenceKeys,
   resolveProjectExpanded,
   useUiStateStore,
 } from "../uiStateStore";
@@ -246,16 +247,19 @@ function formatProjectMemberActionLabel(
     return member.title;
   }
 
-  return member.environmentLabel
-    ? `${member.environmentLabel} — ${member.workspaceRoot}`
-    : member.workspaceRoot;
+  // A rootless project has no path to disambiguate members by, so its own title is the best
+  // label available — the row stays listed either way.
+  const detail = projectWorkspaceLabel(member);
+  return member.environmentLabel ? `${member.environmentLabel} — ${detail}` : detail;
 }
 
 function projectExpansionPreferenceKeys(project: SidebarProjectSnapshot): string[] {
   return [
     project.projectKey,
     ...project.memberProjects.map((member) => member.physicalProjectKey),
-    ...project.memberProjects.map((member) => legacyProjectCwdPreferenceKey(member.workspaceRoot)),
+    ...project.memberProjects.flatMap((member) =>
+      legacyProjectCwdPreferenceKeys(member.workspaceRoot),
+    ),
   ];
 }
 
@@ -896,7 +900,7 @@ interface SidebarProjectThreadListProps {
   showEmptyThreadState: boolean;
   shouldShowThreadPanel: boolean;
   isThreadListExpanded: boolean;
-  projectCwd: string;
+  projectCwd: string | null;
   activeRouteThreadKey: string | null;
   openPullRequestsInRightPanel: boolean;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
@@ -1623,6 +1627,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 openProjectGroupingDialog(member);
                 return;
               case "copy-path":
+                if (member.workspaceRoot === null) return;
                 copyPathToClipboard(member.workspaceRoot, { path: member.workspaceRoot });
                 return;
               case "delete":
@@ -1675,7 +1680,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
-            buildTargetedItem("copy-path", "Copy Path"),
+            buildTargetedItem("copy-path", "Copy Path", {
+              isDisabled: (member) => member.workspaceRoot === null,
+            }),
             buildTargetedItem("delete", "Remove", {
               destructive: true,
             }),
@@ -3094,7 +3101,7 @@ export default function LegacySidebar() {
       getId: getProjectOrderKey,
       getPreferenceIds: (project) => [
         getProjectOrderKey(project),
-        legacyProjectCwdPreferenceKey(project.workspaceRoot),
+        ...legacyProjectCwdPreferenceKeys(project.workspaceRoot),
       ],
     });
   }, [projectOrder, projects]);

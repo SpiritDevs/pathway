@@ -13,6 +13,8 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { IssuesToolkitHandlersLive } from "./toolkits/issues/handlers.ts";
+import { IssuesToolkit } from "./toolkits/issues/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -216,6 +218,15 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+/**
+ * The issue tracker, exposed to every provider adapter at once. Registered here rather than per
+ * driver because the toolkit is protocol-level: any agent that can reach `/mcp` with a live
+ * credential can read and write the tracker, which is the access the decision record grants.
+ */
+export const IssuesToolkitRegistrationLive = McpServer.toolkit(IssuesToolkit).pipe(
+  Layer.provide(IssuesToolkitHandlersLive),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Pathway",
   version: packageJson.version,
@@ -223,4 +234,7 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  IssuesToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

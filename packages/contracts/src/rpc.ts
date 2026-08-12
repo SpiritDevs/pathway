@@ -66,6 +66,75 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  ISSUES_WS_METHODS,
+  IssueBulkUpdateInput,
+  IssueCommentAttachmentUploadInput,
+  IssueCommentAttachmentUploadResult,
+  IssueCommentCreateInput,
+  IssueCommentDeleteInput,
+  IssueCommentResult,
+  IssueCommentUpdateInput,
+  IssueCommentsResult,
+  IssueCreateInput,
+  IssueCycleCreateInput,
+  IssueCycleDeleteInput,
+  IssueCycleResult,
+  IssueCycleUpdateInput,
+  IssueCyclesResult,
+  IssueDetail,
+  IssueEnrichmentRunRefInput,
+  IssueEnrichmentRunResult,
+  IssueEnrichmentRunsResult,
+  IssueEnrichmentStartInput,
+  IssueLabelCreateInput,
+  IssueLabelDeleteInput,
+  IssueLabelResult,
+  IssueLabelUpdateInput,
+  IssueLabelsResult,
+  IssueKeyPrefixInput,
+  IssueMilestoneCreateInput,
+  IssueMilestoneDeleteInput,
+  IssueMilestoneResult,
+  IssueMilestoneUpdateInput,
+  IssueMilestonesReorderInput,
+  IssueMilestonesResult,
+  IssueRefInput,
+  IssueRelationCreateInput,
+  IssueRelationDeleteInput,
+  IssueRelationsResult,
+  IssueResult,
+  IssueSetSortOrderInput,
+  IssueStatusCreateInput,
+  IssueStatusDeleteInput,
+  IssueStatusResult,
+  IssueStatusUpdateInput,
+  IssueStatusesReorderInput,
+  IssueStatusesResult,
+  IssueTodoCreateInput,
+  IssueTodoDeleteInput,
+  IssueTodoUpdateInput,
+  IssueTodosReorderInput,
+  IssueTodosResult,
+  IssueThreadLinkInput,
+  IssueThreadLinksResult,
+  IssueThreadUnlinkInput,
+  IssueTrackerConfigResult,
+  IssueTrackerError,
+  IssueUpdateInput,
+  IssueViewCreateInput,
+  IssueViewDeleteInput,
+  IssueViewResult,
+  IssueViewUpdateInput,
+  IssueViewsReorderInput,
+  IssueViewsResult,
+  IssuesGetEventsResult,
+  IssuesImportCsvInput,
+  IssuesImportCsvResult,
+  IssuesResult,
+  IssuesSnapshot,
+  IssuesStreamEvent,
+} from "./issues.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ServerGetProviderUsageInput, ServerProviderUsageSnapshot } from "./providerUsage.ts";
 import {
@@ -954,6 +1023,348 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+/**
+ * Issue tracker. Every method fails the same way, so the union is written once: the tracker is
+ * one local database and there is no second failure mode to tell apart per call.
+ */
+const IssuesRpcError = Schema.Union([IssueTrackerError, EnvironmentAuthorizationError]);
+
+export const WsIssuesGetSnapshotRpc = Rpc.make(ISSUES_WS_METHODS.getSnapshot, {
+  payload: Schema.Struct({}),
+  success: IssuesSnapshot,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesGetDetailRpc = Rpc.make(ISSUES_WS_METHODS.getDetail, {
+  payload: IssueRefInput,
+  success: IssueDetail,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCreateRpc = Rpc.make(ISSUES_WS_METHODS.create, {
+  payload: IssueCreateInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesUpdateRpc = Rpc.make(ISSUES_WS_METHODS.update, {
+  payload: IssueUpdateInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesDeleteRpc = Rpc.make(ISSUES_WS_METHODS.delete, {
+  payload: IssueRefInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesRestoreRpc = Rpc.make(ISSUES_WS_METHODS.restore, {
+  payload: IssueRefInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesBulkUpdateRpc = Rpc.make(ISSUES_WS_METHODS.bulkUpdate, {
+  payload: IssueBulkUpdateInput,
+  success: IssuesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSetSortOrderRpc = Rpc.make(ISSUES_WS_METHODS.setSortOrder, {
+  payload: IssueSetSortOrderInput,
+  success: IssueResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCreateStatusRpc = Rpc.make(ISSUES_WS_METHODS.createStatus, {
+  payload: IssueStatusCreateInput,
+  success: IssueStatusResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesUpdateStatusRpc = Rpc.make(ISSUES_WS_METHODS.updateStatus, {
+  payload: IssueStatusUpdateInput,
+  success: IssueStatusResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesDeleteStatusRpc = Rpc.make(ISSUES_WS_METHODS.deleteStatus, {
+  payload: IssueStatusDeleteInput,
+  success: IssueStatusesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesReorderStatusesRpc = Rpc.make(ISSUES_WS_METHODS.reorderStatuses, {
+  payload: IssueStatusesReorderInput,
+  success: IssueStatusesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCreateLabelRpc = Rpc.make(ISSUES_WS_METHODS.createLabel, {
+  payload: IssueLabelCreateInput,
+  success: IssueLabelResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesUpdateLabelRpc = Rpc.make(ISSUES_WS_METHODS.updateLabel, {
+  payload: IssueLabelUpdateInput,
+  success: IssueLabelResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesDeleteLabelRpc = Rpc.make(ISSUES_WS_METHODS.deleteLabel, {
+  payload: IssueLabelDeleteInput,
+  success: IssueLabelsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesMilestoneCreateRpc = Rpc.make(ISSUES_WS_METHODS.milestoneCreate, {
+  payload: IssueMilestoneCreateInput,
+  success: IssueMilestoneResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesMilestoneUpdateRpc = Rpc.make(ISSUES_WS_METHODS.milestoneUpdate, {
+  payload: IssueMilestoneUpdateInput,
+  success: IssueMilestoneResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesMilestoneDeleteRpc = Rpc.make(ISSUES_WS_METHODS.milestoneDelete, {
+  payload: IssueMilestoneDeleteInput,
+  success: IssueMilestonesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesMilestonesReorderRpc = Rpc.make(ISSUES_WS_METHODS.milestonesReorder, {
+  payload: IssueMilestonesReorderInput,
+  success: IssueMilestonesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCycleCreateRpc = Rpc.make(ISSUES_WS_METHODS.cycleCreate, {
+  payload: IssueCycleCreateInput,
+  success: IssueCycleResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCycleUpdateRpc = Rpc.make(ISSUES_WS_METHODS.cycleUpdate, {
+  payload: IssueCycleUpdateInput,
+  success: IssueCycleResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCycleDeleteRpc = Rpc.make(ISSUES_WS_METHODS.cycleDelete, {
+  payload: IssueCycleDeleteInput,
+  success: IssueCyclesResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTodoCreateRpc = Rpc.make(ISSUES_WS_METHODS.todoCreate, {
+  payload: IssueTodoCreateInput,
+  success: IssueTodosResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTodoUpdateRpc = Rpc.make(ISSUES_WS_METHODS.todoUpdate, {
+  payload: IssueTodoUpdateInput,
+  success: IssueTodosResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTodoDeleteRpc = Rpc.make(ISSUES_WS_METHODS.todoDelete, {
+  payload: IssueTodoDeleteInput,
+  success: IssueTodosResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesTodosReorderRpc = Rpc.make(ISSUES_WS_METHODS.todosReorder, {
+  payload: IssueTodosReorderInput,
+  success: IssueTodosResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesRelationCreateRpc = Rpc.make(ISSUES_WS_METHODS.relationCreate, {
+  payload: IssueRelationCreateInput,
+  success: IssueRelationsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesRelationDeleteRpc = Rpc.make(ISSUES_WS_METHODS.relationDelete, {
+  payload: IssueRelationDeleteInput,
+  success: IssueRelationsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCommentCreateRpc = Rpc.make(ISSUES_WS_METHODS.commentCreate, {
+  payload: IssueCommentCreateInput,
+  success: IssueCommentResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCommentUpdateRpc = Rpc.make(ISSUES_WS_METHODS.commentUpdate, {
+  payload: IssueCommentUpdateInput,
+  success: IssueCommentResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCommentDeleteRpc = Rpc.make(ISSUES_WS_METHODS.commentDelete, {
+  payload: IssueCommentDeleteInput,
+  success: IssueCommentsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCommentsListRpc = Rpc.make(ISSUES_WS_METHODS.commentsList, {
+  payload: IssueRefInput,
+  success: IssueCommentsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesUploadCommentAttachmentRpc = Rpc.make(
+  ISSUES_WS_METHODS.uploadCommentAttachment,
+  {
+    payload: IssueCommentAttachmentUploadInput,
+    success: IssueCommentAttachmentUploadResult,
+    error: IssuesRpcError,
+  },
+);
+
+export const WsIssuesViewCreateRpc = Rpc.make(ISSUES_WS_METHODS.viewCreate, {
+  payload: IssueViewCreateInput,
+  success: IssueViewResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesViewUpdateRpc = Rpc.make(ISSUES_WS_METHODS.viewUpdate, {
+  payload: IssueViewUpdateInput,
+  success: IssueViewResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesViewDeleteRpc = Rpc.make(ISSUES_WS_METHODS.viewDelete, {
+  payload: IssueViewDeleteInput,
+  success: IssueViewsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesViewsReorderRpc = Rpc.make(ISSUES_WS_METHODS.viewsReorder, {
+  payload: IssueViewsReorderInput,
+  success: IssueViewsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesSetKeyPrefixRpc = Rpc.make(ISSUES_WS_METHODS.setKeyPrefix, {
+  payload: IssueKeyPrefixInput,
+  success: IssueTrackerConfigResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesImportCsvRpc = Rpc.make(ISSUES_WS_METHODS.importCsv, {
+  payload: IssuesImportCsvInput,
+  success: IssuesImportCsvResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesGetEventsRpc = Rpc.make(ISSUES_WS_METHODS.getEvents, {
+  payload: IssueRefInput,
+  success: IssuesGetEventsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesStartEnrichmentRpc = Rpc.make(ISSUES_WS_METHODS.startEnrichment, {
+  payload: IssueEnrichmentStartInput,
+  success: IssueEnrichmentRunResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesCancelEnrichmentRpc = Rpc.make(ISSUES_WS_METHODS.cancelEnrichment, {
+  payload: IssueEnrichmentRunRefInput,
+  success: IssueEnrichmentRunResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesGetEnrichmentRunsRpc = Rpc.make(ISSUES_WS_METHODS.getEnrichmentRuns, {
+  payload: IssueRefInput,
+  success: IssueEnrichmentRunsResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesLinkThreadRpc = Rpc.make(ISSUES_WS_METHODS.linkThread, {
+  payload: IssueThreadLinkInput,
+  success: IssueThreadLinksResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesUnlinkThreadRpc = Rpc.make(ISSUES_WS_METHODS.unlinkThread, {
+  payload: IssueThreadUnlinkInput,
+  success: IssueThreadLinksResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesGetThreadLinksRpc = Rpc.make(ISSUES_WS_METHODS.getThreadLinks, {
+  payload: IssueRefInput,
+  success: IssueThreadLinksResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesStreamRpc = Rpc.make(ISSUES_WS_METHODS.stream, {
+  payload: Schema.Struct({}),
+  success: IssuesStreamEvent,
+  error: IssuesRpcError,
+  stream: true,
+});
+
+export const IssuesRpcs = RpcGroup.make(
+  WsIssuesGetSnapshotRpc,
+  WsIssuesGetDetailRpc,
+  WsIssuesCreateRpc,
+  WsIssuesUpdateRpc,
+  WsIssuesDeleteRpc,
+  WsIssuesRestoreRpc,
+  WsIssuesBulkUpdateRpc,
+  WsIssuesSetSortOrderRpc,
+  WsIssuesCreateStatusRpc,
+  WsIssuesUpdateStatusRpc,
+  WsIssuesDeleteStatusRpc,
+  WsIssuesReorderStatusesRpc,
+  WsIssuesCreateLabelRpc,
+  WsIssuesUpdateLabelRpc,
+  WsIssuesDeleteLabelRpc,
+  WsIssuesMilestoneCreateRpc,
+  WsIssuesMilestoneUpdateRpc,
+  WsIssuesMilestoneDeleteRpc,
+  WsIssuesMilestonesReorderRpc,
+  WsIssuesCycleCreateRpc,
+  WsIssuesCycleUpdateRpc,
+  WsIssuesCycleDeleteRpc,
+  WsIssuesTodoCreateRpc,
+  WsIssuesTodoUpdateRpc,
+  WsIssuesTodoDeleteRpc,
+  WsIssuesTodosReorderRpc,
+  WsIssuesRelationCreateRpc,
+  WsIssuesRelationDeleteRpc,
+  WsIssuesCommentCreateRpc,
+  WsIssuesCommentUpdateRpc,
+  WsIssuesCommentDeleteRpc,
+  WsIssuesCommentsListRpc,
+  WsIssuesUploadCommentAttachmentRpc,
+  WsIssuesViewCreateRpc,
+  WsIssuesViewUpdateRpc,
+  WsIssuesViewDeleteRpc,
+  WsIssuesViewsReorderRpc,
+  WsIssuesSetKeyPrefixRpc,
+  WsIssuesImportCsvRpc,
+  WsIssuesGetEventsRpc,
+  WsIssuesStartEnrichmentRpc,
+  WsIssuesCancelEnrichmentRpc,
+  WsIssuesGetEnrichmentRunsRpc,
+  WsIssuesLinkThreadRpc,
+  WsIssuesUnlinkThreadRpc,
+  WsIssuesGetThreadLinksRpc,
+  WsIssuesStreamRpc,
+);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1051,4 +1462,4 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
-);
+).merge(IssuesRpcs);

@@ -43,7 +43,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
-import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
@@ -116,6 +116,7 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
+import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -313,6 +314,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveEditableUserMessageId,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -733,11 +735,13 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
       }
       const worktreePathForLaunch =
         launchContext !== null ? launchContext.worktreePath : summary.worktreePath;
+      const sessionCwd = launchContext?.cwd ?? summary.cwd;
       next.set(session.target.terminalId, {
-        cwd: launchContext?.cwd ?? summary.cwd,
+        cwd: sessionCwd,
         worktreePath: worktreePathForLaunch,
-        runtimeEnv: projectScriptRuntimeEnv({
-          project: { cwd: project.workspaceRoot },
+        runtimeEnv: projectWorkspaceRuntimeEnv({
+          workspaceRoot: project.workspaceRoot,
+          cwd: sessionCwd,
           worktreePath: worktreePathForLaunch,
         }),
       });
@@ -796,8 +800,8 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     () =>
       launchContext?.cwd ??
       (project
-        ? projectScriptCwd({
-            project: { cwd: project.workspaceRoot },
+        ? projectWorkspaceCwd({
+            workspaceRoot: project.workspaceRoot,
             worktreePath: effectiveWorktreePath,
           })
         : null),
@@ -805,13 +809,14 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   );
   const runtimeEnv = useMemo(
     () =>
-      project
-        ? projectScriptRuntimeEnv({
-            project: { cwd: project.workspaceRoot },
+      project && cwd
+        ? projectWorkspaceRuntimeEnv({
+            workspaceRoot: project.workspaceRoot,
+            cwd,
             worktreePath: effectiveWorktreePath,
           })
         : {},
-    [effectiveWorktreePath, project],
+    [cwd, effectiveWorktreePath, project],
   );
 
   const bumpFocusRequestId = useCallback(() => {
@@ -1109,22 +1114,20 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
       launchContext?.cwd ??
       activeSummary?.cwd ??
       (project
-        ? projectScriptCwd({
-            project: { cwd: project.workspaceRoot },
-            worktreePath,
-          })
+        ? projectWorkspaceCwd({ workspaceRoot: project.workspaceRoot, worktreePath })
         : null),
     [activeSummary?.cwd, launchContext?.cwd, project, worktreePath],
   );
   const runtimeEnv = useMemo(
     () =>
-      project
-        ? projectScriptRuntimeEnv({
-            project: { cwd: project.workspaceRoot },
+      project && cwd
+        ? projectWorkspaceRuntimeEnv({
+            workspaceRoot: project.workspaceRoot,
+            cwd,
             worktreePath,
           })
         : {},
-    [project, worktreePath],
+    [cwd, project, worktreePath],
   );
   const terminalLabelsById = useMemo(() => {
     const labels = new Map<string, string>();
@@ -1155,8 +1158,8 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
         launchContext?.cwd ??
         summary?.cwd ??
         (project
-          ? projectScriptCwd({
-              project: { cwd: project.workspaceRoot },
+          ? projectWorkspaceCwd({
+              workspaceRoot: project.workspaceRoot,
               worktreePath: terminalWorktreePath,
             })
           : null);
@@ -1164,8 +1167,9 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
       locations.set(terminalId, {
         cwd: terminalCwd,
         worktreePath: terminalWorktreePath,
-        runtimeEnv: projectScriptRuntimeEnv({
-          project: { cwd: project.workspaceRoot },
+        runtimeEnv: projectWorkspaceRuntimeEnv({
+          workspaceRoot: project.workspaceRoot,
+          cwd: terminalCwd,
           worktreePath: terminalWorktreePath,
         }),
       });
@@ -1270,6 +1274,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const editThreadTurn = useAtomCommand(threadEnvironment.editTurn, { reportFailure: false });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1386,6 +1391,9 @@ function ChatViewContent(props: ChatViewProps) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  const [optimisticUserMessageEdits, setOptimisticUserMessageEdits] = useState<
+    Record<string, string>
+  >({});
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, LocalThreadErrorEntry>
   >({});
@@ -1763,6 +1771,11 @@ function ChatViewContent(props: ChatViewProps) {
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
   const activeProject = useProject(activeProjectRef);
+  // Rootless projects stay selectable, so every surface below that needs a real directory —
+  // terminals, project scripts, worktree bootstrap — resolves one through this rather than
+  // going quiet. See docs/internals/decisions/0006-issue-tracker.md.
+  const { ensureWorkspaceRoot: ensureActiveProjectWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
   const handleNewThreadInActiveProject = useCallback(() => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   }, [activeProjectRef, handleNewThread]);
@@ -2446,18 +2459,35 @@ function ChatViewContent(props: ChatViewProps) {
   const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!serverMessages) return [];
     return serverMessages.map((message) => {
+      const optimisticText = optimisticUserMessageEdits[message.id];
       if (!message.attachments || message.attachments.length === 0) {
-        return message;
+        return optimisticText === undefined ? message : { ...message, text: optimisticText };
       }
       return {
         ...message,
+        ...(optimisticText === undefined ? {} : { text: optimisticText }),
         attachments: message.attachments.map((attachment) => {
           const previewUrl = serverAttachmentUrlById.get(attachment.id);
           return previewUrl ? { ...attachment, previewUrl } : attachment;
         }),
       };
     });
-  }, [serverAttachmentUrlById, serverMessages]);
+  }, [optimisticUserMessageEdits, serverAttachmentUrlById, serverMessages]);
+  useEffect(() => {
+    setOptimisticUserMessageEdits((existing) => {
+      let next = existing;
+      for (const message of serverMessages ?? []) {
+        if (existing[message.id] !== message.text) {
+          continue;
+        }
+        if (next === existing) {
+          next = { ...existing };
+        }
+        delete next[message.id];
+      }
+      return next;
+    });
+  }, [serverMessages]);
   useEffect(() => {
     if (typeof Image === "undefined" || displayServerMessages.length === 0) {
       return;
@@ -2616,6 +2646,10 @@ function ChatViewContent(props: ChatViewProps) {
   ] = useDraftHeroLayoutTransition(isDraftHeroState);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
+  const editableUserMessageId = useMemo(
+    () => resolveEditableUserMessageId(activeThread),
+    [activeThread],
+  );
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, TurnDiffSummary>();
     for (const summary of turnDiffSummaries) {
@@ -2658,8 +2692,8 @@ function ChatViewContent(props: ChatViewProps) {
   }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
 
   const gitCwd = activeProject
-    ? projectScriptCwd({
-        project: { cwd: activeProject.workspaceRoot },
+    ? projectWorkspaceCwd({
+        workspaceRoot: activeProject.workspaceRoot,
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
@@ -2863,25 +2897,31 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadId || !activeProject) {
         return;
       }
-      const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
-      if (!cwdForOpen) {
-        return;
-      }
-      const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-      storeEnsureTerminal(activeThreadRef, terminalId, { open: true });
-      void openTerminal({
-        environmentId,
-        input: {
-          threadId: activeThreadId,
-          terminalId,
-          cwd: cwdForOpen,
-          ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-          env: projectScriptRuntimeEnv({
-            project: { cwd: activeProject.workspaceRoot },
-            worktreePath: activeThreadWorktreePath,
-          }),
-        },
-      });
+      void (async () => {
+        const cwdForOpen =
+          gitCwd ??
+          activeProject.workspaceRoot ??
+          (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
+        if (!cwdForOpen) {
+          return;
+        }
+        const terminalId = nextTerminalId(allocatableActiveTerminalIds);
+        storeEnsureTerminal(activeThreadRef, terminalId, { open: true });
+        await openTerminal({
+          environmentId,
+          input: {
+            threadId: activeThreadId,
+            terminalId,
+            cwd: cwdForOpen,
+            ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+            env: projectWorkspaceRuntimeEnv({
+              workspaceRoot: activeProject.workspaceRoot,
+              cwd: cwdForOpen,
+              worktreePath: activeThreadWorktreePath,
+            }),
+          },
+        });
+      })();
       return;
     }
     setTerminalOpen(nextOpen);
@@ -2891,6 +2931,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadRef,
     activeThreadWorktreePath,
     allocatableActiveTerminalIds,
+    ensureActiveProjectWorkspaceRoot,
     environmentId,
     gitCwd,
     openTerminal,
@@ -2904,36 +2945,43 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadRef || hasReachedSplitLimit || !activeThreadId || !activeProject) {
         return;
       }
-      const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
-      if (!cwdForOpen) {
-        return;
-      }
-      const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-      if (direction === "vertical") {
-        storeSplitTerminalVertical(activeThreadRef, terminalId);
-      } else {
-        storeSplitTerminal(activeThreadRef, terminalId);
-      }
-      setTerminalFocusRequestId((value) => value + 1);
-      void openTerminal({
-        environmentId,
-        input: {
-          threadId: activeThreadId,
-          terminalId,
-          cwd: cwdForOpen,
-          ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-          env: projectScriptRuntimeEnv({
-            project: { cwd: activeProject.workspaceRoot },
-            worktreePath: activeThreadWorktreePath,
-          }),
-        },
-      });
+      void (async () => {
+        const cwdForOpen =
+          gitCwd ??
+          activeProject.workspaceRoot ??
+          (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
+        if (!cwdForOpen) {
+          return;
+        }
+        const terminalId = nextTerminalId(allocatableActiveTerminalIds);
+        if (direction === "vertical") {
+          storeSplitTerminalVertical(activeThreadRef, terminalId);
+        } else {
+          storeSplitTerminal(activeThreadRef, terminalId);
+        }
+        setTerminalFocusRequestId((value) => value + 1);
+        await openTerminal({
+          environmentId,
+          input: {
+            threadId: activeThreadId,
+            terminalId,
+            cwd: cwdForOpen,
+            ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+            env: projectWorkspaceRuntimeEnv({
+              workspaceRoot: activeProject.workspaceRoot,
+              cwd: cwdForOpen,
+              worktreePath: activeThreadWorktreePath,
+            }),
+          },
+        });
+      })();
     },
     [
       activeProject,
       activeThreadId,
       allocatableActiveTerminalIds,
       activeThreadRef,
+      ensureActiveProjectWorkspaceRoot,
       openTerminal,
       activeThreadWorktreePath,
       environmentId,
@@ -2947,31 +2995,38 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeThreadId || !activeProject) {
       return;
     }
-    const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
-    if (!cwdForOpen) {
-      return;
-    }
-    const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-    storeNewTerminal(activeThreadRef, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-    void openTerminal({
-      environmentId,
-      input: {
-        threadId: activeThreadId,
-        terminalId,
-        cwd: cwdForOpen,
-        ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-        env: projectScriptRuntimeEnv({
-          project: { cwd: activeProject.workspaceRoot },
-          worktreePath: activeThreadWorktreePath,
-        }),
-      },
-    });
+    void (async () => {
+      const cwdForOpen =
+        gitCwd ??
+        activeProject.workspaceRoot ??
+        (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
+      if (!cwdForOpen) {
+        return;
+      }
+      const terminalId = nextTerminalId(allocatableActiveTerminalIds);
+      storeNewTerminal(activeThreadRef, terminalId);
+      setTerminalFocusRequestId((value) => value + 1);
+      await openTerminal({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          terminalId,
+          cwd: cwdForOpen,
+          ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+          env: projectWorkspaceRuntimeEnv({
+            workspaceRoot: activeProject.workspaceRoot,
+            cwd: cwdForOpen,
+            worktreePath: activeThreadWorktreePath,
+          }),
+        },
+      });
+    })();
   }, [
     activeProject,
     activeThreadId,
     allocatableActiveTerminalIds,
     activeThreadRef,
+    ensureActiveProjectWorkspaceRoot,
     openTerminal,
     activeThreadWorktreePath,
     environmentId,
@@ -3029,7 +3084,14 @@ function ChatViewContent(props: ChatViewProps) {
           return { ...current, [activeProject.id]: script.id };
         });
       }
-      const targetCwd = options?.cwd ?? gitCwd ?? activeProject.workspaceRoot;
+      const targetCwd =
+        options?.cwd ??
+        gitCwd ??
+        activeProject.workspaceRoot ??
+        (await ensureActiveProjectWorkspaceRoot("A project action runs inside a directory."));
+      if (targetCwd === null) {
+        return;
+      }
       const baseTerminalId =
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
@@ -3048,10 +3110,9 @@ function ChatViewContent(props: ChatViewProps) {
       }
       setTerminalFocusRequestId((value) => value + 1);
 
-      const runtimeEnv = projectScriptRuntimeEnv({
-        project: {
-          cwd: activeProject.workspaceRoot,
-        },
+      const runtimeEnv = projectWorkspaceRuntimeEnv({
+        workspaceRoot: activeProject.workspaceRoot,
+        cwd: targetCwd,
         worktreePath: targetWorktreePath,
         ...(options?.env ? { extraEnv: options.env } : {}),
       });
@@ -3115,6 +3176,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread,
       activeThreadId,
       activeThreadRef,
+      ensureActiveProjectWorkspaceRoot,
       gitCwd,
       setTerminalOpen,
       setThreadError,
@@ -3134,7 +3196,6 @@ function ChatViewContent(props: ChatViewProps) {
   const persistProjectScripts = useCallback(
     async (input: {
       projectId: ProjectId;
-      projectCwd: string;
       previousScripts: ReadonlyArray<ProjectScript>;
       nextScripts: ReadonlyArray<ProjectScript>;
       keybinding?: string | null;
@@ -3193,7 +3254,6 @@ function ChatViewContent(props: ChatViewProps) {
 
       return persistProjectScripts({
         projectId: activeProject.id,
-        projectCwd: activeProject.workspaceRoot,
         previousScripts: activeProject.scripts,
         nextScripts,
         keybinding: input.keybinding,
@@ -3226,7 +3286,6 @@ function ChatViewContent(props: ChatViewProps) {
 
       return persistProjectScripts({
         projectId: activeProject.id,
-        projectCwd: activeProject.workspaceRoot,
         previousScripts: activeProject.scripts,
         nextScripts,
         keybinding: input.keybinding,
@@ -3246,7 +3305,6 @@ function ChatViewContent(props: ChatViewProps) {
 
       const result = await persistProjectScripts({
         projectId: activeProject.id,
-        projectCwd: activeProject.workspaceRoot,
         previousScripts: activeProject.scripts,
         nextScripts,
         keybinding: null,
@@ -3378,29 +3436,37 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef]);
   const addTerminalSurface = useCallback(() => {
     if (!activeThreadRef || !activeThreadId || !activeProject) return;
-    const cwd = gitCwd ?? activeProject.workspaceRoot;
-    const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-    useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-    void openTerminal({
-      environmentId: activeThreadRef.environmentId,
-      input: {
-        threadId: activeThreadId,
-        terminalId,
-        cwd,
-        ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-        env: projectScriptRuntimeEnv({
-          project: { cwd: activeProject.workspaceRoot },
-          worktreePath: activeThreadWorktreePath,
-        }),
-      },
-    });
+    void (async () => {
+      const cwd =
+        gitCwd ??
+        activeProject.workspaceRoot ??
+        (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
+      if (cwd === null) return;
+      const terminalId = nextTerminalId(allocatableActiveTerminalIds);
+      useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
+      setTerminalFocusRequestId((value) => value + 1);
+      await openTerminal({
+        environmentId: activeThreadRef.environmentId,
+        input: {
+          threadId: activeThreadId,
+          terminalId,
+          cwd,
+          ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+          env: projectWorkspaceRuntimeEnv({
+            workspaceRoot: activeProject.workspaceRoot,
+            cwd,
+            worktreePath: activeThreadWorktreePath,
+          }),
+        },
+      });
+    })();
   }, [
     activeProject,
     activeThreadId,
     activeThreadRef,
     activeThreadWorktreePath,
     allocatableActiveTerminalIds,
+    ensureActiveProjectWorkspaceRoot,
     gitCwd,
     openTerminal,
   ]);
@@ -3415,25 +3481,32 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
-      const terminalId = nextTerminalId(allocatableActiveTerminalIds);
-      const cwd = gitCwd ?? activeProject.workspaceRoot;
-      useRightPanelStore
-        .getState()
-        .splitTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId, direction);
-      setTerminalFocusRequestId((value) => value + 1);
-      void openTerminal({
-        environmentId: activeThreadRef.environmentId,
-        input: {
-          threadId: activeThreadId,
-          terminalId,
-          cwd,
-          ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-          env: projectScriptRuntimeEnv({
-            project: { cwd: activeProject.workspaceRoot },
-            worktreePath: activeThreadWorktreePath,
-          }),
-        },
-      });
+      void (async () => {
+        const cwd =
+          gitCwd ??
+          activeProject.workspaceRoot ??
+          (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
+        if (cwd === null) return;
+        const terminalId = nextTerminalId(allocatableActiveTerminalIds);
+        useRightPanelStore
+          .getState()
+          .splitTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId, direction);
+        setTerminalFocusRequestId((value) => value + 1);
+        await openTerminal({
+          environmentId: activeThreadRef.environmentId,
+          input: {
+            threadId: activeThreadId,
+            terminalId,
+            cwd,
+            ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
+            env: projectWorkspaceRuntimeEnv({
+              workspaceRoot: activeProject.workspaceRoot,
+              cwd,
+              worktreePath: activeThreadWorktreePath,
+            }),
+          },
+        });
+      })();
     },
     [
       activeProject,
@@ -3442,6 +3515,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadRef,
       activeThreadWorktreePath,
       allocatableActiveTerminalIds,
+      ensureActiveProjectWorkspaceRoot,
       gitCwd,
       openTerminal,
     ],
@@ -4668,8 +4742,8 @@ function ChatViewContent(props: ChatViewProps) {
       if (!current || current.threadId !== activeThreadId) {
         return current;
       }
-      const settledCwd = projectScriptCwd({
-        project: { cwd: activeProjectCwd },
+      const settledCwd = projectWorkspaceCwd({
+        workspaceRoot: activeProjectCwd,
         worktreePath: activeThreadWorktreePath,
       });
       if (
@@ -5078,6 +5152,15 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    // The composer is the loudest just-in-time promotion surface: a rootless project cannot hold
+    // a thread at all (the decider refuses `thread.create`), so the directory is resolved here,
+    // before the draft is consumed — cancelling leaves the composer exactly as it was.
+    const projectWorkspaceRootForSend =
+      activeProject.workspaceRoot ??
+      (await ensureActiveProjectWorkspaceRoot("An agent needs a directory to work in."));
+    if (projectWorkspaceRootForSend === null) {
+      return;
+    }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
@@ -5285,7 +5368,7 @@ function ChatViewContent(props: ChatViewProps) {
               ...(baseBranchForWorktree
                 ? {
                     prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
+                      projectCwd: projectWorkspaceRootForSend,
                       baseBranch: baseBranchForWorktree,
                       branch: buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
@@ -5389,6 +5472,122 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   };
+
+  const onRequestEditUserMessage = useCallback(
+    async (messageId: MessageId): Promise<boolean> => {
+      if (!activeThread || editableUserMessageId !== messageId) {
+        return false;
+      }
+      if (latestTurnSettled && activeThread.session?.status !== "starting") {
+        return true;
+      }
+      const result = await interruptThreadTurn({
+        environmentId,
+        input: buildThreadTurnInterruptInput(activeThread),
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to stop the current turn.",
+          );
+        }
+        return false;
+      }
+      return true;
+    },
+    [
+      activeThread,
+      editableUserMessageId,
+      environmentId,
+      interruptThreadTurn,
+      latestTurnSettled,
+      setThreadError,
+    ],
+  );
+
+  const onSubmitUserMessageEdit = useCallback(
+    async (messageId: MessageId, text: string): Promise<boolean> => {
+      if (
+        !activeThread ||
+        !isServerThread ||
+        editableUserMessageId !== messageId ||
+        !latestTurnSettled ||
+        isWorking ||
+        sendInFlightRef.current ||
+        text.trim().length === 0
+      ) {
+        return false;
+      }
+      const sendCtx = composerRef.current?.getSendContext();
+      if (!sendCtx?.providerAvailable) {
+        setThreadError(activeThread.id, "The selected provider is unavailable.");
+        return false;
+      }
+
+      sendInFlightRef.current = true;
+      beginLocalDispatch({ preparingWorktree: false });
+      setThreadError(activeThread.id, null);
+      setOptimisticUserMessageEdits((existing) => ({ ...existing, [messageId]: text }));
+
+      const result = await editThreadTurn({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          messageId,
+          text,
+          modelSelection: sendCtx.selectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          ...(activeLatestTurn?.sourceProposedPlan
+            ? { sourceProposedPlan: activeLatestTurn.sourceProposedPlan }
+            : {}),
+        },
+      });
+      sendInFlightRef.current = false;
+
+      if (result._tag === "Success") {
+        acknowledgeActiveThreadWoke();
+        return true;
+      }
+
+      setOptimisticUserMessageEdits((existing) => {
+        if (!(messageId in existing)) {
+          return existing;
+        }
+        const next = { ...existing };
+        delete next[messageId];
+        return next;
+      });
+      resetLocalDispatch();
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to send the edited message.",
+        );
+      }
+      return false;
+    },
+    [
+      acknowledgeActiveThreadWoke,
+      activeLatestTurn?.sourceProposedPlan,
+      activeThread,
+      beginLocalDispatch,
+      composerRef,
+      editThreadTurn,
+      editableUserMessageId,
+      environmentId,
+      interactionMode,
+      isServerThread,
+      isWorking,
+      latestTurnSettled,
+      resetLocalDispatch,
+      runtimeMode,
+      setThreadError,
+    ],
+  );
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -6276,6 +6475,12 @@ function ChatViewContent(props: ChatViewProps) {
                     : null
                 }
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                editableUserMessageId={editableUserMessageId}
+                canSubmitUserMessageEdit={
+                  editableUserMessageId !== null && latestTurnSettled && !isWorking
+                }
+                onRequestEditUserMessage={onRequestEditUserMessage}
+                onSubmitUserMessageEdit={onSubmitUserMessageEdit}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}

@@ -9,6 +9,10 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/**
+ * Undefined when the thread has no worktree and its project is rootless: there
+ * is no directory to run in, and every caller already treats that as "skip".
+ */
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;
@@ -16,7 +20,7 @@ export function resolveThreadWorkspaceCwd(input: {
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
-    readonly workspaceRoot: string;
+    readonly workspaceRoot: string | null;
   }>;
 }): string | undefined {
   const worktreeCwd = input.thread.worktreePath ?? undefined;
@@ -24,5 +28,8 @@ export function resolveThreadWorkspaceCwd(input: {
     return worktreeCwd;
   }
 
-  return input.projects.find((project) => project.id === input.thread.projectId)?.workspaceRoot;
+  return (
+    input.projects.find((project) => project.id === input.thread.projectId)?.workspaceRoot ??
+    undefined
+  );
 }

@@ -537,6 +537,22 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+/**
+ * The selection every model-picking server setting starts from. Shared rather than written twice
+ * so "the text generation default" stays one fact: `issueEnrichmentModelSelection` defaults to
+ * exactly what `textGenerationModelSelection` defaults to.
+ */
+const DEFAULT_TEXT_GENERATION_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: DEFAULT_TEXT_GENERATION_MODEL,
+  options: [
+    {
+      id: "reasoningEffort",
+      value: DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
+    },
+  ],
+};
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -569,18 +585,18 @@ export const ServerSettings = Schema.Struct({
   ),
   addProjectBaseDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   textGenerationModelSelection: ModelSelection.pipe(
-    Schema.withDecodingDefault(
-      Effect.succeed({
-        instanceId: ProviderInstanceId.make("codex"),
-        model: DEFAULT_TEXT_GENERATION_MODEL,
-        options: [
-          {
-            id: "reasoningEffort",
-            value: DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
-          },
-        ],
-      }),
-    ),
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
+  ),
+  /**
+   * What runs an issue enrichment investigation: a read-only one-shot in the project's directory,
+   * beside commit-message and change-request generation rather than in the thread machinery.
+   *
+   * Its own key rather than a reuse of `textGenerationModelSelection`, because the two jobs are
+   * not the same size: naming a commit is a sentence off a diff, and investigating a repository
+   * is minutes of reading. Defaults to the same selection, so leaving it alone costs nothing.
+   */
+  issueEnrichmentModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
   ),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -723,6 +739,7 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  issueEnrichmentModelSelection: Schema.optionalKey(ModelSelectionPatch),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),

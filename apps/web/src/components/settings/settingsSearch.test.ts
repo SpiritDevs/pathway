@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   searchableSetting,
   searchSettings,
+  SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -91,5 +93,47 @@ describe("searchSettings", () => {
       id: "usage",
       to: "/settings/usage",
     });
+  });
+
+  it("routes issue settings to their Settings sections", () => {
+    expect(searchSettings("issue statuses")[0]).toMatchObject({
+      id: "issue-statuses",
+      to: "/settings/issues-statuses",
+    });
+    expect(searchSettings("issue labels")[0]).toMatchObject({
+      id: "issue-labels",
+      to: "/settings/issues-labels",
+    });
+    expect(searchSettings("import issues")[0]).toMatchObject({
+      id: "issue-import",
+      to: "/settings/issues-import",
+    });
+  });
+});
+
+describe("SETTINGS_NAV_GROUPS", () => {
+  const groupedPaths = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths);
+
+  it("places every settings section in exactly one group", () => {
+    expect([...groupedPaths].sort()).toEqual(Object.keys(SETTINGS_SECTION_LABELS).sort());
+  });
+
+  it("keeps the record in sidebar order", () => {
+    expect(groupedPaths).toEqual(Object.keys(SETTINGS_SECTION_LABELS));
+  });
+
+  it("groups the tracker pages under Issues", () => {
+    expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
+      "Workspace",
+      "Agents",
+      "Issues",
+      "System",
+    ]);
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
+      "/settings/issues-statuses",
+      "/settings/issues-labels",
+      "/settings/issues-import",
+      "/settings/issues-enrichment",
+    ]);
   });
 });

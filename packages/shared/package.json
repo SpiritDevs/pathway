@@ -218,6 +218,10 @@
     "./usageFormat": {
       "types": "./src/usageFormat.ts",
       "import": "./src/usageFormat.ts"
+    },
+    "./issuesCsv": {
+      "types": "./src/issuesCsv.ts",
+      "import": "./src/issuesCsv.ts"
     }
   },
   "scripts": {

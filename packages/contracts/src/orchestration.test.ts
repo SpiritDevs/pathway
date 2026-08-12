@@ -20,6 +20,7 @@ import {
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
+  ThreadTurnEditCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
@@ -33,6 +34,7 @@ const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateComma
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
+const decodeThreadTurnEditCommand = Schema.decodeUnknownEffect(ThreadTurnEditCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
@@ -142,6 +144,56 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
   }),
 );
 
+it.effect("decodes a rootless project.create and a rooted one from an older client", () =>
+  Effect.gen(function* () {
+    const rootless = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-1",
+      projectId: "project-1",
+      title: "Planning",
+      workspaceRoot: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rootless.workspaceRoot, null);
+
+    const rooted = yield* decodeProjectCreateCommand({
+      type: "project.create",
+      commandId: "cmd-2",
+      projectId: "project-2",
+      title: "Rooted",
+      workspaceRoot: "/tmp/workspace",
+      createdAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rooted.workspaceRoot, "/tmp/workspace");
+  }),
+);
+
+it.effect("decodes persisted project.created payloads written before and after rootless", () =>
+  Effect.gen(function* () {
+    const historical = yield* decodeProjectCreatedPayload({
+      projectId: "project-1",
+      title: "Rooted",
+      workspaceRoot: "/tmp/workspace",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(historical.workspaceRoot, "/tmp/workspace");
+
+    const rootless = yield* decodeProjectCreatedPayload({
+      projectId: "project-2",
+      title: "Rootless",
+      workspaceRoot: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-08-12T00:00:00.000Z",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    });
+    assert.strictEqual(rootless.workspaceRoot, null);
+  }),
+);
+
 it.effect("decodes project.create with createWorkspaceRootIfMissing enabled", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProjectCreateCommand({
@@ -221,6 +273,22 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection, undefined);
+    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+  }),
+);
+
+it.effect("decodes a message edit that restarts the latest turn", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnEditCommand({
+      type: "thread.turn.edit",
+      commandId: "cmd-edit-turn-1",
+      threadId: "thread-1",
+      messageId: "msg-1",
+      text: "Corrected message",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.text, "Corrected message");
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
@@ -721,6 +789,7 @@ it.effect(
       assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
+      assert.strictEqual(parsed.rollbackTurns, undefined);
     }),
 );
 
@@ -733,12 +802,14 @@ it.effect("decodes thread.turn-start-requested source proposed plan metadata whe
         threadId: "thread-1",
         planId: "plan-1",
       },
+      rollbackTurns: 1,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.deepStrictEqual(parsed.sourceProposedPlan, {
       threadId: "thread-1",
       planId: "plan-1",
     });
+    assert.strictEqual(parsed.rollbackTurns, 1);
   }),
 );
 

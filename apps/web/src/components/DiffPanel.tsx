@@ -38,6 +38,7 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
+import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useProject, useThread } from "../state/entities";
 import { resolveThreadRouteRef } from "../threadRoutes";
@@ -134,6 +135,12 @@ export default function DiffPanel({
       : null,
   );
   const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  // With no directory there is no `activeCwd`, so every query below sits disabled and the panel
+  // would read as "no patch available" rather than as a project that has not been pointed at a
+  // repository yet. Say so, and offer the attach — see
+  // docs/internals/decisions/0006-issue-tracker.md ("Projects").
+  const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -442,7 +449,7 @@ export default function DiffPanel({
       openDiffFilePrimaryAction({
         threadRef: routeThreadRef,
         filePath,
-        activeCwd,
+        activeCwd: activeCwd ?? undefined,
         openInEditor: (targetPath) => {
           void (async () => {
             const result = await openInPreferredEditor(targetPath);
@@ -814,6 +821,21 @@ export default function DiffPanel({
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
+        </div>
+      ) : isRootlessProject ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-5 text-center text-xs text-muted-foreground/70">
+          <p>This project has no directory yet, so there is nothing to diff.</p>
+          <Button
+            onClick={() => {
+              // Attaching updates the project on the projection stream, which re-renders this
+              // panel with a real `activeCwd` and enables the queries below. Nothing to reload.
+              void ensureWorkspaceRoot("A diff is read from the project's git repository.");
+            }}
+            size="xs"
+            variant="outline"
+          >
+            Attach a directory
+          </Button>
         </div>
       ) : !isGitRepo ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">

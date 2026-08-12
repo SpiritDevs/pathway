@@ -185,11 +185,14 @@ function PullRequestsRouteView() {
   const scopedProjects = useMemo(
     () =>
       projects
-        .map((project) => ({
-          id: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-        }))
+        // A rootless project has no remote and no host, so `PullRequestService` already drops it
+        // before building a `PullRequestDetail`; listing it in the filter would offer a scope
+        // that can never match a row.
+        .flatMap((project) =>
+          project.workspaceRoot === null
+            ? []
+            : [{ id: project.id, title: project.title, workspaceRoot: project.workspaceRoot }],
+        )
         .toSorted((left, right) => left.title.localeCompare(right.title)),
     [projects],
   );

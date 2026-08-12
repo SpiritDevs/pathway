@@ -8,9 +8,11 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
+import { useIssueStartWorkLink } from "../components/issues/useIssueStartWorkLink";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useThread, useThreadRefs } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -29,6 +31,7 @@ function DraftChatThreadRouteView() {
   const serverThread = useThread(serverThreadRef);
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
 
   useEffect(() => {
     if (!inferredThreadRef || draftSession?.promotedTo) {
@@ -36,6 +39,15 @@ function DraftChatThreadRouteView() {
     }
     markPromotedDraftThreadByRef(inferredThreadRef);
   }, [draftSession?.promotedTo, inferredThreadRef]);
+
+  // Start work parked an issue against this draft; the thread it named now exists. This is the
+  // only place a draft is seen becoming a thread, so it is where the link gets written.
+  useIssueStartWorkLink({
+    draftId,
+    environmentId: draftSession?.environmentId ?? null,
+    primaryEnvironmentId,
+    threadId: serverThreadRef?.threadId ?? null,
+  });
 
   useEffect(() => {
     if (!canonicalThreadRef) {

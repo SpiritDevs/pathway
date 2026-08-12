@@ -61,6 +61,16 @@ export function legacyProjectCwdPreferenceKey(cwd: string): string {
   return `${LEGACY_PROJECT_CWD_PREFERENCE_PREFIX}${normalizeProjectPathForComparison(cwd)}`;
 }
 
+/**
+ * The legacy path-keyed preference for a project, as a spreadable list.
+ *
+ * A rootless project contributes nothing: the legacy key existed to migrate preferences that were
+ * stored against a cwd, and a project that never had one cannot have a stale entry to match.
+ */
+export function legacyProjectCwdPreferenceKeys(cwd: string | null | undefined): string[] {
+  return cwd == null ? [] : [legacyProjectCwdPreferenceKey(cwd)];
+}
+
 function sanitizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];

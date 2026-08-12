@@ -73,6 +73,38 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+/**
+ * A read-only one-shot investigation of the repository at `cwd`.
+ *
+ * The odd one out in this module, and deliberately so. The other four operations hand the provider
+ * a JSON schema and take a decoded struct back; this one takes the model's raw final text and
+ * leaves parsing to the caller. Two reasons: the answer is long enough that a schema failure would
+ * throw away minutes of work rather than seconds, and the caller (issue enrichment) already has to
+ * be tolerant of fenced and chatty output because the transcript is shown to a human either way.
+ *
+ * It is also the only operation with a live audience — a run panel renders the output as it
+ * arrives — hence `onOutput`.
+ */
+export interface InvestigationGenerationInput {
+  cwd: string;
+  /** The whole instruction set. Built by the caller: this module knows nothing about issues. */
+  prompt: string;
+  /**
+   * Raw provider output, handed over as it arrives, in whatever sizes the transport produces.
+   *
+   * Not throttled here. The caller batches, because only the caller knows what it is feeding —
+   * a database row that republishes on every write, in enrichment's case.
+   */
+  onOutput?: ((chunk: string) => Effect.Effect<void>) | undefined;
+  /** What model and provider to use for the investigation. */
+  modelSelection: ModelSelection;
+}
+
+export interface InvestigationGenerationResult {
+  /** The model's final message, unparsed. Empty output is a failure, not an empty result. */
+  text: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -80,6 +112,7 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  investigate(input: InvestigationGenerationInput): Promise<InvestigationGenerationResult>;
 }
 
 /**
@@ -113,6 +146,17 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Investigate the repository at `cwd`, read-only, and return the model's final text.
+     *
+     * Interrupting this kills the underlying process or session: every implementation registers
+     * its child on the enclosing scope, which is how enrichment cancels a run without ever
+     * pattern-matching a process list.
+     */
+    readonly investigate: (
+      input: InvestigationGenerationInput,
+    ) => Effect.Effect<InvestigationGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -123,7 +167,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "investigate";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -162,6 +207,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    investigate: (input) =>
+      resolveInstance(registry, "investigate", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.investigate(input)),
       ),
   });
 

@@ -1179,9 +1179,20 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    const rollbackTurns = event.payload.rollbackTurns ?? 0;
+    const prepareProviderContext =
+      rollbackTurns > 0
+        ? providerService.rollbackConversation({
+            threadId: event.payload.threadId,
+            numTurns: rollbackTurns,
+          })
+        : Effect.void;
+
+    yield* prepareProviderContext.pipe(
+      Effect.andThen(providerService.sendTurn(sendTurnRequest.value)),
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

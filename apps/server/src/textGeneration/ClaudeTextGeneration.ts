@@ -26,6 +26,7 @@ import {
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
+  INVESTIGATION_TIMEOUT_MS,
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
@@ -46,6 +47,14 @@ import {
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
+
+/** Every operation this adapter names in an error. Written once so adding one is one edit. */
+type ClaudeTextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "investigate";
 
 /**
  * Schema for the wrapper JSON returned by `claude -p --output-format json`.
@@ -80,12 +89,30 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       ),
     );
 
+  /**
+   * The same fold, with every decoded chunk handed on before it is accumulated. Used only by the
+   * investigation path, which has a reader waiting on the output rather than a caller waiting on
+   * the exit code.
+   */
+  const streamStdoutAsString = <E>(
+    operation: string,
+    stream: Stream.Stream<Uint8Array, E>,
+    onOutput: ((chunk: string) => Effect.Effect<void>) | undefined,
+  ): Effect.Effect<string, TextGenerationError> =>
+    stream.pipe(
+      Stream.decodeText(),
+      Stream.tap((chunk) => onOutput?.(chunk) ?? Effect.void),
+      Stream.runFold(
+        () => "",
+        (acc, chunk) => acc + chunk,
+      ),
+      Effect.mapError((cause) =>
+        normalizeCliError("claude", operation, cause, "Failed to collect process output"),
+      ),
+    );
+
   const encodeJsonForOperation = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    operation: ClaudeTextGenerationOperation,
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -111,11 +138,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     outputSchemaJson,
     modelSelection,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: ClaudeTextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -261,6 +284,105 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     );
   });
 
+  /**
+   * The investigation shape: `claude -p` in plan mode, streaming plain text.
+   *
+   * Plan mode rather than `--dangerously-skip-permissions`, which is what the other four
+   * operations use: those never touch the tree, but this one is explicitly told to go read a
+   * repository, and read-only is the whole premise of an enrichment run.
+   *
+   * Text rather than the JSON envelope for the same reason Codex drops its output schema here —
+   * the caller parses tolerantly because it is showing the raw output to a human regardless.
+   */
+  const runClaudeInvestigation = Effect.fn("runClaudeInvestigation")(function* (input: {
+    cwd: string;
+    prompt: string;
+    onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
+    modelSelection: ModelSelection;
+  }) {
+    const operation = "investigate" as const;
+    const caps = getClaudeModelCapabilities(input.modelSelection.model);
+    const cliEffort = normalizeClaudeCliEffort(
+      resolveClaudeEffort(caps, getModelSelectionStringOptionValue(input.modelSelection, "effort")),
+      input.modelSelection.model,
+    );
+
+    const runClaudeCommand = Effect.fn("runClaudeInvestigation.runClaudeCommand")(function* () {
+      const spawnCommand = yield* resolveSpawnCommand(
+        claudeSettings.binaryPath || "claude",
+        [
+          "-p",
+          "--output-format",
+          "text",
+          "--permission-mode",
+          "plan",
+          "--model",
+          resolveClaudeApiModelId(input.modelSelection),
+          ...(cliEffort ? ["--effort", cliEffort] : []),
+        ],
+        { env: claudeEnvironment },
+      );
+      const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        env: claudeEnvironment,
+        cwd: input.cwd,
+        shell: spawnCommand.shell,
+        stdin: {
+          stream: Stream.encodeText(Stream.make(input.prompt)),
+        },
+      });
+
+      const child = yield* commandSpawner
+        .spawn(command)
+        .pipe(
+          Effect.mapError((cause) =>
+            normalizeCliError("claude", operation, cause, "Failed to spawn Claude CLI process"),
+          ),
+        );
+      // By handle, never by name: a pattern kill cannot tell this run's `claude` from the user's.
+      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          streamStdoutAsString(operation, child.stdout, input.onOutput),
+          readStreamAsString(operation, child.stderr),
+          child.exitCode.pipe(
+            Effect.mapError((cause) =>
+              normalizeCliError("claude", operation, cause, "Failed to read Claude CLI exit code"),
+            ),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      if (exitCode !== 0) {
+        const detail = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
+        return yield* new TextGenerationError({
+          operation,
+          detail:
+            detail.length > 0
+              ? `Claude CLI command failed: ${detail}`
+              : `Claude CLI command failed with code ${exitCode}.`,
+        });
+      }
+
+      return stdout;
+    });
+
+    return yield* runClaudeCommand().pipe(
+      Effect.scoped,
+      Effect.timeoutOption(INVESTIGATION_TIMEOUT_MS),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new TextGenerationError({ operation, detail: "Claude CLI request timed out." }),
+            ),
+          onSome: (value) => Effect.succeed(value),
+        }),
+      ),
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // TextGeneration service methods
   // ---------------------------------------------------------------------------
@@ -359,10 +481,29 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
+    "ClaudeTextGeneration.investigate",
+  )(function* (input) {
+    const text = yield* runClaudeInvestigation({
+      cwd: input.cwd,
+      prompt: input.prompt,
+      onOutput: input.onOutput,
+      modelSelection: input.modelSelection,
+    });
+    if (text.trim().length === 0) {
+      return yield* new TextGenerationError({
+        operation: "investigate",
+        detail: "Claude returned no investigation output.",
+      });
+    }
+    return { text } satisfies TextGeneration.InvestigationGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    investigate,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

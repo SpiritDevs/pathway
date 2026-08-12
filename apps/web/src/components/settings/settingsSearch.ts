@@ -4,9 +4,14 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/source-control"
+  | "/settings/usage"
+  | "/settings/issues-statuses"
+  | "/settings/issues-labels"
+  | "/settings/issues-import"
+  | "/settings/issues-enrichment"
   | "/settings/connections"
   | "/settings/archived"
-  | "/settings/usage";
+  | "/settings/diagnostics";
 
 export interface SettingsSearchItem {
   readonly id: string;
@@ -16,19 +21,58 @@ export interface SettingsSearchItem {
 }
 
 /**
- * Section labels in sidebar order. The sidebar nav and the search-result
- * subtitles both render from this record, so each label exists once.
+ * Section labels in sidebar order. The sidebar nav, the breadcrumb, and the
+ * search-result subtitles all render from this record, so each label exists
+ * once. `SETTINGS_NAV_GROUPS` slices the same paths into sidebar groups.
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
-  "/settings/usage": "Usage",
   "/settings/source-control": "Source Control",
+  "/settings/usage": "Usage",
+  "/settings/issues-statuses": "Statuses",
+  "/settings/issues-labels": "Labels",
+  "/settings/issues-import": "Import",
+  "/settings/issues-enrichment": "Enrichment",
   "/settings/connections": "Connections",
   "/settings/archived": "Archive",
+  "/settings/diagnostics": "Diagnostics",
 };
+
+export interface SettingsNavGroup {
+  readonly label: string;
+  readonly paths: ReadonlyArray<SettingsPath>;
+}
+
+/**
+ * Sidebar grouping. Every `SettingsPath` belongs to exactly one group (asserted
+ * in `settingsSearch.test.ts`); labels and icons stay keyed off the path.
+ */
+export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
+  {
+    label: "Workspace",
+    paths: ["/settings/general", "/settings/appearance", "/settings/keybindings"],
+  },
+  {
+    label: "Agents",
+    paths: ["/settings/providers", "/settings/source-control", "/settings/usage"],
+  },
+  {
+    label: "Issues",
+    paths: [
+      "/settings/issues-statuses",
+      "/settings/issues-labels",
+      "/settings/issues-import",
+      "/settings/issues-enrichment",
+    ],
+  },
+  {
+    label: "System",
+    paths: ["/settings/connections", "/settings/archived", "/settings/diagnostics"],
+  },
+];
 
 /**
  * Every searchable setting, in result order. This catalog is the single
@@ -185,6 +229,36 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "source-control",
     title: "Source control",
     to: "/settings/source-control",
+  },
+  {
+    id: "issue-statuses",
+    title: "Issue statuses",
+    to: "/settings/issues-statuses",
+  },
+  {
+    id: "issue-key-prefix",
+    title: "Issue key prefix",
+    to: "/settings/issues-statuses",
+  },
+  {
+    id: "issue-labels",
+    title: "Issue labels",
+    to: "/settings/issues-labels",
+  },
+  {
+    id: "issue-import",
+    title: "Import issues",
+    to: "/settings/issues-import",
+  },
+  {
+    id: "issue-enrichment",
+    title: "Issue enrichment",
+    to: "/settings/issues-enrichment",
+  },
+  {
+    id: "issue-enrichment-model",
+    title: "Investigation model",
+    to: "/settings/issues-enrichment",
   },
   {
     id: "remote-environments",

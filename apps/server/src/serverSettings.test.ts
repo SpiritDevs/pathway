@@ -691,4 +691,106 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
+
+  it.effect("starts issue enrichment on the text generation default", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      // Leaving it alone costs nothing: investigating and naming a commit start on the same model,
+      // and only the person who wants a bigger one for investigations has to say so.
+      assert.deepEqual(
+        DEFAULT_SERVER_SETTINGS.issueEnrichmentModelSelection,
+        DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+      );
+      assert.deepEqual(
+        (yield* serverSettings.getSettings).issueEnrichmentModelSelection,
+        DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("moves the enrichment selection independently of text generation", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+
+      const next = yield* serverSettings.updateSettings({
+        issueEnrichmentModelSelection: { instanceId, model: "claude-opus-5" },
+      });
+
+      assert.deepEqual(next.issueEnrichmentModelSelection, { instanceId, model: "claude-opus-5" });
+      // The two are separate settings; moving one does not move the other.
+      assert.deepEqual(
+        next.textGenerationModelSelection,
+        DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+      );
+
+      // And options merge onto it the same way they do for text generation.
+      const withOptions = yield* serverSettings.updateSettings({
+        issueEnrichmentModelSelection: { options: [{ id: "effort", value: "high" }] },
+      });
+      assert.deepEqual(
+        withOptions.issueEnrichmentModelSelection,
+        createModelSelection(instanceId, "claude-opus-5", [{ id: "effort", value: "high" }]),
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("falls the enrichment selection back to an enabled provider", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      yield* serverSettings.updateSettings({
+        issueEnrichmentModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4-codex",
+        },
+      });
+
+      // Turning Codex off must not leave the Investigate button pointed at it. The stored value
+      // is untouched — turning it back on restores the choice — but what a reader sees resolves
+      // to something that can actually run.
+      const next = yield* serverSettings.updateSettings({
+        providers: { codex: { enabled: false } },
+      });
+
+      assert.notEqual(next.issueEnrichmentModelSelection.instanceId, "codex");
+      assert.deepEqual(
+        next.issueEnrichmentModelSelection,
+        next.textGenerationModelSelection,
+        "both selections fall back to the same first enabled provider",
+      );
+
+      const restored = yield* serverSettings.updateSettings({
+        providers: { codex: { enabled: true } },
+      });
+      assert.deepEqual(restored.issueEnrichmentModelSelection, {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.4-codex",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("leaves the enrichment selection alone when nothing at all is enabled", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          codex: { enabled: false },
+          claudeAgent: { enabled: false },
+          cursor: { enabled: false },
+          grok: { enabled: false },
+          opencode: { enabled: false },
+        },
+      });
+
+      // There is nowhere to fall back to, and inventing a provider would be worse than the
+      // honest refusal the engine gives when it tries to run this.
+      assert.deepEqual(
+        next.issueEnrichmentModelSelection,
+        DEFAULT_SERVER_SETTINGS.issueEnrichmentModelSelection,
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 });

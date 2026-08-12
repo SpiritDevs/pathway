@@ -121,7 +121,8 @@ export function resolveProjectPathForDispatch(value: string, cwd?: string | null
   );
 }
 
-export function findProjectByPath<T extends { workspaceRoot?: string; cwd?: string }>(
+// A rootless project has no path, so it can never be the match here.
+export function findProjectByPath<T extends { workspaceRoot?: string | null; cwd?: string }>(
   projects: ReadonlyArray<T>,
   candidatePath: string,
 ): T | undefined {

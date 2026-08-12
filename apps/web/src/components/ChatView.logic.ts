@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type MessageId,
   isProviderDriverKind,
   ProjectId,
   type ModelSelection,
@@ -226,6 +227,22 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
     previewUrls.push(attachment.previewUrl);
   }
   return previewUrls;
+}
+
+export function resolveEditableUserMessageId(thread: Thread | null | undefined): MessageId | null {
+  const latestUserMessage = thread?.messages.findLast((message) => message.role === "user");
+  if (!thread || !latestUserMessage) {
+    return null;
+  }
+
+  const messageCreatedAt = Date.parse(latestUserMessage.createdAt);
+  const hasChangesSinceMessage = thread.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.files.length > 0 &&
+      (!Number.isFinite(messageCreatedAt) ||
+        Date.parse(checkpoint.completedAt) >= messageCreatedAt),
+  );
+  return hasChangesSinceMessage ? null : latestUserMessage.id;
 }
 
 export interface PullRequestDialogState {

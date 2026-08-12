@@ -41,7 +41,8 @@ import { type CliAuthLocationFlags, projectLocationFlags, resolveCliAuthConfig }
 type ProjectMutationTarget = {
   readonly id: ProjectId;
   readonly title: string;
-  readonly workspaceRoot: string;
+  /** Null for a rootless project, which this CLI can only address by id. */
+  readonly workspaceRoot: string | null;
 };
 
 type ProjectCommandExecutionMode = "live" | "offline";
@@ -236,7 +237,9 @@ const normalizeWorkspaceRootForProjectCommand = Effect.fn(
 });
 
 const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
-  workspaceRoot: string,
+  // Null for a rootless project: there is no basename to fall back to, so an
+  // explicit title is the only source and the generic default covers the rest.
+  workspaceRoot: string | null,
   explicitTitle?: string,
 ) {
   if (explicitTitle !== undefined) {
@@ -248,6 +251,10 @@ const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
       operation: "validateProjectTitle",
       title: explicitTitle,
     });
+  }
+
+  if (workspaceRoot === null) {
+    return "project";
   }
 
   const path = yield* Path.Path;

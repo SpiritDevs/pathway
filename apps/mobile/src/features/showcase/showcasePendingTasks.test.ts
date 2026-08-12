@@ -70,3 +70,16 @@ it("builds sendable-looking pending tasks against real showcase projects", () =>
 it("waits until every referenced project has hydrated", () => {
   assert.equal(buildShowcasePendingTasks(projects.slice(0, 1), Date.now()).length, 1);
 });
+
+it("skips a rootless project, which cannot carry a workspace or branch", () => {
+  const rootless = projects.map((project) =>
+    String(project.id) === "react" ? { ...project, workspaceRoot: null } : project,
+  );
+
+  const tasks = buildShowcasePendingTasks(rootless, Date.parse("2026-07-16T09:00:00.000Z"));
+
+  assert.deepStrictEqual(
+    tasks.map((task) => (task.creation ? String(task.creation.projectId) : undefined)),
+    ["pathway"],
+  );
+});

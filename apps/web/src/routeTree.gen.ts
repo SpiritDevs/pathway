@@ -27,6 +27,10 @@ import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
+import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
+import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
+import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
+import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
@@ -130,6 +134,27 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: '/keybindings',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsIssuesStatusesRoute = SettingsIssuesStatusesRouteImport.update({
+  id: '/issues-statuses',
+  path: '/issues-statuses',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
+  id: '/issues-labels',
+  path: '/issues-labels',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesImportRoute = SettingsIssuesImportRouteImport.update({
+  id: '/issues-import',
+  path: '/issues-import',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsIssuesEnrichmentRoute =
+  SettingsIssuesEnrichmentRouteImport.update({
+    id: '/issues-enrichment',
+    path: '/issues-enrichment',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: '/general',
   path: '/general',
@@ -221,6 +246,10 @@ export interface FileRoutesByFullPath {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -253,6 +282,10 @@ export interface FileRoutesByTo {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -287,6 +320,10 @@ export interface FileRoutesById {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
+  '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
+  '/settings/issues-import': typeof SettingsIssuesImportRoute
+  '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
@@ -321,6 +358,10 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-labels'
+    | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
@@ -353,6 +394,10 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-labels'
+    | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
@@ -386,6 +431,10 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/general'
+    | '/settings/issues-enrichment'
+    | '/settings/issues-import'
+    | '/settings/issues-labels'
+    | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
     | '/settings/source-control'
@@ -543,6 +592,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/issues-statuses': {
+      id: '/settings/issues-statuses'
+      path: '/issues-statuses'
+      fullPath: '/settings/issues-statuses'
+      preLoaderRoute: typeof SettingsIssuesStatusesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-labels': {
+      id: '/settings/issues-labels'
+      path: '/issues-labels'
+      fullPath: '/settings/issues-labels'
+      preLoaderRoute: typeof SettingsIssuesLabelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-import': {
+      id: '/settings/issues-import'
+      path: '/issues-import'
+      fullPath: '/settings/issues-import'
+      preLoaderRoute: typeof SettingsIssuesImportRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-enrichment': {
+      id: '/settings/issues-enrichment'
+      path: '/issues-enrichment'
+      fullPath: '/settings/issues-enrichment'
+      preLoaderRoute: typeof SettingsIssuesEnrichmentRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/general': {
       id: '/settings/general'
       path: '/general'
@@ -663,6 +740,10 @@ interface SettingsRouteChildren {
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
+  SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
+  SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
+  SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
+  SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
@@ -675,6 +756,10 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
+  SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
+  SettingsIssuesImportRoute: SettingsIssuesImportRoute,
+  SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
+  SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,

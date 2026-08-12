@@ -97,10 +97,30 @@ export function parsePersistedServerObservabilitySettings(
   return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
 }
 
+type ModelSelectionPatch = NonNullable<ServerSettingsPatch["textGenerationModelSelection"]>;
+
+/**
+ * Naming a different instance or a different model starts the option set over. Options are
+ * model-specific — a reasoning effort means nothing to a model that has no reasoning — so carrying
+ * the old ones across a switch would hand the new model settings that were never chosen for it.
+ */
 function shouldReplaceTextGenerationModelSelection(
-  patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
+  patch: ModelSelectionPatch | undefined,
 ): boolean {
   return Boolean(patch && (patch.instanceId !== undefined || patch.model !== undefined));
+}
+
+/** Apply one `ModelSelectionPatch` over one current selection. Shared by every selection key. */
+function applyModelSelectionPatch(
+  current: ModelSelection,
+  patch: ModelSelectionPatch,
+): ModelSelection {
+  const instanceId = patch.instanceId ?? current.instanceId;
+  const model = patch.model ?? current.model;
+  const options = shouldReplaceTextGenerationModelSelection(patch)
+    ? patch.options
+    : mergeModelSelectionOptionsById({ current: current.options, patch: patch.options });
+  return createModelSelection(instanceId, model, options);
 }
 
 function mergeModelSelectionOptionsById(input: {
@@ -126,6 +146,7 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
+  const enrichmentSelectionPatch = patch.issueEnrichmentModelSelection;
   const {
     automaticGitFetchInterval,
     providerHealthRefreshInterval,
@@ -206,21 +227,23 @@ export function applyServerSettingsPatch(
     providerHealthRefreshInterval: resolvedBackgroundActivity.providerHealthRefreshInterval,
     backgroundActivityProfile: resolvedBackgroundActivity.profile,
   };
-  if (!selectionPatch) {
-    return nextWithReplacements;
-  }
-
-  const instanceId = selectionPatch.instanceId ?? current.textGenerationModelSelection.instanceId;
-  const model = selectionPatch.model ?? current.textGenerationModelSelection.model;
-  const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
-    ? selectionPatch.options
-    : mergeModelSelectionOptionsById({
-        current: current.textGenerationModelSelection.options,
-        patch: selectionPatch.options,
-      });
-
   return {
     ...nextWithReplacements,
-    textGenerationModelSelection: createModelSelection(instanceId, model, options),
+    ...(selectionPatch
+      ? {
+          textGenerationModelSelection: applyModelSelectionPatch(
+            current.textGenerationModelSelection,
+            selectionPatch,
+          ),
+        }
+      : {}),
+    ...(enrichmentSelectionPatch
+      ? {
+          issueEnrichmentModelSelection: applyModelSelectionPatch(
+            current.issueEnrichmentModelSelection,
+            enrichmentSelectionPatch,
+          ),
+        }
+      : {}),
   };
 }

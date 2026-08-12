@@ -3,8 +3,10 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  type OrchestrationReadModel,
   ProjectId,
   ThreadId,
+  TurnId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -340,6 +342,154 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         ]),
         runtimeMode: "approval-required",
       });
+
+      const firstMessageEvent = events[0];
+      if (firstMessageEvent?.type !== "thread.message-sent") {
+        return;
+      }
+      const withUserMessage = yield* projectEvent(readModel, {
+        ...firstMessageEvent,
+        sequence: 3,
+      });
+      const previousTurnId = TurnId.make("turn-previous-response");
+      const previousAssistantMessageId = asMessageId("message-assistant-previous-response");
+      const withPreviousResponse = {
+        ...withUserMessage,
+        threads: withUserMessage.threads.map((thread) =>
+          thread.id === ThreadId.make("thread-1")
+            ? {
+                ...thread,
+                messages: [
+                  ...thread.messages,
+                  {
+                    id: previousAssistantMessageId,
+                    role: "assistant" as const,
+                    text: "old response",
+                    turnId: previousTurnId,
+                    streaming: false,
+                    createdAt: "2026-01-01T00:00:20.000Z",
+                    updatedAt: "2026-01-01T00:00:20.000Z",
+                  },
+                ],
+                checkpoints: [
+                  {
+                    turnId: previousTurnId,
+                    checkpointTurnCount: 1,
+                    checkpointRef: "checkpoint-previous-response" as never,
+                    status: "ready" as const,
+                    files: [],
+                    assistantMessageId: previousAssistantMessageId,
+                    completedAt: "2026-01-01T00:00:30.000Z",
+                  },
+                ],
+                latestTurn: {
+                  turnId: previousTurnId,
+                  state: "completed" as const,
+                  requestedAt: now,
+                  startedAt: now,
+                  completedAt: "2026-01-01T00:00:30.000Z",
+                  assistantMessageId: previousAssistantMessageId,
+                },
+              }
+            : thread,
+        ),
+      };
+      const editResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.edit",
+          commandId: CommandId.make("cmd-turn-edit"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: asMessageId("message-user-1"),
+          text: "hello, corrected",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex"),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:01:00.000Z",
+        },
+        readModel: withPreviousResponse,
+      });
+      const editEvents = Array.isArray(editResult) ? editResult : [editResult];
+      expect(editEvents.map((event) => event.type)).toEqual([
+        "thread.reverted",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      expect(editEvents[0]?.payload).toMatchObject({
+        threadId: ThreadId.make("thread-1"),
+        turnCount: 0,
+      });
+      expect(editEvents[1]?.payload).toMatchObject({
+        messageId: asMessageId("message-user-1"),
+        text: "hello, corrected",
+        createdAt: now,
+      });
+      expect(editEvents[2]?.payload).toMatchObject({
+        messageId: asMessageId("message-user-1"),
+        rollbackTurns: 1,
+      });
+
+      let rewrittenReadModel: OrchestrationReadModel = withPreviousResponse;
+      for (const [index, event] of editEvents.entries()) {
+        rewrittenReadModel = yield* projectEvent(rewrittenReadModel, {
+          ...event,
+          sequence: 4 + index,
+        });
+      }
+      const rewrittenThread = rewrittenReadModel.threads.find(
+        (thread) => thread.id === ThreadId.make("thread-1"),
+      );
+      expect(rewrittenThread?.messages).toHaveLength(1);
+      expect(rewrittenThread?.messages[0]).toMatchObject({
+        id: asMessageId("message-user-1"),
+        role: "user",
+        text: "hello, corrected",
+      });
+      expect(rewrittenThread?.checkpoints).toHaveLength(0);
+
+      const changedReadModel = {
+        ...withPreviousResponse,
+        threads: withPreviousResponse.threads.map((thread) =>
+          thread.id === ThreadId.make("thread-1")
+            ? {
+                ...thread,
+                checkpoints: [
+                  {
+                    turnId: "turn-with-changes" as never,
+                    checkpointTurnCount: 1,
+                    checkpointRef: "checkpoint-with-changes" as never,
+                    status: "ready" as const,
+                    files: [
+                      {
+                        path: "src/app.ts",
+                        kind: "modified",
+                        additions: 1,
+                        deletions: 0,
+                      },
+                    ],
+                    assistantMessageId: null,
+                    completedAt: "2026-01-01T00:00:30.000Z",
+                  },
+                ],
+              }
+            : thread,
+        ),
+      };
+      const editFailure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.turn.edit",
+            commandId: CommandId.make("cmd-turn-edit-after-changes"),
+            threadId: ThreadId.make("thread-1"),
+            messageId: asMessageId("message-user-1"),
+            text: "too late",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: "2026-01-01T00:01:00.000Z",
+          },
+          readModel: changedReadModel,
+        }),
+      );
+      expect(editFailure.message).toContain("changed files");
     }),
   );
 

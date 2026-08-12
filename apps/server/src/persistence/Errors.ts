@@ -88,6 +88,17 @@ export function toPersistenceDecodeError(operation: string) {
     PersistenceDecodeError.fromSchemaError(operation, cause);
 }
 
+/**
+ * One mapper for call sites that both encode a request and decode rows, where the failure could
+ * come from either side and the driver error and the schema error arrive on the same channel.
+ */
+export function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
+  return (cause: unknown): PersistenceSqlError | PersistenceDecodeError =>
+    Schema.isSchemaError(cause)
+      ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
+
 export const isPersistenceError = (u: unknown) =>
   isPersistenceSqlError(u) || isPersistenceDecodeError(u);
 
@@ -136,3 +147,4 @@ export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDe
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+export type IssueTrackerRepositoryError = PersistenceSqlError | PersistenceDecodeError;

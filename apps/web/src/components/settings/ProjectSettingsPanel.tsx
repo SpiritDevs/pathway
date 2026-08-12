@@ -73,6 +73,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -466,6 +467,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const selectedCheckout =
     group.memberProjects.find((member) => member.physicalProjectKey === selectedCheckoutKey) ??
     representative;
+  const selectedCheckoutWorkspaceRoot = selectedCheckout.workspaceRoot;
+  const [attachDirectoryOpen, setAttachDirectoryOpen] = useState(false);
   const selectedServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
   );
@@ -803,7 +806,9 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   variant="outline"
                   type="button"
                   aria-label="Choose a project icon file"
-                  disabled={isSavingFavicon}
+                  // The picker browses the project's directory; there is nothing to browse until
+                  // one is attached.
+                  disabled={isSavingFavicon || representative.workspaceRoot === null}
                   onClick={() => setFaviconPickerOpen(true)}
                 >
                   Choose file
@@ -928,7 +933,8 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                     hideIndicator
                     value={member.physicalProjectKey}
                   >
-                    {member.environmentLabel ?? "This machine"} · {member.workspaceRoot}
+                    {member.environmentLabel ?? "This machine"} ·{" "}
+                    {member.workspaceRoot ?? "No directory"}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -937,22 +943,39 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         >
           <div className="px-3 py-2 sm:px-4">
             <div className="flex min-w-0 items-center rounded-lg bg-muted/30 p-1 text-base text-muted-foreground sm:text-sm">
-              <button
-                aria-label="Copy checkout path"
-                className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                title="Copy path"
-                type="button"
-                onClick={() =>
-                  copyPathToClipboard(selectedCheckout.workspaceRoot, {
-                    path: selectedCheckout.workspaceRoot,
-                  })
-                }
-              >
-                <code className="min-w-0 flex-1 truncate font-mono">
-                  {selectedCheckout.workspaceRoot}
-                </code>
-                <CopyIcon className="size-4 shrink-0 opacity-60 group-hover:opacity-100" />
-              </button>
+              {/* A rootless project says so and offers the fix in place, rather than showing an
+                  empty path field — the same just-in-time promotion every other surface uses. */}
+              {selectedCheckoutWorkspaceRoot === null ? (
+                <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1">
+                  <span className="min-w-0 flex-1 truncate">No directory attached</span>
+                  <Button
+                    aria-label="Attach a directory to this project"
+                    onClick={() => setAttachDirectoryOpen(true)}
+                    size="xs"
+                    type="button"
+                    variant="outline"
+                  >
+                    Attach directory
+                  </Button>
+                </div>
+              ) : (
+                <button
+                  aria-label="Copy checkout path"
+                  className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  title="Copy path"
+                  type="button"
+                  onClick={() =>
+                    copyPathToClipboard(selectedCheckoutWorkspaceRoot, {
+                      path: selectedCheckoutWorkspaceRoot,
+                    })
+                  }
+                >
+                  <code className="min-w-0 flex-1 truncate font-mono">
+                    {selectedCheckoutWorkspaceRoot}
+                  </code>
+                  <CopyIcon className="size-4 shrink-0 opacity-60 group-hover:opacity-100" />
+                </button>
+              )}
               <div className="shrink-0 border-l border-border/60 px-2 tabular-nums">
                 {selectedCheckoutThreadCount === 1
                   ? "1 thread"
@@ -1171,14 +1194,23 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         onDelete={deleteScript}
         onClose={() => setEditorRequest(null)}
       />
-      <ProjectFaviconPickerDialog
-        key={`${representative.environmentId}:${representative.workspaceRoot}:${faviconPickerOpen}`}
-        cwd={representative.workspaceRoot}
-        environmentId={representative.environmentId}
-        onOpenChange={setFaviconPickerOpen}
-        onSelect={(path) => void setFaviconPath(path)}
-        open={faviconPickerOpen}
-        projectName={group.displayName}
+      {representative.workspaceRoot === null ? null : (
+        <ProjectFaviconPickerDialog
+          key={`${representative.environmentId}:${representative.workspaceRoot}:${faviconPickerOpen}`}
+          cwd={representative.workspaceRoot}
+          environmentId={representative.environmentId}
+          onOpenChange={setFaviconPickerOpen}
+          onSelect={(path) => void setFaviconPath(path)}
+          open={faviconPickerOpen}
+          projectName={group.displayName}
+        />
+      )}
+      <AttachProjectDirectoryDialog
+        onAttached={() => setAttachDirectoryOpen(false)}
+        onOpenChange={setAttachDirectoryOpen}
+        open={attachDirectoryOpen}
+        project={selectedCheckout}
+        reason="Threads, git actions, and the file explorer all run inside this directory."
       />
     </>
   );

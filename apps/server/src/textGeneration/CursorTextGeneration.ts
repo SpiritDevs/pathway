@@ -18,6 +18,7 @@ import {
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
+  INVESTIGATION_TIMEOUT_MS,
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
@@ -31,6 +32,14 @@ const CURSOR_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
+/** Every operation this adapter names in an error. Written once so adding one is one edit. */
+type CursorTextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "investigate";
+
 /**
  * Build a Cursor text-generation closure bound to a specific `CursorSettings`
  * payload. See `makeCodexAdapter` for the overall per-instance rationale.
@@ -43,23 +52,29 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const resolvedEnvironment = environment ?? process.env;
 
-  const runCursorJson = <S extends Schema.Top>({
+  /**
+   * One Cursor ACP session, prompted once, returning whatever text it said.
+   *
+   * The whole of both operations lives here: structured generation decodes this string, and an
+   * investigation hands it back raw. Streaming is free on this transport — the message chunks are
+   * already arriving one at a time — so `onOutput` is a second use of the accumulator rather than
+   * a separate code path.
+   */
+  const runCursorText = ({
     operation,
     cwd,
     prompt,
-    outputSchemaJson,
     modelSelection,
+    onOutput,
+    timeoutMs,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: CursorTextGenerationOperation;
     cwd: string;
     prompt: string;
-    outputSchemaJson: S;
     modelSelection: ModelSelection;
-  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+    onOutput?: ((chunk: string) => Effect.Effect<void>) | undefined;
+    timeoutMs: number;
+  }): Effect.Effect<string, TextGenerationError> =>
     Effect.gen(function* () {
       const outputRef = yield* Ref.make("");
       const runtime = yield* makeCursorAcpRuntime({
@@ -79,11 +94,16 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         if (content.type !== "text") {
           return Effect.void;
         }
-        return Ref.update(outputRef, (current) => current + content.text);
+        const text = content.text;
+        return Ref.update(outputRef, (current) => current + text).pipe(
+          Effect.andThen(onOutput?.(text) ?? Effect.void),
+        );
       });
 
       const promptResult = yield* Effect.gen(function* () {
         yield* runtime.start();
+        // "ask" is Cursor's read-only mode, which every operation here wants: none of them is
+        // allowed to touch the tree, and an investigation least of all.
         yield* Effect.ignore(runtime.setMode("ask"));
         yield* applyCursorAcpModelSelection({
           runtime,
@@ -104,7 +124,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
           prompt: [{ type: "text", text: prompt }],
         });
       }).pipe(
-        Effect.timeoutOption(CURSOR_TIMEOUT_MS),
+        Effect.timeoutOption(timeoutMs),
         Effect.flatMap(
           Option.match({
             onNone: () =>
@@ -138,20 +158,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               : "Cursor Agent returned empty output.",
         });
       }
-
-      const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson));
-      return yield* decodeOutput(extractJsonObject(rawResult)).pipe(
-        Effect.catchTags({
-          SchemaError: (cause) =>
-            Effect.fail(
-              new TextGenerationError({
-                operation,
-                detail: "Cursor Agent returned invalid structured output.",
-                cause,
-              }),
-            ),
-        }),
-      );
+      return rawResult;
     }).pipe(
       Effect.mapError((cause) =>
         isTextGenerationError(cause)
@@ -162,7 +169,46 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
               cause,
             }),
       ),
+      // Closes the ACP session, and with it the agent process, on interrupt as well as on exit.
       Effect.scoped,
+    );
+
+  const runCursorJson = <S extends Schema.Top>({
+    operation,
+    cwd,
+    prompt,
+    outputSchemaJson,
+    modelSelection,
+  }: {
+    operation: CursorTextGenerationOperation;
+    cwd: string;
+    prompt: string;
+    outputSchemaJson: S;
+    modelSelection: ModelSelection;
+  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+    runCursorText({
+      operation,
+      cwd,
+      prompt,
+      modelSelection,
+      timeoutMs: CURSOR_TIMEOUT_MS,
+    }).pipe(
+      Effect.flatMap((rawResult) =>
+        Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))(
+          extractJsonObject(rawResult),
+        ).pipe(
+          Effect.catchTags({
+            SchemaError: (cause) =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: "Cursor Agent returned invalid structured output.",
+                  cause,
+                }),
+              ),
+          }),
+        ),
+      ),
     );
 
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
@@ -259,10 +305,25 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
+    "CursorTextGeneration.investigate",
+  )(function* (input) {
+    const text = yield* runCursorText({
+      operation: "investigate",
+      cwd: input.cwd,
+      prompt: input.prompt,
+      modelSelection: input.modelSelection,
+      onOutput: input.onOutput,
+      timeoutMs: INVESTIGATION_TIMEOUT_MS,
+    });
+    return { text } satisfies TextGeneration.InvestigationGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    investigate,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

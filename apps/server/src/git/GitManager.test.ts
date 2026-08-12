@@ -293,6 +293,8 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    // Git never investigates a repository; the shape needs the member, these tests do not.
+    investigate: () => Effect.die("investigate is not used by git text generation"),
     ...overrides,
   };
 
@@ -336,6 +338,17 @@ function createTextGeneration(
           (cause) =>
             new TextGenerationError({
               operation: "generateThreadTitle",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    investigate: (input) =>
+      implementation.investigate(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "investigate",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

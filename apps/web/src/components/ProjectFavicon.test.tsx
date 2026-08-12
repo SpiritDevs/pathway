@@ -59,7 +59,7 @@ vi.mock("../assets/assetUrls", () => ({
   },
 }));
 
-import { ProjectFavicon } from "./ProjectFavicon";
+import { ProjectFavicon, RootedProjectFavicon } from "./ProjectFavicon";
 
 type ProjectFaviconImageProps = {
   readonly cacheKey: string;
@@ -83,7 +83,7 @@ function resolveImageComponent(): {
   readonly props: ProjectFaviconImageProps;
 } {
   hooks.beginRender();
-  const element = ProjectFavicon({
+  const element = RootedProjectFavicon({
     environmentId: "environment-test" as EnvironmentId,
     cwd: "/workspace-test",
   }) as ReactElement<ProjectFaviconImageProps>;
@@ -131,7 +131,7 @@ describe("ProjectFavicon", () => {
   });
 
   it("requests a saved favicon path when one is set", () => {
-    ProjectFavicon({
+    RootedProjectFavicon({
       environmentId: "environment-test" as EnvironmentId,
       cwd: "/workspace-test",
       faviconPath: "brand/icon.svg",
@@ -142,5 +142,18 @@ describe("ProjectFavicon", () => {
       cwd: "/workspace-test",
       path: "brand/icon.svg",
     });
+  });
+
+  it("renders the fallback for a rootless project without asking for an asset", () => {
+    testState.lastResource = null;
+    const element = ProjectFavicon({
+      environmentId: "environment-test" as EnvironmentId,
+      cwd: null,
+    }) as ReactElement<{ readonly icon: ComponentType<{ className?: string }> }>;
+
+    // A rootless project has no directory to read a favicon out of, so nothing is requested and
+    // the row still renders — visible everywhere is the rule.
+    expect(testState.lastResource).toBeNull();
+    expect(element.props.icon).toBeDefined();
   });
 });

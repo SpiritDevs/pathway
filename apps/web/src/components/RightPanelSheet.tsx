@@ -35,7 +35,8 @@ function readRightPanelSheetMaxWidth(): number {
   });
 }
 
-function useRightPanelSheetMaxWidth(): number {
+/** Exported so a sheet that composes the primitives itself keeps the same clamp as this one. */
+export function useRightPanelSheetMaxWidth(): number {
   const [maxWidth, setMaxWidth] = useState(readRightPanelSheetMaxWidth);
 
   useEffect(() => {

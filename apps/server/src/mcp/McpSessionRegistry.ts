@@ -1,4 +1,4 @@
-import { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -14,6 +14,13 @@ import * as McpProviderSession from "./McpProviderSession.ts";
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
+  /**
+   * The driver behind the instance. Optional because the instance id *is* the driver kind for
+   * every built-in single-instance setup (`defaultInstanceIdForDriver`), which is the default
+   * applied here; callers that have resolved the instance — `ProviderService` always has — should
+   * pass it so a user-named instance still attributes to its driver.
+   */
+  readonly providerDriverKind?: ProviderDriverKind;
 }
 
 export interface McpIssuedCredential {
@@ -123,11 +130,14 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
+      const providerInstanceId = ProviderInstanceId.make(request.providerInstanceId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
-        providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+        providerInstanceId,
+        providerDriverKind:
+          request.providerDriverKind ?? ProviderDriverKind.make(providerInstanceId),
         capabilities: new Set(["preview"]),
         issuedAt,
       };

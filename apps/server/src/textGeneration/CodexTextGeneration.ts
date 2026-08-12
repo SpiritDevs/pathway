@@ -28,6 +28,7 @@ import {
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
+  INVESTIGATION_TIMEOUT_MS,
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
@@ -38,6 +39,15 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 
 const CODEX_TIMEOUT_MS = 180_000;
+
+/** Every operation this adapter names in an error. Written once so adding one is one edit. */
+type CodexTextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "investigate";
+
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -72,6 +82,28 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       ),
     );
 
+  /**
+   * The same fold, with every decoded chunk handed on before it is accumulated. Used only by the
+   * investigation path, which has a reader waiting on the output rather than a caller waiting on
+   * the exit code.
+   */
+  const streamStdoutAsString = <E>(
+    operation: string,
+    stream: Stream.Stream<Uint8Array, E>,
+    onOutput: ((chunk: string) => Effect.Effect<void>) | undefined,
+  ): Effect.Effect<string, TextGenerationError> =>
+    stream.pipe(
+      Stream.decodeText(),
+      Stream.tap((chunk) => onOutput?.(chunk) ?? Effect.void),
+      Stream.runFold(
+        () => "",
+        (acc, chunk) => acc + chunk,
+      ),
+      Effect.mapError((cause) =>
+        normalizeCliError("codex", operation, cause, "Failed to collect process output"),
+      ),
+    );
+
   const writeTempFile = (
     operation: string,
     prefix: string,
@@ -97,11 +129,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
 
   const encodeJsonForOperation = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    operation: CodexTextGenerationOperation,
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -116,11 +144,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     );
 
   const materializeImageAttachments = Effect.fn("materializeImageAttachments")(function* (
-    _operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    _operation: CodexTextGenerationOperation,
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
@@ -158,11 +182,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     cleanupPaths = [],
     modelSelection,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: CodexTextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -301,6 +321,125 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }).pipe(Effect.ensuring(cleanup));
   });
 
+  /**
+   * The investigation shape: the same read-only `codex exec`, minus the output schema.
+   *
+   * Two differences from {@link runCodexJson}, both forced by the audience. Stdout is forwarded as
+   * it arrives instead of only being folded at the end, because a run panel renders it live; and
+   * the child is registered on the scope, so interrupting this fiber kills that process by handle
+   * — which is the entire cancellation story for an enrichment run.
+   */
+  const runCodexInvestigation = Effect.fn("runCodexInvestigation")(function* (input: {
+    cwd: string;
+    prompt: string;
+    onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
+    modelSelection: ModelSelection;
+  }): Effect.fn.Return<string, TextGenerationError, Scope.Scope> {
+    const operation = "investigate" as const;
+    const outputPath = yield* writeTempFile(operation, "codex-investigation", "");
+
+    const runCodexCommand = Effect.fn("runCodexInvestigation.runCodexCommand")(function* () {
+      const launchArgs = resolveCodexLaunchArgs(codexConfig.launchArgs, resolvedEnvironment);
+      const reasoningEffort =
+        getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
+        DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
+      const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
+      const spawnCommand = yield* resolveSpawnCommand(
+        codexConfig.binaryPath || "codex",
+        [
+          "exec",
+          ...codexExecLaunchArgs(launchArgs),
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "-s",
+          "read-only",
+          "--model",
+          input.modelSelection.model,
+          "--config",
+          `model_reasoning_effort="${reasoningEffort}"`,
+          ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
+          "--output-last-message",
+          outputPath,
+          "-",
+        ],
+        { env: resolvedEnvironment },
+      );
+      const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        env: {
+          ...resolvedEnvironment,
+          ...(codexConfig.homePath ? { CODEX_HOME: expandHomePath(codexConfig.homePath) } : {}),
+        },
+        cwd: input.cwd,
+        shell: spawnCommand.shell,
+        stdin: {
+          stream: Stream.encodeText(Stream.make(input.prompt)),
+        },
+      });
+
+      const child = yield* commandSpawner
+        .spawn(command)
+        .pipe(
+          Effect.mapError((cause) =>
+            normalizeCliError("codex", operation, cause, "Failed to spawn Codex CLI process"),
+          ),
+        );
+      // By handle, never by name: two investigations and a user's own `codex` share a process
+      // table, and a pattern kill cannot tell them apart.
+      yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
+
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          streamStdoutAsString(operation, child.stdout, input.onOutput),
+          readStreamAsString(operation, child.stderr),
+          child.exitCode.pipe(
+            Effect.mapError((cause) =>
+              normalizeCliError("codex", operation, cause, "Failed to read Codex CLI exit code"),
+            ),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      if (exitCode !== 0) {
+        const detail = stderr.trim().length > 0 ? stderr.trim() : stdout.trim();
+        return yield* new TextGenerationError({
+          operation,
+          detail:
+            detail.length > 0
+              ? `Codex CLI command failed: ${detail}`
+              : `Codex CLI command failed with code ${exitCode}.`,
+        });
+      }
+    });
+
+    return yield* Effect.gen(function* () {
+      yield* runCodexCommand().pipe(
+        Effect.scoped,
+        Effect.timeoutOption(INVESTIGATION_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new TextGenerationError({ operation, detail: "Codex CLI request timed out." }),
+              ),
+            onSome: () => Effect.void,
+          }),
+        ),
+      );
+
+      return yield* fileSystem.readFileString(outputPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Failed to read Codex output file.",
+              cause,
+            }),
+        ),
+      );
+    }).pipe(Effect.ensuring(safeUnlink(outputPath)));
+  });
+
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
     Effect.fn("CodexTextGeneration.generateCommitMessage")(function* (input) {
       const { prompt, outputSchema } = buildCommitMessagePrompt({
@@ -405,10 +544,33 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
+    "CodexTextGeneration.investigate",
+  )(function* (input) {
+    // Scoped here rather than inside: the temp file holding the model's answer has to outlive the
+    // process that wrote it and die with the call that reads it.
+    const text = yield* runCodexInvestigation({
+      cwd: input.cwd,
+      prompt: input.prompt,
+      onOutput: input.onOutput,
+      modelSelection: input.modelSelection,
+    }).pipe(Effect.scoped);
+    // `--output-last-message` is the model's answer with the run log stripped off; empty means the
+    // CLI exited clean without ever answering, which the caller cannot parse and should not try to.
+    if (text.trim().length === 0) {
+      return yield* new TextGenerationError({
+        operation: "investigate",
+        detail: "Codex returned no investigation output.",
+      });
+    }
+    return { text } satisfies TextGeneration.InvestigationGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    investigate,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

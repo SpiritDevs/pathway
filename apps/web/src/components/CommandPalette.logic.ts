@@ -141,7 +141,13 @@ export function buildProjectActionItems(input: {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.title, project.workspaceRoot, ...(input.searchTerms?.(project) ?? [])],
+    // A rootless project still gets an entry — it just has one fewer thing to match on. An empty
+    // string here would match every query instead.
+    searchTerms: [
+      project.title,
+      ...(project.workspaceRoot === null ? [] : [project.workspaceRoot]),
+      ...(input.searchTerms?.(project) ?? []),
+    ],
     title: project.title,
     description: project.workspaceRoot,
     icon: input.icon(project),

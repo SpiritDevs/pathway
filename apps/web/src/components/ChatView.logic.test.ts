@@ -26,6 +26,7 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveEditableUserMessageId,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -104,6 +105,59 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   };
 }
+
+describe("editable user message", () => {
+  const userMessage = {
+    id: MessageId.make("message-user-latest"),
+    role: "user" as const,
+    text: "Fix teh typo",
+    turnId: null,
+    createdAt: "2026-03-29T00:01:00.000Z",
+    updatedAt: "2026-03-29T00:01:00.000Z",
+    streaming: false,
+  };
+
+  it("selects only the latest user message while no later checkpoint changed files", () => {
+    const thread = makeThread({
+      messages: [
+        { ...userMessage, id: MessageId.make("message-user-older"), createdAt: now },
+        userMessage,
+      ],
+      checkpoints: [
+        {
+          turnId: TurnId.make("turn-before-message"),
+          checkpointTurnCount: 1,
+          checkpointRef: "checkpoint-before" as never,
+          status: "ready",
+          files: [{ path: "old.ts", kind: "modified", additions: 1, deletions: 0 }],
+          assistantMessageId: null,
+          completedAt: "2026-03-29T00:00:30.000Z",
+        },
+      ],
+    });
+
+    expect(resolveEditableUserMessageId(thread)).toBe(userMessage.id);
+  });
+
+  it("hides editing after a checkpoint following the message changes files", () => {
+    const thread = makeThread({
+      messages: [userMessage],
+      checkpoints: [
+        {
+          turnId: TurnId.make("turn-after-message"),
+          checkpointTurnCount: 1,
+          checkpointRef: "checkpoint-after" as never,
+          status: "ready",
+          files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+          assistantMessageId: null,
+          completedAt: "2026-03-29T00:02:00.000Z",
+        },
+      ],
+    });
+
+    expect(resolveEditableUserMessageId(thread)).toBeNull();
+  });
+});
 
 const completedTurn = {
   turnId: TurnId.make("turn-1"),

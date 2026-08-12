@@ -264,11 +264,14 @@ export function useSelectedThreadGitActions() {
       await runSelectedThreadGitMutation(
         "create_worktree",
         "Creating worktree",
-        async ({ thread, project }) => {
+        async ({ thread, project, cwd }) => {
           const result = await createWorktree({
             environmentId: thread.environmentId,
             input: {
-              cwd: project.workspaceRoot,
+              // The project root is the git root to branch from; the thread cwd
+              // is only a fallback for a rootless project, which cannot host a
+              // thread in the first place.
+              cwd: project.workspaceRoot ?? cwd,
               refName: nextWorktree.baseBranch,
               newRefName: sanitizeFeatureBranchName(nextWorktree.newBranch),
               path: null,

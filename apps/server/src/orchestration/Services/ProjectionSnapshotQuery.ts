@@ -40,7 +40,8 @@ export interface ProjectionSnapshotSequence {
 export interface ProjectionThreadCheckpointContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
-  readonly workspaceRoot: string;
+  /** Null when the thread's project is rootless: there is nothing to diff against. */
+  readonly workspaceRoot: string | null;
   readonly worktreePath: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
 }
@@ -48,7 +49,8 @@ export interface ProjectionThreadCheckpointContext {
 export interface ProjectionFullThreadDiffContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
-  readonly workspaceRoot: string;
+  /** Null when the thread's project is rootless: there is nothing to diff against. */
+  readonly workspaceRoot: string | null;
   readonly worktreePath: string | null;
   readonly latestCheckpointTurnCount: number;
   readonly toCheckpointRef: CheckpointRef | null;

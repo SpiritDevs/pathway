@@ -134,6 +134,7 @@ function matchMedia() {
 }
 
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
+let UserMessageEditActions: typeof import("./MessagesTimeline").UserMessageEditActions;
 
 beforeAll(async () => {
   const classList = {
@@ -167,7 +168,7 @@ beforeAll(async () => {
     },
   });
 
-  ({ MessagesTimeline } = await import("./MessagesTimeline"));
+  ({ MessagesTimeline, UserMessageEditActions } = await import("./MessagesTimeline"));
 }, 30_000);
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -462,6 +463,42 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Show full message");
     expect(markup).toContain('data-user-message-collapsible="false"');
     expect(markup).toContain("rounded-2xl bg-message p-3");
+  });
+
+  it("shows the edit action only for the eligible user message", () => {
+    const entry = buildUserTimelineEntry("Fix teh typo");
+    const editableMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        editableUserMessageId={entry.message.id}
+        timelineEntries={[entry]}
+      />,
+    );
+    const ineligibleMarkup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
+    );
+
+    expect(editableMarkup).toContain('aria-label="Edit message"');
+    expect(ineligibleMarkup).not.toContain('aria-label="Edit message"');
+  });
+
+  it("renders visible cancel and send controls for the inline editor", () => {
+    const markup = renderToStaticMarkup(
+      <UserMessageEditActions
+        status={null}
+        submitDisabled={false}
+        submitting={false}
+        onCancel={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-user-message-edit-actions="true"');
+    expect(markup).toContain(">Cancel</button>");
+    expect(markup).toContain(">Send</button>");
+    expect(markup).toContain("bg-primary");
+    expect(markup).toContain("text-primary-foreground");
+    expect(markup).toContain("max-w-full");
+    expect(markup).toContain("overflow-hidden");
   });
 
   it("renders inline terminal labels with the composer chip UI", () => {

@@ -38,7 +38,11 @@ export function buildShowcasePendingTasks(
 ): ReadonlyArray<QueuedThreadMessage> {
   return SHOWCASE_PENDING_TASK_DEFINITIONS.flatMap((definition) => {
     const project = projects.find((candidate) => String(candidate.id) === definition.projectId);
-    if (!project) return [];
+    // The showcase fixtures depict a queued task with a workspace and branch,
+    // which a rootless project cannot produce.
+    if (!project || project.workspaceRoot === null) return [];
+
+    const workspaceRoot = project.workspaceRoot;
 
     return [
       {
@@ -54,10 +58,10 @@ export function buildShowcasePendingTasks(
         creation: {
           projectId: project.id,
           projectTitle: project.title,
-          projectCwd: project.workspaceRoot,
+          projectCwd: workspaceRoot,
           workspaceMode: "local" as const,
           branch: definition.branch,
-          worktreePath: project.workspaceRoot,
+          worktreePath: workspaceRoot,
         },
         createdAt: new Date(now - definition.minutesAgo * 60_000).toISOString(),
       },

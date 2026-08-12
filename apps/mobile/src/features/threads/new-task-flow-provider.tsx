@@ -148,6 +148,12 @@ type NewTaskFlowContextValue = {
     readonly environmentLabel: string;
   }>;
   readonly selectedProject: EnvironmentProject | null;
+  /**
+   * The selected project has no workspace root, so no thread can be created
+   * or queued against it until a directory is attached (desktop only in this
+   * stage).
+   */
+  readonly selectedProjectDirectoryMissing: boolean;
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
@@ -261,10 +267,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       environmentId: editingPendingTask.environmentId,
       id: creation.projectId,
       title: creation.projectTitle ?? "Unknown project",
-      // Deliberately empty when the snapshot has no cwd — downstream consumers
-      // (branch queries, worktree bootstrap) must skip it, not receive a
-      // fabricated path.
-      workspaceRoot: creation.projectCwd ?? "",
+      // Deliberately null when the snapshot has no cwd — the same absence a
+      // rootless project reports, so downstream consumers (branch queries,
+      // worktree bootstrap) skip it instead of receiving a fabricated path.
+      workspaceRoot: creation.projectCwd ?? null,
       repositoryIdentity: null,
       defaultModelSelection: editingPendingTask.modelSelection ?? null,
       scripts: [],
@@ -291,10 +297,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // whatever unrelated project happens to be first on the other machine. Repository
   // identity is the primary signal; projects that haven't reported one yet (still
   // indexing) fall back to workspace basename / title so a valid host isn't hidden.
+  const selectedProjectDirectoryMissing =
+    selectedProject !== null && selectedProject.workspaceRoot === null;
+
   const selectedRepositoryKey = selectedProject?.repositoryIdentity?.canonicalKey ?? null;
-  // `|| null` (not `??`): a pending-task placeholder project can have an empty
-  // workspaceRoot, and an "" basename would reject every real host below.
-  const selectedWorkspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
+  // `|| null` (not `??`): a rootless project — and the pending-task stand-in
+  // built from a cwd-less snapshot — has no path to derive a basename from,
+  // and an empty basename would reject every real host below.
+  const selectedWorkspaceBasename = selectedProject?.workspaceRoot?.split("/").at(-1) || null;
   const selectedProjectTitle = selectedProject?.title ?? null;
   const environments = useMemo(() => {
     const seen = new Set<EnvironmentId>();
@@ -311,7 +321,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         return projectKey === selectedRepositoryKey;
       }
       return (
-        project.workspaceRoot.split("/").at(-1) === selectedWorkspaceBasename ||
+        project.workspaceRoot?.split("/").at(-1) === selectedWorkspaceBasename ||
         (selectedProjectTitle !== null && project.title === selectedProjectTitle)
       );
     };
@@ -358,7 +368,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // uses for new draft threads: per-project setting, then the repo's
   // checked-in t3.json, then the server's configured default.
   const t3ProjectFileQuery = useEnvironmentQuery(
-    selectedProject !== null && selectedProject.workspaceRoot !== ""
+    selectedProject !== null && selectedProject.workspaceRoot !== null
       ? projectEnvironment.readFile({
           environmentId: selectedProject.environmentId,
           input: { cwd: selectedProject.workspaceRoot, relativePath: T3_PROJECT_FILE_NAME },
@@ -524,8 +534,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const branchTarget = useMemo(
     () => ({
       environmentId: selectedProject?.environmentId ?? null,
-      // `|| null` also skips the stand-in project's empty workspaceRoot.
-      cwd: selectedProject?.workspaceRoot || null,
+      // Null for a rootless project (and the cwd-less stand-in): there is no
+      // repository to list branches from.
+      cwd: selectedProject?.workspaceRoot ?? null,
       query: null,
     }),
     [selectedProject?.environmentId, selectedProject?.workspaceRoot],
@@ -570,7 +581,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       // indexed) fall back to workspace basename, then title, so switching
       // computers still follows the same repo instead of resetting to
       // whatever project is first on the target machine.
-      const workspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
+      const workspaceBasename = selectedProject?.workspaceRoot?.split("/").at(-1) || null;
       const match =
         (repositoryKey !== null
           ? projectsOnTarget.find(
@@ -579,7 +590,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           : undefined) ??
         (workspaceBasename !== null
           ? projectsOnTarget.find(
-              (project) => project.workspaceRoot.split("/").at(-1) === workspaceBasename,
+              (project) => project.workspaceRoot?.split("/").at(-1) === workspaceBasename,
             )
           : undefined) ??
         (selectedProject !== null
@@ -755,9 +766,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       const projectTitle = usingPendingSnapshot
         ? editingPendingTask?.creation?.projectTitle
         : selectedProject.title;
-      const projectCwd = usingPendingSnapshot
-        ? editingPendingTask?.creation?.projectCwd
-        : selectedProject.workspaceRoot;
+      // A rootless project has no cwd to snapshot, and the queued shape
+      // records absence as an omitted key rather than a null.
+      const projectCwd =
+        (usingPendingSnapshot
+          ? editingPendingTask?.creation?.projectCwd
+          : selectedProject.workspaceRoot) ?? undefined;
       return {
         environmentId: selectedProject.environmentId,
         threadId: ThreadId.make(metadata.threadId),
@@ -910,6 +924,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       expandedProvider,
       environments,
       selectedProject,
+      selectedProjectDirectoryMissing,
       modelOptions,
       selectedModel,
       selectedModelOption,
@@ -971,6 +986,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProviderSkills,
       setSelectedModelOptions,
       selectedProject,
+      selectedProjectDirectoryMissing,
       selectedProjectKey,
       selectedWorktreePath,
       setProject,

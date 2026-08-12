@@ -24,7 +24,7 @@ const repositoryIdentity = {
 
 function makeProject(
   id: string,
-  workspaceRoot: string,
+  workspaceRoot: string | null,
   overrides: Partial<EnvironmentProject> = {},
 ): EnvironmentProject {
   return {
@@ -212,5 +212,28 @@ describe("buildProjectGroups", () => {
     });
     expect(groups).toHaveLength(1);
     expect(groups[0]?.members.map((member) => member.project.id)).toEqual(["winner", "sibling"]);
+  });
+  it("keeps rootless projects apart instead of collapsing them onto one absent path", () => {
+    const projects = [
+      makeProject("rootless-a", null, { repositoryIdentity: null }),
+      makeProject("rootless-b", null, { repositoryIdentity: null }),
+      makeProject("rooted", "/work/pathway"),
+    ];
+
+    for (const mode of ["repository", "repository_path", "separate"] as const) {
+      const groups = buildProjectGroups({ projects, settings: settings(mode) });
+      expect(groups.map((group) => group.members.map((member) => member.project.id))).toEqual([
+        ["rootless-a"],
+        ["rootless-b"],
+        ["rooted"],
+      ]);
+    }
+  });
+
+  it("keys a rootless project on its id, and a rooted one on its path", () => {
+    expect(derivePhysicalProjectKey(makeProject("rootless", null))).toBe("environment:rootless");
+    expect(derivePhysicalProjectKey(makeProject("rooted", "/work/pathway"))).not.toBe(
+      "environment:rooted",
+    );
   });
 });

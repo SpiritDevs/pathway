@@ -396,6 +396,11 @@ function ThreadNavigationSidebarPane(
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
     for (const project of projects) {
+      // A rootless project contributes no entry: every reader falls back to
+      // `?? null`, which is exactly "this row has no path".
+      if (project.workspaceRoot === null) {
+        continue;
+      }
       map.set(scopedProjectKey(project.environmentId, project.id), project.workspaceRoot);
     }
     return map;

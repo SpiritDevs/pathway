@@ -111,6 +111,22 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import { IssueCommentRepositoryLive } from "./persistence/Layers/IssueComments.ts";
+import { IssueCycleRepositoryLive } from "./persistence/Layers/IssueCycles.ts";
+import { IssueEnrichmentRunRepositoryLive } from "./persistence/Layers/IssueEnrichmentRuns.ts";
+import { IssueEventRepositoryLive } from "./persistence/Layers/IssueEvents.ts";
+import { IssueLabelRepositoryLive } from "./persistence/Layers/IssueLabels.ts";
+import { IssueMilestoneRepositoryLive } from "./persistence/Layers/IssueMilestones.ts";
+import { IssueRelationRepositoryLive } from "./persistence/Layers/IssueRelations.ts";
+import { IssueRepositoryLive } from "./persistence/Layers/Issues.ts";
+import { IssueStatusRepositoryLive } from "./persistence/Layers/IssueStatuses.ts";
+import { IssueThreadLinkRepositoryLive } from "./persistence/Layers/IssueThreadLinks.ts";
+import { IssueTodoRepositoryLive } from "./persistence/Layers/IssueTodos.ts";
+import { IssueTrackerConfigRepositoryLive } from "./persistence/Layers/IssueTrackerConfig.ts";
+import { IssueViewRepositoryLive } from "./persistence/Layers/IssueViews.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
+import * as IssueEnrichmentEngine from "./issues/IssueEnrichmentEngine.ts";
+import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
@@ -275,11 +291,32 @@ const browserOtlpTracingLayer = Layer.mergeAll(
   Layer.succeed(HttpClient.TracerDisabledWhen, () => true),
 );
 
+/** The two route dependencies that own tables, sharing one in-memory database as they do in production. */
 const makeAuthTestLayer = () =>
-  EnvironmentAuth.layer.pipe(
-    Layer.provide(SqlitePersistenceMemory),
-    Layer.provide(ServerSecretStore.layer),
-  );
+  Layer.mergeAll(
+    EnvironmentAuth.layer,
+    IssueTrackerService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          IssueRepositoryLive,
+          IssueStatusRepositoryLive,
+          IssueLabelRepositoryLive,
+          IssueEventRepositoryLive,
+          IssueTrackerConfigRepositoryLive,
+          IssueMilestoneRepositoryLive,
+          IssueCycleRepositoryLive,
+          IssueTodoRepositoryLive,
+          IssueRelationRepositoryLive,
+          IssueCommentRepositoryLive,
+          IssueViewRepositoryLive,
+          IssueEnrichmentRunRepositoryLive,
+          IssueThreadLinkRepositoryLive,
+          ProjectionProjectRepositoryLive,
+        ),
+      ),
+      Layer.provide(IssueEnrichmentEngine.layerStub),
+    ),
+  ).pipe(Layer.provide(SqlitePersistenceMemory), Layer.provide(ServerSecretStore.layer));
 
 const makeBrowserOtlpPayload = (spanName: string) =>
   Effect.gen(function* () {

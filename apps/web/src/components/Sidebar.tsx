@@ -93,7 +93,7 @@ import {
   buildSidebarProjectSnapshots,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -535,7 +535,7 @@ interface SidebarDraftRowData {
 // re-render only this block, never the whole sidebar. Vanishes at count 0.
 const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectDisplayNameByKey: ReadonlyMap<string, string>;
-  projectCwdByKey: ReadonlyMap<string, string>;
+  projectCwdByKey: ReadonlyMap<string, string | null>;
   projectFaviconPathByKey: ReadonlyMap<string, string | null | undefined>;
   scopedProjectKeys: ReadonlySet<string> | null;
   routeDraftId: string | null;
@@ -1720,7 +1720,7 @@ export default function Sidebar() {
         getId: getProjectOrderKey,
         getPreferenceIds: (project) => [
           getProjectOrderKey(project),
-          legacyProjectCwdPreferenceKey(project.workspaceRoot),
+          ...legacyProjectCwdPreferenceKeys(project.workspaceRoot),
         ],
       }),
     [projectOrder, projects],

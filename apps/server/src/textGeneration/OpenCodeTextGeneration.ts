@@ -39,6 +39,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "investigate",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -249,11 +250,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
 
   const acquireSharedServer = (input: {
     readonly binaryPath: string;
-    readonly operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    readonly operation: OpenCodeTextGenerationOperation;
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -358,11 +355,18 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     ),
   );
 
-  const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
+  /**
+   * One OpenCode session, prompted once, returning whatever text it said.
+   *
+   * The session denies every permission up front, so this is read-only for structured generation
+   * and for an investigation alike. Unlike the other four adapters there is nothing to stream:
+   * `session.prompt` is one request that resolves with the finished parts, so a caller watching
+   * for output sees it arrive in a single piece at the end.
+   */
+  const runOpenCodeText = Effect.fn("runOpenCodeText")(function* (input: {
     readonly operation: OpenCodeTextGenerationOperation;
     readonly cwd: string;
     readonly prompt: string;
-    readonly outputSchemaJson: S;
     readonly modelSelection: ModelSelection;
     readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   }) {
@@ -380,7 +384,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
     });
 
-    const runAgainstServer = Effect.fn("runOpenCodeJson.runAgainstServer")(
+    const runAgainstServer = Effect.fn("runOpenCodeText.runAgainstServer")(
       function* (server: Pick<OpenCodeRuntime.OpenCodeServerConnection, "url">) {
         const client = openCodeRuntime.createOpenCodeSdkClient({
           baseUrl: server.url,
@@ -496,18 +500,27 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       }),
     );
 
-    const rawOutput =
-      openCodeSettings.serverUrl.length > 0
-        ? yield* runAgainstServer({ url: openCodeSettings.serverUrl })
-        : yield* Effect.acquireUseRelease(
-            acquireSharedServer({
-              binaryPath: openCodeSettings.binaryPath,
-              operation: input.operation,
-            }),
-            runAgainstServer,
-            releaseSharedServer,
-          );
+    return openCodeSettings.serverUrl.length > 0
+      ? yield* runAgainstServer({ url: openCodeSettings.serverUrl })
+      : yield* Effect.acquireUseRelease(
+          acquireSharedServer({
+            binaryPath: openCodeSettings.binaryPath,
+            operation: input.operation,
+          }),
+          runAgainstServer,
+          releaseSharedServer,
+        );
+  });
 
+  const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
+    readonly operation: OpenCodeTextGenerationOperation;
+    readonly cwd: string;
+    readonly prompt: string;
+    readonly outputSchemaJson: S;
+    readonly modelSelection: ModelSelection;
+    readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  }) {
+    const rawOutput = yield* runOpenCodeText(input);
     const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson));
     return yield* decodeOutput(extractJsonObject(rawOutput)).pipe(
       Effect.catchTags({
@@ -615,10 +628,26 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       };
     });
 
+  const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
+    "OpenCodeTextGeneration.investigate",
+  )(function* (input) {
+    const text = yield* runOpenCodeText({
+      operation: "investigate",
+      cwd: input.cwd,
+      prompt: input.prompt,
+      modelSelection: input.modelSelection,
+    });
+    // One chunk, at the end: this transport has no intermediate output to forward, and a panel
+    // showing nothing at all would be worse than a panel that fills in one go.
+    yield* input.onOutput?.(text) ?? Effect.void;
+    return { text } satisfies TextGeneration.InvestigationGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    investigate,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -71,6 +71,43 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
+  it.effect("round-trips a rootless project as SQL NULL and attaches a root later", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const row = {
+        projectId: ProjectId.make("project-rootless"),
+        title: "Rootless project",
+        workspaceRoot: null,
+        defaultModelSelection: null,
+        defaultThreadEnvMode: null,
+        scripts: [],
+        createdAt: "2026-08-12T00:00:00.000Z",
+        updatedAt: "2026-08-12T00:00:00.000Z",
+        deletedAt: null,
+      } as const;
+
+      yield* projects.upsert(row);
+
+      const stored = yield* sql<{ readonly workspaceRoot: string | null }>`
+        SELECT workspace_root AS "workspaceRoot"
+        FROM projection_projects
+        WHERE project_id = 'project-rootless'
+      `;
+      assert.strictEqual(stored[0]?.workspaceRoot, null);
+      assert.strictEqual(
+        Option.getOrNull(yield* projects.getById({ projectId: row.projectId }))?.workspaceRoot,
+        null,
+      );
+
+      yield* projects.upsert({ ...row, workspaceRoot: "/tmp/attached-later" });
+      assert.strictEqual(
+        Option.getOrNull(yield* projects.getById({ projectId: row.projectId }))?.workspaceRoot,
+        "/tmp/attached-later",
+      );
+    }),
+  );
+
   it.effect("stores JSON for thread model options", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;

@@ -22,6 +22,7 @@ import {
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { readLocalApi } from "../localApi";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { shouldLoadNextBranchPageAfterScroll } from "../state/paginatedBranches";
@@ -138,6 +139,11 @@ export function BranchToolbarBranchSelector({
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const branchCwd = activeWorktreePath ?? activeProjectCwd;
+  // A rootless project has no repository to list refs from, so every query below sits disabled and
+  // the picker would open on an empty list. Opening it asks for a directory instead — see
+  // docs/internals/decisions/0006-issue-tracker.md ("Projects").
+  const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
   const hasServerThread = serverThread !== null;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
@@ -508,13 +514,29 @@ export function BranchToolbarBranchSelector({
   // ---------------------------------------------------------------------------
   const branchListScrollElementRef = useRef<HTMLElement | null>(null);
   const previousBranchListScrollTopRef = useRef<number | null>(null);
-  const handleOpenChange = useCallback((open: boolean) => {
-    previousBranchListScrollTopRef.current = null;
-    setIsBranchMenuOpen(open);
-    if (!open) {
-      setBranchQuery("");
-    }
-  }, []);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (open && isRootlessProject) {
+        // Prompt, then open against the attached root. Nothing else has to be re-read: the project
+        // update arrives on the projection stream, `branchCwd` resolves on the re-render, and the
+        // ref queries this component already declares light up on their own.
+        void ensureWorkspaceRoot("Branches come from the project's directory.").then(
+          (workspaceRoot) => {
+            if (workspaceRoot === null) return;
+            previousBranchListScrollTopRef.current = null;
+            setIsBranchMenuOpen(true);
+          },
+        );
+        return;
+      }
+      previousBranchListScrollTopRef.current = null;
+      setIsBranchMenuOpen(open);
+      if (!open) {
+        setBranchQuery("");
+      }
+    },
+    [ensureWorkspaceRoot, isRootlessProject],
+  );
 
   const [showTopBranchScrollFade, setShowTopBranchScrollFade] = useState(false);
   const [showBottomBranchScrollFade, setShowBottomBranchScrollFade] = useState(false);

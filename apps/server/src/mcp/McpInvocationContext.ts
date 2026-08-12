@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -14,6 +15,13 @@ export interface McpInvocationScope {
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  /**
+   * Which driver implements {@link providerInstanceId}. Carried alongside the routing key rather
+   * than derived from it: `codex_personal` and `codex_work` are two instances of one driver, and
+   * a tool that attributes a write to "the calling agent" means the driver, not the slug the user
+   * happened to type in settings.
+   */
+  readonly providerDriverKind: ProviderDriverKind;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
 }

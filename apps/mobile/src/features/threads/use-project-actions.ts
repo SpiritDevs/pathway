@@ -20,7 +20,10 @@ import { buildProjectThreadStartTurnInput } from "../../lib/projectThreadStartTu
 import { randomHex } from "../../lib/uuid";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
-import { validateProjectThreadCreation } from "./projectThreadCreationValidation";
+import {
+  ProjectThreadWorkspaceRootRequiredError,
+  validateProjectThreadCreation,
+} from "./projectThreadCreationValidation";
 
 export function useCreateProjectThread() {
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -44,6 +47,21 @@ export function useCreateProjectThread() {
       const threadId = ThreadId.make(metadata.threadId);
       const initialMessageText = input.initialMessageText.trim();
 
+      // A rootless project cannot host a thread: the server's decider rejects
+      // `thread.create` without a workspace root, and a thread with no cwd
+      // would run the agent wherever the server happens to be. Mobile has no
+      // attach-directory flow in this stage, so this is a dead end, not a
+      // prompt.
+      const projectCwd = input.project.workspaceRoot;
+      if (projectCwd === null) {
+        const workspaceRootError = new ProjectThreadWorkspaceRootRequiredError({
+          environmentId: input.project.environmentId,
+          projectId: input.project.id,
+        });
+        setPendingConnectionError(workspaceRootError.message);
+        return AsyncResult.failure(Cause.fail(workspaceRootError));
+      }
+
       const validationError = validateProjectThreadCreation({
         environmentId: input.project.environmentId,
         projectId: input.project.id,
@@ -60,7 +78,7 @@ export function useCreateProjectThread() {
         environmentId: input.project.environmentId,
         input: buildProjectThreadStartTurnInput({
           projectId: input.project.id,
-          projectCwd: input.project.workspaceRoot,
+          projectCwd,
           threadId: metadata.threadId,
           commandId: metadata.commandId,
           messageId: metadata.messageId,

@@ -11,7 +11,28 @@ import { cn } from "~/lib/utils";
 
 const loadedProjectFaviconSrcs = new Map<string, string>();
 
+/**
+ * A rootless project has no directory to read a favicon out of, so it renders the folder fallback
+ * without asking. The split into an inner component is what keeps that a plain early return: the
+ * asset hook cannot be skipped conditionally, and swapping the rendered element type remounts
+ * cleanly when a directory is attached later.
+ */
 export function ProjectFavicon(input: {
+  environmentId: EnvironmentId;
+  cwd: string | null;
+  faviconPath?: string | null | undefined;
+  className?: string | undefined;
+  fallbackIcon?: ComponentType<{ className?: string }>;
+}) {
+  if (!input.cwd) {
+    return (
+      <ProjectFaviconFallback className={input.className} icon={input.fallbackIcon ?? FolderIcon} />
+    );
+  }
+  return <RootedProjectFavicon {...input} cwd={input.cwd} />;
+}
+
+export function RootedProjectFavicon(input: {
   environmentId: EnvironmentId;
   cwd: string;
   faviconPath?: string | null | undefined;

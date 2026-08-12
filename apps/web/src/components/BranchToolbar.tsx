@@ -13,6 +13,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
+import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   type EnvMode,
@@ -405,6 +406,26 @@ export const BranchToolbar = memo(function BranchToolbar({
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
       : null;
   const activeProject = useProject(activeProjectRef);
+  // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
+  // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
+  // draft state, and the send path resolves the root again anyway (`ChatView.tsx:5134`).
+  const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
+  const handleEnvModeChange = useCallback(
+    (mode: EnvMode) => {
+      if (mode !== "worktree" || !isRootlessProject) {
+        onEnvModeChange(mode);
+        return;
+      }
+      void ensureWorkspaceRoot("A worktree is cut from the project's git repository.").then(
+        (workspaceRoot) => {
+          if (workspaceRoot === null) return;
+          onEnvModeChange(mode);
+        },
+      );
+    },
+    [ensureWorkspaceRoot, isRootlessProject, onEnvModeChange],
+  );
   const hasActiveThread = serverThread !== null || draftThread !== null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const effectiveEnvMode =
@@ -482,7 +503,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           onEnvironmentChange={onEnvironmentChange}
           effectiveEnvMode={effectiveEnvMode}
           activeWorktreePath={activeWorktreePath}
-          onEnvModeChange={onEnvModeChange}
+          onEnvModeChange={handleEnvModeChange}
           previousWorktreeLabel={previousWorktreeLabel}
           onUsePreviousWorktree={onUsePreviousWorktree}
         />
@@ -510,7 +531,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
-              onEnvModeChange={onEnvModeChange}
+              onEnvModeChange={handleEnvModeChange}
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}
             />

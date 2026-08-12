@@ -17,6 +17,28 @@ export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
+const USER_MESSAGE_CONTEXT_START =
+  /\n*<(?:terminal_context|element_context|preview_annotation|review_comment)\b/;
+
+export function splitEditableUserMessageText(value: string): {
+  readonly editableText: string;
+  readonly preservedSuffix: string;
+} {
+  const contextStart = USER_MESSAGE_CONTEXT_START.exec(value)?.index ?? -1;
+  if (contextStart < 0) {
+    return { editableText: value, preservedSuffix: "" };
+  }
+  return {
+    editableText: value.slice(0, contextStart),
+    preservedSuffix: value.slice(contextStart),
+  };
+}
+
+export function replaceEditableUserMessageText(original: string, editedText: string): string {
+  const { preservedSuffix } = splitEditableUserMessageText(original);
+  return `${editedText.trim()}${preservedSuffix}`;
+}
+
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
   readonly contentLength?: number;

@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -33,6 +34,7 @@ import {
   CloudDownloadIcon,
   CloudUploadIcon,
   ExternalLinkIcon,
+  FolderPlusIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
   InfoIcon,
@@ -85,7 +87,8 @@ import {
   useVcsInitAction,
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
-import { useThread } from "~/state/entities";
+import { useEnsureProjectWorkspace } from "~/hooks/useEnsureProjectWorkspace";
+import { useProject, useThread } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -1020,6 +1023,20 @@ export default function GitActionsControl({
   const activeServerThread = useThread(activeThreadRef, {
     waitForShell: activeDraftThread !== null,
   });
+  // A rootless project produces no `gitCwd`, which would take the whole control off the header.
+  // Stand an attach affordance in its place instead: once a directory is attached the project
+  // update arrives on the projection stream, `gitCwd` resolves, and the real bar renders.
+  const activeProjectRef = useMemo(() => {
+    const projectId = activeServerThread?.projectId ?? activeDraftThread?.projectId ?? null;
+    const environmentId =
+      activeServerThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
+    return projectId === null || environmentId === null
+      ? null
+      : scopeProjectRef(environmentId, projectId);
+  }, [activeDraftThread, activeServerThread]);
+  const activeProject = useProject(activeProjectRef);
+  const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
+    useEnsureProjectWorkspace(activeProject);
   const activeProviderInstanceId =
     activeServerThread?.session?.providerInstanceId ??
     activeServerThread?.modelSelection.instanceId;
@@ -1711,6 +1728,23 @@ export default function GitActionsControl({
   );
 
   const canPublishRepository = isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
+
+  if (isRootlessProject) {
+    return (
+      <div className="shrink-0">
+        <Button
+          onClick={() => {
+            void ensureWorkspaceRoot("Git actions run inside the project's directory.");
+          }}
+          size="xs"
+          variant="outline"
+        >
+          <FolderPlusIcon className="size-3.5" aria-hidden />
+          <span className="ml-0.5">Attach a directory</span>
+        </Button>
+      </div>
+    );
+  }
 
   if (!gitCwd) return null;
 

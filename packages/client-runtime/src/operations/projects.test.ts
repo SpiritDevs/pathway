@@ -9,7 +9,9 @@ import * as Option from "effect/Option";
 
 import {
   buildAddProjectRemoteSourceReadiness,
+  buildProjectAttachWorkspaceRootCommand,
   buildProjectCreateCommand,
+  buildRootlessProjectCreateCommand,
   canCreateProjectInEnvironment,
   findExistingAddProject,
   getAddProjectInitialQuery,
@@ -148,6 +150,39 @@ describe("add project shared logic", () => {
       workspaceRoot: "/work/repo",
       createWorkspaceRootIfMissing: true,
       defaultModelSelection: null,
+    });
+  });
+  it("builds a rootless project.create command from a title alone", () => {
+    expect(
+      buildRootlessProjectCreateCommand({
+        commandId: CommandId.make("command"),
+        projectId: ProjectId.make("project"),
+        title: "Planning",
+        createdAt: "2026-08-12T00:00:00.000Z",
+      }),
+    ).toEqual({
+      type: "project.create",
+      commandId: "command",
+      projectId: "project",
+      title: "Planning",
+      workspaceRoot: null,
+      defaultModelSelection: null,
+      createdAt: "2026-08-12T00:00:00.000Z",
+    });
+  });
+
+  it("builds the attach-directory command as a bare meta update", () => {
+    expect(
+      buildProjectAttachWorkspaceRootCommand({
+        commandId: CommandId.make("command"),
+        projectId: ProjectId.make("project"),
+        workspaceRoot: "/work/repo",
+      }),
+    ).toEqual({
+      type: "project.meta.update",
+      commandId: "command",
+      projectId: "project",
+      workspaceRoot: "/work/repo",
     });
   });
 });

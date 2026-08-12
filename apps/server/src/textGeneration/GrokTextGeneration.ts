@@ -19,6 +19,7 @@ import {
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
+  INVESTIGATION_TIMEOUT_MS,
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
@@ -34,6 +35,14 @@ const GROK_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
+/** Every operation this adapter names in an error. Written once so adding one is one edit. */
+type GrokTextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "investigate";
+
 export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(function* (
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
@@ -41,23 +50,29 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
   const crypto = yield* Crypto.Crypto;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  const runGrokJson = <S extends Schema.Top>({
+  /**
+   * One Grok ACP session, prompted once, returning whatever text it said.
+   *
+   * The whole of both operations lives here: structured generation decodes this string, and an
+   * investigation hands it back raw. Streaming is free on this transport — the message chunks are
+   * already arriving one at a time — so `onOutput` is a second use of the accumulator rather than
+   * a separate code path.
+   */
+  const runGrokText = ({
     operation,
     cwd,
     prompt,
-    outputSchemaJson,
     modelSelection,
+    onOutput,
+    timeoutMs,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: GrokTextGenerationOperation;
     cwd: string;
     prompt: string;
-    outputSchemaJson: S;
     modelSelection: ModelSelection;
-  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+    onOutput?: ((chunk: string) => Effect.Effect<void>) | undefined;
+    timeoutMs: number;
+  }): Effect.Effect<string, TextGenerationError> =>
     Effect.gen(function* () {
       const resolvedModel = resolveGrokAcpBaseModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
@@ -78,7 +93,10 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         if (content.type !== "text") {
           return Effect.void;
         }
-        return Ref.update(outputRef, (current) => current + content.text);
+        const text = content.text;
+        return Ref.update(outputRef, (current) => current + text).pipe(
+          Effect.andThen(onOutput?.(text) ?? Effect.void),
+        );
       });
 
       const promptResult = yield* Effect.gen(function* () {
@@ -99,7 +117,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           prompt: [{ type: "text", text: prompt }],
         });
       }).pipe(
-        Effect.timeoutOption(GROK_TIMEOUT_MS),
+        Effect.timeoutOption(timeoutMs),
         Effect.flatMap(
           Option.match({
             onNone: () =>
@@ -130,20 +148,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
               : "Grok Agent returned empty output.",
         });
       }
-
-      const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson));
-      return yield* decodeOutput(extractJsonObject(trimmed)).pipe(
-        Effect.catchTags({
-          SchemaError: (cause) =>
-            Effect.fail(
-              new TextGenerationError({
-                operation,
-                detail: "Grok Agent returned invalid structured output.",
-                cause,
-              }),
-            ),
-        }),
-      );
+      return trimmed;
     }).pipe(
       Effect.mapError((cause) =>
         isTextGenerationError(cause)
@@ -154,7 +159,40 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
               cause,
             }),
       ),
+      // Closes the ACP session, and with it the agent process, on interrupt as well as on exit.
       Effect.scoped,
+    );
+
+  const runGrokJson = <S extends Schema.Top>({
+    operation,
+    cwd,
+    prompt,
+    outputSchemaJson,
+    modelSelection,
+  }: {
+    operation: GrokTextGenerationOperation;
+    cwd: string;
+    prompt: string;
+    outputSchemaJson: S;
+    modelSelection: ModelSelection;
+  }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
+    runGrokText({ operation, cwd, prompt, modelSelection, timeoutMs: GROK_TIMEOUT_MS }).pipe(
+      Effect.flatMap((trimmed) =>
+        Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))(
+          extractJsonObject(trimmed),
+        ).pipe(
+          Effect.catchTags({
+            SchemaError: (cause) =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: "Grok Agent returned invalid structured output.",
+                  cause,
+                }),
+              ),
+          }),
+        ),
+      ),
     );
 
   const generateCommitMessage: TextGeneration.TextGeneration["Service"]["generateCommitMessage"] =
@@ -251,10 +289,25 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
+    "GrokTextGeneration.investigate",
+  )(function* (input) {
+    const text = yield* runGrokText({
+      operation: "investigate",
+      cwd: input.cwd,
+      prompt: input.prompt,
+      modelSelection: input.modelSelection,
+      onOutput: input.onOutput,
+      timeoutMs: INVESTIGATION_TIMEOUT_MS,
+    });
+    return { text } satisfies TextGeneration.InvestigationGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    investigate,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

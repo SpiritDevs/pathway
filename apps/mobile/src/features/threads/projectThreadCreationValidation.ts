@@ -26,9 +26,30 @@ export class ProjectThreadBaseBranchRequiredError extends Schema.TaggedErrorClas
   }
 }
 
+/**
+ * Shown wherever a rootless project blocks thread creation. Mobile has no
+ * attach-directory flow in this stage, so the copy points at the desktop app
+ * instead of offering an action.
+ */
+export const PROJECT_DIRECTORY_REQUIRED_MESSAGE =
+  "This project has no directory yet. Attach one from the desktop app to start tasks here.";
+
+export class ProjectThreadWorkspaceRootRequiredError extends Schema.TaggedErrorClass<ProjectThreadWorkspaceRootRequiredError>()(
+  "ProjectThreadWorkspaceRootRequiredError",
+  {
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+  },
+) {
+  override get message(): string {
+    return PROJECT_DIRECTORY_REQUIRED_MESSAGE;
+  }
+}
+
 export const ProjectThreadCreationValidationError = Schema.Union([
   ProjectThreadTaskRequiredError,
   ProjectThreadBaseBranchRequiredError,
+  ProjectThreadWorkspaceRootRequiredError,
 ]);
 export type ProjectThreadCreationValidationError = typeof ProjectThreadCreationValidationError.Type;
 

@@ -23,6 +23,12 @@ type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
 };
 
+/**
+ * A rootless project stays in the picker — it just has no path to show in the
+ * row's detail line. Thread creation is blocked later, in the draft composer.
+ */
+const NO_DIRECTORY_SUBTITLE = "No directory attached";
+
 function deriveProjectEmptyState(catalogState: WorkspaceState): {
   readonly title: string;
   readonly detail: string;
@@ -311,7 +317,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                       >
                         {hasMultipleProjects
                           ? `${scope.projects.length} workspaces`
-                          : singleProject?.workspaceRoot}
+                          : (singleProject?.workspaceRoot ?? NO_DIRECTORY_SUBTITLE)}
                       </Text>
                     </View>
                     <SymbolView
@@ -345,7 +351,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                               ellipsizeMode="middle"
                               numberOfLines={1}
                             >
-                              {project.workspaceRoot}
+                              {project.workspaceRoot ?? NO_DIRECTORY_SUBTITLE}
                             </Text>
                           </View>
                           <SymbolView

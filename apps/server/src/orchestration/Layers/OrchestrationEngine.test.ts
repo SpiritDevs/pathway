@@ -153,7 +153,17 @@ describe("OrchestrationEngine", () => {
           settledOverride: null,
           settledAt: null,
           deletedAt: null,
-          messages: [],
+          messages: [
+            {
+              id: asMessageId("message-bootstrap-user"),
+              role: "user" as const,
+              text: "Original message",
+              turnId: null,
+              streaming: false,
+              createdAt: "2026-03-03T00:00:02.500Z",
+              updatedAt: "2026-03-03T00:00:02.500Z",
+            },
+          ],
           proposedPlans: [],
           activities: [],
           checkpoints: [],
@@ -172,6 +182,7 @@ describe("OrchestrationEngine", () => {
       })),
     };
     let fullSnapshotReadCount = 0;
+    let threadDetailReadCount = 0;
 
     const layer = OrchestrationEngineLive.pipe(
       Layer.provide(
@@ -205,7 +216,14 @@ describe("OrchestrationEngine", () => {
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),
           getFullThreadDiffContext: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: (threadId) =>
+            Effect.sync(() => {
+              threadDetailReadCount += 1;
+              const thread = projectionSnapshot.threads.find(
+                (candidate) => candidate.id === threadId,
+              );
+              return thread ? Option.some(thread) : Option.none();
+            }),
           getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
           searchThreads: () => Effect.succeed({ matches: [] }),
         }),
@@ -237,6 +255,24 @@ describe("OrchestrationEngine", () => {
 
     expect(result.sequence).toBe(8);
     expect(await runtime.runPromise(engine.latestSequence)).toBe(8);
+    expect(fullSnapshotReadCount).toBe(0);
+
+    const editResult = await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.turn.edit",
+        commandId: CommandId.make("cmd-bootstrap-thread-edit"),
+        threadId: ThreadId.make("thread-bootstrap"),
+        messageId: asMessageId("message-bootstrap-user"),
+        text: "Corrected message",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: "2026-03-03T00:00:05.000Z",
+      }),
+    );
+
+    expect(editResult.sequence).toBe(11);
+    expect(await runtime.runPromise(engine.latestSequence)).toBe(11);
+    expect(threadDetailReadCount).toBe(1);
     expect(fullSnapshotReadCount).toBe(0);
 
     await runtime.dispose();

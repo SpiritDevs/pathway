@@ -45,6 +45,10 @@ function deriveRepositoryRelativeProjectPath(
     return null;
   }
 
+  if (project.workspaceRoot === null) {
+    return null;
+  }
+
   const normalizedProjectPath = normalizeProjectPathForComparison(project.workspaceRoot);
   const normalizedRootPath = normalizeProjectPathForComparison(rootPath);
   if (normalizedProjectPath.length === 0 || normalizedRootPath.length === 0) {
@@ -68,26 +72,34 @@ export function derivePhysicalProjectKeyFromPath(environmentId: string, cwd: str
   return `${environmentId}:${normalizeProjectPathForComparison(cwd)}`;
 }
 
+/**
+ * Grouping is by directory: two projects pointing at one path are one physical
+ * project. A rootless project shares its (absent) path with nothing, so it keys on
+ * its own id and always stands alone — otherwise every rootless project in an
+ * environment would collapse into a single group.
+ */
 export function derivePhysicalProjectKey(
-  project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">,
+  project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
 ): string {
-  return derivePhysicalProjectKeyFromPath(project.environmentId, project.workspaceRoot);
+  return project.workspaceRoot === null
+    ? scopedProjectKey(scopeProjectRef(project.environmentId, project.id))
+    : derivePhysicalProjectKeyFromPath(project.environmentId, project.workspaceRoot);
 }
 
 export function deriveProjectGroupingOverrideKey(
-  project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">,
+  project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
 ): string {
   return derivePhysicalProjectKey(project);
 }
 
 export function getProjectOrderKey(
-  project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">,
+  project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
 ): string {
   return derivePhysicalProjectKey(project);
 }
 
 export function resolveProjectGroupingMode(
-  project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">,
+  project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
   settings: ProjectGroupingSettings,
 ): SidebarProjectGroupingMode {
   return (

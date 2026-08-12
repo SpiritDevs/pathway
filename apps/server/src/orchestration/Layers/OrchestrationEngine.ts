@@ -150,9 +150,26 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           });
         }
 
+        const readModelForCommand =
+          envelope.command.type === "thread.turn.edit"
+            ? yield* projectionSnapshotQuery.getThreadDetailById(envelope.command.threadId).pipe(
+                Effect.map(
+                  Option.match({
+                    onNone: () => commandReadModel,
+                    onSome: (thread) => ({
+                      ...commandReadModel,
+                      threads: commandReadModel.threads.map((candidate) =>
+                        candidate.id === thread.id ? thread : candidate,
+                      ),
+                    }),
+                  }),
+                ),
+              )
+            : commandReadModel;
+
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          readModel: commandReadModel,
+          readModel: readModelForCommand,
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((cause) =>

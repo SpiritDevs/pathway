@@ -121,6 +121,7 @@ import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { QuickCreateProjectDialog } from "./projects/QuickCreateProjectDialog";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
@@ -136,7 +137,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
-import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
@@ -392,6 +393,19 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  // Hosted here rather than inside the palette popup: picking "Name only" closes the palette,
+  // and a dialog mounted inside a closing popup would unmount with it.
+  const [quickCreateProjectEnvironmentId, setQuickCreateProjectEnvironmentId] =
+    useState<EnvironmentId | null>(null);
+  const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  const openQuickCreateProject = useCallback(
+    (environmentId: EnvironmentId) => {
+      setQuickCreateProjectEnvironmentId(environmentId);
+      setQuickCreateProjectOpen(true);
+      setOpen(false);
+    },
+    [setOpen],
+  );
   const routeTarget = useParams({
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
@@ -483,6 +497,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         }}
       >
         {children}
+        <QuickCreateProjectDialog
+          environmentId={quickCreateProjectEnvironmentId}
+          onOpenChange={setQuickCreateProjectOpen}
+          open={quickCreateProjectOpen}
+        />
         <CommandPaletteDialog
           open={state.open}
           mode={state.mode}
@@ -490,6 +509,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           setOpen={setOpen}
           openOverlayMode={toggleMode}
           clearOpenIntent={clearOpenIntent}
+          onQuickCreateProject={openQuickCreateProject}
         />
       </CommandDialog>
     </ComposerHandleContext>
@@ -503,6 +523,7 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
@@ -541,6 +562,7 @@ function CommandPaletteDialog(props: {
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}
           clearOpenIntent={props.clearOpenIntent}
+          onQuickCreateProject={props.onQuickCreateProject}
         />
       )}
     </CommandDialogPopup>
@@ -552,9 +574,10 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
+  const { clearOpenIntent, onQuickCreateProject, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
@@ -641,7 +664,7 @@ function OpenCommandPaletteDialog(props: {
         getId: getProjectOrderKey,
         getPreferenceIds: (project) => [
           getProjectOrderKey(project),
-          legacyProjectCwdPreferenceKey(project.workspaceRoot),
+          ...legacyProjectCwdPreferenceKeys(project.workspaceRoot),
         ],
       }),
     [projectOrder, projects],
@@ -813,7 +836,9 @@ function OpenCommandPaletteDialog(props: {
 
   const projectCwdById = useMemo(
     () =>
-      new Map<ProjectId, string>(projects.map((project) => [project.id, project.workspaceRoot])),
+      new Map<ProjectId, string | null>(
+        projects.map((project) => [project.id, project.workspaceRoot]),
+      ),
     [projects],
   );
   const projectTitleById = useMemo(
@@ -947,8 +972,12 @@ function OpenCommandPaletteDialog(props: {
         valuePrefix: "project",
         searchTerms: (project) => {
           const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+          // A rootless member contributes only its title: matching on a missing path would
+          // need an empty search term, which matches everything.
           return (
-            group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+            group?.memberProjects.flatMap((member) =>
+              member.workspaceRoot === null ? [member.title] : [member.title, member.workspaceRoot],
+            ) ?? []
           );
         },
         icon: projectFavicon,
@@ -966,7 +995,11 @@ function OpenCommandPaletteDialog(props: {
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
             return (
-              group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+              group?.memberProjects.flatMap((member) =>
+                member.workspaceRoot === null
+                  ? [member.title]
+                  : [member.title, member.workspaceRoot],
+              ) ?? []
             );
           },
           icon: projectFavicon,
@@ -1147,6 +1180,17 @@ function OpenCommandPaletteDialog(props: {
             await startAddProjectBrowse(environmentId);
           },
         },
+        {
+          kind: "action",
+          value: `action:add-project:${environmentId}:rootless`,
+          searchTerms: ["name", "empty", "no directory", "rootless", "planning"],
+          title: "Name only",
+          description: "Create a project now, attach a directory later",
+          icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+          run: async () => {
+            onQuickCreateProject(environmentId);
+          },
+        },
       ];
 
       const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
@@ -1220,7 +1264,7 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [onQuickCreateProject, openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
   );
 
   const startAddProjectSourceSelection = useCallback(

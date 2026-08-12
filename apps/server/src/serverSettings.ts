@@ -163,13 +163,13 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
     return {
       start: Effect.void,
       ready: Effect.void,
-      getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
+      getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveModelSelectionProviders)),
       updateSettings: (patch) =>
         Ref.get(currentSettingsRef).pipe(
           Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
           Effect.flatMap(normalizeServerSettings),
           Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-          Effect.map(resolveTextGenerationProvider),
+          Effect.map(resolveModelSelectionProviders),
         ),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
@@ -182,29 +182,55 @@ export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
 
-function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection)
-    ? settings
-    : fallbackTextGenerationProvider(settings);
+/**
+ * The first enabled provider, on its default text-generation model.
+ *
+ * What a selection falls back to when the provider it names has since been turned off: pointing at
+ * a disabled provider is not a state the caller can do anything with, and refusing outright would
+ * break commit messages and investigations for anyone who disabled Codex.
+ */
+function enabledProviderFallbackSelection(settings: ServerSettings): ModelSelection | undefined {
+  const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
+  if (!fallbackEntry) {
+    return undefined;
+  }
+  const fallback = ProviderDriverKind.make(fallbackEntry[0]);
+  return {
+    instanceId: ProviderInstanceId.make(fallback),
+    model:
+      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[fallback] ??
+      DEFAULT_MODEL_BY_PROVIDER[fallback] ??
+      DEFAULT_TEXT_GENERATION_MODEL,
+  } satisfies ModelSelection;
 }
 
-function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
-  const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
-  if (!fallback) {
+function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
+  if (isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection)) {
     return settings;
   }
+  const fallback = enabledProviderFallbackSelection(settings);
+  return fallback ? { ...settings, textGenerationModelSelection: fallback } : settings;
+}
 
-  return {
-    ...settings,
-    textGenerationModelSelection: {
-      instanceId: ProviderInstanceId.make(fallback),
-      model:
-        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[fallback] ??
-        DEFAULT_MODEL_BY_PROVIDER[fallback] ??
-        DEFAULT_TEXT_GENERATION_MODEL,
-    } satisfies ModelSelection,
-  };
+/**
+ * The same fallback for the enrichment selection. Resolved separately rather than deferred to
+ * `textGenerationModelSelection`: the two are independent settings, and an enrichment model whose
+ * provider is off should land on an enabled provider, not on whatever writes commit messages.
+ */
+function resolveIssueEnrichmentProvider(settings: ServerSettings): ServerSettings {
+  if (isModelSelectionProviderEnabled(settings, settings.issueEnrichmentModelSelection)) {
+    return settings;
+  }
+  const fallback = enabledProviderFallbackSelection(settings);
+  return fallback ? { ...settings, issueEnrichmentModelSelection: fallback } : settings;
+}
+
+/**
+ * Every model-picking setting, resolved against what is actually enabled. One function so no
+ * reader has to remember that there is now more than one selection to resolve.
+ */
+function resolveModelSelectionProviders(settings: ServerSettings): ServerSettings {
+  return resolveIssueEnrichmentProvider(resolveTextGenerationProvider(settings));
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
@@ -214,6 +240,7 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
+  "issueEnrichmentModelSelection",
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
@@ -372,7 +399,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
-      Stream.map(resolveTextGenerationProvider),
+      Stream.map(resolveModelSelectionProviders),
     );
 
   const persistProviderEnvironmentSecrets = (
@@ -573,7 +600,7 @@ const make = Effect.gen(function* () {
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeProviderEnvironmentSecrets),
-      Effect.map(resolveTextGenerationProvider),
+      Effect.map(resolveModelSelectionProviders),
     ),
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
@@ -588,7 +615,7 @@ const make = Effect.gen(function* () {
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
           const materialized = yield* materializeProviderEnvironmentSecrets(next);
-          return resolveTextGenerationProvider(materialized);
+          return resolveModelSelectionProviders(materialized);
         }),
       ),
     get streamChanges() {

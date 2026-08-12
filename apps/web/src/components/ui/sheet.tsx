@@ -61,6 +61,7 @@ function SheetPopup({
   className,
   children,
   showCloseButton = true,
+  showBackdrop = true,
   keepMounted = false,
   side = "right",
   variant = "default",
@@ -68,6 +69,12 @@ function SheetPopup({
   ...props
 }: SheetPrimitive.Popup.Props & {
   showCloseButton?: boolean;
+  /**
+   * Off for a non-modal sheet (`<Sheet modal={false}>`): the backdrop renders regardless of the
+   * modal state, so a sheet meant to sit beside a live surface would dim and blur the very thing
+   * it is meant to leave usable.
+   */
+  showBackdrop?: boolean;
   keepMounted?: boolean;
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
@@ -75,7 +82,7 @@ function SheetPopup({
 }) {
   return (
     <SheetPortal keepMounted={keepMounted}>
-      <SheetBackdrop />
+      {showBackdrop ? <SheetBackdrop /> : null}
       <SheetViewport className={viewportClassName} side={side} variant={variant}>
         <SheetPrimitive.Popup
           className={cn(

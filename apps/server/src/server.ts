@@ -25,6 +25,22 @@ import { pullRequestHttpApiLayer } from "./pullRequest/http.ts";
 import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { IssueCommentRepositoryLive } from "./persistence/Layers/IssueComments.ts";
+import { IssueCycleRepositoryLive } from "./persistence/Layers/IssueCycles.ts";
+import { IssueEnrichmentRunRepositoryLive } from "./persistence/Layers/IssueEnrichmentRuns.ts";
+import { IssueEventRepositoryLive } from "./persistence/Layers/IssueEvents.ts";
+import { IssueLabelRepositoryLive } from "./persistence/Layers/IssueLabels.ts";
+import { IssueMilestoneRepositoryLive } from "./persistence/Layers/IssueMilestones.ts";
+import { IssueRelationRepositoryLive } from "./persistence/Layers/IssueRelations.ts";
+import { IssueRepositoryLive } from "./persistence/Layers/Issues.ts";
+import { IssueStatusRepositoryLive } from "./persistence/Layers/IssueStatuses.ts";
+import { IssueThreadLinkRepositoryLive } from "./persistence/Layers/IssueThreadLinks.ts";
+import { IssueTodoRepositoryLive } from "./persistence/Layers/IssueTodos.ts";
+import { IssueTrackerConfigRepositoryLive } from "./persistence/Layers/IssueTrackerConfig.ts";
+import { IssueViewRepositoryLive } from "./persistence/Layers/IssueViews.ts";
+import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
+import * as IssueEnrichmentEngineLive from "./issues/IssueEnrichmentEngineLive.ts";
+import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -263,6 +279,47 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 
+// One `SqlClient` behind every repository: these tables reference each other, and the
+// tracker's key counter is only unique per database. The repositories stay internal to the
+// service — nothing else reads the issue tables.
+//
+// Merged with persistence rather than added to the runtime chain because `Layer.pipe` tops out
+// at twenty arguments and that chain is already there.
+const IssueRepositoriesLive = Layer.mergeAll(
+  IssueRepositoryLive,
+  IssueStatusRepositoryLive,
+  IssueLabelRepositoryLive,
+  IssueEventRepositoryLive,
+  IssueTrackerConfigRepositoryLive,
+  IssueMilestoneRepositoryLive,
+  IssueCycleRepositoryLive,
+  IssueTodoRepositoryLive,
+  IssueRelationRepositoryLive,
+  IssueCommentRepositoryLive,
+  IssueViewRepositoryLive,
+  IssueEnrichmentRunRepositoryLive,
+  IssueThreadLinkRepositoryLive,
+  // Read-only: an enrichment run needs the project's directory, and a rootless project is
+  // the case the tracker refuses. Its own instance of the repository, over the same client.
+  ProjectionProjectRepositoryLive,
+);
+
+// The process half of enrichment: the configured model, run read-only in the project's directory.
+// It reads the same repositories the tracker writes — the same layer value, so one instance each —
+// and reports back through the recorder the tracker hands it rather than through the tracker's
+// tag, which is what keeps the two from requiring one another.
+const IssueEnrichmentEngineLayerLive = IssueEnrichmentEngineLive.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(TextGeneration.layer),
+  Layer.provide(ServerSettingsLayerLive),
+);
+
+const IssueTrackerLayerLive = IssueTrackerService.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(IssueEnrichmentEngineLayerLive),
+  Layer.provideMerge(PersistenceLayerLive),
+);
+
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
 );
@@ -374,7 +431,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
-  Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(IssueTrackerLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
   // The instance registry is the new routing keystone — text generation,

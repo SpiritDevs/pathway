@@ -125,7 +125,9 @@ export const make = Effect.gen(function* () {
     }
 
     const script = setupProjectScript(project.scripts);
-    if (!script) {
+    // A rootless project has no directory to export as PATHWAY_PROJECT_ROOT and
+    // nothing a setup script could sensibly operate on, so it runs nothing.
+    if (!script || project.workspaceRoot === null) {
       return {
         status: "no-script",
       } as const;

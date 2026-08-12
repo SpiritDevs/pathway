@@ -7,6 +7,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createAttachmentId,
+  createIssueAttachmentId,
+  parseIssueSegmentFromAttachmentId,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
@@ -42,6 +44,38 @@ describe("attachmentStore", () => {
       return;
     }
     expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
+  });
+
+  it("keeps issue attachment ids out of the thread namespace", () => {
+    const attachmentId = createIssueAttachmentId("00000000-0000-4000-8000-000000000001");
+    expect(attachmentId).toBeTruthy();
+    if (!attachmentId) {
+      return;
+    }
+
+    expect(parseIssueSegmentFromAttachmentId(attachmentId)).toBe(
+      "00000000-0000-4000-8000-000000000001",
+    );
+    // The load-bearing half: thread attachment cleanup sweeps by thread segment, and an issue
+    // attachment that parsed as one would be deleted the next time that thread was pruned.
+    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBeNull();
+  });
+
+  it("keeps thread attachment ids out of the issue namespace", () => {
+    const threadId = "thread-1";
+    const attachmentId = createAttachmentId(threadId);
+    expect(attachmentId).toBeTruthy();
+    if (!attachmentId) {
+      return;
+    }
+
+    expect(parseIssueSegmentFromAttachmentId(attachmentId)).toBeNull();
+    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-1");
+    // A thread cannot borrow the reserved prefix, in either direction.
+    expect(createAttachmentId("iss_borrowed")).toBeNull();
+    expect(
+      parseIssueSegmentFromAttachmentId("iss_issue-1-00000000-0000-4000-8000-000000000002"),
+    ).toBe("issue-1");
   });
 
   it("resolves attachment path by id using the extension that exists on disk", () => {

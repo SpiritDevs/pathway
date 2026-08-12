@@ -407,14 +407,17 @@ export function useThreadActions() {
         }
       }
 
-      if (!shouldDeleteWorktree || !orphanedWorktreePath || !threadProject) {
+      // A worktree hangs off a repository, so a rootless project cannot have left one behind:
+      // the missing root is nothing to clean up, not a failure to report.
+      const threadProjectCwd = threadProject?.workspaceRoot ?? null;
+      if (!shouldDeleteWorktree || !orphanedWorktreePath || threadProjectCwd === null) {
         return deleteResult;
       }
 
       const removeResult = await removeWorktree({
         environmentId: threadRef.environmentId,
         input: {
-          cwd: threadProject.workspaceRoot,
+          cwd: threadProjectCwd,
           path: orphanedWorktreePath,
           force: true,
         },
@@ -423,7 +426,7 @@ export function useThreadActions() {
         removeResult._tag === "Success"
           ? await refreshVcsStatus({
               environmentId: threadRef.environmentId,
-              input: { cwd: threadProject.workspaceRoot },
+              input: { cwd: threadProjectCwd },
             })
           : null;
       const cleanupFailure =
@@ -437,7 +440,7 @@ export function useThreadActions() {
         const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
         console.error("Failed to remove orphaned worktree after thread deletion", {
           threadId: threadRef.threadId,
-          projectCwd: threadProject.workspaceRoot,
+          projectCwd: threadProjectCwd,
           worktreePath: orphanedWorktreePath,
           error,
         });

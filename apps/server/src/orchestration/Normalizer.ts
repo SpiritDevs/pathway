@@ -80,6 +80,14 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         );
 
     if (canonicalCommand.type === "project.create") {
+      // A rootless project has no path to normalize or create on disk.
+      if (canonicalCommand.workspaceRoot === null) {
+        return {
+          ...canonicalCommand,
+          workspaceRoot: null,
+          createWorkspaceRootIfMissing: false,
+        } satisfies OrchestrationCommand;
+      }
       return {
         ...canonicalCommand,
         workspaceRoot: yield* normalizeProjectWorkspaceRootForCreate(
@@ -94,9 +102,14 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       canonicalCommand.type === "project.meta.update" &&
       canonicalCommand.workspaceRoot !== undefined
     ) {
+      // Attaching a directory to a rootless project runs the same validation as
+      // creating one with a directory, including creating the folder on request.
       return {
         ...canonicalCommand,
-        workspaceRoot: yield* normalizeProjectWorkspaceRoot(canonicalCommand.workspaceRoot),
+        workspaceRoot:
+          canonicalCommand.createWorkspaceRootIfMissing === true
+            ? yield* normalizeProjectWorkspaceRootForCreate(canonicalCommand.workspaceRoot, true)
+            : yield* normalizeProjectWorkspaceRoot(canonicalCommand.workspaceRoot),
       } satisfies OrchestrationCommand;
     }
 

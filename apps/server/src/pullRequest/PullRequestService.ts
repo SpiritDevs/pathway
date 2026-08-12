@@ -185,9 +185,19 @@ const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
  */
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 
+/**
+ * A project with a directory on disk. Change requests come from a checkout's remote, so a
+ * rootless project has nothing this page could read and is dropped before anything asks a host.
+ */
+type RootedProjectShell = OrchestrationProjectShell & { readonly workspaceRoot: string };
+
+function isRootedProject(project: OrchestrationProjectShell): project is RootedProjectShell {
+  return project.workspaceRoot !== null;
+}
+
 /** A project this page can read: its remote is on a host with an implementation. */
 interface SupportedProject {
-  readonly project: OrchestrationProjectShell;
+  readonly project: RootedProjectShell;
   readonly api: PullRequestProviderApi;
   readonly repository: string;
   /** The host the repository lives on, which is the account boundary rather than the kind. */
@@ -370,13 +380,14 @@ export const make = Effect.gen(function* () {
     filter: Pick<PullRequestListInput, "projectId" | "host">,
   ) => {
     type RefinementCandidate = {
-      readonly project: OrchestrationProjectShell;
+      readonly project: RootedProjectShell;
       readonly provider: SourceControlProviderInfo;
       readonly remoteName: string;
       readonly remoteUrl: string;
     };
     const refinements = new Map<string, RefinementCandidate[]>();
     for (const project of projects) {
+      if (!isRootedProject(project)) continue;
       if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
       const identity = project.repositoryIdentity;
       if (identity?.provider !== "unknown" || repositoryIdentityOf(project) === null) continue;
@@ -449,6 +460,7 @@ export const make = Effect.gen(function* () {
         const viewerRoots = new Map<string, string[]>();
         const seen = new Set<string>();
         for (const project of snapshot.projects) {
+          if (!isRootedProject(project)) continue;
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
           const identity = project.repositoryIdentity;
           let kind = identity?.provider as SourceControlProviderKind | undefined;

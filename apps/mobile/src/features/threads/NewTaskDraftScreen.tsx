@@ -17,6 +17,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
+import { AppText } from "../../components/AppText";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
   ComposerToolbarButton,
@@ -52,6 +53,7 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
+import { PROJECT_DIRECTORY_REQUIRED_MESSAGE } from "./projectThreadCreationValidation";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 
 function formatWorkspaceLabel(input: {
@@ -740,6 +742,9 @@ export function NewTaskDraftScreen(props: {
       !modelSelection ||
       initialMessageText.length === 0 ||
       flow.submitting ||
+      // Mirrors `canStart`: the offline queue path below must not park a task
+      // the server could never accept either.
+      selectedProject.workspaceRoot === null ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
       return;
@@ -873,6 +878,9 @@ export function NewTaskDraftScreen(props: {
   const isExpanded = !isAndroid || isComposerFocused || settingsSheetPresentation.isActive;
   const canStart =
     Boolean(flow.selectedProject) &&
+    // A rootless project has nowhere to run: neither starting nor queueing is
+    // possible until a directory is attached (desktop only in this stage).
+    !flow.selectedProjectDirectoryMissing &&
     Boolean(flow.selectedModel) &&
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
@@ -972,6 +980,15 @@ export function NewTaskDraftScreen(props: {
     />
   );
 
+  // The send button is disabled for a rootless project, so say why rather
+  // than leaving a dead control. There is no attach-directory flow on mobile
+  // in this stage, so this is a pointer, not an action.
+  const directoryRequiredNotice = flow.selectedProjectDirectoryMissing ? (
+    <AppText className="text-xs leading-snug text-foreground-muted">
+      {PROJECT_DIRECTORY_REQUIRED_MESSAGE}
+    </AppText>
+  ) : null;
+
   const startButton = (
     <ComposerToolbarButton
       accessibilityLabel={
@@ -1021,6 +1038,9 @@ export function NewTaskDraftScreen(props: {
                 : "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.85) 40%, rgba(255,255,255,0.95) 100%)",
             }}
           >
+            {directoryRequiredNotice !== null ? (
+              <View className="px-1 pb-2">{directoryRequiredNotice}</View>
+            ) : null}
             <ComposerSurface
               isDarkMode={isDarkMode}
               style={
@@ -1098,6 +1118,9 @@ export function NewTaskDraftScreen(props: {
                 imageBorderRadius={20}
               />
             </View>
+          ) : null}
+          {directoryRequiredNotice !== null ? (
+            <View className="px-5 pt-3">{directoryRequiredNotice}</View>
           ) : null}
           <ComposerToolbarRow paddingBottom={controlsBottomPadding} paddingHorizontal={6}>
             <ComposerToolbarScroller

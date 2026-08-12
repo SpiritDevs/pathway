@@ -5,7 +5,30 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  replaceEditableUserMessageText,
+  splitEditableUserMessageText,
 } from "./MessagesTimeline.logic";
+
+describe("editable user message text", () => {
+  it("preserves structured context while replacing the user's text", () => {
+    const original = [
+      "Fix teh typo",
+      "",
+      "<terminal_context>",
+      "Terminal 1:",
+      "output",
+      "</terminal_context>",
+    ].join("\n");
+
+    expect(splitEditableUserMessageText(original)).toEqual({
+      editableText: "Fix teh typo",
+      preservedSuffix: "\n\n<terminal_context>\nTerminal 1:\noutput\n</terminal_context>",
+    });
+    expect(replaceEditableUserMessageText(original, "Fix the typo")).toBe(
+      original.replace("Fix teh typo", "Fix the typo"),
+    );
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {

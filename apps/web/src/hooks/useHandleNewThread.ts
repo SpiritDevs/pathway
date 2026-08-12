@@ -28,7 +28,7 @@ import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
 import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
-import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
 
 interface NewThreadWorkspaceOptions {
@@ -135,7 +135,11 @@ export function useNewThreadHandler() {
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
-        const consultProjectFile = project !== undefined && project.defaultThreadEnvMode == null;
+        // t3.json is read out of the project directory; a rootless project has none to read.
+        const consultProjectFile =
+          project !== undefined &&
+          project.defaultThreadEnvMode == null &&
+          project.workspaceRoot !== null;
         return resolveDefaultThreadEnvMode({
           projectSetting: project?.defaultThreadEnvMode,
           projectFile: consultProjectFile
@@ -422,7 +426,7 @@ export function useHandleNewThread() {
       getId: getProjectOrderKey,
       getPreferenceIds: (project) => [
         getProjectOrderKey(project),
-        legacyProjectCwdPreferenceKey(project.workspaceRoot),
+        ...legacyProjectCwdPreferenceKeys(project.workspaceRoot),
       ],
     });
   }, [projectOrder, projects]);

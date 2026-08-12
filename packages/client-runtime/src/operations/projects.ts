@@ -225,3 +225,46 @@ export function buildProjectCreateCommand(input: {
     createdAt: input.createdAt,
   };
 }
+
+/**
+ * A project created from a name alone. It is visible everywhere a rooted project
+ * is; anything needing a path prompts for one and then sends
+ * `buildProjectAttachWorkspaceRootCommand`.
+ */
+export function buildRootlessProjectCreateCommand(input: {
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly title: string;
+  readonly createdAt: string;
+}): Extract<OrchestrationCommand, { type: "project.create" }> {
+  return {
+    type: "project.create",
+    commandId: input.commandId,
+    projectId: input.projectId,
+    title: input.title,
+    workspaceRoot: null,
+    defaultModelSelection: null,
+    createdAt: input.createdAt,
+  };
+}
+
+/**
+ * Attaches a directory to a project that had none. The server normalizes the path
+ * and requires it to exist, and rejects it when another active project already
+ * holds it; `repositoryIdentity` follows from the directory on the next read, so
+ * git needs nothing sent here.
+ */
+export function buildProjectAttachWorkspaceRootCommand(input: {
+  readonly commandId: CommandId;
+  readonly projectId: ProjectId;
+  readonly workspaceRoot: string;
+  readonly createWorkspaceRootIfMissing?: boolean;
+}): Extract<OrchestrationCommand, { type: "project.meta.update" }> {
+  return {
+    type: "project.meta.update",
+    commandId: input.commandId,
+    projectId: input.projectId,
+    workspaceRoot: input.workspaceRoot,
+    ...(input.createWorkspaceRootIfMissing === true ? { createWorkspaceRootIfMissing: true } : {}),
+  };
+}

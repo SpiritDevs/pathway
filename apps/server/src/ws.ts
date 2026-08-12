@@ -18,6 +18,8 @@ import {
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
+  type IssueActor,
+  ISSUES_WS_METHODS,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -78,6 +80,7 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -418,6 +421,10 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      const issueTracker = yield* IssueTrackerService.IssueTrackerService;
+      // The only actor stage 1 has. The service takes one so the stage 4 MCP toolkit can pass an
+      // agent without every handler changing shape.
+      const issueActor: IssueActor = { kind: "user" };
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1891,9 +1898,12 @@ const makeWsRpcLayer = (
                   resource: input.resource,
                 });
               }
+              // A rootless project has no directory to serve a workspace file from;
+              // `issueAssetUrl` turns the missing root into a not-found.
+              const workspaceRoot = thread.value.worktreePath ?? project.value.workspaceRoot;
               return yield* issueAssetUrl({
                 resource: input.resource,
-                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+                ...(workspaceRoot === null ? {} : { workspaceRoot }),
               });
             }),
             { "rpc.aggregate": "workspace" },
@@ -2260,6 +2270,228 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [ISSUES_WS_METHODS.getSnapshot]: (_input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.getSnapshot, issueTracker.getSnapshot(), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.create]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.create, issueTracker.create(input, issueActor), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.update]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.update, issueTracker.update(input, issueActor), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.delete]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.delete, issueTracker.remove(input, issueActor), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.restore]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.restore, issueTracker.restore(input, issueActor), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.bulkUpdate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.bulkUpdate,
+            issueTracker.bulkUpdate(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.setSortOrder]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.setSortOrder,
+            issueTracker.setSortOrder(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.createStatus]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.createStatus, issueTracker.createStatus(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.updateStatus]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.updateStatus, issueTracker.updateStatus(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.deleteStatus]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.deleteStatus,
+            issueTracker.deleteStatus(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.reorderStatuses]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.reorderStatuses, issueTracker.reorderStatuses(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.createLabel]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.createLabel, issueTracker.createLabel(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.updateLabel]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.updateLabel, issueTracker.updateLabel(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.deleteLabel]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.deleteLabel, issueTracker.deleteLabel(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.getDetail]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.getDetail, issueTracker.getDetail(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.milestoneCreate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.milestoneCreate, issueTracker.milestoneCreate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.milestoneUpdate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.milestoneUpdate,
+            issueTracker.milestoneUpdate(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.milestoneDelete]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.milestoneDelete,
+            issueTracker.milestoneDelete(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.milestonesReorder]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.milestonesReorder,
+            issueTracker.milestonesReorder(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.cycleCreate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.cycleCreate, issueTracker.cycleCreate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.cycleUpdate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.cycleUpdate, issueTracker.cycleUpdate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.cycleDelete]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.cycleDelete,
+            issueTracker.cycleDelete(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.todoCreate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.todoCreate, issueTracker.todoCreate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.todoUpdate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.todoUpdate, issueTracker.todoUpdate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.todoDelete]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.todoDelete, issueTracker.todoDelete(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.todosReorder]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.todosReorder, issueTracker.todosReorder(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.relationCreate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.relationCreate,
+            issueTracker.relationCreate(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.relationDelete]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.relationDelete,
+            issueTracker.relationDelete(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.commentCreate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.commentCreate,
+            issueTracker.commentCreate(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.commentUpdate]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.commentUpdate,
+            issueTracker.commentUpdate(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.commentDelete]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.commentDelete,
+            issueTracker.commentDelete(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.commentsList]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.commentsList, issueTracker.commentsList(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.uploadCommentAttachment]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.uploadCommentAttachment,
+            issueTracker.uploadCommentAttachment(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.viewCreate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.viewCreate, issueTracker.viewCreate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.viewUpdate]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.viewUpdate, issueTracker.viewUpdate(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.viewDelete]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.viewDelete, issueTracker.viewDelete(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.viewsReorder]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.viewsReorder, issueTracker.viewsReorder(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.setKeyPrefix]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.setKeyPrefix, issueTracker.setKeyPrefix(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.importCsv]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.importCsv, issueTracker.importCsv(input, issueActor), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.getEvents]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.getEvents, issueTracker.getEvents(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.startEnrichment]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.startEnrichment, issueTracker.startEnrichment(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.cancelEnrichment]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.cancelEnrichment,
+            issueTracker.cancelEnrichment(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.getEnrichmentRuns]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.getEnrichmentRuns,
+            issueTracker.getEnrichmentRuns(input),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.linkThread]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.linkThread,
+            issueTracker.linkThread(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.unlinkThread]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.unlinkThread,
+            issueTracker.unlinkThread(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.getThreadLinks]: (input) =>
+          observeRpcEffect(ISSUES_WS_METHODS.getThreadLinks, issueTracker.getThreadLinks(input), {
+            "rpc.aggregate": "issues",
+          }),
+        [ISSUES_WS_METHODS.stream]: (_input) =>
+          observeRpcStream(ISSUES_WS_METHODS.stream, issueTracker.stream, {
+            "rpc.aggregate": "issues",
+          }),
       });
     }),
   );
