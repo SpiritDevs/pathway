@@ -30,6 +30,28 @@ function renderControl(
   );
 }
 
+function renderPanelControlWithImportedAction() {
+  return renderToStaticMarkup(
+    <ProjectScriptsControl
+      displayMode="panel"
+      scripts={[]}
+      fileScripts={[
+        {
+          name: "Setup Worktree",
+          command: "vp i",
+          icon: "configure",
+          runOnWorktreeCreate: true,
+        },
+      ]}
+      keybindings={EMPTY_KEYBINDINGS}
+      onRunScript={() => {}}
+      onAddScript={async () => undefined as never}
+      onUpdateScript={async () => undefined as never}
+      onDeleteScript={async () => undefined as never}
+    />,
+  );
+}
+
 function buttonTag(html: string, ariaLabel: string) {
   return html.match(new RegExp(`<button[^>]*aria-label="${ariaLabel}"[^>]*>`))?.[0];
 }
@@ -73,5 +95,17 @@ describe("ProjectScriptsControl compact controls", () => {
     expect(html).toContain(">Dev</span>");
     expect(html).toContain(">Add action</button>");
     expect(html).not.toContain('aria-label="Script actions"');
+  });
+
+  it("renders available project actions as a full panel row", () => {
+    const html = renderPanelControlWithImportedAction();
+    const primary = buttonTag(html, "Project actions");
+    const menuTrigger = buttonTag(html, "Choose project action");
+
+    expect(primary).toContain("flex-1");
+    expect(primary).toContain("justify-start");
+    expect(menuTrigger).toContain("w-8");
+    expect(html).toContain("h-4 w-px");
+    expect(html).toContain(">Actions</span>");
   });
 });

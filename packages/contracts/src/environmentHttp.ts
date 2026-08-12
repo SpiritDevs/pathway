@@ -27,12 +27,10 @@ import {
 import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  ClientOrchestrationCommand,
-  DispatchResult,
-  OrchestrationReadModel,
-  OrchestrationShellSnapshot,
-  OrchestrationThreadDetailSnapshot,
-} from "./orchestration.ts";
+  OrchestrationV2ShellSnapshot,
+  OrchestrationV2ThreadDetailSnapshot,
+} from "./orchestrationV2.ts";
+import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -87,9 +85,10 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "pairing_link_revoke_failed",
   "client_sessions_load_failed",
   "client_session_revoke_failed",
+  "project_snapshot_failed",
+  "project_mutation_failed",
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
-  "orchestration_dispatch_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -292,6 +291,10 @@ const EnvironmentSessionRevokeErrors = [
   EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentProjectSnapshotErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentOrchestrationSnapshotErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -301,7 +304,7 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
-const EnvironmentOrchestrationDispatchErrors = [
+const EnvironmentProjectMutationErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -463,28 +466,11 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
-// Query-string window for windowed thread snapshots (GET payloads must encode
-// to strings). Both fields optional: omitting them keeps the full-snapshot
-// behavior, so pagination stays opt-in per request.
-const EnvironmentOrchestrationThreadSnapshotQuery = {
-  turnLimit: Schema.optional(
-    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
-  ),
-  beforeCursor: Schema.optional(TrimmedNonEmptyString),
-};
-
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
-  .add(
-    HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
-      headers: OptionalBearerHeaders,
-      success: OrchestrationReadModel,
-      error: EnvironmentOrchestrationSnapshotErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
       headers: OptionalBearerHeaders,
-      success: OrchestrationShellSnapshot,
+      success: OrchestrationV2ShellSnapshot,
       error: EnvironmentOrchestrationSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
@@ -492,17 +478,25 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
-      payload: EnvironmentOrchestrationThreadSnapshotQuery,
-      success: OrchestrationThreadDetailSnapshot,
+      success: OrchestrationV2ThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+export class EnvironmentProjectsHttpApi extends HttpApiGroup.make("projects")
+  .add(
+    HttpApiEndpoint.get("snapshot", "/api/projects", {
+      headers: OptionalBearerHeaders,
+      success: ProjectSnapshot,
+      error: EnvironmentProjectSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {
+    HttpApiEndpoint.post("mutate", "/api/projects/mutate", {
       headers: OptionalBearerHeaders,
-      payload: ClientOrchestrationCommand,
-      success: DispatchResult,
-      error: EnvironmentOrchestrationDispatchErrors,
+      payload: ProjectMutation,
+      success: Project,
+      error: EnvironmentProjectMutationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
@@ -588,4 +582,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
+  .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi) {}

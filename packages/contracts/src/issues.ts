@@ -18,11 +18,8 @@ import {
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
-import {
-  ChatAttachmentId,
-  ModelSelection,
-  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-} from "./orchestration.ts";
+import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 export const ISSUES_WS_METHODS = {

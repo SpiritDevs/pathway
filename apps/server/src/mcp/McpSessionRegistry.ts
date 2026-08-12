@@ -138,7 +138,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         providerInstanceId,
         providerDriverKind:
           request.providerDriverKind ?? ProviderDriverKind.make(providerInstanceId),
-        capabilities: new Set(["preview"]),
+        capabilities: new Set(McpInvocationContext.ALL_MCP_CAPABILITIES),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {

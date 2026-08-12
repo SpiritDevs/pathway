@@ -77,6 +77,20 @@ export function createIssueAttachmentId(issueId: string): string | null {
   return `${ATTACHMENT_ID_ISSUE_PREFIX}${issueSegment}-${NodeCrypto.randomUUID()}`;
 }
 
+export function createDeterministicAttachmentId(
+  threadId: string,
+  stableKey: string,
+): string | null {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  if (!threadSegment) return null;
+  const hash = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([threadId, stableKey]))
+    .digest("hex")
+    .slice(0, 32);
+  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+  return `${threadSegment}-${uuid}`;
+}
+
 function normalizeAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentRelativePath(attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {

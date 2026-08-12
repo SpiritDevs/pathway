@@ -3,6 +3,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/providers"
+  | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/usage"
   | "/settings/issues-statuses"
@@ -30,6 +31,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
+  "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
   "/settings/usage": "Usage",
   "/settings/issues-statuses": "Statuses",
@@ -137,6 +139,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "word-wrap",
     title: "Word wrap",
+    to: "/settings/appearance",
+  },
+  {
+    id: "composer-context",
+    title: "Composer context",
     to: "/settings/appearance",
   },
   {

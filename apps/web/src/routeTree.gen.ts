@@ -25,6 +25,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
+import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
@@ -122,6 +123,11 @@ const SettingsUsageRoute = SettingsUsageRouteImport.update({
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
   id: '/source-control',
   path: '/source-control',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsScheduledTasksRoute = SettingsScheduledTasksRouteImport.update({
+  id: '/scheduled-tasks',
+  path: '/scheduled-tasks',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
@@ -252,6 +258,7 @@ export interface FileRoutesByFullPath {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -288,6 +295,7 @@ export interface FileRoutesByTo {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -326,6 +334,7 @@ export interface FileRoutesById {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/providers': typeof SettingsProvidersRoute
+  '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -364,6 +373,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
+    | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/$environmentId/$threadId'
@@ -400,6 +410,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
+    | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/$environmentId/$threadId'
@@ -437,6 +448,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/providers'
+    | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
     | '/_chat/$environmentId/$threadId'
@@ -576,6 +588,13 @@ declare module '@tanstack/react-router' {
       path: '/source-control'
       fullPath: '/settings/source-control'
       preLoaderRoute: typeof SettingsSourceControlRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/scheduled-tasks': {
+      id: '/settings/scheduled-tasks'
+      path: '/scheduled-tasks'
+      fullPath: '/settings/scheduled-tasks'
+      preLoaderRoute: typeof SettingsScheduledTasksRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/providers': {
@@ -746,6 +765,7 @@ interface SettingsRouteChildren {
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
+  SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
 }
@@ -762,6 +782,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsUsageRoute: SettingsUsageRoute,
 }

@@ -134,13 +134,12 @@ describe("add project shared logic", () => {
     );
   });
 
-  it("builds the existing project.create command shape", () => {
+  it("builds the V2 project.create mutation", () => {
     expect(
       buildProjectCreateCommand({
         commandId: CommandId.make("command"),
         projectId: ProjectId.make("project"),
         workspaceRoot: "/work/repo",
-        createdAt: "2026-01-01T00:00:00.000Z",
       }),
     ).toMatchObject({
       type: "project.create",
@@ -167,7 +166,6 @@ describe("add project shared logic", () => {
       title: "Planning",
       workspaceRoot: null,
       defaultModelSelection: null,
-      createdAt: "2026-08-12T00:00:00.000Z",
     });
   });
 
@@ -179,7 +177,7 @@ describe("add project shared logic", () => {
         workspaceRoot: "/work/repo",
       }),
     ).toEqual({
-      type: "project.meta.update",
+      type: "project.update",
       commandId: "command",
       projectId: "project",
       workspaceRoot: "/work/repo",

@@ -86,6 +86,17 @@ export interface ThreadSettingsSnapshot {
   readonly interactionMode: ProviderInteractionModeType;
 }
 
+export function findQueuedMessageThread<
+  Thread extends { readonly environmentId: EnvironmentId; readonly id: ThreadId },
+>(
+  threads: ReadonlyArray<Thread>,
+  message: Pick<QueuedThreadMessage, "environmentId" | "threadId">,
+): Thread | undefined {
+  return threads.find(
+    (thread) => thread.environmentId === message.environmentId && thread.id === message.threadId,
+  );
+}
+
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,

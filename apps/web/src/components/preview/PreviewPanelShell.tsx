@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { isElectron } from "~/env";
+import { type PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { cn } from "~/lib/utils";
 
@@ -17,13 +18,12 @@ export const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
 export function getPreviewPanelMaxWidth(viewportWidth: number): number {
   return Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
 }
-
 /**
  * Shell for the preview panel. In inline mode the panel is user-resizable
  * via a drag handle on the left edge; width persists per browser. In
  * sheet/sidebar modes the parent owns the size.
  */
-export function PreviewPanelShell(props: {
+interface PreviewPanelShellProps {
   mode: PreviewPanelMode;
   /**
    * Overrides the localStorage key used to persist the panel width. Callers
@@ -34,33 +34,55 @@ export function PreviewPanelShell(props: {
   widthStorageKey?: string;
   /** Overrides the initial width (px) before the user has resized the panel. */
   defaultWidth?: number;
+  maximized?: boolean;
+  inlineSize?: PreviewPanelInlineSize;
   children: ReactNode;
-}) {
-  const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
-  const isInline = props.mode === "inline";
+}
+
+export function PreviewPanelShell(props: PreviewPanelShellProps) {
+  if (props.inlineSize) {
+    return <PreviewPanelShellFrame {...props} inlineSize={props.inlineSize} />;
+  }
+
+  return <ResizablePreviewPanelShell {...props} />;
+}
+
+function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
   const maxWidth = usePreviewPanelMaxWidth();
-  const { width, handlers } = useResizableWidth({
+  const inlineSize = useResizableWidth({
     storageKey: props.widthStorageKey ?? PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     defaultWidth: props.defaultWidth ?? PREVIEW_PANEL_DEFAULT_WIDTH,
     minWidth: PREVIEW_PANEL_MIN_WIDTH,
     maxWidth,
     edge: "left",
   });
+  return <PreviewPanelShellFrame {...props} inlineSize={inlineSize} />;
+}
+
+function PreviewPanelShellFrame(
+  props: PreviewPanelShellProps & { inlineSize: PreviewPanelInlineSize },
+) {
+  const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
+  const isInline = props.mode === "inline";
+  const { width, handlers } = props.inlineSize;
 
   return (
     <div
       className={cn(
         "relative flex h-full min-h-0 min-w-0 flex-col self-stretch bg-background",
         isInline
-          ? "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
+          ? props.maximized
+            ? "flex-1 rounded-xl border border-sidebar-border shadow-sm/5"
+            : "shrink-0 rounded-xl border border-sidebar-border shadow-sm/5"
           : props.mode === "sheet"
             ? "w-full overflow-hidden rounded-[inherit]"
             : "w-full",
       )}
-      style={isInline ? { width: `${width}px` } : undefined}
+      style={isInline && !props.maximized ? { width: `${width}px` } : undefined}
       data-preview-panel-mode={props.mode}
+      data-preview-panel-maximized={props.maximized ? "true" : "false"}
     >
-      {isInline ? <RightPanelResizeHandle handlers={handlers} /> : null}
+      {isInline && !props.maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
       {isInline ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">
           {useDragRegion ? <div className="electron-drag-region h-0 w-full" aria-hidden /> : null}

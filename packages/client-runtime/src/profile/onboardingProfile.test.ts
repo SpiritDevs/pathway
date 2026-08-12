@@ -7,7 +7,7 @@ import {
   onboardingStepIndex,
   parseProfileMetadata,
   resolveOnboardingStep,
-} from "./onboardingProfile";
+} from "./onboardingProfile.ts";
 
 describe("parseProfileMetadata", () => {
   it("parses a fresh v1 shape", () => {

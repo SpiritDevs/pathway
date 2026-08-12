@@ -11,7 +11,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useIssueStartWorkLink } from "../components/issues/useIssueStartWorkLink";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { useThread, useThreadRefs } from "../state/entities";
+import { useThreadRefs, useThreadShell } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
 function DraftChatThreadRouteView() {
@@ -28,7 +28,7 @@ function DraftChatThreadRouteView() {
       ) ?? null)
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
-  const serverThread = useThread(serverThreadRef);
+  const serverThread = useThreadShell(serverThreadRef);
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
   const primaryEnvironmentId = usePrimaryEnvironmentId();

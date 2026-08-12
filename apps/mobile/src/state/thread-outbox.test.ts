@@ -12,6 +12,7 @@ import { AtomRegistry } from "effect/unstable/reactivity";
 import {
   decodeQueuedThreadMessage,
   encodeQueuedThreadMessage,
+  findQueuedMessageThread,
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
@@ -56,6 +57,27 @@ describe("thread outbox", () => {
     expect(groupQueuedThreadMessages([later, earlier])).toEqual({
       "environment-1:thread-1": [earlier, later],
     });
+  });
+
+  it("selects the latest matching shell at dispatch time", () => {
+    const message = queuedMessage({
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    const stale = {
+      environmentId: message.environmentId,
+      id: message.threadId,
+      runtimeMode: "full-access",
+    } as const;
+    const fresh = { ...stale, runtimeMode: "approval-required" } as const;
+
+    expect(findQueuedMessageThread([fresh], message)).toBe(fresh);
+    expect(
+      findQueuedMessageThread(
+        [{ ...fresh, environmentId: EnvironmentId.make("another-environment") }],
+        message,
+      ),
+    ).toBeUndefined();
   });
 
   it("decodes the persisted schema and rejects incomplete messages", () => {

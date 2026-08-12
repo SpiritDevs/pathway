@@ -4,34 +4,36 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  TurnId,
+  RunId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import * as DateTime from "effect/DateTime";
+import { describe, expect, it } from "vite-plus/test";
 
-import type { Thread, ThreadShell } from "../types";
+import type { Thread } from "../types";
+import { makeThreadFixture } from "../test-fixtures";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
-  buildLoadingThreadFromShell,
-  buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
+  deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
-  ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
-  hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
-  resolveEditableUserMessageId,
+  resolveEditableV2UserMessageId,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
-  scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
+  shouldShowComposerContextStrip,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -40,44 +42,8 @@ const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
 
-describe("environment reconnect warning grace", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("shows a persistent reconnect after the grace period", () => {
-    vi.useFakeTimers();
-    const showWarning = vi.fn();
-
-    scheduleEnvironmentReconnectWarning(showWarning);
-    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS - 1);
-    expect(showWarning).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(1);
-    expect(showWarning).toHaveBeenCalledOnce();
-  });
-
-  it("cancels the warning when the connection recovers during the grace period", () => {
-    vi.useFakeTimers();
-    const showWarning = vi.fn();
-
-    const cancel = scheduleEnvironmentReconnectWarning(showWarning);
-    cancel();
-    vi.advanceTimersByTime(ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
-
-    expect(showWarning).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse elapsed grace from another environment", () => {
-    const anotherEnvironmentId = EnvironmentId.make("environment-remote");
-
-    expect(hasEnvironmentReconnectWarningGraceElapsed(environmentId, environmentId)).toBe(true);
-    expect(hasEnvironmentReconnectWarningGraceElapsed(anotherEnvironmentId, environmentId)).toBe(
-      false,
-    );
-  });
-});
-
 function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
+  return makeThreadFixture({
     id: threadId,
     environmentId,
     projectId,
@@ -88,80 +54,25 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     },
     runtimeMode: "full-access",
     interactionMode: "default",
-    session: null,
+    runtime: null,
     messages: [],
     proposedPlans: [],
-    activities: [],
-    checkpoints: [],
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
     deletedAt: null,
-    latestTurn: null,
+    latestRun: null,
     branch: null,
     worktreePath: null,
     ...overrides,
-  };
+  });
 }
 
-describe("editable user message", () => {
-  const userMessage = {
-    id: MessageId.make("message-user-latest"),
-    role: "user" as const,
-    text: "Fix teh typo",
-    turnId: null,
-    createdAt: "2026-03-29T00:01:00.000Z",
-    updatedAt: "2026-03-29T00:01:00.000Z",
-    streaming: false,
-  };
-
-  it("selects only the latest user message while no later checkpoint changed files", () => {
-    const thread = makeThread({
-      messages: [
-        { ...userMessage, id: MessageId.make("message-user-older"), createdAt: now },
-        userMessage,
-      ],
-      checkpoints: [
-        {
-          turnId: TurnId.make("turn-before-message"),
-          checkpointTurnCount: 1,
-          checkpointRef: "checkpoint-before" as never,
-          status: "ready",
-          files: [{ path: "old.ts", kind: "modified", additions: 1, deletions: 0 }],
-          assistantMessageId: null,
-          completedAt: "2026-03-29T00:00:30.000Z",
-        },
-      ],
-    });
-
-    expect(resolveEditableUserMessageId(thread)).toBe(userMessage.id);
-  });
-
-  it("hides editing after a checkpoint following the message changes files", () => {
-    const thread = makeThread({
-      messages: [userMessage],
-      checkpoints: [
-        {
-          turnId: TurnId.make("turn-after-message"),
-          checkpointTurnCount: 1,
-          checkpointRef: "checkpoint-after" as never,
-          status: "ready",
-          files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-          assistantMessageId: null,
-          completedAt: "2026-03-29T00:02:00.000Z",
-        },
-      ],
-    });
-
-    expect(resolveEditableUserMessageId(thread)).toBeNull();
-  });
-});
-
 const completedTurn = {
-  turnId: TurnId.make("turn-1"),
-  state: "completed" as const,
+  runId: RunId.make("turn-1"),
+  status: "completed" as const,
   requestedAt: now,
   startedAt: "2026-03-29T00:00:01.000Z",
   completedAt: "2026-03-29T00:00:10.000Z",
@@ -169,58 +80,90 @@ const completedTurn = {
 };
 
 const readySession = {
-  threadId,
-  status: "ready" as const,
+  status: "completed" as const,
   providerName: "codex",
   providerInstanceId: ProviderInstanceId.make("codex"),
-  runtimeMode: "full-access" as const,
-  activeTurnId: null,
+  activeRunId: null,
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
 
-describe("buildLoadingThreadFromShell", () => {
-  it("preserves shell metadata and supplies empty detail collections", () => {
-    const shell = {
-      environmentId,
-      id: threadId,
-      projectId,
-      title: "Loading thread",
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
-        model: "gpt-5.4",
+function editableV2Projection(
+  input: {
+    readonly createdBy?: "user" | "agent";
+    readonly files?: ReadonlyArray<{ readonly path: string }>;
+    readonly rollbackCapable?: boolean;
+  } = {},
+): OrchestrationV2ThreadProjection {
+  const messageId = MessageId.make("message-editable");
+  const runId = RunId.make("run-editable");
+  const item = {
+    type: "user_message",
+    messageId,
+    runId,
+    createdBy: input.createdBy ?? "user",
+  };
+  return {
+    thread: { modelSelection: { instanceId: "codex", model: "gpt-5.4" } },
+    visibleTurnItems: [{ item }],
+    runs: [
+      {
+        id: runId,
+        ordinal: 1,
+        status: "completed",
+        modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+        providerThreadId: "provider-thread-editable",
       },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: "main",
-      worktreePath: null,
-      latestTurn: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      snoozedUntil: null,
-      snoozedAt: null,
-      session: null,
-      latestUserMessageAt: now,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
-    } satisfies ThreadShell;
+    ],
+    providerThreads: [
+      { id: "provider-thread-editable", providerSessionId: "provider-session-editable" },
+    ],
+    providerSessions: [
+      {
+        id: "provider-session-editable",
+        capabilities: {
+          checkpointing: {
+            providerCanRollbackConversation: input.rollbackCapable ?? true,
+          },
+        },
+      },
+    ],
+    checkpointScopes: [{ id: "scope-editable", runId, kind: "root_run" }],
+    checkpoints: [
+      {
+        id: "checkpoint-editable-baseline",
+        scopeId: "scope-editable",
+        status: "ready",
+        ordinalWithinScope: 0,
+        appRunOrdinal: null,
+        files: [],
+      },
+      ...((input.files?.length ?? 0) === 0
+        ? []
+        : [
+            {
+              id: "checkpoint-editable-completed",
+              scopeId: "scope-editable",
+              status: "ready",
+              ordinalWithinScope: 1,
+              appRunOrdinal: 1,
+              files: input.files,
+            },
+          ]),
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+}
 
-    expect(buildLoadingThreadFromShell(shell)).toMatchObject({
-      environmentId,
-      id: threadId,
-      projectId,
-      title: "Loading thread",
-      branch: "main",
-      deletedAt: null,
-      messages: [],
-      proposedPlans: [],
-      activities: [],
-      checkpoints: [],
-    });
+describe("resolveEditableV2UserMessageId", () => {
+  it("offers restart for the latest rollback-capable user message", () => {
+    expect(resolveEditableV2UserMessageId(editableV2Projection())).toBe("message-editable");
+  });
+
+  it("does not offer restart after file changes or for agent-authored messages", () => {
+    expect(
+      resolveEditableV2UserMessageId(editableV2Projection({ files: [{ path: "src/app.ts" }] })),
+    ).toBeNull();
+    expect(resolveEditableV2UserMessageId(editableV2Projection({ createdBy: "agent" }))).toBeNull();
   });
 });
 
@@ -252,30 +195,56 @@ describe("resolveThreadMetadataUpdateForNextTurn", () => {
   });
 });
 
-describe("buildThreadTurnInterruptInput", () => {
-  it("targets the session's active running turn", () => {
-    const activeTurnId = TurnId.make("turn-running");
-
+describe("shouldShowComposerContextStrip", () => {
+  it("shows git context while composing a new thread", () => {
     expect(
-      buildThreadTurnInterruptInput(
-        makeThread({
-          session: {
-            ...readySession,
-            status: "running",
-            activeTurnId,
-          },
-        }),
-      ),
-    ).toEqual({ threadId, turnId: activeTurnId });
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: false,
+      }),
+    ).toBe(true);
   });
 
-  it("omits a turn id when the session is not running", () => {
-    expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
-      threadId,
-    });
+  it("keeps git context in an active thread only when requested", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: false,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: false,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides git context without a git-backed project", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: false,
+        hasActiveProject: true,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: true,
+        hasActiveProject: false,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(false);
   });
 });
-
 describe("deriveComposerSendState", () => {
   it("treats expired terminal pills as non-sendable content", () => {
     const state = deriveComposerSendState({
@@ -407,18 +376,18 @@ describe("getStartedThreadModelChangeBlockReason", () => {
     ).toBeNull();
   });
 
-  it("blocks started-session model changes when either provider requires a new thread", () => {
+  it("blocks started-session model changes for providers that require a new thread", () => {
     expect(
       getStartedThreadModelChangeBlockReason({
         providers,
         hasStartedSession: true,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
         },
         nextModelSelection: {
           instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          model: "grok-other",
         },
       }),
     ).toEqual({
@@ -565,24 +534,19 @@ describe("reconcileRetainedMountedThreadIds", () => {
 });
 
 describe("shouldWriteThreadErrorToCurrentServerThread", () => {
-  it("writes errors for a shell-derived active server thread", () => {
+  it("requires the environment, route thread, and target thread to match", () => {
     const routeThreadRef = { environmentId, threadId };
 
     expect(
       shouldWriteThreadErrorToCurrentServerThread({
-        activeServerThread: { environmentId, id: threadId },
+        serverThread: { environmentId, id: threadId },
         routeThreadRef,
         targetThreadId: threadId,
       }),
     ).toBe(true);
-  });
-
-  it("requires an active server thread matching the environment, route, and target", () => {
-    const routeThreadRef = { environmentId, threadId };
-
     expect(
       shouldWriteThreadErrorToCurrentServerThread({
-        activeServerThread: null,
+        serverThread: null,
         routeThreadRef,
         targetThreadId: threadId,
       }),
@@ -620,16 +584,15 @@ describe("startNewThreadForProject", () => {
 describe("hasServerAcknowledgedLocalDispatch", () => {
   it("does not acknowledge unchanged server state", () => {
     const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
     );
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "ready",
-        latestTurn: completedTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        session: readySession,
+        latestRun: completedTurn,
+        runtime: readySession,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -639,11 +602,11 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
 
   it("acknowledges a settled newer turn", () => {
     const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
     );
     const newerTurn = {
       ...completedTurn,
-      turnId: TurnId.make("turn-2"),
+      runId: RunId.make("turn-2"),
       requestedAt: "2026-03-29T00:01:00.000Z",
       startedAt: "2026-03-29T00:01:01.000Z",
       completedAt: "2026-03-29T00:01:30.000Z",
@@ -653,9 +616,8 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "ready",
-        latestTurn: newerTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        session: { ...readySession, updatedAt: newerTurn.completedAt },
+        latestRun: newerTurn,
+        runtime: { ...readySession, updatedAt: newerTurn.completedAt },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -665,12 +627,12 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
 
   it("waits for the matching running turn before acknowledging", () => {
     const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
     );
     const runningTurn = {
       ...completedTurn,
-      turnId: TurnId.make("turn-2"),
-      state: "running" as const,
+      runId: RunId.make("turn-2"),
+      status: "running" as const,
       requestedAt: "2026-03-29T00:01:00.000Z",
       startedAt: "2026-03-29T00:01:01.000Z",
       completedAt: null,
@@ -680,12 +642,11 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        session: {
+        latestRun: runningTurn,
+        runtime: {
           ...readySession,
           status: "running",
-          activeTurnId: TurnId.make("turn-other"),
+          activeRunId: RunId.make("turn-other"),
         },
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -696,12 +657,11 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        session: {
+        latestRun: runningTurn,
+        runtime: {
           ...readySession,
           status: "running",
-          activeTurnId: runningTurn.turnId,
+          activeRunId: runningTurn.runId,
         },
         hasPendingApproval: false,
         hasPendingUserInput: false,
@@ -710,42 +670,29 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
-  it("acknowledges a steering message projected onto the current running turn", () => {
-    const runningTurn = {
+  it("acknowledges a steering message projected onto the current running run", () => {
+    const runningRun = {
       ...completedTurn,
-      state: "running" as const,
+      status: "running" as const,
       completedAt: null,
     };
-    const runningSession = {
+    const runningRuntime = {
       ...readySession,
       status: "running" as const,
-      activeTurnId: runningTurn.turnId,
+      activeRunId: runningRun.runId,
     };
     const localDispatch = createLocalDispatchSnapshot(
-      makeThread({
-        latestTurn: runningTurn,
-        session: runningSession,
-        messages: [
-          {
-            id: MessageId.make("message-before-steer"),
-            role: "user",
-            text: "Initial prompt",
-            turnId: runningTurn.turnId,
-            createdAt: runningTurn.requestedAt,
-            updatedAt: runningTurn.requestedAt,
-            streaming: false,
-          },
-        ],
-      }),
+      makeThread({ latestRun: runningRun, runtime: runningRuntime }),
+      { latestUserMessageId: MessageId.make("message-before-steer") },
     );
 
     expect(
       hasServerAcknowledgedLocalDispatch({
         localDispatch,
         phase: "running",
-        latestTurn: runningTurn,
+        latestRun: runningRun,
         latestUserMessageId: MessageId.make("message-steer"),
-        session: runningSession,
+        runtime: runningRuntime,
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -758,9 +705,8 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     const common = {
       localDispatch,
       phase: "ready" as const,
-      latestTurn: null,
-      latestUserMessageId: localDispatch.latestUserMessageId,
-      session: null,
+      latestRun: null,
+      runtime: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,
       threadError: null,
@@ -769,5 +715,105 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("deriveCommittedServerUserMessageIds", () => {
+  it("tracks only committed user turn items, not assistant rows or projection-only messages", () => {
+    const turnStartId = MessageId.make("message-turn-start");
+    const steerId = MessageId.make("message-steer");
+    const assistantId = MessageId.make("message-assistant");
+    const committedAt = DateTime.makeUnsafe("2026-06-26T17:50:15.180Z");
+    const runId = RunId.make("run:thread:thread-1:ordinal:1");
+    const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-turn-start"),
+        item: {
+          id: TurnItemId.make("turn-item:message-turn-start"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          createdBy: "user",
+          creationSource: "web",
+          type: "user_message",
+          messageId: turnStartId,
+          inputIntent: "turn_start",
+          text: "start",
+          attachments: [],
+        },
+      },
+      {
+        position: 1,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-assistant"),
+        item: {
+          id: TurnItemId.make("turn-item:message-assistant"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          type: "assistant_message",
+          messageId: assistantId,
+          text: "working",
+          streaming: false,
+        },
+      },
+      {
+        position: 2,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-steer"),
+        item: {
+          id: TurnItemId.make("turn-item:message-steer"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 3,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          createdBy: "user",
+          creationSource: "web",
+          type: "user_message",
+          messageId: steerId,
+          inputIntent: "steer",
+          text: "continue",
+          attachments: [],
+        },
+      },
+    ];
+
+    expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
+      new Set([turnStartId, steerId]),
+    );
   });
 });

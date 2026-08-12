@@ -58,6 +58,14 @@ import Migration0042 from "./Migrations/042_IssueTrackerStructure.ts";
 import Migration0043 from "./Migrations/043_ProjectionProjectsNullableWorkspaceRoot.ts";
 import Migration0044 from "./Migrations/044_IssueTrackerViews.ts";
 import Migration0045 from "./Migrations/045_IssueTrackerAgents.ts";
+import Migration0046 from "./Migrations/046_OrchestrationV2.ts";
+import Migration0047 from "./Migrations/047_OrchestrationV2Subagents.ts";
+import Migration0048 from "./Migrations/048_OrchestrationV2Foundation.ts";
+import Migration0049 from "./Migrations/049_OrchestrationV2ProviderSessionBindings.ts";
+import Migration0050 from "./Migrations/050_OrchestrationV2ThreadLaunchWorkflows.ts";
+import Migration0051 from "./Migrations/051_ApplicationEventSource.ts";
+import Migration0052 from "./Migrations/052_OrchestrationV2EffectCancellation.ts";
+import Migration0053 from "./Migrations/053_ScheduledTasks.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -115,6 +123,14 @@ export const migrationEntries = [
   [43, "ProjectionProjectsNullableWorkspaceRoot", Migration0043],
   [44, "IssueTrackerViews", Migration0044],
   [45, "IssueTrackerAgents", Migration0045],
+  [46, "OrchestrationV2", Migration0046],
+  [47, "OrchestrationV2Subagents", Migration0047],
+  [48, "OrchestrationV2Foundation", Migration0048],
+  [49, "OrchestrationV2ProviderSessionBindings", Migration0049],
+  [50, "OrchestrationV2ThreadLaunchWorkflows", Migration0050],
+  [51, "ApplicationEventSource", Migration0051],
+  [52, "OrchestrationV2EffectCancellation", Migration0052],
+  [53, "ScheduledTasks", Migration0053],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

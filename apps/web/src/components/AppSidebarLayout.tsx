@@ -17,6 +17,7 @@ import { cn } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import LegacyThreadSidebar from "./LegacySidebar";
+import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { CalendarSidebar } from "./calendar/CalendarSidebar";
 import { EmailSidebar } from "./email/EmailSidebar";
@@ -152,6 +153,10 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
+  // Settings routes show the settings nav in place of whichever thread
+  // sidebar is active.
+  // Seeds server-side visited tracking from this browser's localStorage the
+  useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
   const isMobile = useIsMobile();
   const [isPrimaryNavigationExpanded, setPrimaryNavigationExpanded] = useLocalStorage(
