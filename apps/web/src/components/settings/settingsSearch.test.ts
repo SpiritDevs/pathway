@@ -185,4 +185,22 @@ describe("SETTINGS_NAV_GROUPS", () => {
       to: "/settings/email",
     });
   });
+
+  it("lands per-project capture settings on the section that holds them", () => {
+    expect(searchSettings("project capture addresses")[0]).toMatchObject({
+      id: "email-project-capture",
+      to: "/settings/email",
+    });
+    // Both are edited inside a project's collapsed block, so the section is the scroll target.
+    expect(searchSettings("mail slug")[0]).toMatchObject({
+      id: "email-mail-slug",
+      to: "/settings/email",
+      targetId: "email-project-capture",
+    });
+    expect(searchSettings("capture password")[0]).toMatchObject({
+      id: "email-capture-password",
+      to: "/settings/email",
+      targetId: "email-project-capture",
+    });
+  });
 });

@@ -124,23 +124,26 @@ describe("CapturedEmailMessage", () => {
     expect(() => decodeCapturedEmailMessage({ ...MESSAGE_JSON, detectedCode: "123" })).toThrow();
   });
 
-  it.each(["auth-username", "recipient-domain", "recipient-plus-tag", "unassigned"] as const)(
-    "retains the %s routing decision",
-    (matchedBy) => {
-      const unassigned = matchedBy === "unassigned";
-      const message = decodeCapturedEmailMessage({
-        ...MESSAGE_JSON,
-        attribution: {
-          projectId: unassigned ? null : "project-1",
-          mailSlug: unassigned ? null : "my-app",
-          matchedBy,
-          matchedValue: unassigned ? null : "my-app",
-        },
-      });
+  it.each([
+    "auth-username",
+    "auth-password",
+    "recipient-domain",
+    "recipient-plus-tag",
+    "unassigned",
+  ] as const)("retains the %s routing decision", (matchedBy) => {
+    const unassigned = matchedBy === "unassigned";
+    const message = decodeCapturedEmailMessage({
+      ...MESSAGE_JSON,
+      attribution: {
+        projectId: unassigned ? null : "project-1",
+        mailSlug: unassigned ? null : "my-app",
+        matchedBy,
+        matchedValue: unassigned ? null : "my-app",
+      },
+    });
 
-      expect(message.attribution.matchedBy).toBe(matchedBy);
-    },
-  );
+    expect(message.attribution.matchedBy).toBe(matchedBy);
+  });
 });
 
 describe("EmailCaptureSettings", () => {
@@ -162,6 +165,7 @@ describe("EmailCaptureSettings", () => {
     ).toEqual({
       projectId: "project-1",
       mailSlug: "my-app",
+      capturePassword: null,
       retention: { maxMessages: null, maxAgeDays: null },
       toastMuted: false,
       twoFactorCodeRegex: null,

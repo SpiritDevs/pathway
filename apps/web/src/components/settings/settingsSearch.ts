@@ -374,6 +374,25 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/email",
   },
   {
+    id: "email-project-capture",
+    title: "Project capture addresses",
+    to: "/settings/email",
+  },
+  // The slug and the password are edited inside a project's collapsed block, so the section is the
+  // stable destination: the hit gets you to the list and you open the project you meant.
+  {
+    id: "email-mail-slug",
+    title: "Mail slug",
+    to: "/settings/email",
+    targetId: "email-project-capture",
+  },
+  {
+    id: "email-capture-password",
+    title: "SMTP capture password",
+    to: "/settings/email",
+    targetId: "email-project-capture",
+  },
+  {
     id: "email-trigger-rules",
     title: "Mail trigger rules",
     to: "/settings/email",

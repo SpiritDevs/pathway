@@ -10,19 +10,25 @@
  *
  * @module components/email/ProjectEmailCaptureSection
  */
-import type { EmailCaptureSettings, EmailMailSlug, ProjectId } from "@t3tools/contracts";
+import type { EmailCaptureSettings, ProjectId } from "@t3tools/contracts";
 import { BellIcon, CopyIcon, MailIcon } from "lucide-react";
 
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useEmailSettings, useUpdateEmailSettings } from "~/state/email";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
-import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingResetButton, SettingsRow, SettingsSection } from "../settings/settingsLayout";
+import {
+  CAPTURE_PASSWORD_DESCRIPTION,
+  CapturePasswordField,
+  CopyValueButton,
+  MAIL_SLUG_DESCRIPTION,
+  MailSlugField,
+  useCaptureValueCopy,
+} from "./EmailCaptureFields";
 import {
   emailCaptureAddress,
   findEmailProjectSettings,
-  mailSlugError,
+  otherCapturePasswords,
   otherMailSlugs,
   parseOptionalPositiveInteger,
   withEmailProjectSettings,
@@ -53,21 +59,7 @@ export function ProjectEmailCaptureSection({
 }) {
   const { settings } = useEmailSettings();
   const updateSettings = useUpdateEmailSettings();
-  const { copyToClipboard } = useCopyToClipboard<{ address: string }>({
-    target: "capture address",
-    onCopy: ({ address }) => {
-      toastManager.add({ type: "success", title: "Capture address copied", description: address });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy the capture address",
-          description: error.message,
-        }),
-      );
-    },
-  });
+  const copyCaptureAddress = useCaptureValueCopy("Capture address");
 
   const project = findEmailProjectSettings(settings, projectId);
 
@@ -103,29 +95,19 @@ export function ProjectEmailCaptureSection({
       <SettingsSection icon={<MailIcon className="size-3.5" />} title="Email capture">
         <SettingsRow
           control={
-            <EmailSettingField
-              ariaLabel="Mail slug"
-              onCommit={(draft) => patch({ mailSlug: draft.trim() as EmailMailSlug })}
-              validate={(draft) =>
-                mailSlugError(draft) ??
-                (takenSlugs.includes(draft.trim() as EmailMailSlug)
-                  ? "Another project already uses that slug."
-                  : null)
-              }
+            <MailSlugField
+              onCommit={(mailSlug) => patch({ mailSlug })}
+              takenSlugs={takenSlugs}
               value={project.mailSlug}
             />
           }
-          description="Mail routes to this project when the SMTP AUTH username is the slug, when a recipient uses it as a domain, or when a recipient carries it as a plus tag."
+          description={MAIL_SLUG_DESCRIPTION}
           title="Mail slug"
         />
 
         <SettingsRow
           control={
-            <Button
-              onClick={() => copyToClipboard(captureAddress, { address: captureAddress })}
-              size="sm"
-              variant="outline"
-            >
+            <Button onClick={() => copyCaptureAddress(captureAddress)} size="sm" variant="outline">
               <CopyIcon aria-hidden="true" />
               Copy address
             </Button>
@@ -138,6 +120,33 @@ export function ProjectEmailCaptureSection({
             </>
           }
           title="Capture address"
+        />
+
+        <SettingsRow
+          control={
+            <div className="flex w-full items-center gap-2 sm:w-auto">
+              <CapturePasswordField
+                onCommit={(capturePassword) => patch({ capturePassword })}
+                takenPasswords={otherCapturePasswords(settings, projectId)}
+                value={project.capturePassword}
+              />
+              <CopyValueButton
+                disabled={project.capturePassword === null}
+                label="Capture password"
+                value={project.capturePassword ?? ""}
+              />
+            </div>
+          }
+          description={CAPTURE_PASSWORD_DESCRIPTION}
+          resetAction={
+            project.capturePassword === null ? null : (
+              <SettingResetButton
+                label="capture password"
+                onClick={() => void patch({ capturePassword: null })}
+              />
+            )
+          }
+          title="Capture password"
         />
 
         <SettingsRow

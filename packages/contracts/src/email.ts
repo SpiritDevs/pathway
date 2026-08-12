@@ -59,6 +59,7 @@ export type EmailMailSlug = typeof EmailMailSlug.Type;
 
 export const EmailRoutingRule = Schema.Literals([
   "auth-username",
+  "auth-password",
   "recipient-domain",
   "recipient-plus-tag",
   "unassigned",
@@ -70,7 +71,7 @@ export const EmailProjectAttribution = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
   mailSlug: Schema.NullOr(EmailMailSlug),
   matchedBy: EmailRoutingRule,
-  /** The AUTH username or recipient address that won. Null only for Unassigned. */
+  /** The AUTH routing label or recipient address that won. Null only for Unassigned. */
   matchedValue: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type EmailProjectAttribution = typeof EmailProjectAttribution.Type;
@@ -365,6 +366,12 @@ export type EmailTriggerFiringsListResult = typeof EmailTriggerFiringsListResult
 export const EmailProjectSettings = Schema.Struct({
   projectId: ProjectId,
   mailSlug: EmailMailSlug,
+  capturePassword: Schema.NullOr(TrimmedNonEmptyString)
+    .pipe(Schema.withDecodingDefault(Effect.succeed(null)))
+    .annotate({
+      description:
+        "Optional SMTP AUTH password routing label. Like the mail slug, this is not a secret or security boundary.",
+    }),
   retention: EmailRetentionOverrides.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   toastMuted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   twoFactorCodeRegex: Schema.NullOr(TrimmedNonEmptyString).pipe(
