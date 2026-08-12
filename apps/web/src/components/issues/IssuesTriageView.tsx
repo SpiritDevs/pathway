@@ -12,7 +12,7 @@
  * @module components/issues/IssuesTriageView
  */
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import type { Issue, IssueId, ProjectId } from "@t3tools/contracts";
+import type { Issue, IssueId, ProjectId, ProviderDriverKind } from "@t3tools/contracts";
 import { CheckIcon, InboxIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
@@ -149,6 +149,11 @@ export function IssuesTriageView({
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
   const [acceptIssues, setAcceptIssues] = useState<ReadonlyArray<Issue>>([]);
   const [acceptOpen, setAcceptOpen] = useState(false);
+  const [startWorkRequest, setStartWorkRequest] = useState<{
+    readonly issueKey: string;
+    readonly provider: ProviderDriverKind;
+    readonly projectId: ProjectId | null;
+  } | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const scrollToActiveRef = useRef(false);
 
@@ -187,7 +192,10 @@ export function IssuesTriageView({
   const detailIssueKey = search.issue ?? null;
   const detailIssue = useIssue(detailIssueKey);
   const openIssue = (issue: Issue) => onSearch({ issue: issue.key });
-  const closeDetail = () => onSearch({ issue: undefined });
+  const closeDetail = () => {
+    setStartWorkRequest(null);
+    onSearch({ issue: undefined });
+  };
 
   useEffect(() => {
     if (ids.length === 0 || detailIssue === null || detailIssue.deletedAt !== null) return;
@@ -442,6 +450,15 @@ export function IssuesTriageView({
         issues={acceptIssues}
         onAccepted={() => setSelection(EMPTY_ISSUES_SELECTION)}
         onOpenChange={setAcceptOpen}
+        onStartTask={(issue) => {
+          if (issue.assignee?.kind !== "agent") return;
+          setStartWorkRequest({
+            issueKey: issue.key,
+            provider: issue.assignee.provider,
+            projectId: issue.projectId,
+          });
+          onSearch({ issue: issue.key });
+        }}
         open={acceptOpen}
         projects={projects}
         statuses={statuses}
@@ -451,6 +468,13 @@ export function IssuesTriageView({
         issueKey={detailIssueKey}
         onClose={closeDetail}
         onOpenIssueKey={(key) => onSearch({ issue: key })}
+        onStartWorkRequestHandled={() => setStartWorkRequest(null)}
+        startWorkRequestProvider={
+          startWorkRequest?.issueKey === detailIssueKey ? startWorkRequest.provider : null
+        }
+        startWorkRequestProjectId={
+          startWorkRequest?.issueKey === detailIssueKey ? startWorkRequest.projectId : null
+        }
       />
     </SidebarInset>
   );

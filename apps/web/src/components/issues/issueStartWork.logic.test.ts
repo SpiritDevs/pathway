@@ -1,4 +1,6 @@
 import {
+  ChatAttachmentId,
+  IssueCommentId,
   IssueId,
   IssueStatusId,
   IssueTodoId,
@@ -13,15 +15,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
-  ISSUE_PENDING_THREAD_LINK_STORAGE_KEY,
   buildIssueStartWorkPrompt,
   issueDetailPath,
   issueDetailUrl,
+  issueStartWorkAttachmentIds,
   issueStartWorkTodos,
-  rememberPendingIssueThreadLink,
   resolveIssueStartWorkModelSelection,
-  takePendingIssueThreadLink,
-  type PendingLinkStorage,
+  resolveIssueStartWorkStatusId,
 } from "./issueStartWork.logic";
 
 const NOW = "2026-08-12T00:00:00.000Z";
@@ -153,18 +153,6 @@ describe("resolveIssueStartWorkModelSelection", () => {
   });
 });
 
-function memoryStorage(initial: Record<string, string> = {}): PendingLinkStorage & {
-  readonly read: () => Record<string, string>;
-} {
-  const map = new Map(Object.entries(initial));
-  return {
-    getItem: (key) => map.get(key) ?? null,
-    setItem: (key, value) => void map.set(key, value),
-    removeItem: (key) => void map.delete(key),
-    read: () => Object.fromEntries(map),
-  };
-}
-
 describe("issueDetailUrl", () => {
   it("points at the sheet over the list, because there is no per-issue route", () => {
     expect(issueDetailPath("PAT-12")).toBe("/issues?issue=PAT-12");
@@ -273,65 +261,59 @@ describe("issueStartWorkTodos", () => {
   });
 });
 
-describe("the pending link", () => {
-  it("remembers an issue against a draft and spends it exactly once", () => {
-    const storage = memoryStorage();
-    rememberPendingIssueThreadLink(storage, "draft-1", IssueId.make("i1"));
+describe("issueStartWorkAttachmentIds", () => {
+  it("keeps image order, deduplicates, and respects the first-turn attachment limit", () => {
+    const attachmentIds = Array.from({ length: 9 }, (_, index) =>
+      ChatAttachmentId.make(`image-${index}`),
+    );
+    const comments = [
+      {
+        id: IssueCommentId.make("comment-1"),
+        issueId: IssueId.make("i1"),
+        author: { kind: "user" as const },
+        body: "screenshots",
+        attachmentIds: [attachmentIds[0]!, ...attachmentIds],
+        createdAt: NOW,
+        editedAt: null,
+      },
+    ];
 
-    expect(takePendingIssueThreadLink(storage, "draft-1")).toBe("i1");
-    expect(takePendingIssueThreadLink(storage, "draft-1")).toBe(null);
-    // The last entry out clears the key rather than leaving `{}` behind.
-    expect(storage.read()[ISSUE_PENDING_THREAD_LINK_STORAGE_KEY]).toBe(undefined);
+    expect(issueStartWorkAttachmentIds(comments)).toEqual(attachmentIds.slice(0, 8));
   });
+});
 
-  it("keeps drafts apart, and the last press per draft wins", () => {
-    const storage = memoryStorage();
-    rememberPendingIssueThreadLink(storage, "draft-1", IssueId.make("i1"));
-    rememberPendingIssueThreadLink(storage, "draft-2", IssueId.make("i2"));
-    rememberPendingIssueThreadLink(storage, "draft-1", IssueId.make("i3"));
-
-    expect(takePendingIssueThreadLink(storage, "draft-1")).toBe("i3");
-    expect(takePendingIssueThreadLink(storage, "draft-2")).toBe("i2");
+describe("resolveIssueStartWorkStatusId", () => {
+  const status = (id: string, category: "backlog" | "unstarted" | "started") => ({
+    id: IssueStatusId.make(id),
+    name: id,
+    color: "#2563eb",
+    category,
+    position: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
   });
+  const statuses = [
+    status("backlog", "backlog"),
+    status("todo", "unstarted"),
+    status("doing", "started"),
+  ];
 
-  it("keeps only the newest entries, so an abandoned draft cannot grow the record", () => {
-    const storage = memoryStorage();
-    for (let index = 0; index < 25; index += 1) {
-      rememberPendingIssueThreadLink(storage, `draft-${index}`, IssueId.make(`i${index}`));
-    }
-
-    expect(takePendingIssueThreadLink(storage, "draft-0")).toBe(null);
-    expect(takePendingIssueThreadLink(storage, "draft-24")).toBe("i24");
-  });
-
-  it("reads nothing out of junk, and nothing out of a storage that throws", () => {
+  it("uses the configured work-started transition", () => {
     expect(
-      takePendingIssueThreadLink(
-        memoryStorage({ [ISSUE_PENDING_THREAD_LINK_STORAGE_KEY]: "not json" }),
-        "draft-1",
-      ),
-    ).toBe(null);
-    expect(
-      takePendingIssueThreadLink(
-        memoryStorage({ [ISSUE_PENDING_THREAD_LINK_STORAGE_KEY]: '["draft-1"]' }),
-        "draft-1",
-      ),
-    ).toBe(null);
+      resolveIssueStartWorkStatusId({
+        configuredStatusId: IssueStatusId.make("todo"),
+        statuses,
+      }),
+    ).toBe("todo");
+  });
 
-    const hostile: PendingLinkStorage = {
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      setItem: () => {
-        throw new Error("blocked");
-      },
-      removeItem: () => {
-        throw new Error("blocked");
-      },
-    };
-    expect(takePendingIssueThreadLink(hostile, "draft-1")).toBe(null);
-    expect(() =>
-      rememberPendingIssueThreadLink(hostile, "draft-1", IssueId.make("i1")),
-    ).not.toThrow();
+  it("falls back to active work, then Todo-like work", () => {
+    expect(resolveIssueStartWorkStatusId({ configuredStatusId: null, statuses })).toBe("doing");
+    expect(
+      resolveIssueStartWorkStatusId({
+        configuredStatusId: IssueStatusId.make("missing"),
+        statuses: statuses.slice(0, 2),
+      }),
+    ).toBe("todo");
   });
 });

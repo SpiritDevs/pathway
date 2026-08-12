@@ -6,15 +6,16 @@
  * therefore different too — where it came from and how long it has been sitting there, rather than
  * a status dot and a board position.
  *
- * Accepting is one write that sets status, project, and priority together, so the dialog's
- * defaults are a single calculation over the selection rather than three independent ones. Doing
- * it here keeps "the first unstarted status" and "the project every selected item was auto-tagged
- * with" testable without a connection.
+ * Accepting is one write that sets status, project, priority, and assignment together, so the
+ * dialog's defaults are a single calculation over the selection rather than independent ones.
+ * Doing it here keeps "the first unstarted status" and "the project every selected item was
+ * auto-tagged with" testable without a connection.
  *
  * @module components/issues/triage.logic
  */
 import type {
   Issue,
+  IssueAssignee,
   IssueId,
   IssuePriority,
   IssueSlackSource,
@@ -198,6 +199,7 @@ export interface TriageAcceptDraft {
   readonly statusId: IssueStatusId | null;
   readonly projectId: ProjectId | null;
   readonly priority: IssuePriority;
+  readonly assignee: IssueAssignee | null;
   /** Default on, and forced off when {@link triageInvestigateBlock} refuses. */
   readonly runEnrichment: boolean;
 }
@@ -205,12 +207,17 @@ export interface TriageAcceptDraft {
 const INVESTIGATION_BLOCK_PATTERN = /^## Investigation \(/mu;
 const EMPTY_INVESTIGATED_ISSUE_IDS: ReadonlySet<IssueId> = new Set();
 
+/** A completed investigation is appended to the durable issue description under this heading. */
+export function issueHasCompletedInvestigation(issue: Issue): boolean {
+  return INVESTIGATION_BLOCK_PATTERN.test(issue.description);
+}
+
 /** Whether accepting would duplicate an investigation already started by Slack routing. */
 export function issueAlreadyInvestigated(
   issue: Issue,
   investigatedIssueIds: ReadonlySet<IssueId> = EMPTY_INVESTIGATED_ISSUE_IDS,
 ): boolean {
-  return investigatedIssueIds.has(issue.id) || INVESTIGATION_BLOCK_PATTERN.test(issue.description);
+  return investigatedIssueIds.has(issue.id) || issueHasCompletedInvestigation(issue);
 }
 
 /**
@@ -230,10 +237,22 @@ export function triageAcceptDefaults(input: {
     first !== undefined && input.issues.every((issue) => issue.priority === first.priority)
       ? first.priority
       : "none";
+  const sharedAssignee =
+    first !== undefined &&
+    input.issues.every(
+      (issue) =>
+        issue.assignee?.kind === first.assignee?.kind &&
+        (issue.assignee?.kind !== "agent" ||
+          (first.assignee?.kind === "agent" &&
+            issue.assignee.provider === first.assignee.provider)),
+    )
+      ? first.assignee
+      : null;
   return {
     statusId: firstUnstartedStatusId(input.statuses),
     projectId,
     priority: sharedPriority,
+    assignee: sharedAssignee ?? null,
     runEnrichment:
       triageInvestigateBlock({ projectId, workspaceRoots: input.workspaceRoots }) === null &&
       !input.issues.some((issue) => issueAlreadyInvestigated(issue, input.investigatedIssueIds)),
@@ -260,6 +279,7 @@ export function triageAcceptInput(input: {
     statusId,
     projectId: input.draft.projectId,
     priority: input.draft.priority,
+    assignee: input.draft.assignee,
     runEnrichment: input.draft.runEnrichment && !input.investigateBlocked,
   };
 }

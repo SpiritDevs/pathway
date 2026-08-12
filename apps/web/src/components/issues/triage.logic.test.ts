@@ -2,6 +2,7 @@ import {
   IssueId,
   IssueStatusId,
   ProjectId,
+  ProviderDriverKind,
   type Issue,
   type IssueSlackSource,
   type IssueStatus,
@@ -13,6 +14,7 @@ import {
   firstUnstartedStatusId,
   formatIssueAge,
   formatSlackMrkdwn,
+  issueHasCompletedInvestigation,
   sharedTriageProjectId,
   slackSourceChip,
   triageAcceptDefaults,
@@ -294,6 +296,7 @@ describe("triageAcceptDefaults", () => {
     expect(
       triageAcceptDefaults({ issues: [completed], statuses, workspaceRoots: roots }).runEnrichment,
     ).toBe(false);
+    expect(issueHasCompletedInvestigation(completed)).toBe(true);
 
     const running = issue("2", { projectId });
     expect(
@@ -304,6 +307,7 @@ describe("triageAcceptDefaults", () => {
         investigatedIssueIds: new Set([running.id]),
       }).runEnrichment,
     ).toBe(false);
+    expect(issueHasCompletedInvestigation(running)).toBe(false);
   });
 
   it("turns investigation off when there is no project to run in", () => {
@@ -312,6 +316,7 @@ describe("triageAcceptDefaults", () => {
         statusId: TODO.id,
         projectId: null,
         priority: "none",
+        assignee: null,
         runEnrichment: false,
       },
     );
@@ -333,6 +338,27 @@ describe("triageAcceptDefaults", () => {
       }).priority,
     ).toBe("none");
   });
+
+  it("keeps a shared agent assignment and leaves a mixed selection unassigned", () => {
+    const codex = {
+      kind: "agent" as const,
+      provider: ProviderDriverKind.make("codex"),
+    };
+    expect(
+      triageAcceptDefaults({
+        issues: [issue("1", { assignee: codex }), issue("2", { assignee: codex })],
+        statuses,
+        workspaceRoots: roots,
+      }).assignee,
+    ).toEqual(codex);
+    expect(
+      triageAcceptDefaults({
+        issues: [issue("1", { assignee: codex }), issue("2", { assignee: { kind: "user" } })],
+        statuses,
+        workspaceRoots: roots,
+      }).assignee,
+    ).toBeNull();
+  });
 });
 
 describe("triageAcceptInput", () => {
@@ -340,6 +366,7 @@ describe("triageAcceptInput", () => {
     statusId: TODO.id,
     projectId: ProjectId.make("p1"),
     priority: "high",
+    assignee: { kind: "agent", provider: ProviderDriverKind.make("codex") },
     runEnrichment: true,
   } as const;
 
@@ -355,6 +382,7 @@ describe("triageAcceptInput", () => {
       statusId: TODO.id,
       projectId: null,
       priority: "high",
+      assignee: { kind: "agent", provider: ProviderDriverKind.make("codex") },
       runEnrichment: false,
     });
   });

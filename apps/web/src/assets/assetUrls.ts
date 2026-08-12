@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 
 import { assetEnvironment } from "~/state/assets";
@@ -13,6 +13,8 @@ export type AssetUrlState =
   | { readonly _tag: "Loading" }
   | { readonly _tag: "Failure" }
   | { readonly _tag: "Success"; readonly url: string; readonly sourcePath?: string };
+
+const EMPTY_ASSET_URL_RESULTS_ATOM = Atom.make([]).pipe(Atom.withLabel("web-asset-urls:empty"));
 
 export function useAssetUrlState(
   environmentId: EnvironmentId,
@@ -50,15 +52,14 @@ export function useAssetUrl(environmentId: EnvironmentId, resource: AssetResourc
 }
 
 export function useAssetUrls(
-  environmentId: EnvironmentId,
+  environmentId: EnvironmentId | null,
   resources: ReadonlyArray<AssetResource>,
 ): ReadonlyArray<string | null> {
   const preparedConnection = usePreparedConnection(environmentId);
   const results = useAtomValue(
-    assetEnvironment.createUrls({
-      environmentId,
-      resources,
-    }),
+    environmentId === null
+      ? EMPTY_ASSET_URL_RESULTS_ATOM
+      : assetEnvironment.createUrls({ environmentId, resources }),
   );
   return useMemo(
     () =>

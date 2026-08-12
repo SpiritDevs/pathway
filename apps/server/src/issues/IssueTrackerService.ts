@@ -3447,6 +3447,7 @@ export const make = Effect.gen(function* () {
       triage: false,
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
+      ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
     };
     yield* validatePatch({
       patch,

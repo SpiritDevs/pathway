@@ -2,8 +2,8 @@
  * The agent half of the properties rail: Start work, and the threads that came of it.
  *
  * Assigning an agent is intent, not a launch — the decision record is explicit that a stray kanban
- * drag must not spawn three agents — so the button here composes a prompt, opens a draft holding
- * it, and stops. The reader sends it.
+ * drag must not spawn three agents. The explicit button is different: it composes the issue
+ * context and starts the first turn immediately.
  *
  * @module components/issues/IssueAgentSection
  */

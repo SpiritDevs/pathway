@@ -949,10 +949,12 @@ describe("Slack intake", () => {
       statusId: "status-todo",
       projectId: null,
       priority: "high",
+      assignee: { kind: "agent", provider: "codex" },
       runEnrichment: true,
     });
 
     expect(accepted.projectId).toBeNull();
+    expect(accepted.assignee).toEqual({ kind: "agent", provider: "codex" });
     // Absent keeps whatever the channel auto-tagged, which is not the same as clearing it.
     expect(
       decodeTriageAccept({ issueId: "issue-1", statusId: "status-todo", runEnrichment: false })

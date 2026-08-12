@@ -1,9 +1,9 @@
 /**
- * Accepting a triage item: status, project, and priority in ONE write.
+ * Accepting a triage item: status, project, priority, and assignment in ONE write.
  *
- * Three fields and a checkbox, deliberately. Applying them one at a time would put the issue on a
- * board halfway through being triaged, which is the state triage exists to keep out of the board —
- * so the dialog confirms once and the server writes once, per selected item.
+ * The workflow fields and investigation choice are deliberate. Applying them one at a time would
+ * put the issue on a board halfway through being triaged, which is the state triage exists to keep
+ * out of the board — so the dialog confirms once and the server writes once, per selected item.
  *
  * The same dialog does a bulk accept: the fields are the selection's shared defaults, and the
  * confirm loops the write. There is no bulk RPC because there is no bulk *decision* — a status and
@@ -14,19 +14,21 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import type {
   Issue,
+  IssueAssignee,
   IssuePriority,
   IssueStatus,
   IssueStatusId,
   ProjectId,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { CircleDotIcon, FolderIcon, SignalHighIcon } from "lucide-react";
+import { CircleDotIcon, FolderIcon, PlayIcon, SignalHighIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useInvestigatedIssueIds, useTriageAccept } from "~/state/issues";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
+import { PROVIDER_CLIENT_DEFINITION_BY_VALUE } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -41,8 +43,13 @@ import {
 import { Label } from "../ui/label";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
-import { IssuePriorityMenu, IssueProjectMenu, IssueStatusMenu } from "./IssuePropertyMenus";
+import { IssueAssigneeGlyph, IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
+import {
+  IssueAssigneeMenu,
+  IssuePriorityMenu,
+  IssueProjectMenu,
+  IssueStatusMenu,
+} from "./IssuePropertyMenus";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS } from "./issueEnrichment.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
@@ -51,6 +58,7 @@ import {
   triageAcceptInput,
   triageAcceptLabel,
   triageInvestigateBlock,
+  issueHasCompletedInvestigation,
   type TriageAcceptDraft,
 } from "./triage.logic";
 
@@ -64,6 +72,7 @@ export function TriageAcceptDialog({
   statuses,
   projects,
   onAccepted,
+  onStartTask,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -73,6 +82,8 @@ export function TriageAcceptDialog({
   projects: ReadonlyArray<EnvironmentProject>;
   /** Fired once, after every write in a bulk accept has come back. */
   onAccepted?: () => void;
+  /** Fired after a single eligible issue is accepted and ready for its assigned agent. */
+  onStartTask?: (issue: Issue) => void;
 }) {
   const acceptTriage = useTriageAccept();
   const investigatedIssueIds = useInvestigatedIssueIds();
@@ -81,9 +92,10 @@ export function TriageAcceptDialog({
     statusId: null,
     projectId: null,
     priority: "none",
+    assignee: null,
     runEnrichment: false,
   });
-  const [submitting, setSubmitting] = useState(false);
+  const [submittingAction, setSubmittingAction] = useState<"accept" | "start" | null>(null);
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
 
   const workspaceRoots = useMemo(
@@ -99,7 +111,7 @@ export function TriageAcceptDialog({
   const selectionKey = issues.map((issue) => issue.id).join(",");
   const resetDraft = useEffectEvent(() => {
     setDraft(triageAcceptDefaults({ issues, statuses, workspaceRoots, investigatedIssueIds }));
-    setSubmitting(false);
+    setSubmittingAction(null);
   });
 
   // Reopening starts from the selection's defaults rather than from whatever the last accept left
@@ -115,13 +127,36 @@ export function TriageAcceptDialog({
   });
   const selectedStatus = statuses.find((status) => status.id === draft.statusId) ?? null;
   const selectedProject = projects.find((project) => project.id === draft.projectId) ?? null;
+  const selectedAssigneeLabel =
+    draft.assignee === null
+      ? "Unassigned"
+      : draft.assignee.kind === "user"
+        ? "You"
+        : (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
+          draft.assignee.provider);
+  const singleIssue = issues.length === 1 ? (issues[0] ?? null) : null;
+  const alreadyInvestigated = singleIssue !== null && issueHasCompletedInvestigation(singleIssue);
+  const submitting = submittingAction !== null;
   const canSubmit = draft.statusId !== null && issues.length > 0 && !submitting;
+  const startTaskBlockReason =
+    investigateBlock === null
+      ? draft.runEnrichment
+        ? "Turn off Investigate after accepting before starting the task."
+        : null
+      : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock];
+  const canStartTask =
+    canSubmit &&
+    singleIssue !== null &&
+    alreadyInvestigated &&
+    draft.assignee?.kind === "agent" &&
+    startTaskBlockReason === null;
 
-  const submit = () => {
-    if (!canSubmit) return;
-    setSubmitting(true);
+  const submit = (action: "accept" | "start") => {
+    if (!canSubmit || (action === "start" && !canStartTask)) return;
+    setSubmittingAction(action);
     void (async () => {
       let accepted = 0;
+      let acceptedIssue: Issue | null = null;
       let refusal: string | null = null;
       let failed = false;
       for (const issue of issues) {
@@ -138,11 +173,12 @@ export function TriageAcceptDialog({
         }
         if (!AsyncResult.isSuccess(result)) continue;
         accepted += 1;
+        acceptedIssue = result.value.issue;
         // An investigation that could not start does not undo the accept — the server reports the
         // refusal alongside it, and one sentence covers a bulk run of identical refusals.
         if (refusal === null) refusal = result.value.enrichmentRefusal;
       }
-      setSubmitting(false);
+      setSubmittingAction(null);
       if (accepted > 0) {
         toastManager.add(
           stackedThreadToast({
@@ -160,6 +196,7 @@ export function TriageAcceptDialog({
       if (failed) return;
       onAccepted?.();
       onOpenChange(false);
+      if (action === "start" && acceptedIssue !== null) onStartTask?.(acceptedIssue);
     })();
   };
 
@@ -185,8 +222,8 @@ export function TriageAcceptDialog({
           <DialogHeader>
             <DialogTitle>{triageAcceptLabel(issues)}</DialogTitle>
             <DialogDescription>
-              Status, project, and priority are set in one write, which is what takes these out of
-              triage and into the workflow.
+              Status, project, priority, and assignment are set in one write, which is what takes
+              these out of triage and into the workflow.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
@@ -210,6 +247,24 @@ export function TriageAcceptDialog({
                   </button>
                 }
                 value={draft.statusId}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-xs text-muted-foreground">Assigned agent</span>
+              <IssueAssigneeMenu
+                onSelect={(assignee: IssueAssignee | null) => patch({ assignee })}
+                trigger={
+                  <button className={PICKER_CLASS} disabled={submitting} type="button">
+                    <IssueAssigneeGlyph assignee={draft.assignee} className="size-3.5" />
+                    <span
+                      className={cn("truncate", draft.assignee === null && "text-muted-foreground")}
+                    >
+                      {selectedAssigneeLabel}
+                    </span>
+                  </button>
+                }
+                value={draft.assignee}
               />
             </div>
 
@@ -295,10 +350,27 @@ export function TriageAcceptDialog({
             >
               Cancel
             </Button>
-            <Button disabled={!canSubmit} onClick={submit} size="sm" type="button">
-              {submitting ? <Spinner className="size-3.5" /> : null}
+            <Button disabled={!canSubmit} onClick={() => submit("accept")} size="sm" type="button">
+              {submittingAction === "accept" ? <Spinner className="size-3.5" /> : null}
               {triageAcceptLabel(issues)}
             </Button>
+            {singleIssue !== null && alreadyInvestigated && draft.assignee?.kind === "agent" ? (
+              <Button
+                className="border-emerald-800 bg-emerald-700 text-white shadow-emerald-950/20 hover:bg-emerald-800 dark:border-emerald-600 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+                disabled={!canStartTask}
+                onClick={() => submit("start")}
+                size="sm"
+                title={
+                  startTaskBlockReason === null
+                    ? "Accept this issue and start its assigned agent."
+                    : startTaskBlockReason
+                }
+                type="button"
+              >
+                {submittingAction === "start" ? <Spinner className="size-3.5" /> : <PlayIcon />}
+                Start Task
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogPopup>
       </Dialog>

@@ -1868,6 +1868,7 @@ describe("IssueTrackerService", () => {
           statusId: IssueStatusId.make("in-progress"),
           projectId: PROJECT,
           priority: "urgent",
+          assignee: { kind: "agent", provider: ProviderDriverKind.make("codex") },
           runEnrichment: false,
         },
         ACTOR,
@@ -1877,6 +1878,10 @@ describe("IssueTrackerService", () => {
       assert.strictEqual(accepted.issue.statusId, "in-progress");
       assert.strictEqual(accepted.issue.projectId, PROJECT);
       assert.strictEqual(accepted.issue.priority, "urgent");
+      assert.deepStrictEqual(accepted.issue.assignee, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
       assert.isNull(accepted.enrichmentRun);
       assert.isNull(accepted.enrichmentRefusal);
 
@@ -1887,6 +1892,7 @@ describe("IssueTrackerService", () => {
           ["created", null],
           ["field_changed", "status"],
           ["field_changed", "priority"],
+          ["field_changed", "assignee"],
           ["field_changed", "project"],
           ["field_changed", "triage"],
         ],

@@ -1441,7 +1441,7 @@ export const SlackWatchResult = Schema.Struct({
 export type SlackWatchResult = typeof SlackWatchResult.Type;
 
 /**
- * Accept a triage item: status, project, and priority in one write.
+ * Accept a triage item: status, project, priority, and assignment in one write.
  *
  * One action rather than three, because a triage item has no status at all — applying them one at
  * a time would put the issue on a board halfway through being triaged, which is exactly the state
@@ -1454,6 +1454,8 @@ export const IssueTriageAcceptInput = Schema.Struct({
   /** Absent keeps whatever the channel auto-tagged; an explicit null files it under no project. */
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
   priority: Schema.optional(IssuePriority),
+  /** Absent keeps the current assignment; an explicit null leaves the issue unassigned. */
+  assignee: Schema.optional(Schema.NullOr(IssueAssignee)),
   /**
    * Fire the read-only investigation as part of accepting. Refused for a rootless or absent
    * project — and that refusal does not undo the accept, it is reported alongside it.

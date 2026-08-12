@@ -1,31 +1,31 @@
 /**
- * Start work: the seed a thread opens holding, and the note that says which issue it came from.
+ * Start work: the seed dispatched as a thread, its workflow destination, and its image context.
  *
  * Assigning an agent records intent and nothing else — the decision record is explicit that a
  * stray kanban drag must not start three agents — so this composes text and hands it to the
- * existing new-thread flow. Nothing here sends anything.
- *
- * The link is the awkward half. `useNewThreadHandler` mints the thread id client-side and the
- * server materialises *that* id when the composer is finally sent, so the id is known at the
- * press. Writing the link then would record a thread for every draft anybody opened and
- * abandoned, and the server does not check that a thread exists. So the press only remembers the
- * intent, keyed by draft, and the draft route writes the link once the thread actually appears.
+ * existing new-thread flow. The explicit Start work press dispatches that first turn immediately;
+ * assigning an agent by itself remains intent only.
  *
  * @module components/issues/issueStartWork.logic
  */
 import type {
+  ChatAttachmentId,
   Issue,
-  IssueId,
+  IssueComment,
+  IssueStatus,
+  IssueStatusId,
   IssueTodo,
   ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { createModelSelection, resolveSelectableModel } from "@t3tools/shared/model";
 
 import type { ProviderInstanceEntry } from "~/providerInstances";
 import { resolveSelectableProviderInstanceEntry } from "~/providerInstances";
 import type { ModelEsque } from "../chat/providerIconUtils";
+import { issueAttachmentIds } from "./issueCommentAttachments";
 
 // ── Model choice ──────────────────────────────────────────────────────
 
@@ -122,8 +122,9 @@ function metaLine(context: IssueStartWorkContext): string | null {
  * it is made of, what it touches. Empty sections are dropped rather than printed empty — a
  * "## Checklist" with nothing under it reads as a checklist the model failed to load.
  *
- * The closing line is the only instruction, and it is deliberately not a plan: the thread is
- * opened *unsent*, so the reader gets to edit or delete every word of this before anything runs.
+ * The closing line is the only instruction, and it is deliberately not a plan: this is dispatched
+ * by an explicit Start work press, so the agent should begin from the issue rather than inventing
+ * work beyond it.
  */
 export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): string {
   const { issue } = context;
@@ -170,82 +171,29 @@ export function issueStartWorkTodos(todos: ReadonlyArray<IssueTodo>): ReadonlyAr
   );
 }
 
-// ── The pending link ───────────────────────────────────────────────────
-
-export const ISSUE_PENDING_THREAD_LINK_STORAGE_KEY = "pathway:issues:pending-thread-links";
-
 /**
- * Bounded so an abandoned draft cannot grow the record without limit. Small on purpose: this is a
- * hand-off that lives for the seconds between opening a composer and sending it, not a queue.
+ * Start means active work. A configured transition wins; otherwise prefer the first active status,
+ * then Todo-like unstarted work. The latter keeps custom workflows usable when they have no
+ * explicit In Progress column.
  */
-const MAX_PENDING_LINKS = 20;
-
-/** The three methods used, so a test can pass a plain object and the caller passes `sessionStorage`. */
-export type PendingLinkStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-function readPendingLinks(storage: PendingLinkStorage): Record<string, string> {
-  let raw: string | null = null;
-  try {
-    raw = storage.getItem(ISSUE_PENDING_THREAD_LINK_STORAGE_KEY);
-  } catch {
-    // A storage that throws on read (private mode, a disabled origin) means no pending links,
-    // which costs the reader a manual link rather than a broken button.
-    return {};
+export function resolveIssueStartWorkStatusId(input: {
+  readonly configuredStatusId: string | null;
+  readonly statuses: ReadonlyArray<IssueStatus>;
+}): IssueStatusId | null {
+  if (input.configuredStatusId !== null) {
+    const configured = input.statuses.find((status) => status.id === input.configuredStatusId);
+    if (configured !== undefined) return configured.id;
   }
-  if (raw === null) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    const entries: Array<[string, string]> = [];
-    for (const [draftId, issueId] of Object.entries(parsed)) {
-      if (typeof issueId === "string" && issueId.length > 0) entries.push([draftId, issueId]);
-    }
-    return Object.fromEntries(entries);
-  } catch {
-    return {};
-  }
-}
-
-function writePendingLinks(storage: PendingLinkStorage, links: Record<string, string>): void {
-  try {
-    const entries = Object.entries(links);
-    if (entries.length === 0) {
-      storage.removeItem(ISSUE_PENDING_THREAD_LINK_STORAGE_KEY);
-      return;
-    }
-    storage.setItem(
-      ISSUE_PENDING_THREAD_LINK_STORAGE_KEY,
-      JSON.stringify(Object.fromEntries(entries)),
-    );
-  } catch {
-    // Nothing to do: the link is a convenience, and the Threads section can be filled by hand.
-  }
-}
-
-/** Records "the thread this draft becomes belongs to this issue". Last write per draft wins. */
-export function rememberPendingIssueThreadLink(
-  storage: PendingLinkStorage,
-  draftId: string,
-  issueId: IssueId,
-): void {
-  const links = readPendingLinks(storage);
-  delete links[draftId];
-  const entries = [...Object.entries(links), [draftId, issueId] as const];
-  writePendingLinks(
-    storage,
-    Object.fromEntries(entries.slice(Math.max(0, entries.length - MAX_PENDING_LINKS))),
+  return (
+    input.statuses.find((status) => status.category === "started")?.id ??
+    input.statuses.find((status) => status.category === "unstarted")?.id ??
+    null
   );
 }
 
-/** Reads and clears in one step, so a re-render cannot write the same link twice. */
-export function takePendingIssueThreadLink(
-  storage: PendingLinkStorage,
-  draftId: string,
-): IssueId | null {
-  const links = readPendingLinks(storage);
-  const issueId = links[draftId];
-  if (issueId === undefined) return null;
-  delete links[draftId];
-  writePendingLinks(storage, links);
-  return issueId as IssueId;
+/** Issue images become first-turn context, in comment order and within the provider send limit. */
+export function issueStartWorkAttachmentIds(
+  comments: ReadonlyArray<IssueComment>,
+): ReadonlyArray<ChatAttachmentId> {
+  return issueAttachmentIds(comments).slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
 }

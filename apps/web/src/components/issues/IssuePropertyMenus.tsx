@@ -8,6 +8,7 @@
  */
 import type {
   Issue,
+  IssueAssignee,
   IssueLabel,
   IssueLabelId,
   IssuePriority,
@@ -20,6 +21,7 @@ import { PlusIcon } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import {
   Menu,
   MenuCheckboxItem,
@@ -32,7 +34,13 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { IssueLabelDot, IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
+import {
+  IssueAssigneeGlyph,
+  IssueLabelDot,
+  IssuePriorityIcon,
+  IssueStatusDot,
+} from "./IssueGlyphs";
+import { issueAssigneeOptionValue, issueAssigneeOptions } from "./issueDetail.logic";
 import {
   ISSUE_PRIORITY_LABELS,
   ISSUE_PRIORITY_ORDER,
@@ -54,6 +62,51 @@ export function IssuePropertyGuard({ children }: { children: ReactNode }) {
     >
       {children}
     </span>
+  );
+}
+
+const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
+
+/** Shared assignment menu for triage and other property surfaces. */
+export function IssueAssigneeMenu({
+  value,
+  onSelect,
+  trigger,
+  align = "start",
+}: {
+  value: IssueAssignee | null;
+  onSelect: (assignee: IssueAssignee | null) => void;
+  trigger: ReactElement;
+  align?: "start" | "center" | "end";
+}) {
+  const current = issueAssigneeOptionValue(value);
+  return (
+    <IssuePropertyGuard>
+      <Menu>
+        <MenuTrigger render={trigger} />
+        <MenuPopup align={align} className="min-w-52" side="bottom">
+          <MenuGroup>
+            <MenuGroupLabel>Assignee</MenuGroupLabel>
+            <MenuRadioGroup
+              onValueChange={(next) => {
+                const option = ASSIGNEE_OPTIONS.find((candidate) => candidate.value === next);
+                if (option !== undefined) onSelect(option.assignee);
+              }}
+              value={current}
+            >
+              {ASSIGNEE_OPTIONS.map((option) => (
+                <MenuRadioItem key={option.value} value={option.value}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                    <span className="truncate">{option.label}</span>
+                  </span>
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
+        </MenuPopup>
+      </Menu>
+    </IssuePropertyGuard>
   );
 }
 

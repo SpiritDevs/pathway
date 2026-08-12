@@ -35,7 +35,9 @@ import type {
   IssueTodoPatch,
   ModelSelection,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
+  UploadChatAttachment,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -49,12 +51,13 @@ import {
   type ReactNode,
 } from "react";
 
+import { useAssetUrls } from "~/assets/assetUrls";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { usePrimarySettings } from "~/hooks/useSettings";
-import { cn } from "~/lib/utils";
+import { cn, newMessageId } from "~/lib/utils";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -88,6 +91,7 @@ import {
   useIssueEnrichmentRuns,
   useIssueEvents,
   useIssueLabels,
+  useLinkIssueThread,
   useIssueMilestonesForProject,
   useIssueStatuses,
   useIssueThreadLinks,
@@ -96,11 +100,14 @@ import {
   useReorderIssueTodos,
   useRestoreIssue,
   useStartIssueEnrichment,
+  useTriageAccept,
   useUnlinkIssueThread,
   useUpdateIssue,
   useUpdateIssueComment,
   useUpdateIssueTodo,
 } from "~/state/issues";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
 import { useRightPanelSheetMaxWidth } from "../RightPanelSheet";
 import { PREVIEW_PANEL_MIN_WIDTH } from "../preview/PreviewPanelShell";
@@ -113,6 +120,7 @@ import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
 import { IssueActivityFeed } from "./IssueActivityFeed";
+import { readFileAsDataUrl } from "../ChatView.logic";
 import { IssueActionPanel } from "./IssueActionPanel";
 import { IssueAgentSection } from "./IssueAgentSection";
 import { IssueAttachments } from "./IssueAttachments";
@@ -151,9 +159,10 @@ import {
 import {
   buildIssueStartWorkPrompt,
   issueDetailUrl,
+  issueStartWorkAttachmentIds,
   issueStartWorkTodos,
-  rememberPendingIssueThreadLink,
   resolveIssueStartWorkModelSelection,
+  resolveIssueStartWorkStatusId,
   type IssueStartWorkRelation,
 } from "./issueStartWork.logic";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
@@ -179,12 +188,19 @@ export function IssueDetailSheet({
   issueKey,
   onClose,
   onOpenIssueKey,
+  startWorkRequestProvider = null,
+  startWorkRequestProjectId = null,
+  onStartWorkRequestHandled,
 }: {
   /** The `?issue=` value: an issue key such as `PAT-221`, or null when the sheet is shut. */
   issueKey: string | null;
   onClose: () => void;
   /** Reopens the sheet on an undone delete, which arrives after the sheet has already closed. */
   onOpenIssueKey: (key: string) => void;
+  /** A triage Start Task press waiting for the accepted assignment to reach this sheet. */
+  startWorkRequestProvider?: ProviderDriverKind | null;
+  startWorkRequestProjectId?: ProjectId | null;
+  onStartWorkRequestHandled?: () => void;
 }) {
   const maxWidth = useRightPanelSheetMaxWidth();
   const { width, handlers } = useResizableWidth({
@@ -246,6 +262,9 @@ export function IssueDetailSheet({
             key={issue.id}
             onClose={onClose}
             onOpenIssueKey={onOpenIssueKey}
+            onStartWorkRequestHandled={onStartWorkRequestHandled}
+            startWorkRequestProvider={startWorkRequestProvider}
+            startWorkRequestProjectId={startWorkRequestProjectId}
           />
         )}
       </SheetPopup>
@@ -316,10 +335,16 @@ function IssueDetailBody({
   issue,
   onClose,
   onOpenIssueKey,
+  startWorkRequestProvider,
+  startWorkRequestProjectId,
+  onStartWorkRequestHandled,
 }: {
   issue: Issue;
   onClose: () => void;
   onOpenIssueKey: (key: string) => void;
+  startWorkRequestProvider: ProviderDriverKind | null;
+  startWorkRequestProjectId: ProjectId | null;
+  onStartWorkRequestHandled: (() => void) | undefined;
 }) {
   const store = useIssuesStore();
   const storeStatus = useIssuesStoreStatus();
@@ -332,6 +357,7 @@ function IssueDetailBody({
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
   const childRollup = useIssueChildRollup(issue.id);
   const settings = usePrimarySettings();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const timestampFormat = settings.timestampFormat;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
@@ -360,6 +386,8 @@ function IssueDetailBody({
   const deleteComment = useDeleteIssueComment();
   const startEnrichment = useStartIssueEnrichment();
   const cancelEnrichment = useCancelIssueEnrichment();
+  const acceptTriage = useTriageAccept();
+  const linkThread = useLinkIssueThread();
   const unlinkThread = useUnlinkIssueThread();
 
   const write = useCallback(
@@ -412,6 +440,20 @@ function IssueDetailBody({
     () => (detail === null ? [] : issueRelationDisplays(detail.relations)),
     [detail],
   );
+  const startWorkAttachmentIds = useMemo(
+    () => issueStartWorkAttachmentIds(detail?.comments ?? EMPTY_COMMENTS),
+    [detail?.comments],
+  );
+  const startWorkAttachmentResources = useMemo(
+    () =>
+      startWorkAttachmentIds.map((attachmentId) => ({
+        _tag: "attachment" as const,
+        attachmentId,
+      })),
+    [startWorkAttachmentIds],
+  );
+  const startWorkAttachmentUrls = useAssetUrls(primaryEnvironmentId, startWorkAttachmentResources);
+  const startWorkAttachmentsReady = startWorkAttachmentUrls.every((url) => url !== null);
 
   const openIssue = useCallback((target: Issue) => onOpenIssueKey(target.key), [onOpenIssueKey]);
 
@@ -525,9 +567,9 @@ function IssueDetailBody({
   // ── Agents ───────────────────────────────────────────────────────────
 
   const navigate = useNavigate();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const threadShells = useThreadShells();
   const openNewThread = useNewThreadHandler();
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const [startingWork, setStartingWork] = useState(false);
 
   const project = useMemo(
@@ -656,19 +698,18 @@ function IssueDetailBody({
     [issue.id, unlinkThread],
   );
 
-  /**
-   * Opens a draft holding the issue and nothing else. The link is not written here: the thread id
-   * the draft carries is minted client-side and only becomes real when the composer is sent, so
-   * the intent is parked against the draft and the draft route writes the link once the thread
-   * exists. See `issueStartWork.logic.ts`.
-   */
+  /** The explicit press creates and dispatches the thread before changing the issue workflow. */
   const handleStartWork = useCallback(
     (modelSelection: ModelSelection) => {
-      if (project === null || startingWork) return;
+      if (project === null || startingWork || !startWorkAttachmentsReady) return;
       setStartingWork(true);
       void (async () => {
         try {
-          const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id));
+          const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+            // Start work is an immediate action. Preparing a new worktree needs an interactive
+            // branch choice, so this one-click path starts in the project's current checkout.
+            envMode: "local",
+          });
           if (opened === null) return;
           const relations: Array<IssueStartWorkRelation> = [];
           if (parent !== null) {
@@ -698,9 +739,97 @@ function IssueDetailBody({
             issueUrl: issueDetailUrl(window.location.origin, issue.key),
           });
           const draftStore = useComposerDraftStore.getState();
-          draftStore.setModelSelection(opened.draftId, modelSelection, { replaceOptions: true });
-          draftStore.setPrompt(opened.draftId, prompt);
-          rememberPendingIssueThreadLink(window.sessionStorage, opened.draftId, issue.id);
+          const session = draftStore.getDraftSession(opened.draftId);
+          if (session === null) throw new Error("The new thread draft could not be prepared.");
+
+          const attachments: Array<UploadChatAttachment> = [];
+          for (const [index, url] of startWorkAttachmentUrls.entries()) {
+            if (url === null) throw new Error("The issue images are still loading. Try again.");
+            const response = await fetch(url);
+            if (!response.ok) throw new Error("An issue image could not be loaded.");
+            const blob = await response.blob();
+            if (!blob.type.startsWith("image/")) {
+              throw new Error("An issue attachment is not an image.");
+            }
+            const name = `${issue.key}-attachment-${index + 1}`;
+            const file = new File([blob], name, { type: blob.type });
+            attachments.push({
+              type: "image",
+              name,
+              mimeType: blob.type,
+              sizeBytes: blob.size,
+              dataUrl: await readFileAsDataUrl(file),
+            });
+          }
+
+          const createdAt = new Date().toISOString();
+          const started = await startThreadTurn({
+            environmentId: session.environmentId,
+            input: {
+              threadId: session.threadId,
+              message: {
+                messageId: newMessageId(),
+                role: "user",
+                text: prompt,
+                attachments,
+              },
+              modelSelection,
+              titleSeed: issue.title,
+              runtimeMode: session.runtimeMode,
+              interactionMode: session.interactionMode,
+              bootstrap: {
+                createThread: {
+                  projectId: session.projectId,
+                  title: issue.title,
+                  modelSelection,
+                  runtimeMode: session.runtimeMode,
+                  interactionMode: session.interactionMode,
+                  branch: session.branch,
+                  worktreePath: session.worktreePath,
+                  createdAt: session.createdAt,
+                },
+              },
+              createdAt,
+            },
+          });
+          if (reportFailure("Failed to start work", started)) return;
+
+          const targetStatusId = resolveIssueStartWorkStatusId({
+            configuredStatusId: settings.issueAutomation.statusTransitions.workStartedStatusId,
+            statuses,
+          });
+          if (targetStatusId !== null && (issue.triage || issue.statusId !== targetStatusId)) {
+            const transitioned = issue.triage
+              ? await acceptTriage({
+                  issueId: issue.id,
+                  statusId: targetStatusId,
+                  projectId: issue.projectId,
+                  priority: issue.priority,
+                  runEnrichment: false,
+                })
+              : await updateIssue({
+                  issueId: issue.id,
+                  patch: { statusId: targetStatusId },
+                });
+            reportFailure("Work started, but the issue status could not be updated", transitioned);
+          }
+
+          reportFailure(
+            "Work started, but the thread could not be linked to its issue",
+            await linkThread({
+              issueId: issue.id,
+              threadId: session.threadId,
+              origin: "start-work",
+            }),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to start work",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
         } finally {
           setStartingWork(false);
         }
@@ -708,7 +837,9 @@ function IssueDetailBody({
     },
     [
       detail,
+      acceptTriage,
       issue,
+      linkThread,
       openNewThread,
       parent,
       project,
@@ -719,8 +850,61 @@ function IssueDetailBody({
       statuses,
       store,
       settings.issueAutomation.statusTransitions.workFinishedStatusId,
+      settings.issueAutomation.statusTransitions.workStartedStatusId,
+      startThreadTurn,
+      startWorkAttachmentsReady,
+      startWorkAttachmentUrls,
+      updateIssue,
     ],
   );
+
+  useEffect(() => {
+    if (
+      startWorkRequestProvider === null ||
+      detailPending ||
+      startingWork ||
+      !startWorkAttachmentsReady
+    ) {
+      return;
+    }
+    if (
+      issue.triage ||
+      issue.assignee?.kind !== "agent" ||
+      issue.assignee.provider !== startWorkRequestProvider ||
+      issue.projectId !== startWorkRequestProjectId
+    ) {
+      // The accept result and its stream echo can arrive on adjacent ticks. Wait until the issue
+      // reflects the assignment the Start Task press just committed.
+      return;
+    }
+    onStartWorkRequestHandled?.();
+    if (project === null || initialStartWorkModelSelection === null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Task accepted, but work could not start",
+          description:
+            project === null
+              ? "The selected project has no connected workspace."
+              : `No available ${startWorkRequestProvider} model can start this work.`,
+        }),
+      );
+      return;
+    }
+    handleStartWork(initialStartWorkModelSelection);
+  }, [
+    detailPending,
+    handleStartWork,
+    initialStartWorkModelSelection,
+    issue.assignee,
+    issue.triage,
+    onStartWorkRequestHandled,
+    project,
+    startWorkAttachmentsReady,
+    startWorkRequestProvider,
+    startWorkRequestProjectId,
+    startingWork,
+  ]);
 
   const issuesByKey = useMemo(() => {
     const byKey = new Map<string, Issue>();
@@ -974,7 +1158,9 @@ function IssueDetailBody({
                     ? ISSUE_INVESTIGATE_BLOCK_REASONS["no-project"]
                     : storeStatus === "disconnected"
                       ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
-                      : null
+                      : !startWorkAttachmentsReady
+                        ? "Issue images are still loading."
+                        : null
                 }
                 threadsById={threadsById}
               />
