@@ -42,7 +42,11 @@ import {
   replaceTextRange,
   shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  readFileAsDataUrl,
+  shortcutScopeOwnsEvent,
+} from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
   makeComposerMentionDragHandlers,
@@ -124,7 +128,11 @@ function composerCommandMenuPositionsEqual(
   );
 }
 
-function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children: ReactNode }) {
+function ComposerCommandMenuLayer(props: {
+  anchor: HTMLElement | null;
+  children: ReactNode;
+  shortcutScope: "page" | "side-chat";
+}) {
   const [position, setPosition] = useState<ComposerCommandMenuPosition | null>(null);
 
   useLayoutEffect(() => {
@@ -176,6 +184,7 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
   return createPortal(
     <div
       className="pointer-events-auto fixed z-[70]"
+      data-side-chat-surface={props.shortcutScope === "side-chat" ? "true" : undefined}
       style={{
         bottom: position.bottom,
         left: position.left,
@@ -567,6 +576,7 @@ export interface ChatComposerProps {
   resolvedTheme: "light" | "dark";
   settings: UnifiedSettings;
   keybindings: ResolvedKeybindingsConfig;
+  shortcutScope?: "page" | "side-chat";
   terminalOpen: boolean;
   gitCwd: string | null;
 
@@ -657,6 +667,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     resolvedTheme,
     settings,
     keybindings,
+    shortcutScope = "page",
     terminalOpen,
     gitCwd,
     promptRef,
@@ -2282,6 +2293,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      const target = event.target;
+      const eventFromSideChat =
+        target instanceof Element && target.closest("[data-side-chat-surface]") !== null;
+      if (!shortcutScopeOwnsEvent(shortcutScope, eventFromSideChat)) return;
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: getTerminalFocusOwner() !== null,
@@ -2314,6 +2329,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     pendingUserInputs.length,
     projectSelectionRequired,
+    shortcutScope,
     stashCurrentPrompt,
     terminalOpen,
   ]);
@@ -2751,6 +2767,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             ) : pendingUserInputs.length > 0 ? (
               <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
                 <ComposerPendingUserInputPanel
+                  shortcutScope={shortcutScope}
                   pendingUserInputs={pendingUserInputs}
                   respondingRequestIds={respondingRequestIds}
                   answers={activePendingDraftAnswers}
@@ -2792,6 +2809,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               data-chat-composer-collapsed-controls="true"
             >
               <ComposerPendingUserInputPanel
+                shortcutScope={shortcutScope}
                 pendingUserInputs={pendingUserInputs}
                 respondingRequestIds={respondingRequestIds}
                 answers={activePendingDraftAnswers}
@@ -2912,7 +2930,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             />
 
             {isStashMenuOpen && !composerMenuOpen && !isComposerApprovalState && (
-              <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+              <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>
                 <ComposerStashMenu
                   entries={stashQueue}
                   onRestore={restoreStashEntry}
@@ -2923,7 +2941,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             )}
 
             {composerMenuOpen && !isComposerApprovalState && (
-              <ComposerCommandMenuLayer anchor={composerMenuAnchor}>
+              <ComposerCommandMenuLayer anchor={composerMenuAnchor} shortcutScope={shortcutScope}>
                 <ComposerCommandMenu
                   items={composerMenuItems}
                   resolvedTheme={resolvedTheme}
@@ -3173,6 +3191,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </Button>
                 ) : (
                   <ProviderModelPicker
+                    shortcutScope={shortcutScope}
                     compact={isComposerFooterCompact}
                     activeInstanceId={selectedInstanceId}
                     model={selectedModelForPickerWithCustomFallback}

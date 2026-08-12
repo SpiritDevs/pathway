@@ -33,6 +33,17 @@ export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "pathway:last-invoked-script-b
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
+export const FORK_THREAD_READINESS_ERROR =
+  "The fork was created, but its thread data did not reach this client. Reconnect and try opening it from the sidebar.";
+
+export type ChatShortcutScope = "page" | "side-chat";
+
+export function shortcutScopeOwnsEvent(
+  scope: ChatShortcutScope,
+  eventFromSideChat: boolean,
+): boolean {
+  return (scope === "side-chat") === eventFromSideChat;
+}
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -55,6 +66,29 @@ export function startNewThreadForProject(
   if (projectRef === null) return false;
   void handleNewThread(projectRef);
 
+  return true;
+}
+
+/**
+ * Wait until the newly forked thread is visible in this client before opening
+ * it beside its parent. Keeping readiness and presentation in one operation
+ * prevents a successful server command from opening an empty side chat while
+ * the shell is still in flight (especially over remote connections).
+ */
+export async function openForkedThreadSideChatWhenReady(input: {
+  readonly parentThreadRef: ScopedThreadRef;
+  readonly targetThreadRef: ScopedThreadRef;
+  readonly waitForThreadShell: (ref: ScopedThreadRef) => Promise<boolean>;
+  readonly openThread: (parentRef: ScopedThreadRef, childThreadId: ThreadId) => void;
+  readonly onThreadUnavailable: (message: string) => void;
+}): Promise<boolean> {
+  const targetThreadReady = await input.waitForThreadShell(input.targetThreadRef);
+  if (!targetThreadReady) {
+    input.onThreadUnavailable(FORK_THREAD_READINESS_ERROR);
+    return false;
+  }
+
+  input.openThread(input.parentThreadRef, input.targetThreadRef.threadId);
   return true;
 }
 

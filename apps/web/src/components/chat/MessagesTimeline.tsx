@@ -164,6 +164,8 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onOpenFilePreview: (relativePath: string, line?: number) => void;
+  onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onForkFromRun: (input: {
     readonly sourceThreadId: ThreadId;
@@ -200,6 +202,8 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 } as const;
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const NOOP_OPEN_FILE_PREVIEW = (_relativePath: string, _line?: number) => undefined;
+const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -223,6 +227,8 @@ interface MessagesTimelineProps {
   onSubmitUserMessageEdit?: (messageId: MessageId, text: string) => Promise<boolean>;
   routeThreadKey: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onOpenFilePreview?: (relativePath: string, line?: number) => void;
+  onPanelSurfaceOpen?: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
     readonly threadId: ThreadId;
@@ -284,6 +290,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSubmitUserMessageEdit = async () => false,
   routeThreadKey,
   onOpenTurnDiff,
+  onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
+  onPanelSurfaceOpen = NOOP_PANEL_SURFACE_OPEN,
   onOpenThread,
   parentThreadLink = null,
   onForkFromRun,
@@ -626,6 +634,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenFilePreview,
+      onPanelSurfaceOpen,
       onOpenThread,
       onForkFromRun,
       onRollbackCheckpoint,
@@ -653,6 +663,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenFilePreview,
+      onPanelSurfaceOpen,
       onOpenThread,
       onForkFromRun,
       onRollbackCheckpoint,
@@ -1466,6 +1478,8 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           text={messageText}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
+          onOpenFilePreview={ctx.onOpenFilePreview}
+          onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
@@ -1578,6 +1592,8 @@ function ProposedPlanTimelineRow({
         planMarkdown={row.proposedPlan.planMarkdown}
         environmentId={ctx.activeThreadEnvironmentId}
         threadRef={ctx.threadRef ?? undefined}
+        onOpenFilePreview={ctx.onOpenFilePreview}
+        onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
       />
@@ -1753,6 +1769,8 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
                 threadRef={ctx.threadRef ?? undefined}
+                onOpenFilePreview={ctx.onOpenFilePreview}
+                onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
                 skills={ctx.skills}
                 lineBreaks
               />
@@ -1827,6 +1845,8 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
                 threadRef={ctx.threadRef ?? undefined}
+                onOpenFilePreview={ctx.onOpenFilePreview}
+                onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
                 skills={ctx.skills}
                 lineBreaks
               />
@@ -2315,6 +2335,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             text={content}
             cwd={props.markdownCwd}
             threadRef={ctx.threadRef ?? undefined}
+            onOpenFilePreview={ctx.onOpenFilePreview}
+            onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
             skills={props.skills}
             className="text-foreground"
             lineBreaks
@@ -2337,6 +2359,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                   text={segment.text.trim()}
                   cwd={props.markdownCwd}
                   threadRef={ctx.threadRef ?? undefined}
+                  onOpenFilePreview={ctx.onOpenFilePreview}
+                  onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
                   skills={props.skills}
                   className="text-foreground"
                   lineBreaks
@@ -2425,6 +2449,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           text={props.text}
           cwd={props.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
+          onOpenFilePreview={ctx.onOpenFilePreview}
+          onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           skills={props.skills}
           className="text-foreground"
           lineBreaks
@@ -2450,6 +2476,8 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       text={props.text}
       cwd={props.markdownCwd}
       threadRef={ctx.threadRef ?? undefined}
+      onOpenFilePreview={ctx.onOpenFilePreview}
+      onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
       skills={props.skills}
       className="text-foreground"
       lineBreaks
@@ -2485,6 +2513,8 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
           text={formatReviewCommentFence(fenceLanguage, comment.diff)}
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
+          onOpenFilePreview={ctx.onOpenFilePreview}
+          onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           skills={ctx.skills}
           className="text-foreground"
         />
