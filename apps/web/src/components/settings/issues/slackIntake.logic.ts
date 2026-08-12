@@ -28,14 +28,16 @@ export const SLACK_BOT_TOKEN_SCOPES: ReadonlyArray<string> = [
   "channels:history",
   "channels:read",
   "chat:write",
-  "users:read",
-  "reactions:read",
   "files:read",
+  "groups:history",
+  "groups:read",
+  "reactions:read",
+  "users:read",
 ];
 
 /** A watch with nothing switched on. What "Add channel" creates, and what pausing one leaves. */
 export const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = Object.freeze({
-  emoji: null,
+  reactionRoutes: Object.freeze([]),
   everyMessage: false,
   botMention: false,
 });
@@ -49,7 +51,11 @@ export const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = Object.freeze({
 export function slackTriggerSummary(trigger: SlackIntakeTrigger): string {
   if (!isSlackIntakeTriggerActive(trigger)) return "Paused";
   const parts: Array<string> = [];
-  if (trigger.emoji !== null) parts.push(`:${trigger.emoji}:`);
+  if (trigger.reactionRoutes.length === 1) {
+    parts.push(`:${trigger.reactionRoutes[0]?.emoji}:`);
+  } else if (trigger.reactionRoutes.length > 1) {
+    parts.push(`${trigger.reactionRoutes.length} reactions`);
+  }
   if (trigger.everyMessage) parts.push("Every message");
   if (trigger.botMention) parts.push("Bot mentions");
   return parts.join(" · ");

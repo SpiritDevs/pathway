@@ -1,15 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import {
-  ISSUE_DESCRIPTION_MAX_CHARS,
-  ISSUE_ENRICHMENT_SUMMARY_MAX_CHARS,
-  IssueEnrichmentResult,
-} from "@t3tools/contracts";
+import { IssueEnrichmentResult } from "@t3tools/contracts";
 
 import {
-  appendInvestigationBlock,
-  buildInvestigationBlock,
+  buildInvestigationComment,
   buildInvestigationPrompt,
   extractLastJsonObject,
   investigationErrorTail,
@@ -258,8 +253,8 @@ describe("investigationErrorTail", () => {
   });
 });
 
-describe("buildInvestigationBlock", () => {
-  const block = buildInvestigationBlock({
+describe("buildInvestigationComment", () => {
+  const comment = buildInvestigationComment({
     result: {
       summary: "The reconnect path drops the queued turn.",
       likelyFiles: [
@@ -275,24 +270,24 @@ describe("buildInvestigationBlock", () => {
   });
 
   it("heads the block with what ran it and when", () => {
-    assert.isTrue(block.startsWith("## Investigation (codex / gpt-5.4-codex, 2026-08-12)"));
+    assert.isTrue(comment.startsWith("## Investigation (codex / gpt-5.4-codex, 2026-08-12)"));
   });
 
   it("renders the files, the keys, and the suggestions", () => {
-    assert.include(block, "- `apps/server/src/ws.ts` — Owns reconnect");
+    assert.include(comment, "- `apps/server/src/ws.ts` — Owns reconnect");
     // A file with no reason is still a pointer; the em dash goes rather than the line.
-    assert.include(block, "- `apps/web/src/state/threads.ts`\n");
-    assert.include(block, "PAT-9, PAT-31");
-    assert.include(block, "- Labels: Bug");
-    assert.include(block, "- Priority: high");
+    assert.include(comment, "- `apps/web/src/state/threads.ts`\n");
+    assert.include(comment, "PAT-9, PAT-31");
+    assert.include(comment, "- Labels: Bug");
+    assert.include(comment, "- Priority: high");
   });
 
   it("says out loud that nothing was applied", () => {
-    assert.include(block, "**Suggested** (not applied)");
+    assert.include(comment, "**Suggested** (not applied)");
   });
 
   it("omits the suggestion section when there is nothing to suggest", () => {
-    const bare = buildInvestigationBlock({
+    const bare = buildInvestigationComment({
       result: {
         summary: "s",
         likelyFiles: [],
@@ -306,77 +301,5 @@ describe("buildInvestigationBlock", () => {
 
     assert.notInclude(bare, "Suggested");
     assert.notInclude(bare, "Likely files");
-  });
-});
-
-describe("appendInvestigationBlock", () => {
-  it("separates the block from what a human wrote", () => {
-    assert.strictEqual(
-      appendInvestigationBlock("The body.\n\n", "## Investigation (x, y)"),
-      "The body.\n\n---\n\n## Investigation (x, y)",
-    );
-  });
-
-  it("leaves no leading rule on an empty description", () => {
-    assert.strictEqual(
-      appendInvestigationBlock("", "## Investigation (x, y)"),
-      "## Investigation (x, y)",
-    );
-  });
-
-  it("appends a second run rather than replacing the first", () => {
-    const once = appendInvestigationBlock("Body.", "## Investigation (x, 2026-08-11)");
-    const twice = appendInvestigationBlock(once, "## Investigation (x, 2026-08-12)");
-
-    // Two readings of a tree that moved between them; the older one is what was true then.
-    assert.strictEqual(twice.match(/## Investigation/g)?.length, 2);
-    assert.isTrue(twice.indexOf("2026-08-11") < twice.indexOf("2026-08-12"));
-  });
-
-  it("never returns more than a description is allowed to hold", () => {
-    const body = "Human body.";
-    const block = `## Investigation (x, y)\n${"detail ".repeat(400)}`;
-    const appended = appendInvestigationBlock(body, block, 600);
-
-    assert.isAtMost(appended.length, 600);
-    assert.isTrue(appended.startsWith("Human body.\n\n---\n\n## Investigation"));
-    assert.isTrue(appended.endsWith("[truncated]"));
-  });
-
-  it("leaves the description alone when there is no room for a readable block", () => {
-    // A description already at the bound is what nine investigations before this one leave. The
-    // tenth must not push it over: the editor round-trips the whole body, and one character past
-    // the limit makes the field unsavable from every client.
-    const full = "x".repeat(ISSUE_DESCRIPTION_MAX_CHARS - 100);
-    const appended = appendInvestigationBlock(full, "## Investigation (x, y)\nSomething found.");
-
-    assert.strictEqual(appended, full);
-  });
-
-  it("stays inside the bound however many investigations land on one issue", () => {
-    // Each block is a full-sized summary plus the maximum likely-file list, which is the largest
-    // one run can produce. Twenty of them is well past 100k of raw text.
-    const block = buildInvestigationBlock({
-      result: {
-        summary: "s".repeat(ISSUE_ENRICHMENT_SUMMARY_MAX_CHARS),
-        likelyFiles: Array.from({ length: 25 }, (_unused, index) => ({
-          path: `apps/server/src/file-${index}.ts`,
-          reason: "r".repeat(500),
-        })),
-        relatedIssueKeys: [],
-        suggestedLabels: [],
-        suggestedPriority: "high",
-      },
-      model: "codex / gpt-5.6-luna",
-      finishedAt: "2026-08-12T14:31:02.000Z",
-    });
-
-    let description = "Human body.";
-    for (let run = 0; run < 20; run += 1) {
-      description = appendInvestigationBlock(description, block);
-      assert.isAtMost(description.length, ISSUE_DESCRIPTION_MAX_CHARS);
-    }
-    // And the human's own text is still at the top of it, untouched.
-    assert.isTrue(description.startsWith("Human body.\n\n---\n\n"));
   });
 });

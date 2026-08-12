@@ -26,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import { IssueCommentRepositoryLive } from "./IssueComments.ts";
+import { IssueAutomationAuditRepositoryLive } from "./IssueAutomationAudits.ts";
 import { IssueCycleRepositoryLive } from "./IssueCycles.ts";
 import { IssueEnrichmentRunRepositoryLive } from "./IssueEnrichmentRuns.ts";
 import { IssueEventRepositoryLive } from "./IssueEvents.ts";
@@ -42,6 +43,7 @@ import { SlackChannelWatchRepositoryLive } from "./SlackChannelWatches.ts";
 import { SlackIntakeLedgerRepositoryLive } from "./SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { IssueCommentRepository } from "../Services/IssueComments.ts";
+import { IssueAutomationAuditRepository } from "../Services/IssueAutomationAudits.ts";
 import { IssueCycleRepository } from "../Services/IssueCycles.ts";
 import { IssueEnrichmentRunRepository } from "../Services/IssueEnrichmentRuns.ts";
 import { IssueEventRepository } from "../Services/IssueEvents.ts";
@@ -70,6 +72,7 @@ const issueTrackerLayer = it.layer(
     IssueTodoRepositoryLive,
     IssueRelationRepositoryLive,
     IssueCommentRepositoryLive,
+    IssueAutomationAuditRepositoryLive,
     IssueViewRepositoryLive,
     IssueEnrichmentRunRepositoryLive,
     IssueThreadLinkRepositoryLive,
@@ -105,6 +108,8 @@ const makeIssue = (overrides: Partial<IssueRecord> = {}): IssueRecord => ({
   statusId: IssueStatusId.make("todo"),
   priority: "medium",
   assignee: null,
+  workModelSelection: null,
+  automationAssignment: null,
   projectId: null,
   milestoneId: null,
   cycleId: null,
@@ -692,6 +697,53 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
     }),
   );
 
+  it.effect("claims each configured auditor once and records its independent verdict", () =>
+    Effect.gen(function* () {
+      const audits = yield* IssueAutomationAuditRepository;
+      const issueId = IssueId.make("issue-audited");
+      const running = {
+        id: "audit-1",
+        issueId,
+        triggerKey: "review-transition-1",
+        ruleId: "implementation",
+        auditorIndex: 0,
+        modelSelection: ENRICHMENT_MODEL,
+        state: "running" as const,
+        verdict: null,
+        summary: null,
+        findings: [],
+        error: null,
+        remediationCycle: 0,
+        createdAt: "2026-08-12T00:00:00.000Z",
+        finishedAt: null,
+      };
+
+      assert.isTrue(yield* audits.claim(running));
+      assert.isFalse(yield* audits.claim({ ...running, id: "audit-duplicate" }));
+      yield* audits.releaseInterruptedClaims();
+      const recovered = { ...running, id: "audit-recovered" };
+      assert.isTrue(yield* audits.claim(recovered));
+
+      yield* audits.finish({
+        ...recovered,
+        state: "done",
+        verdict: "changes_requested",
+        summary: "A regression remains.",
+        findings: ["The empty state no longer renders."],
+        finishedAt: "2026-08-12T00:01:00.000Z",
+      });
+
+      const stored = yield* audits.listByTrigger({
+        issueId,
+        triggerKey: "review-transition-1",
+      });
+      assert.strictEqual(stored.length, 1);
+      assert.strictEqual(stored[0]?.modelSelection.model, "gpt-5-codex");
+      assert.deepStrictEqual(stored[0]?.findings, ["The empty state no longer renders."]);
+      assert.strictEqual(yield* audits.countChangesRequested(issueId), 1);
+    }),
+  );
+
   // The bound exists so one runaway process cannot fill the database, and the head is what goes:
   // a run's conclusion is the part anybody rereads.
   it.effect("drops the head of an over-long transcript rather than its tail", () =>
@@ -771,17 +823,33 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         channelId: "C1",
         channelName: "triage",
         projectId: ProjectId.make("project-1"),
-        trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+        autoInvestigate: true,
+        autoAssign: true,
+        trigger: {
+          reactionRoutes: [
+            {
+              emoji: "ticket",
+              projectId: ProjectId.make("project-2"),
+              autoInvestigate: false,
+            },
+          ],
+          everyMessage: false,
+          botMention: true,
+        },
         createdAt: "2026-08-12T00:00:00.000Z",
         updatedAt: "2026-08-12T00:00:00.000Z",
       });
 
       const byChannel = yield* watches.getByChannel({ channelId: "C1" });
       assert.deepStrictEqual(Option.isSome(byChannel) ? byChannel.value.trigger : null, {
-        emoji: "ticket",
+        reactionRoutes: [
+          { emoji: "ticket", projectId: ProjectId.make("project-2"), autoInvestigate: false },
+        ],
         everyMessage: false,
         botMention: true,
       });
+      assert.isTrue(Option.isSome(byChannel) && byChannel.value.autoInvestigate);
+      assert.isTrue(Option.isSome(byChannel) && byChannel.value.autoAssign);
 
       // All three off is a paused watch, and a paused watch has to round-trip like any other.
       yield* watches.upsert({
@@ -789,14 +857,16 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         channelId: "C1",
         channelName: "triage",
         projectId: null,
-        trigger: { emoji: null, everyMessage: false, botMention: false },
+        autoInvestigate: false,
+        autoAssign: false,
+        trigger: { reactionRoutes: [], everyMessage: false, botMention: false },
         createdAt: "2026-08-12T00:00:00.000Z",
         updatedAt: "2026-08-12T00:01:00.000Z",
       });
       const paused = yield* watches.listAll();
       assert.deepStrictEqual(
         paused.map((watch) => watch.trigger),
-        [{ emoji: null, everyMessage: false, botMention: false }],
+        [{ reactionRoutes: [], everyMessage: false, botMention: false }],
       );
       assert.isNull(paused[0]?.projectId ?? null);
 

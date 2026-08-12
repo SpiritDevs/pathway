@@ -8,6 +8,8 @@ describe("orchestrator MCP tool guidance", () => {
     assert.include(DelegateTaskTool.description ?? "", "child agent/subagent");
     assert.include(DelegateTaskTool.description ?? "", "cross-provider");
     assert.include(DelegateTaskTool.description ?? "", "Pathway-owned");
+    assert.include(DelegateTaskTool.description ?? "", "set target");
+    assert.include(DelegateTaskTool.description ?? "", "do not launch that provider's CLI");
     assert.include(CreateThreadsTool.description ?? "", "not delegation");
     assert.include(CreateThreadsTool.description ?? "", "call delegate_task");
     assert.include(CreateThreadsTool.description ?? "", "Pathway conversations");

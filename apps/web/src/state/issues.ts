@@ -366,9 +366,9 @@ export function applyIssueDetailStreamEvent(
  * the list draws a marker on any issue with an investigation in flight, and that has to be true
  * for issues whose sheet has never been opened.
  *
- * {@link IssueAgentState.investigatingIssueIds} is membership-stable on purpose: a running run
- * republishes its whole row every 250ms, and a fresh `Set` on each of those would re-render every
- * row in a virtualized list four times a second to say nothing new.
+ * The id sets are membership-stable on purpose: a running run republishes its whole row every
+ * 250ms, and fresh `Set`s on each of those would re-render subscribers four times a second to say
+ * nothing new.
  */
 export interface IssueAgentState {
   /** Keyed by run id rather than held as a list: the stream carries one run at a time. */
@@ -377,6 +377,8 @@ export interface IssueAgentState {
   readonly linksByIssue: ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>>;
   /** Every issue with a `queued` or `running` run, as far as this connection has been told. */
   readonly investigatingIssueIds: ReadonlySet<IssueId>;
+  /** Every issue with a queued, running, or completed run observed on this connection. */
+  readonly investigatedIssueIds: ReadonlySet<IssueId>;
 }
 
 const EMPTY_ENRICHMENT_RUNS: ReadonlyMap<
@@ -385,11 +387,13 @@ const EMPTY_ENRICHMENT_RUNS: ReadonlyMap<
 > = new Map();
 const EMPTY_THREAD_LINKS_BY_ISSUE: ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>> = new Map();
 const EMPTY_INVESTIGATING_IDS: ReadonlySet<IssueId> = new Set();
+const EMPTY_INVESTIGATED_IDS: ReadonlySet<IssueId> = new Set();
 
 export const EMPTY_ISSUE_AGENT_STATE: IssueAgentState = {
   runsByIssue: EMPTY_ENRICHMENT_RUNS,
   linksByIssue: EMPTY_THREAD_LINKS_BY_ISSUE,
   investigatingIssueIds: EMPTY_INVESTIGATING_IDS,
+  investigatedIssueIds: EMPTY_INVESTIGATED_IDS,
 };
 
 /** Queued and running are the two states a cancel button and a marker chip both apply to. */
@@ -427,6 +431,9 @@ export function applyIssueAgentStreamEvent(
       // Recomputed across the issue's whole known set rather than read off this one run: a second
       // run can be queued behind the one that just finished.
       const active = [...runs.values()].some(isIssueEnrichmentRunActive);
+      // A failed attempt may be retried on acceptance; an active or completed run should not be
+      // offered again by default. The user can still opt into another run explicitly.
+      const investigated = [...runs.values()].some((candidate) => candidate.state !== "failed");
       return {
         ...current,
         runsByIssue,
@@ -434,6 +441,11 @@ export function applyIssueAgentStreamEvent(
           current.investigatingIssueIds,
           run.issueId,
           active,
+        ),
+        investigatedIssueIds: withInvestigatingIssue(
+          current.investigatedIssueIds,
+          run.issueId,
+          investigated,
         ),
       };
     }
@@ -446,7 +458,8 @@ export function applyIssueAgentStreamEvent(
       if (
         !current.runsByIssue.has(event.issueId) &&
         !current.linksByIssue.has(event.issueId) &&
-        !current.investigatingIssueIds.has(event.issueId)
+        !current.investigatingIssueIds.has(event.issueId) &&
+        !current.investigatedIssueIds.has(event.issueId)
       ) {
         return current;
       }
@@ -459,6 +472,11 @@ export function applyIssueAgentStreamEvent(
         linksByIssue,
         investigatingIssueIds: withInvestigatingIssue(
           current.investigatingIssueIds,
+          event.issueId,
+          false,
+        ),
+        investigatedIssueIds: withInvestigatingIssue(
+          current.investigatedIssueIds,
           event.issueId,
           false,
         ),
@@ -717,6 +735,10 @@ const issueAgentStateAtom = Atom.make(
 export const investigatingIssueIdsAtom = Atom.make(
   (get): ReadonlySet<IssueId> => get(issueAgentStateAtom).investigatingIssueIds,
 ).pipe(Atom.withLabel("web-issues-investigating"));
+
+const investigatedIssueIdsAtom = Atom.make(
+  (get): ReadonlySet<IssueId> => get(issueAgentStateAtom).investigatedIssueIds,
+).pipe(Atom.withLabel("web-issues-investigated"));
 
 const issueEnrichmentRunPatchesAtomFamily = Atom.family((issueId: IssueId) =>
   Atom.make((get): ReadonlyMap<IssueEnrichmentRunId, IssueEnrichmentRun> | undefined =>
@@ -1436,6 +1458,11 @@ export function useIssueThreadLinks(issueId: IssueId | null): IssueThreadLinksVi
 /** For the list and the board: one subscription, membership-stable, no per-row reads. */
 export function useInvestigatingIssueIds(): ReadonlySet<IssueId> {
   return useAtomValue(investigatingIssueIdsAtom);
+}
+
+/** Runs observed on this connection, used to avoid offering a duplicate investigation by default. */
+export function useInvestigatedIssueIds(): ReadonlySet<IssueId> {
+  return useAtomValue(investigatedIssueIdsAtom);
 }
 
 // ── Mutations ──────────────────────────────────────────────────────────

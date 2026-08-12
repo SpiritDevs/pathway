@@ -30,6 +30,7 @@ import {
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2DispatchCommandError,
+  OrchestrationV2ContinuationLaunchError,
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
@@ -76,6 +77,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as ContinuationLaunchService from "./orchestration-v2/ContinuationLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -431,6 +433,7 @@ const makeWsRpcLayer = (
             })),
           ),
       );
+      const continuationLaunch = yield* ContinuationLaunchService.ContinuationLaunchService;
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
@@ -1140,6 +1143,44 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.launchContinuation]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.launchContinuation,
+            startup
+              .enqueueCommand(
+                continuationLaunch.launch({
+                  commandId: input.commandId,
+                  sourceThreadId: input.sourceThreadId,
+                  sourceRunId: input.sourceRunId,
+                  targetThreadId: input.targetThreadId,
+                  ...(input.title === undefined ? {} : { title: input.title }),
+                  modelSelection: input.modelSelection,
+                  runtimeMode: input.runtimeMode,
+                  interactionMode: input.interactionMode,
+                  workspaceTarget: input.workspaceTarget,
+                  createdBy: "user",
+                  creationSource: input.creationSource ?? "web",
+                }),
+              )
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2ContinuationLaunchError({
+                      commandId: input.commandId,
+                      sourceThreadId: input.sourceThreadId,
+                      targetThreadId: input.targetThreadId,
+                      message: "Failed to launch continuation",
+                      cause,
+                    }),
+                ),
+              ),
+            {
+              "rpc.aggregate": "orchestration",
+              "orchestration_v2.command_id": input.commandId,
+              "orchestration_v2.source_thread_id": input.sourceThreadId,
+              "orchestration_v2.target_thread_id": input.targetThreadId,
             },
           ),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>

@@ -398,3 +398,59 @@ describe("ServerSettingsPatch.issueEnrichmentModelSelection", () => {
     ).toEqual(DEFAULT_SERVER_SETTINGS.issueEnrichmentModelSelection);
   });
 });
+
+describe("ServerSettingsPatch.issueAutomation", () => {
+  it("defaults to an inert, bounded workflow", () => {
+    const automation = decodeServerSettings({}).issueAutomation;
+    expect(automation.routingRules).toEqual([]);
+    expect(automation.auditRules).toEqual([]);
+    expect(automation.fallbackModelSelection).toBeNull();
+    expect(automation.statusTransitions).toEqual({
+      workStartedStatusId: null,
+      workFinishedStatusId: null,
+      auditPassedStatusId: null,
+      auditChangesRequestedStatusId: null,
+    });
+    expect(automation.maxRemediationCycles).toBe(3);
+  });
+
+  it("round-trips ordered worker rules, several auditors, and custom status ids", () => {
+    const current = decodeServerSettings({});
+    const issueAutomation = {
+      ...current.issueAutomation,
+      routingRules: [
+        {
+          id: "ui",
+          name: "UI work",
+          condition: "Frontend changes",
+          modelSelection: current.textGenerationModelSelection,
+        },
+      ],
+      auditRules: [
+        {
+          id: "implementation",
+          name: "Implementation review",
+          condition: "All completed work",
+          auditors: [
+            { id: "primary", modelSelection: current.textGenerationModelSelection },
+            {
+              id: "second-opinion",
+              modelSelection: { ...current.textGenerationModelSelection, model: "second-opinion" },
+            },
+          ],
+        },
+      ],
+      statusTransitions: {
+        workStartedStatusId: "custom-building",
+        workFinishedStatusId: "custom-review",
+        auditPassedStatusId: "custom-shipped",
+        auditChangesRequestedStatusId: "custom-building",
+      },
+    };
+    const patch = decodeServerSettingsPatch({ issueAutomation });
+    expect(patch.issueAutomation).toEqual(issueAutomation);
+    expect(
+      decodeServerSettings(encodeServerSettings({ ...current, issueAutomation })).issueAutomation,
+    ).toEqual(issueAutomation);
+  });
+});

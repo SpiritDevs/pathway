@@ -25,7 +25,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { useTriageAccept } from "~/state/issues";
+import { useInvestigatedIssueIds, useTriageAccept } from "~/state/issues";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -75,6 +75,7 @@ export function TriageAcceptDialog({
   onAccepted?: () => void;
 }) {
   const acceptTriage = useTriageAccept();
+  const investigatedIssueIds = useInvestigatedIssueIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [draft, setDraft] = useState<TriageAcceptDraft>({
     statusId: null,
@@ -97,7 +98,7 @@ export function TriageAcceptDialog({
   // this dialog was opened on.
   const selectionKey = issues.map((issue) => issue.id).join(",");
   const resetDraft = useEffectEvent(() => {
-    setDraft(triageAcceptDefaults({ issues, statuses, workspaceRoots }));
+    setDraft(triageAcceptDefaults({ issues, statuses, workspaceRoots, investigatedIssueIds }));
     setSubmitting(false);
   });
 

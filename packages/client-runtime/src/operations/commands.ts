@@ -194,6 +194,17 @@ export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly title?: string;
 }
 
+export interface LaunchThreadContinuationInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly sourceRunId: RunId;
+  readonly targetThreadId: ThreadId;
+  readonly title?: string;
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly workspaceTarget: "current" | "new-worktree";
+}
+
 export interface MergeThreadBackInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
@@ -791,6 +802,23 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     ...(input.title === undefined ? {} : { title: input.title }),
   });
 });
+
+export const launchThreadContinuation = Effect.fn("EnvironmentCommands.launchThreadContinuation")(
+  function* (input: LaunchThreadContinuationInput) {
+    return yield* request(ORCHESTRATION_V2_WS_METHODS.launchContinuation, {
+      commandId: yield* allocateCommandId(input),
+      creationSource: input.creationSource ?? "web",
+      sourceThreadId: input.sourceThreadId,
+      sourceRunId: input.sourceRunId,
+      targetThreadId: input.targetThreadId,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      modelSelection: input.modelSelection,
+      runtimeMode: input.runtimeMode,
+      interactionMode: input.interactionMode,
+      workspaceTarget: input.workspaceTarget,
+    });
+  },
+);
 
 export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(function* (
   input: MergeThreadBackInput,

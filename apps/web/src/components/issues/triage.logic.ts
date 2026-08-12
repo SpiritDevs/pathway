@@ -15,6 +15,7 @@
  */
 import type {
   Issue,
+  IssueId,
   IssuePriority,
   IssueSlackSource,
   IssueStatus,
@@ -201,6 +202,17 @@ export interface TriageAcceptDraft {
   readonly runEnrichment: boolean;
 }
 
+const INVESTIGATION_BLOCK_PATTERN = /^## Investigation \(/mu;
+const EMPTY_INVESTIGATED_ISSUE_IDS: ReadonlySet<IssueId> = new Set();
+
+/** Whether accepting would duplicate an investigation already started by Slack routing. */
+export function issueAlreadyInvestigated(
+  issue: Issue,
+  investigatedIssueIds: ReadonlySet<IssueId> = EMPTY_INVESTIGATED_ISSUE_IDS,
+): boolean {
+  return investigatedIssueIds.has(issue.id) || INVESTIGATION_BLOCK_PATTERN.test(issue.description);
+}
+
 /**
  * What the accept dialog opens on. Priority defaults to the one the selection already shares —
  * intake files everything at `none`, but an agent or an enrichment suggestion may have set one
@@ -210,6 +222,7 @@ export function triageAcceptDefaults(input: {
   readonly issues: ReadonlyArray<Issue>;
   readonly statuses: ReadonlyArray<IssueStatus>;
   readonly workspaceRoots: ReadonlyMap<string, string | null>;
+  readonly investigatedIssueIds?: ReadonlySet<IssueId> | undefined;
 }): TriageAcceptDraft {
   const projectId = sharedTriageProjectId(input.issues);
   const first = input.issues[0];
@@ -222,7 +235,8 @@ export function triageAcceptDefaults(input: {
     projectId,
     priority: sharedPriority,
     runEnrichment:
-      triageInvestigateBlock({ projectId, workspaceRoots: input.workspaceRoots }) === null,
+      triageInvestigateBlock({ projectId, workspaceRoots: input.workspaceRoots }) === null &&
+      !input.issues.some((issue) => issueAlreadyInvestigated(issue, input.investigatedIssueIds)),
   };
 }
 

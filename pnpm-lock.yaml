@@ -576,9 +576,27 @@ importers:
       '@legendapp/list':
         specifier: 'catalog:'
         version: 3.3.5(patch_hash=6befc76c7f590a0b0915b531386ce7e3bbb364612868e1f04e4ac84f60a39ab5)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@lexical/code':
+        specifier: ^0.41.0
+        version: 0.41.0
+      '@lexical/link':
+        specifier: ^0.41.0
+        version: 0.41.0
+      '@lexical/list':
+        specifier: ^0.41.0
+        version: 0.41.0
+      '@lexical/markdown':
+        specifier: ^0.41.0
+        version: 0.41.0
       '@lexical/react':
         specifier: ^0.41.0
         version: 0.41.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(yjs@13.6.31)
+      '@lexical/rich-text':
+        specifier: ^0.41.0
+        version: 0.41.0
+      '@lexical/selection':
+        specifier: ^0.41.0
+        version: 0.41.0
       '@noble/hashes':
         specifier: 'catalog:'
         version: 1.8.0

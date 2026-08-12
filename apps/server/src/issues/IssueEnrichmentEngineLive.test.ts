@@ -182,7 +182,7 @@ const ANSWER = {
 } satisfies IssueEnrichmentResult;
 
 describe("IssueEnrichmentEngineLive", () => {
-  it.effect("streams the transcript, records the result, and appends it to the description", () =>
+  it.effect("streams the transcript, records the result, and leaves an agent comment", () =>
     Effect.gen(function* () {
       const tracker = yield* buildTracker(({ onOutput }) =>
         Effect.gen(function* () {
@@ -214,20 +214,24 @@ describe("IssueEnrichmentEngineLive", () => {
       assert.strictEqual(finished.transcript, "reading files\nthinking\n");
 
       const updated = yield* issueById(tracker, issue.id);
-      assert.isTrue(updated.description.startsWith("Body.\n\n---\n\n## Investigation ("));
-      assert.include(updated.description, "- `apps/server/src/ws.ts` — Owns reconnect");
-      assert.include(updated.description, "**Suggested** (not applied)");
+      assert.strictEqual(updated.description, "Body.");
       // Suggestions are suggestions: the run applied neither the label nor the priority.
       assert.deepStrictEqual(updated.labelIds, []);
       assert.strictEqual(updated.priority, "none");
 
-      // And it went through the ordinary update path, so the feed says which agent wrote it.
-      const { events } = yield* tracker.getEvents({ issueId: issue.id });
-      const descriptionChange = events.find((event) => event.field === "description");
-      assert.deepStrictEqual(descriptionChange?.actor, {
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      assert.strictEqual(detail.comments.length, 1);
+      assert.include(detail.comments[0]?.body ?? "", "- `apps/server/src/ws.ts` — Owns reconnect");
+      assert.include(detail.comments[0]?.body ?? "", "**Suggested** (not applied)");
+      assert.deepStrictEqual(detail.comments[0]?.author, {
         kind: "agent",
         provider: ProviderDriverKind.make("codex"),
       });
+
+      // A completed investigation no longer creates a noisy description edit in Activity.
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      const descriptionChange = events.find((event) => event.field === "description");
+      assert.isUndefined(descriptionChange);
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 

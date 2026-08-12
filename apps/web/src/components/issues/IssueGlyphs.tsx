@@ -305,8 +305,7 @@ export function IssueSlackGlyph({ className }: { className?: string }) {
 }
 
 /**
- * A chip that says an investigation is under way. Used in the sheet header and, in its smallest
- * form, next to an issue key in the list.
+ * A chip that says an investigation is under way. Used in the sheet header and issue list rows.
  */
 export function IssueInvestigatingChip({
   className,

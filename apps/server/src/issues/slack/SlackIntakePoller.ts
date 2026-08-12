@@ -13,7 +13,7 @@
  *   Tuesday; a cursor read on Wednesday catches all of it up.
  *
  * - **A cursor cannot see a reaction.** Adding :ticket: to last week's message does not put that
- *   message back at the top of the history. So every channel with an emoji trigger gets a second,
+ *   message back at the top of the history. So every channel with reaction routes gets a second,
  *   bounded pass over recent history — the smaller of a hundred messages and seven days — looking
  *   for the trigger on messages that have not become issues yet. `reaction_scan_ts` is the floor
  *   of that window and trails the main cursor on purpose.
@@ -40,7 +40,6 @@ import {
   type IssueId,
   type IssuesStreamEvent,
   type SlackChannelWatch,
-  type SlackIntakeTrigger,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -108,10 +107,11 @@ const READABLE_SUBTYPES: ReadonlySet<string> = new Set(["file_share"]);
  */
 const SLACK_USER_ACTOR_LABEL = "Pathway user";
 
-const SLACK_SYSTEM_ACTOR_LABELS: Record<"import" | "cycles" | "slack", string> = {
+const SLACK_SYSTEM_ACTOR_LABELS: Record<"import" | "cycles" | "slack" | "automation", string> = {
   import: "CSV import",
   cycles: "Cycle rollover",
   slack: "Slack",
+  automation: "Automation",
 };
 
 /** Who to say did it, in a sentence a Slack reader can follow. */
@@ -178,25 +178,52 @@ function isReadableMessage(message: SlackMessage): boolean {
 }
 
 /**
- * Whether this message is one the watch wanted.
+ * The behavior a matching message should use.
  *
- * Any of the three, not all: a channel can file on a mention *and* on a reaction. Skin tones ride
- * on the reaction name (`+1::skin-tone-3`), so the comparison is against the base name.
+ * A reaction-specific route wins over channel-wide triggers. This lets a dedicated intake channel
+ * keep filing every message while reactions deliberately reroute individual messages. Several
+ * matching reactions use the first configured route, matching their visible order in settings.
  */
-export function messageMatchesTrigger(
-  trigger: SlackIntakeTrigger,
+export interface SlackResolvedIntakeRoute {
+  readonly projectId: SlackChannelWatch["projectId"];
+  readonly autoInvestigate: boolean;
+}
+
+export function resolveMessageRoute(
+  watch: SlackChannelWatch,
   message: SlackMessage,
   identity: SlackIdentity,
-): boolean {
-  if (trigger.everyMessage) return true;
+): SlackResolvedIntakeRoute | null {
+  for (const route of watch.trigger.reactionRoutes) {
+    if (!messageHasReaction(message, route.emoji)) continue;
+    return {
+      projectId: route.projectId ?? watch.projectId,
+      autoInvestigate: route.autoInvestigate ?? watch.autoInvestigate,
+    };
+  }
+  if (watch.trigger.everyMessage) {
+    return { projectId: watch.projectId, autoInvestigate: watch.autoInvestigate };
+  }
   if (
-    trigger.botMention &&
+    watch.trigger.botMention &&
     identity.botUserId !== null &&
     (message.text ?? "").includes(`<@${identity.botUserId}>`)
   ) {
-    return true;
+    return { projectId: watch.projectId, autoInvestigate: watch.autoInvestigate };
   }
-  return trigger.emoji !== null && messageHasReaction(message, trigger.emoji);
+  return null;
+}
+
+function resolveReactionRoute(watch: SlackChannelWatch, message: SlackMessage) {
+  const route = watch.trigger.reactionRoutes.find((candidate) =>
+    messageHasReaction(message, candidate.emoji),
+  );
+  return route === undefined
+    ? null
+    : {
+        projectId: route.projectId ?? watch.projectId,
+        autoInvestigate: route.autoInvestigate ?? watch.autoInvestigate,
+      };
 }
 
 export function messageHasReaction(message: SlackMessage, emoji: string): boolean {
@@ -493,6 +520,7 @@ export const make = Effect.gen(function* () {
     readonly identity: SlackIdentity;
     readonly watch: SlackChannelWatch;
     readonly message: SlackMessage;
+    readonly route: SlackResolvedIntakeRoute;
   }) =>
     Effect.gen(function* () {
       const [authorName, description] = yield* Effect.all([
@@ -512,7 +540,7 @@ export const make = Effect.gen(function* () {
         messageTs: input.message.ts,
         title: slackTitleFromText(description),
         description,
-        projectId: input.watch.projectId,
+        projectId: input.route.projectId,
         permalink,
         authorName,
       });
@@ -539,6 +567,18 @@ export const make = Effect.gen(function* () {
           threadTs: input.message.ts,
           identity: input.identity,
         });
+      }
+
+      if (input.route.autoInvestigate) {
+        yield* tracker.startEnrichment({ issueId: issue.id }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("slack.intake.auto-investigation-refused", {
+              issueId: issue.id,
+              channelId: input.watch.channelId,
+              error,
+            }),
+          ),
+        );
       }
 
       yield* confirmFiled({
@@ -587,8 +627,9 @@ export const make = Effect.gen(function* () {
         return;
       }
 
-      if (messageMatchesTrigger(watch.trigger, message, input.identity)) {
-        yield* fileMessage(input);
+      const route = resolveMessageRoute(watch, message, input.identity);
+      if (route !== null) {
+        yield* fileMessage({ ...input, route });
         return;
       }
 
@@ -603,7 +644,7 @@ export const make = Effect.gen(function* () {
     });
 
   /**
-   * The second pass: recent history re-read for the trigger emoji.
+   * The second pass: recent history re-read for configured reaction routes.
    *
    * Bounded twice, because both bounds are real. Seven days is how long a reaction can be
    * noticed; a hundred messages is what stops a firehose channel from being re-walked forever,
@@ -616,8 +657,7 @@ export const make = Effect.gen(function* () {
     readonly floor: string;
   }) =>
     Effect.gen(function* () {
-      const emoji = input.watch.trigger.emoji;
-      if (emoji === null) return input.floor;
+      if (input.watch.trigger.reactionRoutes.length === 0) return input.floor;
 
       const page = yield* client.history({
         token: input.token,
@@ -630,13 +670,15 @@ export const make = Effect.gen(function* () {
       for (const message of ordered) {
         if (!isReadableMessage(message) || isThreadReply(message)) continue;
         if (isBotMessage(message, input.identity)) continue;
-        if (!messageHasReaction(message, emoji)) continue;
+        const route = resolveReactionRoute(input.watch, message);
+        if (route === null) continue;
         if (yield* alreadyFiled(input.watch.channelId, message.ts)) continue;
         yield* fileMessage({
           token: input.token,
           identity: input.identity,
           watch: input.watch,
           message,
+          route,
         });
       }
 
@@ -710,7 +752,7 @@ export const make = Effect.gen(function* () {
           ),
         ) ?? nowTs;
       const reactionScanTs =
-        watch.trigger.emoji === null
+        watch.trigger.reactionRoutes.length === 0
           ? previousScanTs
           : yield* scanReactions({
               token: input.token,

@@ -2575,6 +2575,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             coveredRunOrdinals: { from: 1, to: targetRun.ordinal },
             strategy: "full_thread_summary",
             items: input.projection.turnItems,
+            maxChars: targetCapabilities.context.maxRecommendedHandoffChars,
             createdAt: now,
           })
           .pipe(mapDispatchError(input.command));
@@ -3735,6 +3736,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 coveredRunOrdinals: visibleDeltaRunOrdinals(sourceProjection, portableForkItems),
                 strategy: "full_thread_summary",
                 items: portableForkItems,
+                maxChars: capabilities.context.maxRecommendedHandoffChars,
                 createdAt: now,
               })
               .pipe(
@@ -3822,6 +3824,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ? "full_thread_summary"
                     : "delta_since_target_last_seen",
                 items: providerSwitchItems,
+                maxChars: capabilities.context.maxRecommendedHandoffChars,
                 createdAt: now,
               })
               .pipe(
@@ -3934,6 +3937,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   mergeBackDeltaItems,
                 ),
                 deltaItems: mergeBackDeltaItems,
+                maxChars: capabilities.context.maxRecommendedHandoffChars,
                 createdAt: now,
               })
               .pipe(

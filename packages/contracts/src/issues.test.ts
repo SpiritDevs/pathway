@@ -49,6 +49,7 @@ import {
   ISSUE_ENRICHMENT_TRANSCRIPT_MAX_CHARS,
   ISSUE_VIEW_FILTER_MAX_VALUES,
   SLACK_BOT_TOKEN_MAX_CHARS,
+  SLACK_MAX_REACTION_ROUTES,
 } from "./issues.ts";
 
 const decodeIssue = Schema.decodeUnknownSync(Issue);
@@ -161,7 +162,13 @@ const SLACK_WATCH_JSON = {
   channelId: "C0123ABCD",
   channelName: "triage",
   projectId: "project-1",
-  trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+  autoInvestigate: true,
+  autoAssign: true,
+  trigger: {
+    reactionRoutes: [{ emoji: "ticket", projectId: null, autoInvestigate: null }],
+    everyMessage: false,
+    botMention: true,
+  },
   createdAt: "2026-08-12T00:00:00Z",
   updatedAt: "2026-08-12T00:00:00Z",
 };
@@ -858,32 +865,56 @@ describe("Slack intake", () => {
     expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(watch))).toStrictEqual(
       watch,
     );
+    expect(watch.autoAssign).toBe(true);
+    const { autoAssign: _, ...legacyWatch } = SLACK_WATCH_JSON;
+    expect(decodeWatch(legacyWatch).autoAssign).toBeUndefined();
   });
 
-  // A channel can file on a reaction *and* on a mention, and all three off is a paused watch
+  // A channel can file on a reaction *and* on a mention, and all triggers off is a paused watch
   // rather than an invalid one: pausing and forgetting the configuration are different things.
   it("takes any combination of triggers, including none at all", () => {
     expect(isSlackIntakeTriggerActive(decodeTrigger(SLACK_WATCH_JSON.trigger))).toBe(true);
     expect(
       isSlackIntakeTriggerActive(
-        decodeTrigger({ emoji: null, everyMessage: true, botMention: true }),
+        decodeTrigger({ reactionRoutes: [], everyMessage: true, botMention: true }),
       ),
     ).toBe(true);
     expect(
       isSlackIntakeTriggerActive(
-        decodeTrigger({ emoji: null, everyMessage: false, botMention: false }),
+        decodeTrigger({ reactionRoutes: [], everyMessage: false, botMention: false }),
       ),
     ).toBe(false);
   });
 
   // The poller compares this against `reaction.name` verbatim, so a decorated value never matches.
-  it("spells an emoji the way Slack does, with no colons", () => {
-    expect(decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "+1" }).emoji).toBe("+1");
-    expect(decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "white_check_mark" }).emoji).toBe(
-      "white_check_mark",
-    );
-    expect(() => decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: ":ticket:" })).toThrow();
-    expect(() => decodeTrigger({ ...SLACK_WATCH_JSON.trigger, emoji: "Ticket" })).toThrow();
+  it("accepts several unique reaction routes and bounds the list", () => {
+    const route = (emoji: string) => ({ emoji, projectId: null, autoInvestigate: null });
+    expect(
+      decodeTrigger({
+        ...SLACK_WATCH_JSON.trigger,
+        reactionRoutes: [route("+1"), route("white_check_mark")],
+      }).reactionRoutes.map((item) => item.emoji),
+    ).toEqual(["+1", "white_check_mark"]);
+    expect(() =>
+      decodeTrigger({
+        ...SLACK_WATCH_JSON.trigger,
+        reactionRoutes: [route("ticket"), route("ticket")],
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeTrigger({
+        ...SLACK_WATCH_JSON.trigger,
+        reactionRoutes: Array.from({ length: SLACK_MAX_REACTION_ROUTES + 1 }, (_, index) =>
+          route(`ticket_${index}`),
+        ),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeTrigger({ ...SLACK_WATCH_JSON.trigger, reactionRoutes: [route(":ticket:")] }),
+    ).toThrow();
+    expect(() =>
+      decodeTrigger({ ...SLACK_WATCH_JSON.trigger, reactionRoutes: [route("Ticket")] }),
+    ).toThrow();
   });
 
   it("carries no token on the status, only whether there is one", () => {

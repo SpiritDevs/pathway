@@ -186,7 +186,7 @@ function buildProps() {
     routeThreadKey: "environment-local:thread-1",
     onOpenTurnDiff: () => {},
     onOpenThread: () => {},
-    onForkFromRun: async () => {},
+    onContinueFromRun: () => {},
     onRollbackCheckpoint: () => {},
     revertTurnCountByUserMessageId: new Map(),
     onRevertUserMessage: () => {},
@@ -701,7 +701,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Fork from this response"');
+    expect(markup).toContain('aria-label="Continue in a new chat"');
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {

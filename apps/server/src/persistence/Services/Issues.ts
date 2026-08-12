@@ -18,6 +18,8 @@ import {
   IssueSlackSource,
   IssueStatusId,
   IssueAssignee,
+  IssueAutomationAssignment,
+  ModelSelection,
   ProjectId,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
@@ -36,6 +38,8 @@ export const IssueRecord = Schema.Struct({
   statusId: IssueStatusId,
   priority: IssuePriority,
   assignee: Schema.NullOr(IssueAssignee),
+  workModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  automationAssignment: Schema.optionalKey(Schema.NullOr(IssueAutomationAssignment)),
   projectId: Schema.NullOr(ProjectId),
   milestoneId: Schema.NullOr(IssueMilestoneId),
   cycleId: Schema.NullOr(IssueCycleId),

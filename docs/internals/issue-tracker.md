@@ -10,7 +10,7 @@ which direction each one points.
 ## A plain-table domain beside the projections
 
 The tracker's tables live in the same `state.sqlite` as the projection tables and are written
-directly, not derived from orchestration events. Migrations 041–046 own them:
+directly, not derived from orchestration events. Migrations 041–046 and 056 own them:
 
 | Migration | Adds                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------- |
@@ -20,6 +20,8 @@ directly, not derived from orchestration events. Migrations 041–046 own them:
 | 044       | `issue_views`                                                                                                 |
 | 045       | `issue_enrichment_runs`, `issue_thread_links`                                                                 |
 | 046       | `slack_channel_watches`, `slack_cursors`, `slack_outbound_posts`, `slack_processed_messages`                  |
+| 056       | ordered Slack reaction routes and the channel-level automatic-investigation default                           |
+| 057       | pinned work-model choices, channel auto-assignment, and durable multi-model audit claims                      |
 
 [`IssueTrackerService.ts`][tracker] is the single writer. It is a write model _and_ the change feed:
 every mutation writes an `issue_events` row and publishes a diff on the same path, which is what
@@ -61,18 +63,40 @@ ambient current-user; the caller says who it is.
 ```
 IssueActor = { kind: "user" }                                  // the one human on this environment
            | { kind: "agent", provider: ProviderDriverKind }   // an MCP toolkit write
-           | { kind: "system", source: "import" | "cycles" | "slack" }
+           | { kind: "system", source: "import" | "cycles" | "slack" | "automation" }
 ```
 
 `user` carries no identity because this environment has exactly one person and nothing to tell them
 apart by. `system` is a write the tracker made on somebody's behalf: CSV import, the lazy
-carry-over when a cycle ends, and Slack intake.
+carry-over when a cycle ends, Slack intake, and configured issue automation.
 
 The actor is not decoration. It is load-bearing in two places: the activity feed renders it, and the
 Slack poller uses `author.kind === "system"` as one of the two echo suppressors (below).
 
 `IssueAssignee` is the same union minus `system`, and assignment records intent only — it surfaces
 **Start work** rather than spawning a turn, so a kanban drag cannot launch three agents.
+
+## Automation coordinator
+
+[`IssueAutomationCoordinator.ts`](../../apps/server/src/issues/IssueAutomationCoordinator.ts) is
+the effect boundary between the plain tracker and agent work. It consumes the tracker's replay-safe
+stream, observes opted-in Slack issues, and writes ordinary attributed tracker commands. Routing
+and audit policy live in server settings; the chosen worker model and matched rule ids are pinned on
+the issue so later settings changes cannot relabel work already assigned.
+
+Linking the first `start-work` thread moves the card to the configured work status. The seed prompt
+names the configured review destination, and the worker uses the issue toolkit to move the card
+there only after implementation and verification are actually complete. Entering that status is
+the audit boundary; a terminal provider turn alone is deliberately not one, because intermediate
+questions and follow-ups also end turns.
+
+Every selected auditor is a read-only text-generation run over the worktree. Claims are persisted
+in `issue_automation_audits` under `(issue, review trigger, rule, auditor index)`, making stream
+replay idempotent. Completed claims survive a restart; running claims are released at startup so a
+process interruption cannot strand a card in review. Any changes-requested verdict moves the card
+to the configured status and queues the combined findings onto the linked worker thread. All passes
+move it to the configured success status. A bounded remediation count prevents reviewer
+disagreement from creating an unbounded worker/auditor loop.
 
 ## Enrichment seam
 
@@ -118,7 +142,7 @@ channel's pass is caught on its own, so one broken channel is one broken channel
 Two subtleties that are easy to undo by accident:
 
 - **A cursor cannot see a reaction.** Adding an emoji to last week's message does not move it. So
-  emoji-triggered channels get a second bounded pass over recent history
+  channels with reaction routes get a second bounded pass over recent history
   (`SLACK_REACTION_WINDOW_SECONDS` / `SLACK_REACTION_WINDOW_MESSAGES`), floored by a
   `reaction_scan_ts` that trails the main cursor.
 - **The dedupe fence is `slack_processed_messages`, not the cursor.** A cursor reset must not refile

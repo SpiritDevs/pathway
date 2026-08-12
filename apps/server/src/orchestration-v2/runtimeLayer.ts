@@ -40,6 +40,7 @@ import { layerFromProjectRepository as runtimePolicyLayerFromProjectRepository }
 import { layer as runtimeRequestServiceLayer } from "./RuntimeRequestService.ts";
 import { layer as threadManagementServiceLayer } from "./ThreadManagementService.ts";
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
+import { layer as continuationLaunchServiceLayer } from "./ContinuationLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
@@ -202,6 +203,16 @@ const threadLaunchProvided = threadLaunchServiceLayer.pipe(
     ),
   ),
 );
+const continuationLaunchProvided = continuationLaunchServiceLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectServiceLayerLive,
+      ProjectSetupScriptRunnerLayerLive,
+      threadManagementProvided,
+      commandReceiptStoreProvided,
+    ),
+  ),
+);
 const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
 );
@@ -259,6 +270,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   OrchestrationLayerLive,
   OrchestrationV2LayerLive,
   ProjectServiceLayerLive,
+  continuationLaunchProvided,
   threadLaunchProvided,
   threadLifecycleProvided,
   scheduledTaskProvided,

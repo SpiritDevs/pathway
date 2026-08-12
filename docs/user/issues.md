@@ -120,9 +120,15 @@ investigated on import.
 ### Assigning an agent
 
 An issue can be assigned to you or to an agent. Assigning an agent records the intent; it does not
-start anything. A **Start work** button appears on the issue instead, and pressing it opens a
-thread seeded with the issue's title, description, todos, and links. Dragging cards around a board
-never launches an agent.
+start anything. Model and reasoning controls appear beside the **Start work** button, constrained
+to the assigned provider and initially using a compatible project default. Pressing the button
+opens an unsent thread seeded with the issue's title, description, todos, and links and carries
+those choices into its composer. Dragging cards around a board never launches an agent.
+
+When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
+selected provider, model, and reasoning level on the issue. **Start work** opens with that exact
+selection. The worker prompt also names the configured review status, so the agent can move the
+issue there with the issues tools once implementation and verification are genuinely complete.
 
 ### Investigate
 
@@ -163,26 +169,60 @@ Pathway can watch Slack channels, turn messages into issues, and post back into 
 
 1. A Slack app in your workspace with a **bot token** (it starts with `xoxb-`), installed to the
    workspace and invited to each channel you want watched.
-2. These bot scopes: `channels:history`, `channels:read`, `chat:write`, `users:read`,
-   `reactions:read`, `files:read`.
+2. These bot scopes: `channels:history`, `channels:read`, `chat:write`, `files:read`,
+   `groups:history`, `groups:read`, `reactions:read`, `users:read`.
 
-Paste the token into **Settings → Issues → Triage & Intake**. Saving tests the connection, so a
-token missing a scope is refused there rather than failing quietly later. The token is stored on
-the machine running Pathway and is never sent back to the app, which is why the field stays empty
-afterwards.
+Add the scopes under **OAuth & Permissions**, then reinstall the Slack app to the workspace so the
+new permissions reach the bot token. Invite the bot to each channel (for example, with Slack's
+`/invite @bot-name` command), then paste the token into **Settings → Issues → Triage & Intake**.
+Saving verifies the token; opening the channel picker and the first poll verify the channel scopes.
+The token is stored on the machine running Pathway and is never sent back to the app, which is why
+the field stays empty afterwards.
 
 ### Watched channels and triggers
 
-Add the channels you want watched, then choose what files an issue from each one. Any combination
-of three triggers works:
+Add the channels you want watched, then set its **default project** and whether matching messages
+should be investigated automatically. Automatic investigation starts while the issue is still in
+Triage; it does not accept the issue or move it onto a board.
 
-- **A reaction** — someone adds an emoji you nominate, such as `ticket`, to a message.
-- **Every message** — everything posted in the channel.
-- **Bot mentions** — messages that @-mention the bot.
+Choose what files an issue from each channel. Any combination of these triggers works:
 
-Turning all three off pauses a channel without removing it.
+- **Reaction rules** — someone adds an emoji you nominate, such as `ticket`, to a message. A
+  channel can have several rules. Each rule can inherit or override the channel's project and
+  automatic-investigation setting.
+- **Any new message** — every new human message posted in the channel.
+- **Bot is mentioned** — messages that @-mention the bot.
 
-Each channel can map to a project, and everything filed from that channel is tagged with it.
+Reaction rules are checked in their visible order. The first matching reaction wins, ahead of the
+two general triggers. That makes one shared intake channel able to route `:quotecloud:` to the
+QuoteCloud project and `:ve:` to the VE project while keeping a channel-wide fallback.
+
+Turning every trigger off pauses a channel without removing it.
+
+### Automatic assignment and review
+
+Turn on **Auto-assign worker** for the channels that should use automatic routing. At the bottom of
+**Triage & Intake**, configure:
+
+- the routing model, ordered worker rules, and an optional fallback worker;
+- audit rules, each with one or more independent auditor models;
+- the statuses used when work starts, work enters review, every audit passes, or an audit requests
+  changes; and
+- a remediation limit that stops repeated worker-reviewer disagreement from looping forever.
+
+The routing model sees the issue and the rules, then saves the matched rule, exact worker model,
+audit policies, and its explanation on the issue. Assignment does not start a thread by itself.
+When work starts, the issue moves to the configured work status. The worker moves it to the
+configured review status when it is finished, which starts every selected audit independently.
+
+All auditors must pass. Their separately attributed results are comments on the issue so differing
+opinions remain visible. If any auditor finds a concrete blocking problem, the issue returns to the
+configured changes-requested status and the combined findings are sent to the linked worker thread.
+When that agent fixes the findings and moves the issue back to review, a new deduplicated audit
+cycle begins. Passing moves it to the configured completion status.
+
+An automatic investigation needs the resolved project to have a directory attached. If it cannot
+start, the issue is still filed and remains available to investigate by hand.
 
 Channels are polled about every thirty seconds, each from its own position. A machine that was
 asleep catches up on what it missed rather than losing it. Watching a channel starts from now: the
@@ -199,8 +239,9 @@ a decision. The Triage entry in the Issues sidebar carries the pending count, an
 which channel it came from and how long it has been waiting.
 
 **Accept** assigns a status, a project, and a priority in one step, and offers to start an
-investigation at the same time (unavailable if the item has no project, or its project has no
-directory). Accepting several at once applies one choice to the selection.
+investigation at the same time when one has not already been started by Slack routing (unavailable
+if the item has no project, or its project has no directory). Accepting several at once applies one
+choice to the selection.
 
 **Reject** removes the item from the queue, with an Undo that puts it back in triage rather than
 into the workflow.
@@ -229,5 +270,6 @@ message.
   tracker, its own key prefix, and its own Slack configuration.
 - **Polling costs a call.** Every watched channel costs one Slack API call every thirty seconds
   while Pathway is awake.
-- **Investigations spend tokens.** They run your configured model, so they only ever start when you
-  press Investigate or tick the box while accepting a triage item.
+- **Investigations spend tokens.** They run your configured model, so they only start when you
+  press Investigate, tick the box while accepting a triage item, or enable automatic investigation
+  for the Slack route that filed it.
