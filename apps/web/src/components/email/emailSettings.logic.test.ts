@@ -12,8 +12,12 @@ import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  capturePasswordError,
   emailCaptureAddress,
   emailSenderLabel,
+  emailSmtpHostLabel,
+  otherCapturePasswords,
+  parseCapturePassword,
   emailTriggerRuleState,
   emailTriggerRuleToDraft,
   EMPTY_EMAIL_TRIGGER_RULE_DRAFT,
@@ -50,7 +54,7 @@ function settings(overrides?: Partial<EmailCaptureSettings>): EmailCaptureSettin
       {
         projectId: OTHER_PROJECT_ID,
         mailSlug: "storefront" as EmailMailSlug,
-        capturePassword: null,
+        capturePassword: "storefront-smtp",
         retention: { maxMessages: 50, maxAgeDays: null },
         toastMuted: true,
         twoFactorCodeRegex: null,
@@ -297,5 +301,43 @@ describe("otherMailSlugs", () => {
   it("lists the slugs a rename would collide with", () => {
     expect(otherMailSlugs(settings(), PROJECT_ID)).toEqual(["storefront"]);
     expect(otherMailSlugs(null, PROJECT_ID)).toEqual([]);
+  });
+});
+
+describe("emailSmtpHostLabel", () => {
+  it("turns a wildcard bind into a host an app can actually dial", () => {
+    expect(emailSmtpHostLabel("0.0.0.0")).toBe("localhost");
+    expect(emailSmtpHostLabel("::")).toBe("localhost");
+    expect(emailSmtpHostLabel("  ")).toBe("localhost");
+  });
+
+  it("keeps a specific bind, which is the only host that reaches the listener", () => {
+    expect(emailSmtpHostLabel("127.0.0.1")).toBe("127.0.0.1");
+    expect(emailSmtpHostLabel(" 192.168.1.20 ")).toBe("192.168.1.20");
+  });
+});
+
+describe("capture password", () => {
+  it("clears to null rather than storing a blank routing label", () => {
+    expect(parseCapturePassword("  ")).toBeNull();
+    expect(parseCapturePassword("")).toBeNull();
+    expect(parseCapturePassword("  hunter2 ")).toBe("hunter2");
+  });
+
+  it("lists the passwords another project already routes with", () => {
+    expect(otherCapturePasswords(settings(), PROJECT_ID)).toEqual(["storefront-smtp"]);
+    expect(otherCapturePasswords(settings(), OTHER_PROJECT_ID)).toEqual([]);
+    expect(otherCapturePasswords(null, PROJECT_ID)).toEqual([]);
+  });
+
+  it("refuses a duplicate, which would make routing depend on document order", () => {
+    const taken = otherCapturePasswords(settings(), PROJECT_ID);
+
+    expect(capturePasswordError(" storefront-smtp ", taken)).toBe(
+      "Another project already routes with that password.",
+    );
+    expect(capturePasswordError("pathway-smtp", taken)).toBeNull();
+    // Blank is a clear, not a collision — every project may have no password at once.
+    expect(capturePasswordError("   ", taken)).toBeNull();
   });
 });

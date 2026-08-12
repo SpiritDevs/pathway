@@ -34,6 +34,7 @@ import {
 
 const ROUTING_RULE_EXPLANATIONS: Readonly<Record<EmailRoutingRule, string>> = {
   "auth-username": "The SMTP AUTH username matched this project's mail slug.",
+  "auth-password": "The SMTP AUTH password matched this project's capture password.",
   "recipient-domain": "A recipient address used this project's mail slug as its domain.",
   "recipient-plus-tag": "A recipient address carried this project's mail slug as a plus tag.",
   unassigned: "Nothing in the envelope named a project, so the message landed in Unassigned.",

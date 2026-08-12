@@ -47,6 +47,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
@@ -123,6 +124,56 @@ function GmailPlaceholder() {
         Connecting a Gmail mailbox is not available yet.
       </p>
     </SidebarGroup>
+  );
+}
+
+/**
+ * The bell on a project row.
+ *
+ * A mute stays visible; an unmuted project only shows the control on hover, so a quiet sidebar does
+ * not grow a column of bells. A project whose capture entry has not arrived yet keeps the control
+ * visible but inert, with a tooltip saying why — a bell that silently does nothing reads as a bug.
+ */
+function ProjectMuteAction({
+  projectTitle,
+  muted,
+  pending,
+  onToggle,
+}: {
+  projectTitle: string;
+  muted: boolean;
+  pending: boolean;
+  onToggle: () => void;
+}) {
+  const action = (
+    <SidebarMenuAction
+      aria-disabled={pending || undefined}
+      aria-label={
+        pending
+          ? `Capture toasts for ${projectTitle} are not ready yet`
+          : muted
+            ? `Unmute capture toasts for ${projectTitle}`
+            : `Mute capture toasts for ${projectTitle}`
+      }
+      aria-pressed={pending ? undefined : muted}
+      className={cn(muted && "text-sidebar-muted-foreground", pending && "opacity-50")}
+      onClick={pending ? undefined : onToggle}
+      showOnHover={!muted && !pending}
+    >
+      {muted ? <BellOffIcon /> : <BellIcon />}
+    </SidebarMenuAction>
+  );
+
+  if (!pending) return action;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={action} />
+      <TooltipPopup side="right">
+        This project has no capture inbox yet. It appears the next time the server reads its capture
+        settings.
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -208,10 +259,11 @@ function LocalSmtpInboxes() {
             projects.map((project) => {
               const projectScope: EmailInboxScope = { type: "project", projectId: project.id };
               const unread = unreadFor(projectScope);
+              const projectSettings = findEmailProjectSettings(settings, project.id);
               // The settings document is the authority on a mute — it is what the toast host reads
               // — with the inbox summary answering until the first settings read lands.
               const muted =
-                findEmailProjectSettings(settings, project.id)?.toastMuted ??
+                projectSettings?.toastMuted ??
                 findEmailInbox(inboxes, projectScope)?.toastMuted ??
                 false;
               return (
@@ -227,22 +279,14 @@ function LocalSmtpInboxes() {
                       <SidebarMenuBadge className="right-7">{unread}</SidebarMenuBadge>
                     ) : null}
                   </SidebarMenuButton>
-                  {/* A mute stays visible; an unmuted project only shows the control on hover, so a
-                      quiet sidebar does not grow a column of bells. */}
-                  <SidebarMenuAction
-                    aria-label={
-                      muted
-                        ? `Unmute capture toasts for ${project.title}`
-                        : `Mute capture toasts for ${project.title}`
-                    }
-                    aria-pressed={muted}
-                    className={cn(muted && "text-sidebar-muted-foreground")}
-                    disabled={settings === null}
-                    onClick={() => void toggleProjectMute(project.id)}
-                    showOnHover={!muted}
-                  >
-                    {muted ? <BellOffIcon /> : <BellIcon />}
-                  </SidebarMenuAction>
+                  <ProjectMuteAction
+                    muted={muted}
+                    onToggle={() => void toggleProjectMute(project.id)}
+                    projectTitle={project.title}
+                    // A mute is a write to this project's entry, so there is nothing to write until
+                    // the server has derived one. Saying so beats swallowing the click.
+                    pending={settings === null || projectSettings === null}
+                  />
                 </SidebarMenuItem>
               );
             })
