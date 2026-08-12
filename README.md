@@ -37,12 +37,6 @@ Tip: Use `npx t3@latest --help` for the full CLI reference.
 
 Install the latest version of the desktop app from [GitHub Releases](https://github.com/coreybain/pathway/releases), or from your favorite package registry:
 
-#### Windows (`winget`)
-
-```bash
-winget install T3Tools.T3Code
-```
-
 #### macOS (Homebrew)
 
 ```bash
