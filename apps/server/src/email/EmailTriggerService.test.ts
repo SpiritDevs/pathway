@@ -246,7 +246,7 @@ it.effect("renders every documented prompt variable before dispatch", () =>
     Effect.gen(function* () {
       yield* createRule(triggers, {
         promptTemplate:
-          "sender={{sender}}\nsubject={{ subject }}\nbody={{body}}\ncode={{detectedCode}}\nid={{messageId}}",
+          "sender={{sender}}\nsubject={{ subject }}\nbody={{body}}\ncode={{code}}\nalias={{detectedCode}}\nid={{messageId}}",
       });
       const captured = message("message:variables");
       yield* triggers.processMessage({ message: captured });
@@ -258,6 +258,7 @@ it.effect("renders every documented prompt variable before dispatch", () =>
           "subject=Verification code",
           "body=Use ABC123 to continue.",
           "code=ABC123",
+          "alias=ABC123",
           `id=${captured.id}`,
         ].join("\n"),
       );

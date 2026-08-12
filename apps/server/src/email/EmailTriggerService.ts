@@ -160,11 +160,14 @@ export function renderEmailTriggerPrompt(template: string, message: CapturedEmai
       "",
     subject: message.parsedHeaders.subject ?? "",
     body: message.textBody ?? message.htmlBody ?? "",
+    // `code` is the name the rule editor advertises; `detectedCode` is kept as an alias so
+    // templates written against either spelling interpolate.
+    code: message.detectedCode ?? "",
     detectedCode: message.detectedCode ?? "",
     messageId: message.id,
   } as const;
   return template.replace(
-    /{{\s*(sender|subject|body|detectedCode|messageId)\s*}}/g,
+    /{{\s*(sender|subject|body|code|detectedCode|messageId)\s*}}/g,
     (_match, name: keyof typeof variables) => variables[name],
   );
 }

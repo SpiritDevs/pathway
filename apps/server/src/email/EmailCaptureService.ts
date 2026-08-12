@@ -439,9 +439,11 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
           );
         });
       },
+      // smtp-server calls onClose with the session alone despite the typed callback parameter;
+      // invoking it would throw an uncaught TypeError on every connection close.
       onClose(session, callback) {
         transactionLogs.delete(session.id);
-        callback();
+        if (typeof callback === "function") callback();
       },
     });
 

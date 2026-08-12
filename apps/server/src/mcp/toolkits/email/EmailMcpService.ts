@@ -33,6 +33,18 @@ import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 export const DEFAULT_EMAIL_WAIT_TIMEOUT_MS = 120_000;
 export const MAX_EMAIL_WAIT_TIMEOUT_MS = 10 * 60_000;
 export const EMAIL_TASK_POLL_INTERVAL_MS = 1_000;
+export const DEFAULT_EMAIL_MCP_LIST_LIMIT = 50;
+export const MAX_EMAIL_MCP_LIST_LIMIT = 200;
+
+export const emailMcpListLimit = (limit: number | undefined): number =>
+  Math.min(Math.max(1, limit ?? DEFAULT_EMAIL_MCP_LIST_LIMIT), MAX_EMAIL_MCP_LIST_LIMIT);
+
+/**
+ * The list is ordered newest-first by `(receivedAt, id)`, so the cursor is that composite key —
+ * a bare message id is random and would skip and repeat rows across pages.
+ */
+export const emailMcpListCursor = (message: CapturedEmailMessage): string =>
+  `${message.timings.messageReceivedAt}|${message.id}`;
 
 const failure = (reason: "not-found" | "invalid" | "storage", message: string) =>
   new EmailCaptureError({ reason, message });
@@ -225,14 +237,13 @@ const make = Effect.fn("EmailMcpService.make")(function* () {
     function* (invocation, input) {
       const scope = yield* scopes.resolve(invocation, input.project);
       const messages = yield* store.allMessages;
-      const limit = Math.min(Math.max(1, input.limit ?? 50), 200);
       return messages
         .filter(
           (message) =>
             messageMatchesList(message, scope, input) &&
-            (input.cursor === undefined || message.id < input.cursor),
+            (input.cursor === undefined || emailMcpListCursor(message) < input.cursor),
         )
-        .slice(0, limit);
+        .slice(0, emailMcpListLimit(input.limit));
     },
   );
 

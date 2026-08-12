@@ -25,6 +25,7 @@ import { EmailWaitStore } from "../../../email/EmailWaitStore.ts";
 import * as EmailWaitStoreLive from "../../../email/EmailWaitStore.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 import {
+  emailMcpListCursor,
   EmailMcpProjectScopeTest,
   EmailMcpService,
   layer as EmailMcpServiceLayer,
@@ -285,6 +286,36 @@ describe("EmailMcpService", () => {
 
         const latest = yield* service.latestCode(invocation(threadA), undefined);
         expect(Option.getOrNull(latest)?.messageId).toBe(messageA.id);
+      }),
+    ),
+  );
+
+  // The list is newest-first by receivedAt while message ids are random, so the cursor has to
+  // carry the sort key — a bare id cursor repeats and skips rows across pages.
+  it.effect("pages the list without repeating or skipping across the cursor", () =>
+    withDatabase(() =>
+      Effect.gen(function* () {
+        const service = yield* EmailMcpService;
+        const store = yield* EmailStore;
+        const capture = (id: string, receivedAt: string) => {
+          const input = fixture(id, projectA, "project-a");
+          return store.capture({
+            ...input,
+            timings: { ...input.timings, messageReceivedAt: IsoDateTime.make(receivedAt) },
+          });
+        };
+        // Ids deliberately ordered against arrival: the newest message has the smallest id.
+        const oldest = yield* capture("message:z-oldest", "2026-08-12T10:00:00.000Z");
+        const middle = yield* capture("message:m-middle", "2026-08-12T11:00:00.000Z");
+        const newest = yield* capture("message:a-newest", "2026-08-12T12:00:00.000Z");
+
+        const pageOne = yield* service.list(invocation(threadA), { limit: 2 });
+        expect(pageOne.map(({ id }) => id)).toEqual([newest.id, middle.id]);
+        const pageTwo = yield* service.list(invocation(threadA), {
+          limit: 2,
+          cursor: emailMcpListCursor(pageOne.at(-1)!),
+        });
+        expect(pageTwo.map(({ id }) => id)).toEqual([oldest.id]);
       }),
     ),
   );

@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { EmailMcpService } from "./EmailMcpService.ts";
+import { EmailMcpService, emailMcpListCursor, emailMcpListLimit } from "./EmailMcpService.ts";
 import { EmailToolkit } from "./tools.ts";
 
 const handlers = {
@@ -40,7 +40,10 @@ const handlers = {
           detectedCode: message.detectedCode,
         })),
         inboxes: [],
-        nextCursor: messages.length === (input.limit ?? 50) ? (messages.at(-1)?.id ?? null) : null,
+        nextCursor:
+          messages.length === emailMcpListLimit(input.limit)
+            ? emailMcpListCursor(messages.at(-1)!)
+            : null,
       };
     }),
   email_get: (input) =>
