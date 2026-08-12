@@ -14,6 +14,7 @@ export function ThreadContinuationSheet(props: {
   readonly kind: "continue" | "handoff";
   readonly sourceModelSelection: ModelSelection;
   readonly serverConfig: T3ServerConfig | null;
+  readonly canCreateWorktree: boolean;
   readonly pending: boolean;
   readonly onDismiss: () => void;
   readonly onSubmit: (
@@ -130,7 +131,7 @@ export function ThreadContinuationSheet(props: {
               iconColor={iconColor}
               onPress={() => props.onSubmit(selection, "current")}
             />
-            {props.kind === "continue" ? (
+            {props.kind === "continue" && props.canCreateWorktree ? (
               <ContinuationChoice
                 title="Use a new worktree"
                 description="Start from the source checkout's committed HEAD"

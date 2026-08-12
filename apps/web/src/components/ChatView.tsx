@@ -7247,6 +7247,7 @@ function ChatViewContent(props: ChatViewProps) {
         instanceEntries={continuationProviderEntries}
         modelOptionsByInstance={continuationModelOptionsByInstance}
         keybindings={keybindings}
+        canCreateWorktree={gitStatusQuery.data?.isRepo === true}
         pending={continuationPending}
         onOpenChange={(open) => {
           if (!open) setContinuationRequest(null);
