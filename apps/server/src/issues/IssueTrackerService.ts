@@ -1291,7 +1291,7 @@ export const make = Effect.gen(function* () {
       description: input.description ?? "",
       statusId: status.id,
       priority: input.priority ?? "none",
-      assignee: null,
+      assignee: input.assignee ?? null,
       projectId: input.projectId ?? null,
       milestoneId: input.milestoneId ?? null,
       cycleId: input.cycleId ?? null,

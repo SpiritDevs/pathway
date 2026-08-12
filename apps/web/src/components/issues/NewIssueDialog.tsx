@@ -4,9 +4,11 @@
  *
  * @module components/issues/NewIssueDialog
  */
-import { ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
+import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
 import type {
+  ChatAttachmentId,
   Issue,
+  IssueAssignee,
   IssueCreateInput,
   IssueCycleId,
   IssueId,
@@ -22,25 +24,35 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CalendarRangeIcon,
+  CheckIcon,
+  ChevronRightIcon,
   CircleDotIcon,
+  EllipsisIcon,
   FlagIcon,
   FolderIcon,
   GitBranchIcon,
+  PaperclipIcon,
   SignalHighIcon,
   TagIcon,
+  XIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { compressImageToByteLimit } from "~/lib/imageCompression";
+import { cn, randomUUID } from "~/lib/utils";
 import {
   useCreateIssue,
+  useCreateIssueComment,
   useIssueCycles,
   useIssueMilestonesForProject,
   useIssuesStore,
+  useUploadIssueCommentAttachment,
 } from "~/state/issues";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { readFileAsDataUrl } from "../ChatView.logic";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
+import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -50,29 +62,120 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { Input } from "../ui/input";
-import { Label } from "../ui/label";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { Textarea } from "../ui/textarea";
+import { Switch } from "../ui/switch";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
-import { IssueLabelDot, IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
 import {
-  IssueLabelsMenu,
-  IssuePriorityMenu,
-  IssueProjectMenu,
-  IssueStatusMenu,
-} from "./IssuePropertyMenus";
+  IssueAssigneeGlyph,
+  IssueLabelDot,
+  IssuePriorityIcon,
+  IssueStatusDot,
+} from "./IssueGlyphs";
 import {
   IssueCyclePicker,
   IssueMilestonePicker,
   IssueSearchList,
   IssueStatusGlyphFor,
 } from "./IssueSelectors";
-import { buildIssueTreeIndex, issueAncestorDepth, searchIssues } from "./issueDetail.logic";
-import { ISSUE_PRIORITY_LABELS, toggleIssueLabelIds } from "./issuesList.logic";
+import {
+  buildIssueTreeIndex,
+  issueAncestorDepth,
+  issueAssigneeOptions,
+  issueAssigneeOptionValue,
+  searchIssues,
+} from "./issueDetail.logic";
+import {
+  ISSUE_PRIORITY_LABELS,
+  ISSUE_PRIORITY_ORDER,
+  toggleIssueLabelIds,
+} from "./issuesList.logic";
+import {
+  newIssueAttachmentComment,
+  newIssueAttachmentDataUrlRejection,
+  newIssueAttachmentIntake,
+  newIssueAttachmentTooLargeMessage,
+} from "./newIssueAttachments";
 
 const PICKER_CLASS =
-  "flex h-7 items-center gap-1.5 rounded-md border border-input px-2 text-xs text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
+  "flex min-h-8 items-center gap-1.5 rounded-full border border-input bg-input/30 px-3 text-sm text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
+const PICKER_OPTION_CLASS =
+  "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
+const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
+
+function PickerPopover({
+  title,
+  trigger,
+  children,
+  className,
+}: {
+  title: string;
+  trigger: React.ReactElement;
+  children: (close: () => void) => ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger render={trigger} />
+      <PopoverPopup align="start" className={cn("w-60 p-1.5", className)} side="bottom">
+        <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{title}</p>
+        {children(() => setOpen(false))}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+function PickerOption({
+  children,
+  selected,
+  onSelect,
+}: {
+  children: ReactNode;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button className={PICKER_OPTION_CLASS} onClick={onSelect} type="button">
+      <span className="flex min-w-0 flex-1 items-center gap-2">{children}</span>
+      {selected ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
+    </button>
+  );
+}
+
+interface NewIssueAttachmentDraft {
+  readonly id: string;
+  readonly name: string;
+  readonly file: File;
+  readonly previewUrl: string;
+}
+
+function PendingNewIssueAttachment({
+  attachment,
+  onRemove,
+}: {
+  attachment: NewIssueAttachmentDraft;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <li className="relative size-16 overflow-visible rounded-lg border border-border/60 bg-muted/30">
+      <img
+        alt={attachment.name}
+        className="size-full rounded-[calc(var(--radius-lg)-1px)] object-cover"
+        src={attachment.previewUrl}
+      />
+      <Button
+        aria-label={`Remove ${attachment.name}`}
+        className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background"
+        onClick={() => onRemove(attachment.id)}
+        size="icon-xs"
+        variant="ghost"
+      >
+        <XIcon />
+      </Button>
+    </li>
+  );
+}
 
 /**
  * The parents a *new* issue may take. It is a leaf by construction, so the whole rule reduces to
@@ -169,13 +272,17 @@ export function NewIssueDialog({
   defaultParentId?: IssueId | null;
 }) {
   const createIssue = useCreateIssue();
+  const createComment = useCreateIssueComment();
+  const uploadAttachment = useUploadIssueCommentAttachment();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
   const titleRef = useRef<HTMLInputElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [statusId, setStatusId] = useState<IssueStatusId | null>(defaultStatusId);
   const [priority, setPriority] = useState<IssuePriority>("none");
+  const [assignee, setAssignee] = useState<IssueAssignee | null>(null);
   const [projectId, setProjectId] = useState<ProjectId | null>(defaultProjectId);
   const [milestoneId, setMilestoneId] = useState<IssueMilestoneId | null>(defaultMilestoneId);
   const [cycleId, setCycleId] = useState<IssueCycleId | null>(defaultCycleId);
@@ -185,7 +292,11 @@ export function NewIssueDialog({
   const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  const [attachments, setAttachments] = useState<ReadonlyArray<NewIssueAttachmentDraft>>([]);
+  const [isDropTarget, setIsDropTarget] = useState(false);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
 
   const milestones = useIssueMilestonesForProject(projectId);
 
@@ -198,11 +309,17 @@ export function NewIssueDialog({
     setDescription("");
     setStatusId(defaultStatusId);
     setPriority("none");
+    setAssignee(null);
     setProjectId(defaultProjectId);
     setMilestoneId(defaultMilestoneId);
     setCycleId(defaultCycleId);
     setParentId(defaultParentId);
     setLabelIds([]);
+    for (const attachment of attachmentsRef.current) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+    setAttachments([]);
+    setIsDropTarget(false);
     setShowMore(defaultMilestoneId !== null || defaultCycleId !== null || defaultParentId !== null);
     setSubmitting(false);
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
@@ -216,27 +333,112 @@ export function NewIssueDialog({
     open,
   ]);
 
+  useEffect(
+    () => () => {
+      for (const attachment of attachmentsRef.current) {
+        URL.revokeObjectURL(attachment.previewUrl);
+      }
+    },
+    [],
+  );
+
   const selectedStatus = statuses.find((status) => status.id === statusId) ?? null;
   const selectedProject = projects.find((project) => project.id === projectId) ?? null;
   const selectedLabels = labels.filter((label) => labelIds.includes(label.id));
   const selectedMilestone = milestones.find((milestone) => milestone.id === milestoneId) ?? null;
   const selectedCycle = cycles.find((cycle) => cycle.id === cycleId) ?? null;
   const selectedParent = parentId === null ? null : (store.issuesById.get(parentId) ?? null);
+  const selectedAssignee = ASSIGNEE_OPTIONS.find(
+    (option) => option.value === issueAssigneeOptionValue(assignee),
+  );
   const statusById = useMemo(
     () => new Map(statuses.map((status) => [status.id, status])),
     [statuses],
   );
   const canSubmit = title.trim().length > 0 && !submitting;
 
+  const reportAttachmentRejection = useCallback((message: string) => {
+    toastManager.add(
+      stackedThreadToast({ type: "error", title: "Image not attached", description: message }),
+    );
+  }, []);
+
+  const addFiles = useCallback(
+    (files: ReadonlyArray<File>) => {
+      const intake = newIssueAttachmentIntake({ files, currentCount: attachments.length });
+      if (intake.rejection !== null) reportAttachmentRejection(intake.rejection);
+      if (intake.accepted.length === 0) return;
+      setAttachments((current) => [
+        ...current,
+        ...intake.accepted.map((file) => ({
+          id: randomUUID(),
+          name: file.name.trim().length === 0 ? "Pasted image" : file.name,
+          file,
+          previewUrl: URL.createObjectURL(file),
+        })),
+      ]);
+    },
+    [attachments.length, reportAttachmentRejection],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    const removed = attachmentsRef.current.find((attachment) => attachment.id === id);
+    if (removed) URL.revokeObjectURL(removed.previewUrl);
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  }, []);
+
+  const clearAttachments = () => {
+    for (const attachment of attachmentsRef.current) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+    setAttachments([]);
+  };
+
+  const prepareAttachments = async () => {
+    const prepared: Array<{ readonly name: string; readonly dataUrl: string }> = [];
+    for (const attachment of attachments) {
+      const compressed = await compressImageToByteLimit(
+        attachment.file,
+        ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
+      );
+      if (!compressed.ok) {
+        reportAttachmentRejection(
+          compressed.reason === "too-large"
+            ? newIssueAttachmentTooLargeMessage(attachment.name)
+            : `${attachment.name} could not be read as an image.`,
+        );
+        return null;
+      }
+      const dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
+      if (dataUrl === null) {
+        reportAttachmentRejection(`${attachment.name} could not be read as an image.`);
+        return null;
+      }
+      const rejection = newIssueAttachmentDataUrlRejection({ name: attachment.name, dataUrl });
+      if (rejection !== null) {
+        reportAttachmentRejection(rejection);
+        return null;
+      }
+      prepared.push({ name: attachment.name, dataUrl });
+    }
+    return prepared;
+  };
+
   const submit = async () => {
     const trimmed = title.trim();
     if (trimmed.length === 0 || submitting) return;
     setSubmitting(true);
+    const preparedAttachments = await prepareAttachments();
+    if (preparedAttachments === null) {
+      setSubmitting(false);
+      return;
+    }
     const input: IssueCreateInput = {
       title: trimmed,
       ...(description.length > 0 ? { description } : {}),
       ...(statusId === null ? {} : { statusId }),
       ...(priority === "none" ? {} : { priority }),
+      ...(assignee === null ? {} : { assignee }),
       ...(projectId === null ? {} : { projectId }),
       // A milestone belongs to a project, so it only travels with one.
       ...(milestoneId === null || projectId === null ? {} : { milestoneId }),
@@ -245,11 +447,56 @@ export function NewIssueDialog({
       ...(labelIds.length > 0 ? { labelIds } : {}),
     };
     const result = await createIssue(input);
-    setSubmitting(false);
     // The dialog stays open on a refusal with the draft intact: the server can reject a create the
     // form cannot pre-empt (a status deleted from another tab, a tracker with no statuses at all).
-    if (reportIssueWriteFailure("Failed to create the issue", result)) return;
-    if (!AsyncResult.isSuccess(result)) return;
+    if (reportIssueWriteFailure("Failed to create the issue", result)) {
+      setSubmitting(false);
+      return;
+    }
+    if (!AsyncResult.isSuccess(result)) {
+      setSubmitting(false);
+      return;
+    }
+
+    if (preparedAttachments.length > 0) {
+      const attachmentIds: ChatAttachmentId[] = [];
+      for (const attachment of preparedAttachments) {
+        const uploadResult = await uploadAttachment({
+          issueId: result.value.issue.id,
+          dataUrl: attachment.dataUrl,
+        });
+        if (!AsyncResult.isSuccess(uploadResult)) {
+          reportIssueWriteFailure(
+            `Issue ${result.value.issue.key} was created, but ${attachment.name} could not be attached`,
+            uploadResult,
+          );
+          clearAttachments();
+          setSubmitting(false);
+          onOpenChange(false);
+          return;
+        }
+        attachmentIds.push(uploadResult.value.attachmentId);
+      }
+
+      const commentResult = await createComment({
+        issueId: result.value.issue.id,
+        body: newIssueAttachmentComment(attachmentIds.length),
+        attachmentIds,
+      });
+      if (!AsyncResult.isSuccess(commentResult)) {
+        reportIssueWriteFailure(
+          `Issue ${result.value.issue.key} was created, but its attachments could not be added`,
+          commentResult,
+        );
+        clearAttachments();
+        setSubmitting(false);
+        onOpenChange(false);
+        return;
+      }
+    }
+
+    clearAttachments();
+    setSubmitting(false);
     if (createMore) {
       setTitle("");
       setDescription("");
@@ -273,23 +520,51 @@ export function NewIssueDialog({
       />
       <Dialog
         onOpenChange={(nextOpen) => {
-          if (!submitting) onOpenChange(nextOpen);
+          if (submitting) return;
+          if (!nextOpen) clearAttachments();
+          onOpenChange(nextOpen);
         }}
         open={open}
       >
-        <DialogPopup className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>New issue</DialogTitle>
-            <DialogDescription>
+        <DialogPopup className="h-[min(34rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[92rem] overflow-hidden max-sm:h-[calc(100vh-3rem)]">
+          <DialogHeader className="flex-row items-center gap-2 px-6 py-5 max-sm:px-4">
+            <span className="inline-flex min-h-8 items-center rounded-full border border-border/70 bg-muted/70 px-3 font-medium text-sm text-muted-foreground">
+              {store.config?.keyPrefix ?? "ISS"}
+            </span>
+            <ChevronRightIcon className="size-4 text-muted-foreground" />
+            <DialogTitle className="font-sans text-lg">New issue</DialogTitle>
+            <DialogDescription className="sr-only">
               {selectedProject === null
-                ? "Tracked on this environment."
-                : `Tracked in ${selectedProject.title}.`}
+                ? "Create an issue on this environment."
+                : `Create an issue in ${selectedProject.title}.`}
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-3">
-            <Input
+          <DialogPanel
+            className={cn(
+              "flex min-h-[22rem] flex-col gap-4 px-9 pb-5 pt-4 max-sm:px-5",
+              isDropTarget && "bg-primary/[0.035] outline-2 outline-inset outline-ring",
+            )}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setIsDropTarget(false);
+            }}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              setIsDropTarget(true);
+            }}
+            onDrop={(event) => {
+              if (!event.dataTransfer.types.includes("Files")) return;
+              event.preventDefault();
+              setIsDropTarget(false);
+              addFiles([...event.dataTransfer.files]);
+            }}
+            scrollFade={false}
+          >
+            <input
               aria-label="Issue title"
-              onChange={(event) => setTitle(event.target.value)}
+              className="w-full bg-transparent font-semibold text-3xl leading-tight text-foreground outline-none placeholder:text-muted-foreground/55 max-sm:text-2xl"
+              onChange={(event) => setTitle(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
@@ -299,22 +574,40 @@ export function NewIssueDialog({
               ref={titleRef}
               value={title}
             />
-            <Textarea
+            <textarea
               aria-label="Issue description"
-              className="min-h-24"
-              onChange={(event) => setDescription(event.target.value)}
+              className="min-h-28 w-full flex-1 resize-none bg-transparent text-xl leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/55 max-sm:text-base"
+              onChange={(event) => setDescription(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
                 event.preventDefault();
                 void submit();
               }}
-              placeholder="Add a description…"
+              onPaste={(event) => {
+                const files = [...event.clipboardData.files];
+                if (files.length === 0) return;
+                event.preventDefault();
+                addFiles(files);
+              }}
+              placeholder="Add description…"
               value={description}
             />
-            <div className="flex flex-wrap items-center gap-1.5">
-              <IssueStatusMenu
-                onSelect={setStatusId}
-                statuses={statuses}
+
+            {attachments.length === 0 ? null : (
+              <ul className="flex flex-wrap gap-2" aria-label="Issue attachments">
+                {attachments.map((attachment) => (
+                  <PendingNewIssueAttachment
+                    attachment={attachment}
+                    key={attachment.id}
+                    onRemove={removeAttachment}
+                  />
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-auto flex flex-wrap items-center gap-2">
+              <PickerPopover
+                title="Status"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
                     {selectedStatus === null ? (
@@ -325,10 +618,26 @@ export function NewIssueDialog({
                     {selectedStatus?.name ?? "Status"}
                   </button>
                 }
-                value={statusId}
-              />
-              <IssuePriorityMenu
-                onSelect={setPriority}
+              >
+                {(close) =>
+                  statuses.map((status) => (
+                    <PickerOption
+                      key={status.id}
+                      onSelect={() => {
+                        setStatusId(status.id);
+                        close();
+                      }}
+                      selected={status.id === statusId}
+                    >
+                      <IssueStatusDot status={status} />
+                      <span className="truncate">{status.name}</span>
+                    </PickerOption>
+                  ))
+                }
+              </PickerPopover>
+
+              <PickerPopover
+                title="Priority"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
                     {priority === "none" ? (
@@ -339,51 +648,146 @@ export function NewIssueDialog({
                     {priority === "none" ? "Priority" : ISSUE_PRIORITY_LABELS[priority]}
                   </button>
                 }
-                value={priority}
-              />
-              <IssueProjectMenu
-                onCreateProject={() => setQuickCreateProjectOpen(true)}
-                onSelect={(next) => {
-                  setProjectId(next);
-                  // A milestone belongs to the project it was picked in; keeping it across a move
-                  // would send the server one it refuses.
-                  setMilestoneId(null);
-                }}
-                projects={projects}
+              >
+                {(close) =>
+                  ISSUE_PRIORITY_ORDER.map((option) => (
+                    <PickerOption
+                      key={option}
+                      onSelect={() => {
+                        setPriority(option);
+                        close();
+                      }}
+                      selected={option === priority}
+                    >
+                      <IssuePriorityIcon priority={option} />
+                      {ISSUE_PRIORITY_LABELS[option]}
+                    </PickerOption>
+                  ))
+                }
+              </PickerPopover>
+
+              <PickerPopover
+                title="Assignee"
+                trigger={
+                  <button className={PICKER_CLASS} type="button">
+                    <IssueAssigneeGlyph assignee={assignee} className="size-3.5" />
+                    {selectedAssignee?.label ?? "Assignee"}
+                  </button>
+                }
+              >
+                {(close) =>
+                  ASSIGNEE_OPTIONS.map((option) => (
+                    <PickerOption
+                      key={option.value}
+                      onSelect={() => {
+                        setAssignee(option.assignee);
+                        close();
+                      }}
+                      selected={option.value === issueAssigneeOptionValue(assignee)}
+                    >
+                      <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                      {option.label}
+                    </PickerOption>
+                  ))
+                }
+              </PickerPopover>
+
+              <PickerPopover
+                title="Project"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
                     <FolderIcon className="size-3.5 text-muted-foreground" />
                     {selectedProject?.title ?? "Project"}
                   </button>
                 }
-                value={projectId}
-              />
-              <IssueLabelsMenu
-                issues={[]}
-                labels={labels}
-                onToggle={(labelId) =>
-                  setLabelIds((current) => toggleIssueLabelIds(current, labelId))
-                }
+              >
+                {(close) => (
+                  <>
+                    <PickerOption
+                      onSelect={() => {
+                        setProjectId(null);
+                        setMilestoneId(null);
+                        close();
+                      }}
+                      selected={projectId === null}
+                    >
+                      <span className="text-muted-foreground">No project</span>
+                    </PickerOption>
+                    {projects.map((project) => (
+                      <PickerOption
+                        key={project.id}
+                        onSelect={() => {
+                          setProjectId(project.id);
+                          setMilestoneId(null);
+                          close();
+                        }}
+                        selected={project.id === projectId}
+                      >
+                        <FolderIcon className="size-4 text-muted-foreground" />
+                        <span className="truncate">{project.title}</span>
+                      </PickerOption>
+                    ))}
+                    <button
+                      className="mt-1 min-h-8 w-full border-t border-border/60 px-2 pt-2 text-start text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
+                      onClick={() => {
+                        close();
+                        setQuickCreateProjectOpen(true);
+                      }}
+                      type="button"
+                    >
+                      Create project…
+                    </button>
+                  </>
+                )}
+              </PickerPopover>
+
+              <PickerPopover
+                title="Labels"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
                     <TagIcon className="size-3.5 text-muted-foreground" />
-                    {selectedLabels.length === 0 ? "Labels" : `${selectedLabels.length} labels`}
+                    {selectedLabels.length === 0
+                      ? "Labels"
+                      : selectedLabels.length === 1
+                        ? selectedLabels[0]?.name
+                        : `${selectedLabels[0]?.name} +${selectedLabels.length - 1}`}
                   </button>
                 }
-              />
-              {showMore ? null : (
-                <button
-                  className="h-7 rounded-md px-2 text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setShowMore(true)}
-                  type="button"
-                >
-                  More…
-                </button>
-              )}
+              >
+                {() =>
+                  labels.length === 0 ? (
+                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                      No labels yet — add them in Settings → Labels.
+                    </p>
+                  ) : (
+                    labels.map((label) => (
+                      <PickerOption
+                        key={label.id}
+                        onSelect={() =>
+                          setLabelIds((current) => toggleIssueLabelIds(current, label.id))
+                        }
+                        selected={labelIds.includes(label.id)}
+                      >
+                        <IssueLabelDot color={label.color} />
+                        <span className="truncate">{label.name}</span>
+                      </PickerOption>
+                    ))
+                  )
+                }
+              </PickerPopover>
+
+              <button
+                aria-label={showMore ? "Hide more issue properties" : "Show more issue properties"}
+                className={cn(PICKER_CLASS, "size-8 justify-center px-0 pointer-coarse:size-11")}
+                onClick={() => setShowMore((current) => !current)}
+                type="button"
+              >
+                <EllipsisIcon className="size-4 text-muted-foreground" />
+              </button>
             </div>
 
             {showMore ? (
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
                 <IssueMilestonePicker
                   hasProject={projectId !== null}
                   milestones={milestones}
@@ -423,40 +827,49 @@ export function NewIssueDialog({
                 />
               </div>
             ) : null}
-
-            {selectedLabels.length === 0 ? null : (
-              <div className="flex flex-wrap gap-1">
-                {selectedLabels.map((label) => (
-                  <span
-                    className="flex items-center gap-1 rounded-full border border-border/60 px-1.5 py-px text-[11px] text-muted-foreground"
-                    key={label.id}
-                  >
-                    <IssueLabelDot className="size-1.5" color={label.color} />
-                    {label.name}
-                  </span>
-                ))}
-              </div>
-            )}
           </DialogPanel>
-          <DialogFooter className="items-center">
-            <Label className="me-auto flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox
-                checked={createMore}
-                onCheckedChange={(checked) => setCreateMore(checked === true)}
-              />
-              Create more
-            </Label>
+          <DialogFooter
+            className="flex-row items-center gap-3 border-t border-border/50 bg-transparent px-6 py-4 max-sm:px-4"
+            variant="bare"
+          >
+            <input
+              accept="image/*"
+              className="sr-only"
+              multiple
+              onChange={(event) => {
+                addFiles([...(event.currentTarget.files ?? [])]);
+                event.currentTarget.value = "";
+              }}
+              ref={attachmentInputRef}
+              type="file"
+            />
             <Button
+              aria-label="Attach images"
+              className="me-auto rounded-full"
               disabled={submitting}
-              onClick={() => onOpenChange(false)}
-              size="sm"
-              type="button"
+              onClick={() => attachmentInputRef.current?.click()}
+              size="icon-lg"
               variant="outline"
             >
-              Cancel
+              <PaperclipIcon />
             </Button>
-            <Button disabled={!canSubmit} onClick={() => void submit()} size="sm" type="button">
-              Create issue
+            {attachments.length === 0 ? null : (
+              <span className="text-xs text-muted-foreground max-sm:hidden">
+                {attachments.length} {attachments.length === 1 ? "image" : "images"}
+              </span>
+            )}
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+              <Switch checked={createMore} disabled={submitting} onCheckedChange={setCreateMore} />
+              Create more
+            </label>
+            <Button
+              className="rounded-full px-5"
+              disabled={!canSubmit}
+              onClick={() => void submit()}
+              size="lg"
+              type="button"
+            >
+              {submitting ? "Creating…" : "Create issue"}
             </Button>
           </DialogFooter>
         </DialogPopup>
