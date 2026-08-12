@@ -36,7 +36,7 @@ describe("openPullRequestLink", () => {
 
 describe("parseChangeRequestUrl", () => {
   it("reads a GitHub pull request", () => {
-    expect(parseChangeRequestUrl("https://github.com/T3Tools/T3Code/pull/123")).toEqual({
+    expect(parseChangeRequestUrl("https://github.com/coreybain/pathway/pull/123")).toEqual({
       host: "github.com",
       repository: "coreybain/pathway",
       number: 123,

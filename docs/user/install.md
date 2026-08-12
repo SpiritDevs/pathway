@@ -23,12 +23,6 @@ Download the latest release from
 [GitHub Releases](https://github.com/coreybain/pathway/releases), or install from a package
 registry.
 
-Windows:
-
-```bash
-winget install T3Tools.T3Code
-```
-
 macOS:
 
 ```bash

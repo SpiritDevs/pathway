@@ -110,11 +110,6 @@ export const tweets = [
     link: "https://x.com/DavidKPiano/status/2054682983504719930",
   },
   {
-    handle: "iamkaffe",
-    content: "T3Code was the first one to truly care about Linux users.",
-    link: "https://x.com/iamkaffe/status/2054675539311411280",
-  },
-  {
     handle: "uwunetes",
     content:
       "claude code make me go *whine whine whine* and t3 code make me go woof woof awooooo!!!",
