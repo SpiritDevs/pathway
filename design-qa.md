@@ -4,6 +4,10 @@
 - Source pixels: 3360 x 1940 at the supplied Retina density.
 - Before implementation: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-b8f74ff7-d389-450b-b680-d915305963b8.png`
 - Before pixels: 3278 x 2030 at the supplied Retina density.
+- Dropdown source crop: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-bc145573-bd64-402a-87d6-17d1591e348c.png`
+- Dropdown source pixels: 964 x 650 at the supplied Retina density.
+- Dropdown before implementation: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-6a3c5da8-e5a0-448d-a287-35a7a35ffd1b.png`
+- Dropdown before pixels: 3272 x 2024 at the supplied Retina density.
 - Target implementation: `apps/web/src/components/issues/NewIssueDialog.tsx`
 - Target state: desktop new-issue modal, open with default properties and no attachments.
 - Implementation screenshot: unavailable because repository instructions require explicit browser permission.
@@ -17,15 +21,19 @@ no valid same-viewport combined comparison exists.
 
 ## Focused region comparison evidence
 
-Blocked with the full-view comparison. The header, title and description fields, property chips,
-attachment control, create-more switch, and primary action still need a browser-rendered comparison.
+The supplied open-project states show matching popover widths of approximately 234–236 CSS pixels,
+but the Pathway menu is approximately 168 CSS pixels tall against Linear's 139 CSS pixels. Source
+inspection traced the extra 29 pixels to simultaneous shell padding and the shared viewport's
+default 16-pixel inset. A post-fix browser capture is still unavailable.
 
 ## Required fidelity surfaces
 
 - Fonts and typography: the title, description, breadcrumb, and property controls were reduced to
   the compact hierarchy visible in the Linear source, but not browser-compared.
 - Spacing and layout rhythm: the desktop frame now targets 752 x 260 CSS pixels, with compressed
-  header, editor, property, and footer spacing. The mobile sheet remains viewport-height.
+  header, editor, property, and footer spacing. Issue property popovers now use one 6-pixel inset
+  instead of stacking shell padding over the shared 16-pixel viewport inset. The mobile sheet
+  remains viewport-height.
 - Colors and visual tokens: kept on Pathway semantic background, border, muted, and primary tokens;
   no sampled browser comparison was possible.
 - Image quality and asset fidelity: the reference contains UI icons only. The implementation uses
@@ -56,6 +64,8 @@ attachment control, create-more switch, and primary action still need a browser-
 - Fixes made from source inspection: reduced the desktop frame from 1472 x 544 to 752 x 260 CSS
   pixels; tightened typography, padding, property chips, attachment action, and primary action;
   retained the existing controlled popovers, coarse-pointer targets, and attachment flow.
+- Dropdown-density pass: removed duplicate shell and viewport padding from the issue-composer
+  property popovers while preserving 32-pixel option rows and 44-pixel coarse-pointer targets.
 - Post-fix visual evidence: unavailable.
 
 final result: blocked
