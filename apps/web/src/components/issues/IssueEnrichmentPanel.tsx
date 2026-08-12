@@ -1,9 +1,9 @@
 /**
  * The investigation panel — see `docs/internals/decisions/0006-issue-tracker.md`.
  *
- * A slide-over *inside* the detail sheet, not a right-panel tab and not a route. An enrichment run
- * is not a thread: it has no turns, it cannot be replied to, and it belongs to the issue it was
- * fired from. Putting it anywhere the threads view can reach would make it look like one.
+ * The Investigation tab inside the issue detail sheet. An enrichment run is not a thread: it has
+ * no turns, it cannot be replied to, and it belongs to the issue it was fired from. Putting it
+ * anywhere the threads view can reach would make it look like one.
  *
  * The transcript is a live log, republished whole every 250ms by the server, so the scroller
  * follows the tail only while the reader is already at it — the check is latched on the reader's
@@ -19,7 +19,7 @@ import type {
   IssueLabelId,
   IssuePriority,
 } from "@t3tools/contracts";
-import { ArrowDownIcon, CheckIcon, CircleAlertIcon, FileIcon, PlusIcon, XIcon } from "lucide-react";
+import { ArrowDownIcon, CheckIcon, CircleAlertIcon, FileIcon, PlusIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -305,7 +305,6 @@ export interface IssueEnrichmentPanelProps {
   readonly runs: ReadonlyArray<IssueEnrichmentRun>;
   readonly isPending: boolean;
   readonly error: string | null;
-  readonly onClose: () => void;
   readonly onCancel: (runId: IssueEnrichmentRunId) => void;
   readonly onApplyLabel: (labelId: IssueLabelId) => void;
   readonly onApplyPriority: (priority: IssuePriority) => void;
@@ -319,7 +318,6 @@ export function IssueEnrichmentPanel({
   runs,
   isPending,
   error,
-  onClose,
   onCancel,
   onApplyLabel,
   onApplyPriority,
@@ -346,23 +344,8 @@ export function IssueEnrichmentPanel({
     selected === null ? null : issueEnrichmentRunPresentation(selected, nowMs).durationLabel;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/50 px-2 ps-3">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-          Investigation
-        </span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">read-only</span>
-        <Button
-          aria-label="Close the investigation panel"
-          onClick={onClose}
-          size="icon-xs"
-          variant="ghost"
-        >
-          <XIcon />
-        </Button>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 py-3">
         {selected === null ? (
           <p className="text-[13px] text-muted-foreground">
             {isPending

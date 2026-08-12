@@ -1,4 +1,4 @@
-import { SlackChannelWatch, SlackIntakeTrigger } from "@t3tools/contracts";
+import { SlackChannelWatch, SlackIntakeTrigger, SlackReactionRoute } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -16,9 +16,9 @@ import {
 } from "../Services/SlackChannelWatches.ts";
 
 /**
- * The trigger is three columns rather than a JSON blob: all three are switches the poller reads on
- * every pass, and `WHERE trigger_every_message = 1` is a question the poller may want to ask.
- * Reassembled here so the rest of the server only ever sees {@link SlackIntakeTrigger}.
+ * Channel-wide triggers remain columns; reaction routes are the one ordered collection and live
+ * as bounded JSON. Reassembled here so the rest of the server only sees
+ * {@link SlackIntakeTrigger}.
  */
 const SlackIntakeTriggerDbRow = SlackIntakeTrigger.mapFields(
   Struct.assign({
@@ -28,16 +28,26 @@ const SlackIntakeTriggerDbRow = SlackIntakeTrigger.mapFields(
 );
 
 const SlackChannelWatchDbRow = SlackChannelWatch.mapFields(
-  Struct.assign({ trigger: Schema.fromJsonString(SlackIntakeTriggerDbRow) }),
+  Struct.assign({
+    autoInvestigate: Schema.BooleanFromBit,
+    autoAssign: Schema.BooleanFromBit,
+    trigger: Schema.fromJsonString(SlackIntakeTriggerDbRow),
+  }),
 );
+
+const SlackReactionRoutes = Schema.Array(SlackReactionRoute);
+const decodeReactionRoutes = Schema.decodeUnknownSync(SlackReactionRoutes);
+const encodeReactionRoutes = Schema.encodeSync(Schema.fromJsonString(SlackReactionRoutes));
 
 const WATCH_COLUMNS = `
   id,
   channel_id AS "channelId",
   channel_name AS "channelName",
   project_id AS "projectId",
+  auto_investigate AS "autoInvestigate",
+  auto_assign AS "autoAssign",
   json_object(
-    'emoji', trigger_emoji,
+    'reactionRoutes', json(trigger_reaction_routes),
     'everyMessage', trigger_every_message,
     'botMention', trigger_bot_mention
   ) AS "trigger",
@@ -58,7 +68,9 @@ const makeSlackChannelWatchRepository = Effect.gen(function* () {
           channel_id,
           channel_name,
           project_id,
-          trigger_emoji,
+          auto_investigate,
+          auto_assign,
+          trigger_reaction_routes,
           trigger_every_message,
           trigger_bot_mention,
           created_at,
@@ -69,7 +81,9 @@ const makeSlackChannelWatchRepository = Effect.gen(function* () {
           ${row.channelId},
           ${row.channelName},
           ${row.projectId},
-          ${row.trigger.emoji},
+          ${row.autoInvestigate ? 1 : 0},
+          ${row.autoAssign === true ? 1 : 0},
+          ${encodeReactionRoutes(decodeReactionRoutes(row.trigger.reactionRoutes))},
           ${row.trigger.everyMessage ? 1 : 0},
           ${row.trigger.botMention ? 1 : 0},
           ${row.createdAt},
@@ -80,7 +94,9 @@ const makeSlackChannelWatchRepository = Effect.gen(function* () {
           channel_id = excluded.channel_id,
           channel_name = excluded.channel_name,
           project_id = excluded.project_id,
-          trigger_emoji = excluded.trigger_emoji,
+          auto_investigate = excluded.auto_investigate,
+          auto_assign = excluded.auto_assign,
+          trigger_reaction_routes = excluded.trigger_reaction_routes,
           trigger_every_message = excluded.trigger_every_message,
           trigger_bot_mention = excluded.trigger_bot_mention,
           updated_at = excluded.updated_at

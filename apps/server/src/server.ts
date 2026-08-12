@@ -26,6 +26,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import { IssueCommentRepositoryLive } from "./persistence/Layers/IssueComments.ts";
+import { IssueAutomationAuditRepositoryLive } from "./persistence/Layers/IssueAutomationAudits.ts";
 import { IssueCycleRepositoryLive } from "./persistence/Layers/IssueCycles.ts";
 import { IssueEnrichmentRunRepositoryLive } from "./persistence/Layers/IssueEnrichmentRuns.ts";
 import { IssueEventRepositoryLive } from "./persistence/Layers/IssueEvents.ts";
@@ -47,6 +48,7 @@ import * as SlackIntakeEngineLive from "./issues/slack/SlackIntakeEngineLive.ts"
 import * as SlackIntakePoller from "./issues/slack/SlackIntakePoller.ts";
 import * as SlackIntakeSignal from "./issues/slack/SlackIntakeSignal.ts";
 import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
+import * as IssueAutomationCoordinator from "./issues/IssueAutomationCoordinator.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -273,6 +275,7 @@ const IssueRepositoriesLive = Layer.mergeAll(
   IssueTodoRepositoryLive,
   IssueRelationRepositoryLive,
   IssueCommentRepositoryLive,
+  IssueAutomationAuditRepositoryLive,
   IssueViewRepositoryLive,
   IssueEnrichmentRunRepositoryLive,
   IssueThreadLinkRepositoryLive,
@@ -446,7 +449,13 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
 );
 
+const IssueAutomationCoordinatorLayerLive = IssueAutomationCoordinator.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(RuntimeCoreDependenciesBaseLive),
+);
+
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
+  Layer.provideMerge(IssueAutomationCoordinatorLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // V2 drivers and the orchestration runtime. Provide resource attribution so
   // the rewritten telemetry pipeline can account for logical NDJSON writes.

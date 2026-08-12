@@ -166,6 +166,12 @@ export const SLACK_BOT_TOKEN_MAX_CHARS = 512;
  * by accident.
  */
 export const SLACK_MAX_CHANNEL_WATCHES = 50;
+/**
+ * How many reaction-specific routes one watched channel may hold. A route is configuration read
+ * on every poll, not a message, and twenty is already more reactions than a channel can explain
+ * without becoming its own routing system.
+ */
+export const SLACK_MAX_REACTION_ROUTES = 20;
 /** One comment attachment, held to the same ceiling a turn's image is. */
 export const ISSUE_COMMENT_ATTACHMENT_MAX_BYTES = PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
 /**
@@ -238,7 +244,7 @@ const IssueAgentActor = Schema.Struct({
  */
 const IssueSystemActor = Schema.Struct({
   kind: Schema.Literal("system"),
-  source: Schema.Literals(["import", "cycles", "slack"]),
+  source: Schema.Literals(["import", "cycles", "slack", "automation"]),
 });
 
 /**
@@ -283,6 +289,14 @@ export const IssueSlackSource = Schema.Struct({
 });
 export type IssueSlackSource = typeof IssueSlackSource.Type;
 
+export const IssueAutomationAssignment = Schema.Struct({
+  routingRuleId: Schema.NullOr(TrimmedNonEmptyString),
+  auditRuleIds: Schema.Array(TrimmedNonEmptyString),
+  rationale: Schema.String,
+  assignedAt: IsoDateTime,
+});
+export type IssueAutomationAssignment = typeof IssueAutomationAssignment.Type;
+
 export const Issue = Schema.Struct({
   id: IssueId,
   key: IssueKey,
@@ -292,6 +306,10 @@ export const Issue = Schema.Struct({
   statusId: IssueStatusId,
   priority: IssuePriority,
   assignee: Schema.NullOr(IssueAssignee),
+  /** Exact worker choice pinned by automatic routing or learned from the linked work thread. */
+  workModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  /** Human-readable provenance for an automatic assignment. Absent on older and manual issues. */
+  automationAssignment: Schema.optionalKey(Schema.NullOr(IssueAutomationAssignment)),
   projectId: Schema.NullOr(ProjectId),
   /** A milestone belongs to a project, so this is only meaningful alongside that project. */
   milestoneId: Schema.NullOr(IssueMilestoneId),
@@ -575,8 +593,8 @@ export const IssueEnrichmentLikelyFile = Schema.Struct({
 export type IssueEnrichmentLikelyFile = typeof IssueEnrichmentLikelyFile.Type;
 
 /**
- * What a finished run hands back. Structured rather than prose so the client can render it as a
- * marked Investigation block in the description and offer its suggestions as one-click writes —
+ * What a finished run hands back. Structured rather than prose so the client can render the run,
+ * leave a durable investigation comment, and offer its suggestions as one-click writes —
  * suggestions, not writes: nothing here is applied by the run itself.
  */
 export const IssueEnrichmentResult = Schema.Struct({
@@ -654,13 +672,34 @@ export const SlackEmojiName = TrimmedNonEmptyString.check(Schema.isPattern(/^[a-
 export type SlackEmojiName = typeof SlackEmojiName.Type;
 
 /**
+ * One deliberate reaction and the behavior it overrides for that reaction.
+ *
+ * Null project and investigation values inherit the watched channel's defaults. The list is
+ * ordered because a Slack message may carry several configured reactions; the first match wins.
+ */
+export const SlackReactionRoute = Schema.Struct({
+  emoji: SlackEmojiName,
+  projectId: Schema.NullOr(ProjectId),
+  autoInvestigate: Schema.NullOr(Schema.Boolean),
+});
+export type SlackReactionRoute = typeof SlackReactionRoute.Type;
+
+const uniqueSlackReactionRoutes = Schema.makeFilter(
+  (routes: ReadonlyArray<SlackReactionRoute>) =>
+    new Set(routes.map((route) => route.emoji)).size === routes.length ||
+    "Slack reaction routes must use different reactions.",
+);
+
+/**
  * What turns a message in a watched channel into a triage item. Any combination: a channel can
- * file on a reaction *and* on a mention. All three off is a paused watch rather than an invalid
+ * file on reactions *and* on a mention. All triggers off is a paused watch rather than an invalid
  * one — pausing a channel and forgetting how it was configured are different things.
  */
 export const SlackIntakeTrigger = Schema.Struct({
-  /** Null means no reaction files anything. Otherwise the one reaction that does. */
-  emoji: Schema.NullOr(SlackEmojiName),
+  /** Ordered, unique reactions. A matching route wins over either channel-wide trigger below. */
+  reactionRoutes: Schema.Array(SlackReactionRoute)
+    .check(Schema.isMaxLength(SLACK_MAX_REACTION_ROUTES))
+    .check(uniqueSlackReactionRoutes),
   /** Every message in the channel becomes an issue. For a dedicated intake channel. */
   everyMessage: Schema.Boolean,
   botMention: Schema.Boolean,
@@ -669,7 +708,7 @@ export type SlackIntakeTrigger = typeof SlackIntakeTrigger.Type;
 
 /** Whether a watch can file anything at all. All triggers off is a paused channel. */
 export const isSlackIntakeTriggerActive = (trigger: SlackIntakeTrigger): boolean =>
-  trigger.emoji !== null || trigger.everyMessage || trigger.botMention;
+  trigger.reactionRoutes.length > 0 || trigger.everyMessage || trigger.botMention;
 
 /**
  * One watched channel. `projectId` is the auto-tag target rather than a filter: an issue filed
@@ -684,7 +723,12 @@ export const SlackChannelWatch = Schema.Struct({
    * stale after a rename; the id is what everything else is keyed on.
    */
   channelName: TrimmedNonEmptyString,
+  /** Fallback route for channel-wide triggers and reaction routes that inherit their project. */
   projectId: Schema.NullOr(ProjectId),
+  /** Fallback investigation policy. A matching reaction route may override it. */
+  autoInvestigate: Schema.Boolean,
+  /** Whether matching messages should be assigned by the global model-routing rules. */
+  autoAssign: Schema.optionalKey(Schema.Boolean),
   trigger: SlackIntakeTrigger,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -848,6 +892,8 @@ export const IssuePatch = Schema.Struct({
   statusId: Schema.optional(IssueStatusId),
   priority: Schema.optional(IssuePriority),
   assignee: Schema.optional(Schema.NullOr(IssueAssignee)),
+  workModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+  automationAssignment: Schema.optional(Schema.NullOr(IssueAutomationAssignment)),
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
   /** Cleared by the server when the issue leaves the project the milestone belongs to. */
   milestoneId: Schema.optional(Schema.NullOr(IssueMilestoneId)),
@@ -1352,6 +1398,9 @@ export const SlackWatchCreateInput = Schema.Struct({
   channelId: SlackChannelId,
   channelName: TrimmedNonEmptyString,
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  /** Whether matching messages investigate immediately. Defaults off for a new watch. */
+  autoInvestigate: Schema.optional(Schema.Boolean),
+  autoAssign: Schema.optional(Schema.Boolean),
   /** Absent starts the channel paused: configured, watched, and filing nothing yet. */
   trigger: Schema.optional(SlackIntakeTrigger),
 });
@@ -1359,11 +1408,13 @@ export type SlackWatchCreateInput = typeof SlackWatchCreateInput.Type;
 
 /**
  * `trigger` is replaced wholesale rather than merged, for the same reason a saved view's config
- * is: it is edited as one set of switches, and a partial patch could never say "no emoji".
+ * is: it is edited as one ordered rule set, and a partial patch could not safely delete a route.
  */
 export const SlackWatchPatch = Schema.Struct({
   channelName: Schema.optional(TrimmedNonEmptyString),
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  autoInvestigate: Schema.optional(Schema.Boolean),
+  autoAssign: Schema.optional(Schema.Boolean),
   trigger: Schema.optional(SlackIntakeTrigger),
 });
 export type SlackWatchPatch = typeof SlackWatchPatch.Type;

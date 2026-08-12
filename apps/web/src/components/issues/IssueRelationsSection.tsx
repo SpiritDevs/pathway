@@ -16,7 +16,7 @@ import type {
   IssueStatusId,
 } from "@t3tools/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import type { IssueRelationDisplay } from "~/state/issues";
@@ -51,6 +51,7 @@ function AddRelationPopover({
   linkedIds,
   statusById,
   onCreate,
+  openRequest,
 }: {
   issue: Issue;
   issuesById: ReadonlyMap<IssueId, Issue>;
@@ -58,6 +59,7 @@ function AddRelationPopover({
   linkedIds: ReadonlySet<IssueId>;
   statusById: ReadonlyMap<IssueStatusId, IssueStatus>;
   onCreate: (input: IssueRelationCreateInput) => void;
+  openRequest: number;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -70,6 +72,10 @@ function AddRelationPopover({
     () => searchIssues(issuesById.values(), { query, exclude }),
     [exclude, issuesById, query],
   );
+
+  useEffect(() => {
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
 
   return (
     <Popover
@@ -145,6 +151,8 @@ export function IssueRelationsSection({
   onOpenIssue,
   onCreate,
   onDelete,
+  openRequest = 0,
+  onDismiss,
 }: {
   issue: Issue;
   displays: ReadonlyArray<IssueRelationDisplay>;
@@ -153,6 +161,8 @@ export function IssueRelationsSection({
   onOpenIssue: (issue: Issue) => void;
   onCreate: (input: IssueRelationCreateInput) => void;
   onDelete: (relationId: IssueRelationId) => void;
+  openRequest?: number;
+  onDismiss?: (() => void) | undefined;
 }) {
   const groups = useMemo(() => groupIssueRelationDisplays(displays), [displays]);
   const linkedIds = useMemo(() => new Set(displays.map((display) => display.issueId)), [displays]);
@@ -161,14 +171,26 @@ export function IssueRelationsSection({
     <section className="flex flex-col gap-1.5 border-t border-border/50 pt-3">
       <div className="flex items-center gap-2">
         <h3 className="text-xs font-medium text-muted-foreground">Relations</h3>
-        <div className="ms-auto">
+        <div className="ms-auto flex items-center gap-1">
           <AddRelationPopover
             issue={issue}
             issuesById={issuesById}
             linkedIds={linkedIds}
             onCreate={onCreate}
+            openRequest={openRequest}
             statusById={statusById}
           />
+          {groups.length === 0 && onDismiss !== undefined ? (
+            <Button
+              aria-label="Hide relations"
+              className="text-muted-foreground"
+              onClick={onDismiss}
+              size="icon-xs"
+              variant="ghost"
+            >
+              <XIcon />
+            </Button>
+          ) : null}
         </div>
       </div>
 

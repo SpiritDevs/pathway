@@ -113,20 +113,23 @@ Agents have **full write access, including completing and deleting**. Soft delet
 `issue_events` log are what make that recoverable; there is no approval gate.
 
 Agents can be assignees. Assignment records intent and surfaces a "Start work" button that opens a
-thread seeded with the issue's title, description, todos, and links — it does not auto-spawn. A
-stray kanban drag must not start three agents.
+thread seeded with the issue's title, description, todos, and links — it does not auto-spawn. The
+assignee constrains the provider; model and reasoning options are selected before opening the draft
+and written into that draft's existing composer state. A stray kanban drag must not start three
+agents.
 
 ### Enrichment
 
 A new TextGeneration operation beside commit-message and PR-content generation, running the
 configured model as a read-only one-shot in the project's `cwd`. It returns a structured result —
-restated problem, likely files, related issues, suggested labels and priority — appended to the
-description as a marked Investigation block. It fires on triage accept and from a manual
-Investigate button. Never on bulk import. Skipped for rootless projects.
+restated problem, likely files, related issues, suggested labels and priority — recorded as a
+comment from the agent that ran it. It fires on triage accept and from a manual Investigate button.
+Never on bulk import. Skipped for rootless projects.
 
 Runs are owned by an `issue_enrichment_runs` table: state, streamed transcript, structured result,
-model, duration. The side panel renders that transcript live. It is **not** a thread, so it cannot
-appear in the threads view by construction — which is why no `hidden` flag was added to threads.
+model, duration. The Investigation tab renders that transcript live; the comment is the readable
+handoff in Activity. A run is **not** a thread, so it cannot appear in the threads view by
+construction — which is why no `hidden` flag was added to threads.
 
 ### Slack intake
 
@@ -134,9 +137,11 @@ Bot token in `secretsDir`. The server **polls** `conversations.history` per watc
 stored cursor, roughly every 30s. Not Socket Mode and not a relay webhook: this server sleeps, and
 polling from a cursor is the only transport that catches up on what it missed.
 
-Trigger is configurable per channel, any combination of: a trigger emoji reaction, every message in
-the channel, or a bot mention. Slack thread replies attach as comments via the stored source message
-ts. Channels map to projects for automatic tagging.
+Trigger is configurable per channel, any combination of: ordered reaction routes, every message in
+the channel, or a bot mention. Each reaction route can inherit or override the channel's default
+project and automatic-investigation policy; the first matching reaction wins. Slack thread replies
+attach as comments via the stored source message ts. Automatic investigation files the issue into
+Triage first and never accepts it.
 
 Sync is **two-way**. The bot posts to the source thread, attributed ("Corey: …", "Claude moved
 PAT-12 to In Review"), on comments and status changes only. Outbound posts are recorded by message

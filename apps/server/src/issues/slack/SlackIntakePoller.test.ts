@@ -29,6 +29,7 @@ import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/Projec
 import { SlackChannelWatchRepositoryLive } from "../../persistence/Layers/SlackChannelWatches.ts";
 import { SlackIntakeLedgerRepositoryLive } from "../../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { IssueEnrichmentEngine } from "../IssueEnrichmentEngine.ts";
 import { IssueTrackerService, layer as issueTrackerLayer } from "../IssueTrackerService.ts";
 import {
@@ -47,10 +48,23 @@ const USER: IssueActor = { kind: "user" };
 const AGENT: IssueActor = { kind: "agent", provider: ProviderDriverKind.make("claude") };
 const IN_REVIEW = IssueStatusId.make("in-review");
 const PROJECT = ProjectId.make("project-alpha");
+const VE_PROJECT = ProjectId.make("project-ve");
 
-const EVERY_MESSAGE: SlackIntakeTrigger = { emoji: null, everyMessage: true, botMention: false };
-const ON_EMOJI: SlackIntakeTrigger = { emoji: "ticket", everyMessage: false, botMention: false };
-const ON_MENTION: SlackIntakeTrigger = { emoji: null, everyMessage: false, botMention: true };
+const EVERY_MESSAGE: SlackIntakeTrigger = {
+  reactionRoutes: [],
+  everyMessage: true,
+  botMention: false,
+};
+const ON_EMOJI: SlackIntakeTrigger = {
+  reactionRoutes: [{ emoji: "ticket", projectId: null, autoInvestigate: null }],
+  everyMessage: false,
+  botMention: false,
+};
+const ON_MENTION: SlackIntakeTrigger = {
+  reactionRoutes: [],
+  everyMessage: false,
+  botMention: true,
+};
 
 const BOT_USER_ID = "U0BOT";
 
@@ -216,6 +230,21 @@ const storeToken = (token: string) =>
     store.set(SLACK_BOT_TOKEN_SECRET, encoder.encode(token)),
   );
 
+const seedProject = (projectId: ProjectId, title: string) =>
+  Effect.flatMap(ProjectionProjectRepository, (projects) =>
+    projects.upsert({
+      projectId,
+      title,
+      workspaceRoot: `/tmp/${projectId}`,
+      defaultModelSelection: null,
+      defaultThreadEnvMode: null,
+      scripts: [],
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+      deletedAt: null,
+    }),
+  );
+
 /**
  * A message a test can go back and change — a reaction is added to a message that is already in
  * the channel, which is the whole point of the reaction window.
@@ -314,6 +343,67 @@ describe("SlackIntakePoller", () => {
 
         const titles = (yield* tracker.getSnapshot()).issues.map((issue) => issue.title).sort();
         assert.deepStrictEqual(titles, ["@Pathway please file this", "anything at all", "reacted"]);
+      }),
+    );
+  });
+
+  it.effect("routes matching reactions before channel defaults and inherits investigation", () => {
+    const { state, client } = makeFakeSlack();
+    state.history.set("C1", []);
+
+    return run(
+      client,
+      Effect.gen(function* () {
+        const tracker = yield* IssueTrackerService;
+        yield* seedProject(PROJECT, "QuoteCloud");
+        yield* seedProject(VE_PROJECT, "VE");
+        yield* storeToken("xoxb-1");
+        yield* tracker.slackWatchCreate({
+          channelId: "C1",
+          channelName: "intake",
+          projectId: PROJECT,
+          autoInvestigate: true,
+          trigger: {
+            reactionRoutes: [
+              { emoji: "quotecloud", projectId: null, autoInvestigate: null },
+              { emoji: "ve", projectId: VE_PROJECT, autoInvestigate: false },
+            ],
+            everyMessage: true,
+            botMention: false,
+          },
+        });
+        const intake = yield* poller;
+        yield* intake.pollOnce;
+
+        state.history
+          .get("C1")!
+          .push(
+            message({ ts: ts(200), text: "QuoteCloud bug", reactions: [{ name: "quotecloud" }] }),
+            message({ ts: ts(201), text: "VE bug", reactions: [{ name: "ve" }] }),
+            message({ ts: ts(202), text: "Unrouted bug" }),
+          );
+        yield* intake.pollOnce;
+
+        const byTitle = new Map(
+          (yield* tracker.getSnapshot()).issues.map((issue) => [issue.title, issue]),
+        );
+        assert.strictEqual(byTitle.get("QuoteCloud bug")?.projectId, PROJECT);
+        assert.strictEqual(byTitle.get("VE bug")?.projectId, VE_PROJECT);
+        assert.strictEqual(byTitle.get("Unrouted bug")?.projectId, PROJECT);
+
+        const quoteCloud = byTitle.get("QuoteCloud bug");
+        const ve = byTitle.get("VE bug");
+        const unrouted = byTitle.get("Unrouted bug");
+        assert.ok(quoteCloud && ve && unrouted);
+        assert.strictEqual(
+          (yield* tracker.getEnrichmentRuns({ issueId: quoteCloud.id })).runs.length,
+          1,
+        );
+        assert.strictEqual((yield* tracker.getEnrichmentRuns({ issueId: ve.id })).runs.length, 0);
+        assert.strictEqual(
+          (yield* tracker.getEnrichmentRuns({ issueId: unrouted.id })).runs.length,
+          1,
+        );
       }),
     );
   });
@@ -670,7 +760,7 @@ describe("SlackIntakePoller", () => {
           .slackWatches;
         yield* tracker.slackWatchUpdate({
           watchId: watches[0]!.id,
-          patch: { trigger: { emoji: null, everyMessage: false, botMention: false } },
+          patch: { trigger: { reactionRoutes: [], everyMessage: false, botMention: false } },
         });
         yield* intake.pollOnce;
         assert.strictEqual(state.tokensSeen.length, 0);

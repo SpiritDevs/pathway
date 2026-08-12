@@ -68,6 +68,8 @@ import Migration0052 from "./Migrations/052_ApplicationEventSource.ts";
 import Migration0053 from "./Migrations/053_OrchestrationV2EffectCancellation.ts";
 import Migration0054 from "./Migrations/054_ScheduledTasks.ts";
 import Migration0055 from "./Migrations/055_RestoreIssueStatuses.ts";
+import Migration0056 from "./Migrations/056_IssueTrackerSlackReactionRouting.ts";
+import Migration0057 from "./Migrations/057_IssueAutomation.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -135,6 +137,8 @@ export const migrationEntries = [
   [53, "OrchestrationV2EffectCancellation", Migration0053],
   [54, "ScheduledTasks", Migration0054],
   [55, "RestoreIssueStatuses", Migration0055],
+  [56, "IssueTrackerSlackReactionRouting", Migration0056],
+  [57, "IssueAutomation", Migration0057],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -22,8 +22,8 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { IssueTodo, IssueTodoId, IssueTodoPatch } from "@t3tools/contracts";
-import { GripVerticalIcon, Trash2Icon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { GripVerticalIcon, Trash2Icon, XIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -122,6 +122,8 @@ export function IssueTodoList({
   onUpdate,
   onDelete,
   onReorder,
+  focusRequest = 0,
+  onDismiss,
 }: {
   /** Already in position order — the state layer sorts the stream's list. */
   todos: ReadonlyArray<IssueTodo>;
@@ -129,10 +131,17 @@ export function IssueTodoList({
   onUpdate: (todoId: IssueTodoId, patch: IssueTodoPatch) => void;
   onDelete: (todoId: IssueTodoId) => void;
   onReorder: (todoIds: ReadonlyArray<IssueTodoId>) => void;
+  focusRequest?: number;
+  onDismiss?: (() => void) | undefined;
 }) {
   const [draft, setDraft] = useState("");
+  const draftRef = useRef<HTMLInputElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const progress = useMemo(() => issueTodoProgress(todos), [todos]);
+
+  useEffect(() => {
+    if (focusRequest > 0) draftRef.current?.focus();
+  }, [focusRequest]);
 
   const submitDraft = () => {
     const text = issueTodoCreateText(draft);
@@ -158,6 +167,17 @@ export function IssueTodoList({
             {progress.done}/{progress.total}
           </span>
         )}
+        {progress.total === 0 && onDismiss !== undefined ? (
+          <Button
+            aria-label="Hide todos"
+            className="ms-auto text-muted-foreground"
+            onClick={onDismiss}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <XIcon />
+          </Button>
+        ) : null}
       </div>
 
       {todos.length === 0 ? null : (
@@ -200,6 +220,7 @@ export function IssueTodoList({
             submitDraft();
           }}
           placeholder="Add a todo…"
+          ref={draftRef}
           size="sm"
           value={draft}
         />

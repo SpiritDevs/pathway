@@ -2,10 +2,15 @@ import {
   IssueId,
   IssueStatusId,
   IssueTodoId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   type Issue,
   type IssueTodo,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
+import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
   ISSUE_PENDING_THREAD_LINK_STORAGE_KEY,
@@ -14,6 +19,7 @@ import {
   issueDetailUrl,
   issueStartWorkTodos,
   rememberPendingIssueThreadLink,
+  resolveIssueStartWorkModelSelection,
   takePendingIssueThreadLink,
   type PendingLinkStorage,
 } from "./issueStartWork.logic";
@@ -54,6 +60,98 @@ function todo(id: string, text: string, position: number, done = false): IssueTo
     position,
   };
 }
+
+function provider(
+  instanceId: string,
+  driver: "codex" | "claudeAgent",
+  models: ReadonlyArray<string>,
+): ServerProvider {
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: NOW,
+    models: models.map((slug) => ({
+      slug,
+      name: slug,
+      isCustom: false,
+      capabilities: {},
+    })),
+    slashCommands: [],
+    skills: [],
+  };
+}
+
+describe("resolveIssueStartWorkModelSelection", () => {
+  const providers = [
+    provider("codex", "codex", ["gpt-5.6-sol"]),
+    provider("codex_personal", "codex", ["gpt-5.6-luna"]),
+    provider("claudeAgent", "claudeAgent", ["claude-opus-4-6"]),
+  ];
+  const entries = deriveProviderInstanceEntries(providers);
+  const modelOptionsByInstance = new Map([
+    [
+      ProviderInstanceId.make("codex"),
+      [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isDefault: true }],
+    ],
+    [
+      ProviderInstanceId.make("codex_personal"),
+      [{ slug: "gpt-5.6-luna", name: "GPT-5.6 Luna", isDefault: true }],
+    ],
+    [
+      ProviderInstanceId.make("claudeAgent"),
+      [{ slug: "claude-opus-4-6", name: "Claude Opus 4.6", isDefault: true }],
+    ],
+  ]);
+
+  it("keeps a compatible project model and its reasoning options", () => {
+    expect(
+      resolveIssueStartWorkModelSelection({
+        provider: ProviderDriverKind.make("codex"),
+        projectDefault: {
+          instanceId: ProviderInstanceId.make("codex_personal"),
+          model: "gpt-5.6-luna",
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
+        instanceEntries: entries,
+        modelOptionsByInstance,
+      }),
+    ).toEqual({
+      instanceId: "codex_personal",
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+  });
+
+  it("does not cross the assigned agent boundary when the project default uses another provider", () => {
+    expect(
+      resolveIssueStartWorkModelSelection({
+        provider: ProviderDriverKind.make("codex"),
+        projectDefault: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-6",
+        },
+        instanceEntries: entries,
+        modelOptionsByInstance,
+      }),
+    ).toEqual({ instanceId: "codex", model: "gpt-5.6-sol" });
+  });
+
+  it("returns no choice when the assigned provider has no configured instance", () => {
+    expect(
+      resolveIssueStartWorkModelSelection({
+        provider: ProviderDriverKind.make("cursor"),
+        projectDefault: null,
+        instanceEntries: entries,
+        modelOptionsByInstance,
+      }),
+    ).toBe(null);
+  });
+});
 
 function memoryStorage(initial: Record<string, string> = {}): PendingLinkStorage & {
   readonly read: () => Record<string, string>;
@@ -154,6 +252,13 @@ describe("buildIssueStartWorkPrompt", () => {
   it("adds a due date to the metadata line when the issue has one", () => {
     const prompt = buildIssueStartWorkPrompt({ ...base, issue: issue({ dueDate: "2026-09-01" }) });
     expect(prompt).toContain("Due: 2026-09-01");
+  });
+
+  it("names the configured review destination without treating every finished turn as completion", () => {
+    const prompt = buildIssueStartWorkPrompt({ ...base, completionStatusName: "Ready for QA" });
+    expect(prompt).toContain("genuinely finished");
+    expect(prompt).toContain("move it to Ready for QA");
+    expect(prompt).toContain("starts its configured audits");
   });
 });
 

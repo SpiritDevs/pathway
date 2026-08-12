@@ -8,14 +8,28 @@
  * @module components/issues/IssueAgentSection
  */
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { Issue, IssueThreadLink, ThreadId } from "@t3tools/contracts";
+import type {
+  Issue,
+  IssueThreadLink,
+  ModelSelection,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import { MessageSquareIcon, PlayIcon, XIcon } from "lucide-react";
+import { useState } from "react";
 
 import { cn } from "~/lib/utils";
+import type { ProviderInstanceEntry } from "~/providerInstances";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
+import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import type { ModelEsque } from "../chat/providerIconUtils";
+import { shouldRenderTraitsControls, TraitsPicker } from "../chat/TraitsPicker";
 import { PROVIDER_CLIENT_DEFINITION_BY_VALUE } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+
+const ignorePromptChange = (_prompt: string): void => undefined;
 
 /** What the button says. The provider is named so a reassignment is visible without opening a menu. */
 export function issueStartWorkLabel(issue: Issue): string | null {
@@ -24,9 +38,120 @@ export function issueStartWorkLabel(issue: Issue): string | null {
   return `Start work with ${definition?.label ?? issue.assignee.provider}`;
 }
 
+function IssueStartWorkLauncher({
+  issue,
+  initialModelSelection,
+  instanceEntries,
+  modelOptionsByInstance,
+  starting,
+  startWorkBlockReason,
+  onStartWork,
+}: {
+  issue: Issue;
+  initialModelSelection: ModelSelection | null;
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  starting: boolean;
+  startWorkBlockReason: string | null;
+  onStartWork: (modelSelection: ModelSelection) => void;
+}) {
+  const [modelSelection, setModelSelection] = useState(initialModelSelection);
+  const activeEntry =
+    instanceEntries.find((entry) => entry.instanceId === modelSelection?.instanceId) ?? null;
+  const hasTraits =
+    activeEntry !== null &&
+    modelSelection !== null &&
+    shouldRenderTraitsControls({
+      provider: activeEntry.driverKind,
+      models: activeEntry.models,
+      model: modelSelection.model,
+      prompt: "",
+      modelOptions: modelSelection.options,
+      allowPromptInjectedEffort: false,
+    });
+  const startWorkLabel = issueStartWorkLabel(issue) ?? "Start work";
+  const providerLabel =
+    issue.assignee?.kind === "agent"
+      ? (PROVIDER_CLIENT_DEFINITION_BY_VALUE[issue.assignee.provider]?.label ??
+        issue.assignee.provider)
+      : "assigned agent";
+  const blockReason =
+    startWorkBlockReason ??
+    (modelSelection === null || activeEntry === null
+      ? `No available ${providerLabel} model can start this work.`
+      : null);
+
+  return (
+    <div className="flex flex-col gap-2">
+      {modelSelection === null || activeEntry === null ? null : (
+        <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+          <span className="text-[11px] text-muted-foreground">Model</span>
+          <ProviderModelPicker
+            activeInstanceId={modelSelection.instanceId}
+            disabled={starting}
+            instanceEntries={instanceEntries}
+            lockedProvider={activeEntry.driverKind}
+            model={modelSelection.model}
+            modelOptionsByInstance={modelOptionsByInstance}
+            onInstanceModelChange={(instanceId, model) => {
+              setModelSelection(createModelSelection(instanceId, model));
+            }}
+            triggerAriaLabel={`Model for starting work on ${issue.key}`}
+            triggerClassName="w-full max-w-none shrink text-foreground/90 hover:text-foreground"
+            triggerVariant="outline"
+          />
+
+          {hasTraits ? (
+            <>
+              <span className="text-[11px] text-muted-foreground">Reasoning</span>
+              <div aria-label={`Reasoning and model options for ${issue.key}`}>
+                <TraitsPicker
+                  allowPromptInjectedEffort={false}
+                  model={modelSelection.model}
+                  modelOptions={modelSelection.options}
+                  models={activeEntry.models}
+                  onModelOptionsChange={(nextOptions) => {
+                    setModelSelection((current) =>
+                      current === null
+                        ? null
+                        : createModelSelection(current.instanceId, current.model, nextOptions),
+                    );
+                  }}
+                  onPromptChange={ignorePromptChange}
+                  prompt=""
+                  provider={activeEntry.driverKind}
+                  triggerClassName="w-full max-w-none shrink justify-between text-foreground/90 hover:text-foreground"
+                  triggerVariant="outline"
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      <Button
+        className="w-full justify-start"
+        disabled={starting || blockReason !== null}
+        onClick={() => {
+          if (modelSelection !== null) onStartWork(modelSelection);
+        }}
+        size="sm"
+        title={blockReason ?? undefined}
+        variant="outline"
+      >
+        {starting ? <Spinner className="size-3.5" /> : <PlayIcon />}
+        <span className="truncate">{startWorkLabel}</span>
+      </Button>
+    </div>
+  );
+}
+
 export function IssueAgentSection({
   issue,
+  initialModelSelection,
+  instanceEntries,
   links,
+  modelOptionsByInstance,
   threadsById,
   starting,
   startWorkBlockReason,
@@ -35,14 +160,17 @@ export function IssueAgentSection({
   onUnlinkThread,
 }: {
   issue: Issue;
+  initialModelSelection: ModelSelection | null;
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   /** Oldest first, as the server lists them: the first thread on an issue is the one that matters. */
   links: ReadonlyArray<IssueThreadLink>;
+  modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   /** Only threads on the environment the tracker lives on; anything else cannot be opened here. */
   threadsById: ReadonlyMap<ThreadId, EnvironmentThreadShell>;
   starting: boolean;
   /** Null when Start work can be pressed; otherwise the sentence explaining why not. */
   startWorkBlockReason: string | null;
-  onStartWork: () => void;
+  onStartWork: (modelSelection: ModelSelection) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onUnlinkThread: (threadId: ThreadId) => void;
 }) {
@@ -52,17 +180,16 @@ export function IssueAgentSection({
   return (
     <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
       {startWorkLabel === null ? null : (
-        <Button
-          className="w-full justify-start"
-          disabled={starting || startWorkBlockReason !== null}
-          onClick={onStartWork}
-          size="sm"
-          title={startWorkBlockReason ?? undefined}
-          variant="outline"
-        >
-          {starting ? <Spinner className="size-3.5" /> : <PlayIcon />}
-          <span className="truncate">{startWorkLabel}</span>
-        </Button>
+        <IssueStartWorkLauncher
+          initialModelSelection={initialModelSelection}
+          instanceEntries={instanceEntries}
+          issue={issue}
+          key={`${issue.assignee?.kind === "agent" ? issue.assignee.provider : "none"}:${initialModelSelection?.instanceId ?? "none"}:${initialModelSelection?.model ?? "none"}:${JSON.stringify(initialModelSelection?.options ?? [])}`}
+          modelOptionsByInstance={modelOptionsByInstance}
+          onStartWork={onStartWork}
+          starting={starting}
+          startWorkBlockReason={startWorkBlockReason}
+        />
       )}
 
       {links.length === 0 ? null : (

@@ -613,6 +613,81 @@ const DEFAULT_TEXT_GENERATION_MODEL_SELECTION = {
   ],
 };
 
+export const ISSUE_AUTOMATION_MAX_ROUTING_RULES = 25;
+export const ISSUE_AUTOMATION_MAX_AUDIT_RULES = 25;
+export const ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE = 5;
+
+/** An ordered natural-language rule that selects the model which will do the issue's work. */
+export const IssueAutomationRoutingRule = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  condition: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+});
+export type IssueAutomationRoutingRule = typeof IssueAutomationRoutingRule.Type;
+
+export const IssueAutomationAuditor = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+});
+export type IssueAutomationAuditor = typeof IssueAutomationAuditor.Type;
+
+/** One audit policy. Every selected model runs independently so disagreements remain visible. */
+export const IssueAutomationAuditRule = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  condition: TrimmedNonEmptyString,
+  auditors: Schema.Array(IssueAutomationAuditor)
+    .check(Schema.isMinLength(1))
+    .check(Schema.isMaxLength(ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE)),
+});
+export type IssueAutomationAuditRule = typeof IssueAutomationAuditRule.Type;
+
+/**
+ * Status ids rather than status names: teams rename and replace their workflow columns. Null
+ * leaves that transition alone, making every automation independently reversible.
+ */
+export const IssueAutomationStatusTransitions = Schema.Struct({
+  workStartedStatusId: Schema.NullOr(TrimmedNonEmptyString),
+  workFinishedStatusId: Schema.NullOr(TrimmedNonEmptyString),
+  auditPassedStatusId: Schema.NullOr(TrimmedNonEmptyString),
+  auditChangesRequestedStatusId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IssueAutomationStatusTransitions = typeof IssueAutomationStatusTransitions.Type;
+
+export const IssueAutomationSettings = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  /** The cheap classifier which chooses rule ids. It never edits the repository. */
+  routingModelSelection: ModelSelection,
+  routingRules: Schema.Array(IssueAutomationRoutingRule).check(
+    Schema.isMaxLength(ISSUE_AUTOMATION_MAX_ROUTING_RULES),
+  ),
+  /** Used when no routing rule matches. Null deliberately leaves the issue unassigned. */
+  fallbackModelSelection: Schema.NullOr(ModelSelection),
+  auditRules: Schema.Array(IssueAutomationAuditRule).check(
+    Schema.isMaxLength(ISSUE_AUTOMATION_MAX_AUDIT_RULES),
+  ),
+  statusTransitions: IssueAutomationStatusTransitions,
+  /** Stops a reviewer/worker disagreement from spending forever. */
+  maxRemediationCycles: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10 })),
+});
+export type IssueAutomationSettings = typeof IssueAutomationSettings.Type;
+
+export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
+  schemaVersion: 1,
+  routingModelSelection: DEFAULT_TEXT_GENERATION_MODEL_SELECTION,
+  routingRules: [],
+  fallbackModelSelection: null,
+  auditRules: [],
+  statusTransitions: {
+    workStartedStatusId: null,
+    workFinishedStatusId: null,
+    auditPassedStatusId: null,
+    auditChangesRequestedStatusId: null,
+  },
+  maxRemediationCycles: 3,
+};
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -657,6 +732,9 @@ export const ServerSettings = Schema.Struct({
    */
   issueEnrichmentModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
+  ),
+  issueAutomation: IssueAutomationSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ISSUE_AUTOMATION_SETTINGS)),
   ),
   sourceControlWritingStyle: SourceControlWritingStyleSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -798,6 +876,7 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueEnrichmentModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  issueAutomation: Schema.optionalKey(IssueAutomationSettings),
   sourceControlWritingStyle: Schema.optionalKey(
     Schema.Struct({
       mode: Schema.optionalKey(SourceControlWritingStyleMode),

@@ -1671,21 +1671,28 @@ describe("IssueTrackerService", () => {
       });
       // A watch created without a trigger is paused, not broken.
       assert.deepStrictEqual(created.watch.trigger, {
-        emoji: null,
+        reactionRoutes: [],
         everyMessage: false,
         botMention: false,
       });
+      assert.isFalse(created.watch.autoInvestigate);
 
       const updated = yield* tracker.slackWatchUpdate({
         watchId: created.watch.id,
         patch: {
           projectId: null,
-          trigger: { emoji: "ticket", everyMessage: false, botMention: true },
+          autoInvestigate: true,
+          trigger: {
+            reactionRoutes: [{ emoji: "ticket", projectId: PROJECT, autoInvestigate: false }],
+            everyMessage: false,
+            botMention: true,
+          },
         },
       });
       assert.isNull(updated.watch.projectId);
+      assert.isTrue(updated.watch.autoInvestigate);
       assert.deepStrictEqual(updated.watch.trigger, {
-        emoji: "ticket",
+        reactionRoutes: [{ emoji: "ticket", projectId: PROJECT, autoInvestigate: false }],
         everyMessage: false,
         botMention: true,
       });

@@ -208,6 +208,7 @@ export function IssueProjectMenu({
   onCreateProject,
   trigger,
   align = "start",
+  nullLabel = "No project",
 }: {
   projects: ReadonlyArray<EnvironmentProject>;
   value: ProjectId | null;
@@ -220,6 +221,8 @@ export function IssueProjectMenu({
   onCreateProject?: () => void;
   trigger: ReactElement;
   align?: "start" | "center" | "end";
+  /** What a null selection means in this caller: absence, inheritance, or a default route. */
+  nullLabel?: string;
 }) {
   return (
     <IssuePropertyGuard>
@@ -235,7 +238,7 @@ export function IssueProjectMenu({
               }}
             >
               <MenuRadioItem value={NO_PROJECT_VALUE}>
-                <span className="text-muted-foreground">No project</span>
+                <span className="text-muted-foreground">{nullLabel}</span>
               </MenuRadioItem>
               {projects.map((project) => (
                 <MenuRadioItem key={project.id} value={project.id}>

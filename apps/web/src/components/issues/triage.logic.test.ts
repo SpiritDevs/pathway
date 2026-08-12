@@ -285,6 +285,27 @@ describe("triageAcceptDefaults", () => {
     expect(draft.runEnrichment).toBe(false);
   });
 
+  it("does not default to a second run after Slack routing already investigated", () => {
+    const projectId = ProjectId.make("rooted");
+    const completed = issue("1", {
+      projectId,
+      description: "Original report\n\n---\n\n## Investigation (codex, 2026-08-13)\nFound it.",
+    });
+    expect(
+      triageAcceptDefaults({ issues: [completed], statuses, workspaceRoots: roots }).runEnrichment,
+    ).toBe(false);
+
+    const running = issue("2", { projectId });
+    expect(
+      triageAcceptDefaults({
+        issues: [running],
+        statuses,
+        workspaceRoots: roots,
+        investigatedIssueIds: new Set([running.id]),
+      }).runEnrichment,
+    ).toBe(false);
+  });
+
   it("turns investigation off when there is no project to run in", () => {
     expect(triageAcceptDefaults({ issues: [issue("1")], statuses, workspaceRoots: roots })).toEqual(
       {

@@ -13,7 +13,65 @@
  *
  * @module components/issues/issueStartWork.logic
  */
-import type { Issue, IssueId, IssueTodo } from "@t3tools/contracts";
+import type {
+  Issue,
+  IssueId,
+  IssueTodo,
+  ModelSelection,
+  ProviderDriverKind,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
+import { createModelSelection, resolveSelectableModel } from "@t3tools/shared/model";
+
+import type { ProviderInstanceEntry } from "~/providerInstances";
+import { resolveSelectableProviderInstanceEntry } from "~/providerInstances";
+import type { ModelEsque } from "../chat/providerIconUtils";
+
+// ── Model choice ──────────────────────────────────────────────────────
+
+/**
+ * The model shown beside Start work. Assignment constrains the driver; a compatible project
+ * default wins, then the provider's normal ready-instance/default-model order takes over.
+ */
+export function resolveIssueStartWorkModelSelection(input: {
+  readonly provider: ProviderDriverKind | null;
+  readonly projectDefault: ModelSelection | null;
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly modelOptionsByInstance: ReadonlyMap<
+    ProviderInstanceId,
+    ReadonlyArray<ModelEsque & { readonly isDefault?: boolean }>
+  >;
+}): ModelSelection | null {
+  if (input.provider === null) return null;
+  const compatibleEntries = input.instanceEntries.filter(
+    (entry) => entry.driverKind === input.provider,
+  );
+  const preferredInstanceId = compatibleEntries.some(
+    (entry) => entry.instanceId === input.projectDefault?.instanceId,
+  )
+    ? input.projectDefault?.instanceId
+    : undefined;
+  const entry = resolveSelectableProviderInstanceEntry(compatibleEntries, preferredInstanceId);
+  if (entry === undefined) return null;
+
+  const usesProjectDefault = input.projectDefault?.instanceId === entry.instanceId;
+  const options = input.modelOptionsByInstance.get(entry.instanceId) ?? [];
+  const requestedModel = usesProjectDefault ? input.projectDefault.model : null;
+  const model =
+    resolveSelectableModel(entry.driverKind, requestedModel, options) ??
+    options.find((option) => option.isDefault)?.slug ??
+    options[0]?.slug ??
+    null;
+  if (model === null) return null;
+
+  return createModelSelection(
+    entry.instanceId,
+    model,
+    usesProjectDefault && input.projectDefault !== null && model === input.projectDefault.model
+      ? input.projectDefault.options
+      : undefined,
+  );
+}
 
 // ── Links back to the issue ────────────────────────────────────────────
 
@@ -42,6 +100,8 @@ export interface IssueStartWorkContext {
   readonly statusName: string | null;
   readonly projectTitle: string | null;
   readonly priorityLabel: string | null;
+  /** Configured workflow destination the agent should choose only after the work is actually done. */
+  readonly completionStatusName?: string | null;
   readonly todos: ReadonlyArray<IssueTodo>;
   readonly relations: ReadonlyArray<IssueStartWorkRelation>;
   /** Absolute link back to the sheet, from {@link issueDetailUrl}. */
@@ -92,8 +152,12 @@ export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): strin
     );
   }
 
+  const completionInstruction =
+    context.completionStatusName == null
+      ? ""
+      : ` When the implementation and its verification are genuinely finished, use the issues tools to move it to ${context.completionStatusName}; that transition starts its configured audits.`;
   blocks.push(
-    "Start by reading the issue and the code it points at. Keep the issue current as you go — the issues tools can move its status, tick its checklist, and comment on it.",
+    `Start by reading the issue and the code it points at. Keep the issue current as you go — the issues tools can move its status, tick its checklist, and comment on it.${completionInstruction}`,
   );
 
   return `${blocks.join("\n\n")}\n`;

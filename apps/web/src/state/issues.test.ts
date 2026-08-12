@@ -398,7 +398,12 @@ describe("Slack intake in the store", () => {
       channelId,
       channelName,
       projectId: null,
-      trigger: { emoji: "ticket", everyMessage: false, botMention: false },
+      autoInvestigate: false,
+      trigger: {
+        reactionRoutes: [{ emoji: "ticket", projectId: null, autoInvestigate: null }],
+        everyMessage: false,
+        botMention: false,
+      },
       createdAt: NOW,
       updatedAt: NOW,
     };
@@ -869,12 +874,14 @@ describe("applyIssueAgentStreamEvent", () => {
       run: run("r1", "1", "queued"),
     });
     expect([...queued.investigatingIssueIds]).toEqual(["1"]);
+    expect([...queued.investigatedIssueIds]).toEqual(["1"]);
 
     const done = applyIssueAgentStreamEvent(queued, {
       _tag: "EnrichmentRunChanged",
       run: run("r1", "1", "done"),
     });
     expect([...done.investigatingIssueIds]).toEqual([]);
+    expect([...done.investigatedIssueIds]).toEqual(["1"]);
     expect(
       done.runsByIssue.get(IssueId.make("1"))?.get(IssueEnrichmentRunId.make("r1"))?.state,
     ).toBe("done");
@@ -891,7 +898,21 @@ describe("applyIssueAgentStreamEvent", () => {
     });
 
     expect(grown.investigatingIssueIds).toBe(started.investigatingIssueIds);
+    expect(grown.investigatedIssueIds).toBe(started.investigatedIssueIds);
     expect(grown.runsByIssue).not.toBe(started.runsByIssue);
+  });
+
+  it("offers a retry after the only observed investigation failed", () => {
+    const started = applyIssueAgentStreamEvent(EMPTY_ISSUE_AGENT_STATE, {
+      _tag: "EnrichmentRunChanged",
+      run: run("r1", "1", "running"),
+    });
+    const failed = applyIssueAgentStreamEvent(started, {
+      _tag: "EnrichmentRunChanged",
+      run: run("r1", "1", "failed"),
+    });
+
+    expect([...failed.investigatedIssueIds]).toEqual([]);
   });
 
   it("stays marked while a second run is still queued behind the one that finished", () => {
@@ -941,6 +962,7 @@ describe("applyIssueAgentStreamEvent", () => {
     });
     expect(purged.runsByIssue.size).toBe(0);
     expect([...purged.investigatingIssueIds]).toEqual([]);
+    expect([...purged.investigatedIssueIds]).toEqual([]);
 
     expect(
       applyIssueAgentStreamEvent(seeded, { _tag: "IssueDeleted", issueId: IssueId.make("9") }),

@@ -10,6 +10,7 @@
  *
  * @module components/issues/IssueDetailSheet
  */
+import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -31,24 +32,17 @@ import type {
   IssueTodo,
   IssueTodoId,
   IssueTodoPatch,
+  ModelSelection,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
-import {
-  PencilIcon,
-  SearchXIcon,
-  Trash2Icon,
-  UnplugIcon,
-  WandSparklesIcon,
-  XIcon,
-} from "lucide-react";
+import { SearchXIcon, Trash2Icon, UnplugIcon, WandSparklesIcon, XIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
@@ -58,8 +52,14 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
-import { useClientSettings } from "~/hooks/useSettings";
+import { usePrimarySettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { getCustomModelOptionsByInstance } from "~/modelSelection";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "~/providerInstances";
 import {
   RIGHT_PANEL_SHEET_CLASS_NAME,
   RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME,
@@ -67,6 +67,7 @@ import {
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { primaryServerProvidersAtom } from "~/state/server";
 import {
   issueRelationDisplays,
   useCancelIssueEnrichment,
@@ -100,7 +101,6 @@ import {
   useUpdateIssueTodo,
 } from "~/state/issues";
 import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
-import ChatMarkdown from "../ChatMarkdown";
 import { useRightPanelSheetMaxWidth } from "../RightPanelSheet";
 import { PREVIEW_PANEL_MIN_WIDTH } from "../preview/PreviewPanelShell";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
@@ -112,15 +112,16 @@ import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
 import { IssueActivityFeed } from "./IssueActivityFeed";
+import { IssueActionPanel } from "./IssueActionPanel";
 import { IssueAgentSection } from "./IssueAgentSection";
 import { IssueComments } from "./IssueComments";
+import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
 import { IssueDetailProperties } from "./IssueDetailProperties";
+import { IssueDetailTabs, type IssueDetailTab } from "./IssueDetailTabs";
 import { IssueEnrichmentPanel } from "./IssueEnrichmentPanel";
-import { IssueInvestigatingChip } from "./IssueGlyphs";
 import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
-import { NewIssueDialog } from "./NewIssueDialog";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -144,13 +145,13 @@ import {
   issueApplyLabelPatch,
   issueApplyPriorityPatch,
   issueInvestigateBlock,
-  latestIssueEnrichmentRun,
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
   issueDetailUrl,
   issueStartWorkTodos,
   rememberPendingIssueThreadLink,
+  resolveIssueStartWorkModelSelection,
   type IssueStartWorkRelation,
 } from "./issueStartWork.logic";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
@@ -169,6 +170,8 @@ const NOT_FOUND_GRACE_MS = 600;
 /** Stable empties so an unloaded tail does not remount the checklist and the thread on every read. */
 const EMPTY_TODOS: ReadonlyArray<IssueTodo> = Object.freeze([]);
 const EMPTY_COMMENTS: ReadonlyArray<IssueComment> = Object.freeze([]);
+const GROWING_TEXTAREA_CLASS_NAME =
+  "border-transparent bg-transparent shadow-none before:hidden hover:border-input [&_[data-slot=textarea]]:min-h-9 [&_[data-slot=textarea]]:resize-none [&_[data-slot=textarea]]:overflow-hidden max-sm:[&_[data-slot=textarea]]:min-h-9 dark:bg-transparent";
 
 export function IssueDetailSheet({
   issueKey,
@@ -326,7 +329,9 @@ function IssueDetailBody({
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
   const childRollup = useIssueChildRollup(issue.id);
-  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
+  const settings = usePrimarySettings();
+  const timestampFormat = settings.timestampFormat;
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
   // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
   // them: the header has to know whether an investigation has ever run, and the rail has to list
   // the threads. Two small reads on a local socket, patched live by the stream afterwards.
@@ -374,23 +379,6 @@ function IssueDetailBody({
   );
   const titleProps = useCommitOnBlur<HTMLTextAreaElement>(issue.title, commitTitle);
 
-  const [editingDescription, setEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(issue.description);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (editingDescription) descriptionRef.current?.focus();
-  }, [editingDescription]);
-
-  const startEditingDescription = () => {
-    setDescriptionDraft(issue.description);
-    setEditingDescription(true);
-  };
-  const saveDescription = () => {
-    setEditingDescription(false);
-    write(issueDescriptionPatch(issue, descriptionDraft));
-  };
-
   const projectTitles = useMemo(
     () => new Map<string, string>(projects.map((project) => [project.id, project.title])),
     [projects],
@@ -426,6 +414,11 @@ function IssueDetailBody({
   const openIssue = useCallback((target: Issue) => onOpenIssueKey(target.key), [onOpenIssueKey]);
 
   const [subIssueOpen, setSubIssueOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<IssueDetailTab>("details");
+  const [showTodos, setShowTodos] = useState(false);
+  const [todoFocusRequest, setTodoFocusRequest] = useState(0);
+  const [showRelations, setShowRelations] = useState(false);
+  const [relationOpenRequest, setRelationOpenRequest] = useState(0);
 
   /**
    * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
@@ -533,7 +526,6 @@ function IssueDetailBody({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const threadShells = useThreadShells();
   const openNewThread = useNewThreadHandler();
-  const [panelOpen, setPanelOpen] = useState(false);
   const [startingWork, setStartingWork] = useState(false);
 
   const project = useMemo(
@@ -547,8 +539,33 @@ function IssueDetailBody({
     [issue.projectId, primaryEnvironmentId, projects],
   );
 
+  const startWorkProvider = issue.assignee?.kind === "agent" ? issue.assignee.provider : null;
+  const startWorkInstanceEntries = useMemo(() => {
+    if (startWorkProvider === null) return [];
+    return sortProviderInstanceEntries(
+      applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+    ).filter((entry) => entry.driverKind === startWorkProvider);
+  }, [serverProviders, settings, startWorkProvider]);
+  const startWorkModelOptionsByInstance = useMemo(
+    () => getCustomModelOptionsByInstance(settings, serverProviders),
+    [serverProviders, settings],
+  );
+  const initialStartWorkModelSelection = useMemo<ModelSelection | null>(() => {
+    return resolveIssueStartWorkModelSelection({
+      provider: startWorkProvider,
+      projectDefault: issue.workModelSelection ?? project?.defaultModelSelection ?? null,
+      instanceEntries: startWorkInstanceEntries,
+      modelOptionsByInstance: startWorkModelOptionsByInstance,
+    });
+  }, [
+    project?.defaultModelSelection,
+    issue.workModelSelection,
+    startWorkInstanceEntries,
+    startWorkModelOptionsByInstance,
+    startWorkProvider,
+  ]);
+
   const activeRun = activeIssueEnrichmentRun(enrichmentRuns);
-  const latestRun = latestIssueEnrichmentRun(enrichmentRuns);
   const investigateBlock = issueInvestigateBlock({
     connected: storeStatus !== "disconnected",
     deleted: issue.deletedAt !== null,
@@ -557,29 +574,8 @@ function IssueDetailBody({
     hasRunInFlight: activeRun !== null,
   });
 
-  /**
-   * A finished run appends its Investigation block to the description through the server, which
-   * logs the write — and the change log is the one read with no diff on the stream. The
-   * description itself arrives on `IssueUpserted`; only the feed needs telling.
-   */
-  const settledRunIdsRef = useRef<ReadonlySet<string>>(new Set());
-  useEffect(() => {
-    const settled = new Set<string>();
-    let landed = false;
-    for (const run of enrichmentRuns) {
-      if (run.state !== "done" && run.state !== "failed") continue;
-      settled.add(run.id);
-      if (!settledRunIdsRef.current.has(run.id)) landed = true;
-    }
-    const first = settledRunIdsRef.current.size === 0 && enrichmentRuns.length > 0;
-    settledRunIdsRef.current = settled;
-    // The read that seeded the panel already carries every finished run; only a transition seen
-    // while the sheet was open means a feed row this client has not read yet.
-    if (landed && !first) refreshEvents();
-  }, [enrichmentRuns, refreshEvents]);
-
   const handleInvestigate = useCallback(() => {
-    setPanelOpen(true);
+    setActiveTab("investigation");
     void (async () => {
       reportFailure(
         "Failed to start the investigation",
@@ -587,6 +583,23 @@ function IssueDetailBody({
       );
     })();
   }, [issue.id, startEnrichment]);
+
+  const handleAddTodo = useCallback(() => {
+    setActiveTab("details");
+    setShowTodos(true);
+    setTodoFocusRequest((current) => current + 1);
+  }, []);
+
+  const handleAddSubIssue = useCallback(() => {
+    setActiveTab("details");
+    setSubIssueOpen(true);
+  }, []);
+
+  const handleAddRelation = useCallback(() => {
+    setActiveTab("details");
+    setShowRelations(true);
+    setRelationOpenRequest((current) => current + 1);
+  }, []);
 
   const handleCancelRun = useCallback(
     (runId: IssueEnrichmentRunId) => {
@@ -635,98 +648,77 @@ function IssueDetailBody({
    * the intent is parked against the draft and the draft route writes the link once the thread
    * exists. See `issueStartWork.logic.ts`.
    */
-  const handleStartWork = useCallback(() => {
-    if (project === null || startingWork) return;
-    setStartingWork(true);
-    void (async () => {
-      try {
-        const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id));
-        if (opened === null) return;
-        const relations: Array<IssueStartWorkRelation> = [];
-        if (parent !== null) {
-          relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
-        }
-        for (const display of relationDisplays) {
-          const counterpart = store.issuesById.get(display.issueId);
-          if (counterpart === undefined) continue;
-          relations.push({
-            label: display.label,
-            key: counterpart.key,
-            title: counterpart.title,
+  const handleStartWork = useCallback(
+    (modelSelection: ModelSelection) => {
+      if (project === null || startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id));
+          if (opened === null) return;
+          const relations: Array<IssueStartWorkRelation> = [];
+          if (parent !== null) {
+            relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
+          }
+          for (const display of relationDisplays) {
+            const counterpart = store.issuesById.get(display.issueId);
+            if (counterpart === undefined) continue;
+            relations.push({
+              label: display.label,
+              key: counterpart.key,
+              title: counterpart.title,
+            });
+          }
+          const prompt = buildIssueStartWorkPrompt({
+            issue,
+            statusName: status?.name ?? null,
+            completionStatusName:
+              statuses.find(
+                (candidate) =>
+                  candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
+              )?.name ?? null,
+            projectTitle,
+            priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
+            todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
+            relations,
+            issueUrl: issueDetailUrl(window.location.origin, issue.key),
           });
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setModelSelection(opened.draftId, modelSelection, { replaceOptions: true });
+          draftStore.setPrompt(opened.draftId, prompt);
+          rememberPendingIssueThreadLink(window.sessionStorage, opened.draftId, issue.id);
+        } finally {
+          setStartingWork(false);
         }
-        const prompt = buildIssueStartWorkPrompt({
-          issue,
-          statusName: status?.name ?? null,
-          projectTitle,
-          priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
-          todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
-          relations,
-          issueUrl: issueDetailUrl(window.location.origin, issue.key),
-        });
-        useComposerDraftStore.getState().setPrompt(opened.draftId, prompt);
-        rememberPendingIssueThreadLink(window.sessionStorage, opened.draftId, issue.id);
-      } finally {
-        setStartingWork(false);
-      }
-    })();
-  }, [
-    detail,
-    issue,
-    openNewThread,
-    parent,
-    project,
-    projectTitle,
-    relationDisplays,
-    startingWork,
-    status,
-    store,
-  ]);
+      })();
+    },
+    [
+      detail,
+      issue,
+      openNewThread,
+      parent,
+      project,
+      projectTitle,
+      relationDisplays,
+      startingWork,
+      status,
+      statuses,
+      store,
+      settings.issueAutomation.statusTransitions.workFinishedStatusId,
+    ],
+  );
 
   const issuesByKey = useMemo(() => {
     const byKey = new Map<string, Issue>();
     for (const candidate of store.issuesById.values()) byKey.set(candidate.key, candidate);
     return byKey;
   }, [store]);
+  const todos = detail?.todos ?? EMPTY_TODOS;
+  const comments = detail?.comments ?? EMPTY_COMMENTS;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SheetHeaderBar onClose={onClose} title={issue.key}>
-        {activeRun !== null ? (
-          <button
-            aria-label="Open the running investigation"
-            className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => setPanelOpen(true)}
-            type="button"
-          >
-            <IssueInvestigatingChip />
-          </button>
-        ) : latestRun !== null ? (
-          <Button
-            className="text-muted-foreground"
-            onClick={() => setPanelOpen(true)}
-            size="xs"
-            variant="ghost"
-          >
-            <WandSparklesIcon />
-            Investigation
-          </Button>
-        ) : null}
-        <Button
-          className="text-muted-foreground"
-          disabled={investigateBlock !== null}
-          onClick={handleInvestigate}
-          size="xs"
-          title={
-            investigateBlock === null
-              ? "Run a read-only investigation of this issue's repository."
-              : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
-          }
-          variant="ghost"
-        >
-          <WandSparklesIcon />
-          Investigate
-        </Button>
         <IssueDeleteMenu
           count={1}
           onConfirm={handleDelete}
@@ -749,144 +741,176 @@ function IssueDetailBody({
             <div className="flex min-w-0 flex-1 flex-col gap-4">
               <Textarea
                 aria-label="Issue title"
-                className="border-transparent bg-transparent text-[15px] font-medium shadow-none before:hidden hover:border-input dark:bg-transparent"
+                className={cn(GROWING_TEXTAREA_CLASS_NAME, "text-[15px] font-medium")}
                 rows={1}
                 {...titleProps}
-              />
-
-              <section className="flex flex-col gap-1.5">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-medium text-muted-foreground">Description</h3>
-                  {editingDescription ? null : (
-                    <Button
-                      className="text-muted-foreground"
-                      onClick={startEditingDescription}
-                      size="icon-xs"
-                      variant="ghost"
-                    >
-                      <PencilIcon />
-                      <span className="sr-only">Edit description</span>
-                    </Button>
-                  )}
-                </div>
-                {editingDescription ? (
-                  <div className="flex flex-col gap-2">
-                    <Textarea
-                      aria-label="Issue description"
-                      className="min-h-40"
-                      onChange={(event) => setDescriptionDraft(event.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          setEditingDescription(false);
-                          return;
-                        }
-                        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                          event.preventDefault();
-                          saveDescription();
-                        }
-                      }}
-                      placeholder="Describe the problem. Markdown works; a Lexical composer lands in stage 2."
-                      ref={descriptionRef}
-                      value={descriptionDraft}
-                    />
-                    <div className="flex items-center gap-2">
-                      <Button onClick={saveDescription} size="xs">
-                        Save
-                      </Button>
-                      <Button
-                        onClick={() => setEditingDescription(false)}
-                        size="xs"
-                        variant="outline"
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ) : issue.description.trim().length === 0 ? (
-                  <button
-                    className="rounded-md px-1.5 py-1 text-start text-[13px] text-muted-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-                    onClick={startEditingDescription}
-                    type="button"
-                  >
-                    Add a description…
-                  </button>
-                ) : (
-                  <ChatMarkdown className="text-[13px]" cwd={undefined} text={issue.description} />
-                )}
-              </section>
-
-              <IssueSubIssues
-                onAdd={() => setSubIssueOpen(true)}
-                onOpenIssue={openIssue}
-                rollup={childRollup}
-                statusById={statusById}
-                subIssues={childIssues}
-              />
-
-              <IssueTodoList
-                onCreate={(text) =>
-                  runWrite("Failed to add the todo", () => createTodo({ issueId: issue.id, text }))
-                }
-                onDelete={(todoId: IssueTodoId) =>
-                  runWrite("Failed to delete the todo", () => deleteTodo({ todoId }))
-                }
-                onReorder={(todoIds: ReadonlyArray<IssueTodoId>) =>
-                  runWrite("Failed to reorder the todos", () =>
-                    reorderTodos({ issueId: issue.id, todoIds }),
-                  )
-                }
-                onUpdate={(todoId: IssueTodoId, patch: IssueTodoPatch) =>
-                  runWrite("Failed to update the todo", () => updateTodo({ todoId, patch }))
-                }
-                todos={detail?.todos ?? EMPTY_TODOS}
-              />
-
-              <IssueRelationsSection
-                displays={relationDisplays}
-                issue={issue}
-                issuesById={store.issuesById}
-                onCreate={(input: IssueRelationCreateInput) =>
-                  runWrite("Failed to link the issues", () => createRelation(input))
-                }
-                onDelete={handleDeleteRelation}
-                onOpenIssue={openIssue}
-                statusById={statusById}
-              />
-
-              <section className="flex flex-col gap-2 border-t border-border/50 pt-3">
-                <h3 className="text-xs font-medium text-muted-foreground">Activity</h3>
-                <IssueActivityFeed
-                  events={events}
-                  issueKeys={issueKeys}
-                  projectTitles={projectTitles}
-                />
-              </section>
-
-              <IssueComments
-                comments={detail?.comments ?? EMPTY_COMMENTS}
-                isPending={detailPending}
-                issueId={issue.id}
-                onCreate={(body, attachmentIds) =>
-                  runWrite("Failed to post the comment", () =>
-                    createComment({
-                      issueId: issue.id,
-                      body,
-                      ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
-                    }),
-                  )
-                }
-                onDelete={(commentId: IssueCommentId) =>
-                  runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
-                }
-                onEdit={(comment, body) => {
-                  const patch = issueCommentUpdatePatch(comment, body);
-                  if (patch === null) return;
-                  runWrite("Failed to edit the comment", () =>
-                    updateComment({ commentId: comment.id, patch }),
-                  );
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && event.shiftKey) return;
+                  titleProps.onKeyDown(event);
                 }}
               />
+
+              <IssueDescriptionEditor
+                onCommit={(description) => write(issueDescriptionPatch(issue, description))}
+                value={issue.description}
+              />
+
+              <IssueDetailTabs
+                activityCount={events.length + comments.length}
+                investigating={activeRun !== null}
+                investigationCount={enrichmentRuns.length}
+                onChange={setActiveTab}
+                value={activeTab}
+              />
+
+              {activeTab === "details" ? (
+                <div
+                  aria-labelledby="issue-details-tab"
+                  className="flex flex-col gap-4"
+                  id="issue-details-panel"
+                  role="tabpanel"
+                >
+                  <IssueSubIssues
+                    composerOpen={subIssueOpen}
+                    labels={labels}
+                    onComposerOpenChange={setSubIssueOpen}
+                    onOpenIssue={openIssue}
+                    parent={issue}
+                    rollup={childRollup}
+                    statusById={statusById}
+                    statuses={statuses}
+                    subIssues={childIssues}
+                  />
+
+                  {todos.length > 0 || showTodos ? (
+                    <IssueTodoList
+                      focusRequest={todoFocusRequest}
+                      onCreate={(text) =>
+                        runWrite("Failed to add the todo", () =>
+                          createTodo({ issueId: issue.id, text }),
+                        )
+                      }
+                      onDelete={(todoId: IssueTodoId) =>
+                        runWrite("Failed to delete the todo", () => deleteTodo({ todoId }))
+                      }
+                      onDismiss={todos.length === 0 ? () => setShowTodos(false) : undefined}
+                      onReorder={(todoIds: ReadonlyArray<IssueTodoId>) =>
+                        runWrite("Failed to reorder the todos", () =>
+                          reorderTodos({ issueId: issue.id, todoIds }),
+                        )
+                      }
+                      onUpdate={(todoId: IssueTodoId, patch: IssueTodoPatch) =>
+                        runWrite("Failed to update the todo", () => updateTodo({ todoId, patch }))
+                      }
+                      todos={todos}
+                    />
+                  ) : null}
+
+                  {relationDisplays.length > 0 || showRelations ? (
+                    <IssueRelationsSection
+                      displays={relationDisplays}
+                      issue={issue}
+                      issuesById={store.issuesById}
+                      onCreate={(input: IssueRelationCreateInput) =>
+                        runWrite("Failed to link the issues", () => createRelation(input))
+                      }
+                      onDelete={handleDeleteRelation}
+                      onDismiss={
+                        relationDisplays.length === 0 ? () => setShowRelations(false) : undefined
+                      }
+                      onOpenIssue={openIssue}
+                      openRequest={relationOpenRequest}
+                      statusById={statusById}
+                    />
+                  ) : null}
+                </div>
+              ) : activeTab === "activity" ? (
+                <div
+                  aria-labelledby="issue-activity-tab"
+                  className="flex flex-col gap-4"
+                  id="issue-activity-panel"
+                  role="tabpanel"
+                >
+                  <IssueActivityFeed
+                    events={events}
+                    issueKeys={issueKeys}
+                    projectTitles={projectTitles}
+                  />
+                  <IssueComments
+                    comments={comments}
+                    isPending={detailPending}
+                    issueId={issue.id}
+                    onCreate={(body, attachmentIds) =>
+                      runWrite("Failed to post the comment", () =>
+                        createComment({
+                          issueId: issue.id,
+                          body,
+                          ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+                        }),
+                      )
+                    }
+                    onDelete={(commentId: IssueCommentId) =>
+                      runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
+                    }
+                    onEdit={(comment, body) => {
+                      const patch = issueCommentUpdatePatch(comment, body);
+                      if (patch === null) return;
+                      runWrite("Failed to edit the comment", () =>
+                        updateComment({ commentId: comment.id, patch }),
+                      );
+                    }}
+                  />
+                </div>
+              ) : (
+                <div
+                  aria-labelledby="issue-investigation-tab"
+                  className="flex min-h-64 flex-col"
+                  id="issue-investigation-panel"
+                  role="tabpanel"
+                >
+                  <div className="flex items-start gap-3 border-b border-border/50 pb-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-medium text-foreground">
+                        Repository investigation
+                      </h3>
+                      <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                        Read-only analysis. Finished runs are also left as agent comments in
+                        Activity.
+                      </p>
+                    </div>
+                    <Button
+                      disabled={investigateBlock !== null}
+                      onClick={handleInvestigate}
+                      size="xs"
+                      title={
+                        investigateBlock === null
+                          ? "Run a read-only investigation of this issue's repository."
+                          : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
+                      }
+                      variant="outline"
+                    >
+                      {activeRun === null ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
+                      {activeRun === null
+                        ? enrichmentRuns.length === 0
+                          ? "Investigate"
+                          : "Investigate again"
+                        : "Investigating"}
+                    </Button>
+                  </div>
+                  <IssueEnrichmentPanel
+                    error={runsError}
+                    isPending={runsPending}
+                    issue={issue}
+                    issuesByKey={issuesByKey}
+                    labels={labels}
+                    onApplyLabel={(labelId) => write(issueApplyLabelPatch(issue, labelId))}
+                    onApplyPriority={(priority) => write(issueApplyPriorityPatch(issue, priority))}
+                    onCancel={handleCancelRun}
+                    onOpenIssueKey={onOpenIssueKey}
+                    runs={enrichmentRuns}
+                  />
+                </div>
+              )}
             </div>
 
             <aside className="flex shrink-0 flex-col gap-3 border-t border-border/50 pt-3 @xl/issue-detail:w-56 @xl/issue-detail:border-t-0 @xl/issue-detail:border-s @xl/issue-detail:pt-0 @xl/issue-detail:ps-4">
@@ -924,8 +948,11 @@ function IssueDetailBody({
               />
 
               <IssueAgentSection
+                initialModelSelection={initialStartWorkModelSelection}
+                instanceEntries={startWorkInstanceEntries}
                 issue={issue}
                 links={threadLinks}
+                modelOptionsByInstance={startWorkModelOptionsByInstance}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
                 onUnlinkThread={handleUnlinkThread}
@@ -958,44 +985,16 @@ function IssueDetailBody({
                   </dd>
                 </div>
               </dl>
+
+              <IssueActionPanel
+                onAddRelation={handleAddRelation}
+                onAddSubIssue={handleAddSubIssue}
+                onAddTodo={handleAddTodo}
+              />
             </aside>
           </div>
         </ScrollArea>
-
-        {/* Inside the sheet, over its body: an enrichment run belongs to the issue it was fired
-            from, and a right-panel tab or a route would let it escape into surfaces that know
-            nothing about it. */}
-        {panelOpen ? (
-          <div className="absolute inset-0 z-10 flex translate-x-0 flex-col bg-background opacity-100 transition-[translate,opacity] duration-150 ease-out starting:translate-x-3 starting:opacity-0 motion-reduce:transition-none">
-            <IssueEnrichmentPanel
-              error={runsError}
-              isPending={runsPending}
-              issue={issue}
-              issuesByKey={issuesByKey}
-              labels={labels}
-              onApplyLabel={(labelId) => write(issueApplyLabelPatch(issue, labelId))}
-              onApplyPriority={(priority) => write(issueApplyPriorityPatch(issue, priority))}
-              onCancel={handleCancelRun}
-              onClose={() => setPanelOpen(false)}
-              onOpenIssueKey={onOpenIssueKey}
-              runs={enrichmentRuns}
-            />
-          </div>
-        ) : null}
       </div>
-
-      {/* Its own instance rather than the list page's: a sub-issue is created *from* this issue,
-          so the dialog opens prefilled with it as the parent and with its project. */}
-      <NewIssueDialog
-        defaultParentId={issue.id}
-        defaultProjectId={issue.projectId}
-        defaultStatusId={statuses[0]?.id ?? null}
-        labels={labels}
-        onOpenChange={setSubIssueOpen}
-        open={subIssueOpen}
-        projects={projects}
-        statuses={statuses}
-      />
     </div>
   );
 }

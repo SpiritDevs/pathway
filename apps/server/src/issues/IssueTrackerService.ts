@@ -174,7 +174,7 @@ import { IssueEnrichmentEngine, type IssueEnrichmentRunRecorder } from "./IssueE
 import { SlackIntakeEngine } from "./slack/SlackIntakeEngine.ts";
 // The poller reads the same file at the top of every cycle; one name, so they cannot drift.
 import { SLACK_BOT_TOKEN_SECRET } from "./slack/slackToken.ts";
-import { appendInvestigationBlock, buildInvestigationBlock } from "./enrichment.ts";
+import { buildInvestigationComment } from "./enrichment.ts";
 import {
   guessIssueStatusCategory,
   importedKeyPrefix,
@@ -226,10 +226,24 @@ const SLACK_ACTOR: IssueActor = { kind: "system", source: "slack" };
 
 /** A watch created without one: configured, watched, and filing nothing until it is switched on. */
 const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = {
-  emoji: null,
+  reactionRoutes: [],
   everyMessage: false,
   botMention: false,
 };
+
+const slackTriggersEqual = (left: SlackIntakeTrigger, right: SlackIntakeTrigger): boolean =>
+  left.everyMessage === right.everyMessage &&
+  left.botMention === right.botMention &&
+  left.reactionRoutes.length === right.reactionRoutes.length &&
+  left.reactionRoutes.every((route, index) => {
+    const other = right.reactionRoutes[index];
+    return (
+      other !== undefined &&
+      route.emoji === other.emoji &&
+      route.projectId === other.projectId &&
+      route.autoInvestigate === other.autoInvestigate
+    );
+  });
 
 /**
  * What a filed message is called when it had no text — an image, a file, a bare reaction target.
@@ -845,6 +859,29 @@ function applyIssuePatch(input: {
     });
     record = { ...record, assignee: patch.assignee };
   }
+  if (
+    patch.workModelSelection !== undefined &&
+    JSON.stringify(patch.workModelSelection) !== JSON.stringify(record.workModelSelection ?? null)
+  ) {
+    changes.push({
+      field: "work model",
+      before: record.workModelSelection?.model ?? null,
+      after: patch.workModelSelection?.model ?? null,
+    });
+    record = { ...record, workModelSelection: patch.workModelSelection };
+  }
+  if (
+    patch.automationAssignment !== undefined &&
+    JSON.stringify(patch.automationAssignment) !==
+      JSON.stringify(record.automationAssignment ?? null)
+  ) {
+    changes.push({
+      field: "automation assignment",
+      before: record.automationAssignment?.routingRuleId ?? null,
+      after: patch.automationAssignment?.routingRuleId ?? null,
+    });
+    record = { ...record, automationAssignment: patch.automationAssignment };
+  }
   if (patch.projectId !== undefined && patch.projectId !== record.projectId) {
     changes.push({ field: "project", before: record.projectId, after: patch.projectId });
     record = { ...record, projectId: patch.projectId };
@@ -1292,6 +1329,8 @@ export const make = Effect.gen(function* () {
       statusId: status.id,
       priority: input.priority ?? "none",
       assignee: input.assignee ?? null,
+      workModelSelection: null,
+      automationAssignment: null,
       projectId: input.projectId ?? null,
       milestoneId: input.milestoneId ?? null,
       cycleId: input.cycleId ?? null,
@@ -2865,8 +2904,8 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(storage("Failed to finish the enrichment run")));
       yield* publishEnrichmentRun(runId);
 
-      // A result nobody can find is not a result. Landing it on the description here, inside the
-      // guarded terminal write, is what makes a cancelled run leave the description alone: the
+      // A result nobody can find is not a result. Landing it as a comment here, inside the guarded
+      // terminal write, is what makes a cancelled run leave the issue thread alone: the
       // early return above has already fired by the time a late `succeed` arrives.
       if (state === "done" && result !== null) {
         yield* recordInvestigation({
@@ -2879,11 +2918,11 @@ export const make = Effect.gen(function* () {
     });
 
   /**
-   * Append a finished investigation to the issue's description, as the agent that ran it.
+   * Leave a finished investigation as a comment from the agent that ran it.
    *
-   * Through `update` rather than a direct row write, so it lands in the change log like any other
-   * edit and the description is one field with one history. Nothing else is applied: the suggested
-   * labels and priority are rendered as suggestions, and taking them up is a human's write.
+   * The run row remains the source for transcripts and suggestions; the comment is the durable,
+   * human-readable handoff. Nothing else is applied: taking a suggested label or priority remains
+   * a human's write.
    */
   const recordInvestigation = (input: {
     readonly issueId: IssueId;
@@ -2892,16 +2931,15 @@ export const make = Effect.gen(function* () {
     readonly finishedAt: string;
   }) =>
     Effect.gen(function* () {
-      const record = yield* requireIssueRecord(input.issueId);
-      const block = buildInvestigationBlock({
+      const body = buildInvestigationComment({
         result: input.result,
         model: `${input.modelSelection.instanceId} / ${input.modelSelection.model}`,
         finishedAt: input.finishedAt,
       });
-      yield* update(
+      yield* commentCreate(
         {
-          issueId: record.id,
-          patch: { description: appendInvestigationBlock(record.description, block) },
+          issueId: input.issueId,
+          body,
         },
         // The instance id doubles as the driver kind for every built-in provider, and names the
         // configured instance for the rest; either way the feed says which agent wrote this.
@@ -3208,6 +3246,8 @@ export const make = Effect.gen(function* () {
       channelId: input.channelId,
       channelName: input.channelName,
       projectId: input.projectId ?? null,
+      autoInvestigate: input.autoInvestigate ?? false,
+      autoAssign: input.autoAssign ?? false,
       trigger: input.trigger ?? PAUSED_SLACK_TRIGGER,
       createdAt,
       updatedAt: createdAt,
@@ -3228,6 +3268,8 @@ export const make = Effect.gen(function* () {
       ...existing,
       ...(patch.channelName === undefined ? {} : { channelName: patch.channelName }),
       ...(patch.projectId === undefined ? {} : { projectId: patch.projectId }),
+      ...(patch.autoInvestigate === undefined ? {} : { autoInvestigate: patch.autoInvestigate }),
+      ...(patch.autoAssign === undefined ? {} : { autoAssign: patch.autoAssign }),
       // Replaced wholesale rather than merged: the trigger is one set of switches, and a partial
       // patch could never say "no emoji".
       ...(patch.trigger === undefined ? {} : { trigger: patch.trigger }),
@@ -3235,9 +3277,9 @@ export const make = Effect.gen(function* () {
     if (
       next.channelName === existing.channelName &&
       next.projectId === existing.projectId &&
-      next.trigger.emoji === existing.trigger.emoji &&
-      next.trigger.everyMessage === existing.trigger.everyMessage &&
-      next.trigger.botMention === existing.trigger.botMention
+      next.autoInvestigate === existing.autoInvestigate &&
+      next.autoAssign === existing.autoAssign &&
+      slackTriggersEqual(next.trigger, existing.trigger)
     ) {
       return { watch: existing, watches: yield* listSlackWatches() };
     }

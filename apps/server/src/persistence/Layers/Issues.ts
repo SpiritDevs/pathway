@@ -1,4 +1,9 @@
-import { IssueAssignee, IssueSlackSource } from "@t3tools/contracts";
+import {
+  IssueAssignee,
+  IssueAutomationAssignment,
+  IssueSlackSource,
+  ModelSelection,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -24,6 +29,8 @@ import {
 const IssueDbRow = IssueRecord.mapFields(
   Struct.assign({
     assignee: Schema.NullOr(Schema.fromJsonString(IssueAssignee)),
+    workModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    automationAssignment: Schema.NullOr(Schema.fromJsonString(IssueAutomationAssignment)),
     triage: Schema.BooleanFromBit,
     slackSource: Schema.NullOr(Schema.fromJsonString(IssueSlackSource)),
   }),
@@ -40,6 +47,8 @@ const ISSUE_COLUMNS = `
   status_id AS "statusId",
   priority,
   assignee_json AS "assignee",
+  work_model_selection_json AS "workModelSelection",
+  automation_assignment_json AS "automationAssignment",
   project_id AS "projectId",
   milestone_id AS "milestoneId",
   cycle_id AS "cycleId",
@@ -78,6 +87,8 @@ const makeIssueRepository = Effect.gen(function* () {
           status_id,
           priority,
           assignee_json,
+          work_model_selection_json,
+          automation_assignment_json,
           project_id,
           milestone_id,
           cycle_id,
@@ -101,6 +112,8 @@ const makeIssueRepository = Effect.gen(function* () {
           ${row.statusId},
           ${row.priority},
           ${row.assignee === null ? null : JSON.stringify(row.assignee)},
+          ${row.workModelSelection == null ? null : JSON.stringify(row.workModelSelection)},
+          ${row.automationAssignment == null ? null : JSON.stringify(row.automationAssignment)},
           ${row.projectId},
           ${row.milestoneId},
           ${row.cycleId},
@@ -124,6 +137,8 @@ const makeIssueRepository = Effect.gen(function* () {
           status_id = excluded.status_id,
           priority = excluded.priority,
           assignee_json = excluded.assignee_json,
+          work_model_selection_json = excluded.work_model_selection_json,
+          automation_assignment_json = excluded.automation_assignment_json,
           project_id = excluded.project_id,
           milestone_id = excluded.milestone_id,
           cycle_id = excluded.cycle_id,

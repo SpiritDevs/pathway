@@ -33,6 +33,7 @@ function watch(id: string, channelId: string, channelName = channelId): SlackCha
     channelId,
     channelName,
     projectId: null,
+    autoInvestigate: false,
     trigger: PAUSED_SLACK_TRIGGER,
     createdAt: NOW,
     updatedAt: NOW,
@@ -55,8 +56,31 @@ describe("slackTriggerSummary", () => {
   });
 
   it("spells the reaction the way Slack does", () => {
-    expect(slackTriggerSummary(trigger({ emoji: "ticket" }))).toBe(":ticket:");
-    expect(slackTriggerSummary(trigger({ emoji: "+1" }))).toBe(":+1:");
+    expect(
+      slackTriggerSummary(
+        trigger({
+          reactionRoutes: [{ emoji: "ticket", projectId: null, autoInvestigate: null }],
+        }),
+      ),
+    ).toBe(":ticket:");
+    expect(
+      slackTriggerSummary(
+        trigger({ reactionRoutes: [{ emoji: "+1", projectId: null, autoInvestigate: null }] }),
+      ),
+    ).toBe(":+1:");
+  });
+
+  it("summarizes several reaction routes without overflowing the row", () => {
+    expect(
+      slackTriggerSummary(
+        trigger({
+          reactionRoutes: [
+            { emoji: "quotecloud", projectId: null, autoInvestigate: null },
+            { emoji: "ve", projectId: null, autoInvestigate: false },
+          ],
+        }),
+      ),
+    ).toBe("2 reactions");
   });
 
   it("names each trigger on its own", () => {
@@ -65,10 +89,11 @@ describe("slackTriggerSummary", () => {
   });
 
   it("joins a combination in trigger order", () => {
-    expect(slackTriggerSummary({ emoji: "ticket", everyMessage: true, botMention: true })).toBe(
+    const reactionRoutes = [{ emoji: "ticket", projectId: null, autoInvestigate: null }] as const;
+    expect(slackTriggerSummary({ reactionRoutes, everyMessage: true, botMention: true })).toBe(
       ":ticket: · Every message · Bot mentions",
     );
-    expect(slackTriggerSummary(trigger({ emoji: "ticket", botMention: true }))).toBe(
+    expect(slackTriggerSummary(trigger({ reactionRoutes, botMention: true }))).toBe(
       ":ticket: · Bot mentions",
     );
   });

@@ -237,6 +237,7 @@ const ISSUE_SYSTEM_ACTOR_LABELS: Readonly<
   // Not a person and not the tracker in general: the one write nobody asked for is a cycle ending.
   cycles: "Cycle rollover",
   slack: "Slack",
+  automation: "Automation",
 };
 
 export function issueActorLabel(

@@ -12,12 +12,15 @@
  * @module components/settings/issues/IntakeSettingsPanel
  */
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import type {
   ProjectId,
   SlackChannelRef,
   SlackChannelWatch,
   SlackIntakeTrigger,
+  SlackReactionRoute,
 } from "@t3tools/contracts";
+import { SLACK_MAX_REACTION_ROUTES } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { FolderIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
@@ -51,6 +54,7 @@ import {
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../../ui/popover";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
 import { Spinner } from "../../ui/spinner";
 import { Switch } from "../../ui/switch";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
@@ -73,6 +77,7 @@ import {
   slackWatchLimitError,
   unwatchedSlackChannels,
 } from "./slackIntake.logic";
+import { IssueAutomationSettingsSection } from "./IssueAutomationSettingsSection";
 
 function toast(type: "error" | "success", title: string, description?: string) {
   toastManager.add(
@@ -81,77 +86,295 @@ function toast(type: "error" | "success", title: string, description?: string) {
 }
 
 /**
- * One channel's triggers. All three off is a paused watch, which is why nothing here refuses to
- * turn the last one off: pausing a channel and forgetting how it was configured are different
- * things, and the row keeps saying what it would file if it were resumed.
+ * One reaction's project and investigation overrides. Null means inherit the channel default,
+ * not "no project" or "do nothing" — the labels keep that distinction visible.
  */
+function ReactionRouteControls({
+  route,
+  index,
+  watch,
+  busy,
+  projects,
+  projectTitles,
+  onTrigger,
+}: {
+  route: SlackReactionRoute;
+  index: number;
+  watch: SlackChannelWatch;
+  busy: boolean;
+  projects: ReadonlyArray<EnvironmentProject>;
+  projectTitles: ReadonlyMap<ProjectId, string>;
+  onTrigger: (trigger: SlackIntakeTrigger) => void;
+}) {
+  const replace = (patch: Partial<SlackReactionRoute>) => {
+    const reactionRoutes = watch.trigger.reactionRoutes.map((candidate, candidateIndex) =>
+      candidateIndex === index ? { ...candidate, ...patch } : candidate,
+    );
+    onTrigger({ ...watch.trigger, reactionRoutes });
+  };
+
+  const commitEmoji = (raw: string): boolean => {
+    const emoji = normalizeSlackEmojiName(raw);
+    const error = slackEmojiNameError(emoji);
+    if (error !== null) {
+      toast("error", "Slack reaction", error);
+      return false;
+    }
+    if (
+      watch.trigger.reactionRoutes.some(
+        (candidate, candidateIndex) => candidateIndex !== index && candidate.emoji === emoji,
+      )
+    ) {
+      toast("error", "Slack reaction", `:${emoji}: already has a rule for this channel.`);
+      return false;
+    }
+    if (emoji !== route.emoji) replace({ emoji });
+    return true;
+  };
+
+  const investigationValue =
+    route.autoInvestigate === null ? "inherit" : route.autoInvestigate ? "on" : "off";
+  const projectLabel =
+    route.projectId === null
+      ? "Use channel default"
+      : (projectTitles.get(route.projectId) ?? "Unknown project");
+
+  return (
+    <div className="grid gap-2 rounded-md border border-border/60 bg-background/30 p-2 sm:grid-cols-[minmax(8rem,0.8fr)_minmax(10rem,1fr)_minmax(9rem,0.7fr)_auto] sm:items-end">
+      <label className="min-w-0 space-y-1">
+        <span className="block text-[11px] font-medium text-muted-foreground">Slack reaction</span>
+        <span className="flex items-center gap-1 text-muted-foreground">
+          <span aria-hidden>:</span>
+          <Input
+            aria-label={`Slack reaction ${route.emoji} in #${watch.channelName}`}
+            className="h-7 min-w-0"
+            defaultValue={route.emoji}
+            disabled={busy}
+            key={route.emoji}
+            onBlur={(event) => {
+              if (!commitEmoji(event.currentTarget.value)) event.currentTarget.value = route.emoji;
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") {
+                event.currentTarget.value = route.emoji;
+                event.currentTarget.blur();
+              }
+            }}
+            size="sm"
+          />
+          <span aria-hidden>:</span>
+        </span>
+      </label>
+
+      <div className="min-w-0 space-y-1">
+        <span className="block text-[11px] font-medium text-muted-foreground">Project</span>
+        <IssueProjectMenu
+          onSelect={(projectId) => replace({ projectId })}
+          projects={projects}
+          nullLabel="Use channel default"
+          trigger={
+            <button
+              className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input px-2 text-xs text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
+              disabled={busy}
+              type="button"
+            >
+              <FolderIcon className="size-3 shrink-0 text-muted-foreground" />
+              <span className={cn("truncate", route.projectId === null && "text-muted-foreground")}>
+                {projectLabel}
+              </span>
+            </button>
+          }
+          value={route.projectId}
+        />
+      </div>
+
+      <label className="min-w-0 space-y-1">
+        <span className="block text-[11px] font-medium text-muted-foreground">Investigation</span>
+        <Select
+          disabled={busy}
+          onValueChange={(value) => {
+            if (value === null) return;
+            replace({ autoInvestigate: value === "inherit" ? null : value === "on" });
+          }}
+          value={investigationValue}
+        >
+          <SelectTrigger aria-label={`Investigation behavior for :${route.emoji}:`} size="sm">
+            <SelectValue>
+              {investigationValue === "inherit"
+                ? "Use channel default"
+                : investigationValue === "on"
+                  ? "On"
+                  : "Off"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup alignItemWithTrigger={false}>
+            <SelectItem value="inherit">Use channel default</SelectItem>
+            <SelectItem value="on">On</SelectItem>
+            <SelectItem value="off">Off</SelectItem>
+          </SelectPopup>
+        </Select>
+      </label>
+
+      <Button
+        aria-label={`Delete the :${route.emoji}: reaction rule`}
+        className="text-muted-foreground hover:text-destructive-foreground"
+        disabled={busy}
+        onClick={() =>
+          onTrigger({
+            ...watch.trigger,
+            reactionRoutes: watch.trigger.reactionRoutes.filter(
+              (_, candidateIndex) => candidateIndex !== index,
+            ),
+          })
+        }
+        size="icon-xs"
+        variant="ghost"
+      >
+        <Trash2Icon className="size-3.5" />
+      </Button>
+    </div>
+  );
+}
+
+/** Labelled trigger groups for a channel. With nothing configured, the channel is paused. */
 function TriggerControls({
   watch,
   busy,
+  projects,
+  projectTitles,
   onTrigger,
 }: {
   watch: SlackChannelWatch;
   busy: boolean;
+  projects: ReadonlyArray<EnvironmentProject>;
+  projectTitles: ReadonlyMap<ProjectId, string>;
   onTrigger: (trigger: SlackIntakeTrigger) => void;
 }) {
   const { trigger } = watch;
+  const [newReaction, setNewReaction] = useState("");
 
-  const commitEmoji = (raw: string) => {
-    const next = normalizeSlackEmojiName(raw);
-    if (next.length === 0) {
-      if (trigger.emoji !== null) onTrigger({ ...trigger, emoji: null });
-      return;
-    }
-    if (next === trigger.emoji) return;
-    const error = slackEmojiNameError(next);
+  const addReaction = () => {
+    const emoji = normalizeSlackEmojiName(newReaction);
+    const error = slackEmojiNameError(emoji);
     if (error !== null) {
-      toast("error", "Reaction trigger", error);
+      toast("error", "Slack reaction", error);
       return;
     }
-    onTrigger({ ...trigger, emoji: next });
+    if (trigger.reactionRoutes.some((route) => route.emoji === emoji)) {
+      toast("error", "Slack reaction", `:${emoji}: already has a rule for this channel.`);
+      return;
+    }
+    if (trigger.reactionRoutes.length >= SLACK_MAX_REACTION_ROUTES) {
+      toast(
+        "error",
+        "Slack reaction",
+        `A channel can have at most ${SLACK_MAX_REACTION_ROUTES} reaction rules.`,
+      );
+      return;
+    }
+    onTrigger({
+      ...trigger,
+      reactionRoutes: [
+        ...trigger.reactionRoutes,
+        { emoji, projectId: null, autoInvestigate: null },
+      ],
+    });
+    setNewReaction("");
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-      <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-        <span className="text-muted-foreground/70">:</span>
-        <Input
-          aria-label={`Reaction that files from #${watch.channelName}`}
-          className="h-7 w-28"
-          defaultValue={trigger.emoji ?? ""}
-          disabled={busy}
-          key={trigger.emoji ?? ""}
-          onBlur={(event) => commitEmoji(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-            if (event.key === "Escape") {
-              event.currentTarget.value = trigger.emoji ?? "";
-              event.currentTarget.blur();
+    <div className="space-y-3">
+      <div className="space-y-2">
+        <div>
+          <p className="text-xs font-medium text-foreground">Reaction rules</p>
+          <p className="text-[11px] text-muted-foreground">
+            Reacting to a Slack message files it. A rule can override this channel&apos;s default
+            project and investigation behavior; the first matching rule wins.
+          </p>
+        </div>
+
+        {trigger.reactionRoutes.map((route, index) => (
+          <ReactionRouteControls
+            busy={busy}
+            index={index}
+            key={route.emoji}
+            onTrigger={onTrigger}
+            projects={projects}
+            projectTitles={projectTitles}
+            route={route}
+            watch={watch}
+          />
+        ))}
+
+        <div className="flex max-w-sm items-end gap-2">
+          <label className="min-w-0 flex-1 space-y-1">
+            <span className="block text-[11px] font-medium text-muted-foreground">
+              Add Slack reaction
+            </span>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <span aria-hidden>:</span>
+              <Input
+                aria-label={`Add a Slack reaction rule to #${watch.channelName}`}
+                className="h-7 min-w-0"
+                disabled={busy || trigger.reactionRoutes.length >= SLACK_MAX_REACTION_ROUTES}
+                onChange={(event) => setNewReaction(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addReaction();
+                }}
+                placeholder="ticket"
+                size="sm"
+                value={newReaction}
+              />
+              <span aria-hidden>:</span>
+            </span>
+          </label>
+          <Button
+            disabled={
+              busy ||
+              newReaction.trim().length === 0 ||
+              trigger.reactionRoutes.length >= SLACK_MAX_REACTION_ROUTES
             }
-          }}
-          placeholder="ticket"
-          size="sm"
-        />
-        <span className="text-muted-foreground/70">:</span>
-      </label>
-      <label className="flex items-center gap-2 text-[13px] text-foreground">
-        <Switch
-          aria-label={`File every message in #${watch.channelName}`}
-          checked={trigger.everyMessage}
-          disabled={busy}
-          onCheckedChange={(checked) => onTrigger({ ...trigger, everyMessage: checked === true })}
-        />
-        Every message
-      </label>
-      <label className="flex items-center gap-2 text-[13px] text-foreground">
-        <Switch
-          aria-label={`File bot mentions in #${watch.channelName}`}
-          checked={trigger.botMention}
-          disabled={busy}
-          onCheckedChange={(checked) => onTrigger({ ...trigger, botMention: checked === true })}
-        />
-        Bot mention
-      </label>
+            onClick={addReaction}
+            size="sm"
+            variant="outline"
+          >
+            <PlusIcon className="size-3.5" />
+            Add rule
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <div>
+          <p className="text-xs font-medium text-foreground">Other triggers</p>
+          <p className="text-[11px] text-muted-foreground">
+            These use the channel&apos;s default project and investigation behavior.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <label className="flex items-center gap-2 text-[13px] text-foreground">
+            <Switch
+              aria-label={`File every new message in #${watch.channelName}`}
+              checked={trigger.everyMessage}
+              disabled={busy}
+              onCheckedChange={(checked) =>
+                onTrigger({ ...trigger, everyMessage: checked === true })
+              }
+            />
+            Any new message
+          </label>
+          <label className="flex items-center gap-2 text-[13px] text-foreground">
+            <Switch
+              aria-label={`File messages that mention the bot in #${watch.channelName}`}
+              checked={trigger.botMention}
+              disabled={busy}
+              onCheckedChange={(checked) => onTrigger({ ...trigger, botMention: checked === true })}
+            />
+            Bot is mentioned
+          </label>
+        </div>
+      </div>
     </div>
   );
 }
@@ -161,8 +384,8 @@ function TriggerControls({
  * call that costs rate limit, and a settings page nobody is looking at should not spend it.
  *
  * The manual field is the fallback for exactly the case the picker cannot serve — no token, a
- * missing `channels:read`, or a channel the bot has not been invited to — so it appears when the
- * listing fails rather than sitting there suggesting people copy ids by hand.
+ * missing `channels:read`/`groups:read`, or a channel the bot has not been invited to — so it
+ * appears when the listing fails rather than sitting there suggesting people copy ids by hand.
  */
 function AddChannelPopover({
   watches,
@@ -193,7 +416,7 @@ function AddChannelPopover({
     // Not a toast: the failure is the reason the manual field is showing, so it belongs next to it.
     setChannels([]);
     setListError(
-      "Slack would not list the channels. Check the token and the channels:read scope, or add a channel by id.",
+      "Slack would not list the channels. Check the token and the channels:read and groups:read scopes, or add a channel by id.",
     );
   }, [listChannels]);
 
@@ -373,6 +596,8 @@ export function IntakeSettingsPanel() {
         channelId: channel.id,
         channelName: normalizeSlackChannelName(channel.name),
         projectId: null,
+        autoInvestigate: false,
+        autoAssign: false,
         // Watched and filing nothing: a channel starts paused so nobody's backlog fills up
         // between adding it and deciding what should file from it.
         trigger: PAUSED_SLACK_TRIGGER,
@@ -412,7 +637,7 @@ export function IntakeSettingsPanel() {
       <SettingsPageContainer>
         <SettingsSection {...searchableSetting("issue-intake")}>
           <SettingsRow
-            description="A message in a watched channel becomes a triage item — no status, on no board, in no count. Accepting it gives it a status, a project, and a priority in one action and can start an investigation. The bot posts back into the source thread when somebody comments or moves it, and skips its own posts so the two sides cannot loop."
+            description="A matching message in a watched channel becomes a triage item — no status, on no board, in no count. Routing can assign its project and start a read-only investigation immediately; accepting it later gives it a status and priority. The bot posts back into the source thread when somebody comments or moves it, and skips its own posts so the two sides cannot loop."
             title="How intake works"
           />
 
@@ -468,7 +693,7 @@ export function IntakeSettingsPanel() {
           />
 
           <SettingsRow
-            description={`The app needs these bot scopes: ${SLACK_BOT_TOKEN_SCOPES.join(", ")}. Saving tests the connection, so a token short a scope is refused here rather than failing silently on the first poll.`}
+            description={`The app needs these bot scopes: ${SLACK_BOT_TOKEN_SCOPES.join(", ")}. Saving verifies the token; opening the channel picker and the first poll verify the channel scopes.`}
             title="Scopes"
           />
         </SettingsSection>
@@ -484,7 +709,7 @@ export function IntakeSettingsPanel() {
           }
         >
           <SettingsRow
-            description="Each channel is polled from its own cursor about every thirty seconds, so a server that was asleep catches up rather than missing what it slept through. A channel maps to a project, and everything filed from it lands there."
+            description="Each channel is polled from its own cursor about every thirty seconds, so a server that was asleep catches up rather than missing what it slept through. Channel defaults handle general triggers; reaction rules can route individual messages to different projects."
             title="Watched channels"
           />
 
@@ -499,7 +724,7 @@ export function IntakeSettingsPanel() {
           ) : (
             watches.map((watch) => (
               <div
-                className="flex flex-col gap-2 rounded-lg px-3 py-2.5 hover:bg-accent/30 sm:px-4"
+                className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card/30 px-3 py-3 sm:px-4"
                 key={watch.id}
               >
                 <div className="flex items-center gap-2">
@@ -510,35 +735,6 @@ export function IntakeSettingsPanel() {
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {slackTriggerSummary(watch.trigger)}
                   </span>
-                  <IssueProjectMenu
-                    align="end"
-                    onCreateProject={() => setQuickCreateFor(watch)}
-                    onSelect={(projectId) =>
-                      void run("Failed to map the channel", () =>
-                        updateWatch({ watchId: watch.id, patch: { projectId } }),
-                      )
-                    }
-                    projects={projects}
-                    trigger={
-                      <button
-                        className="flex h-7 max-w-44 shrink-0 items-center gap-1.5 rounded-md border border-input px-2 text-xs text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
-                        type="button"
-                      >
-                        <FolderIcon className="size-3 text-muted-foreground" />
-                        <span
-                          className={cn(
-                            "truncate",
-                            watch.projectId === null && "text-muted-foreground",
-                          )}
-                        >
-                          {watch.projectId === null
-                            ? "No project"
-                            : (projectTitles.get(watch.projectId) ?? "Unknown project")}
-                        </span>
-                      </button>
-                    }
-                    value={watch.projectId}
-                  />
                   <Button
                     aria-label={`Stop watching #${watch.channelName}`}
                     className="text-muted-foreground hover:text-destructive-foreground"
@@ -550,6 +746,94 @@ export function IntakeSettingsPanel() {
                     <Trash2Icon className="size-3.5" />
                   </Button>
                 </div>
+
+                <div className="grid gap-3 rounded-md bg-muted/25 p-2.5 sm:grid-cols-2">
+                  <div className="min-w-0 space-y-1">
+                    <span className="block text-[11px] font-medium text-muted-foreground">
+                      Default project
+                    </span>
+                    <IssueProjectMenu
+                      align="start"
+                      nullLabel="No default project"
+                      onCreateProject={() => setQuickCreateFor(watch)}
+                      onSelect={(projectId) =>
+                        void run("Failed to map the channel", () =>
+                          updateWatch({ watchId: watch.id, patch: { projectId } }),
+                        )
+                      }
+                      projects={projects}
+                      trigger={
+                        <button
+                          className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input bg-background/50 px-2 text-xs text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
+                          disabled={busy}
+                          type="button"
+                        >
+                          <FolderIcon className="size-3 shrink-0 text-muted-foreground" />
+                          <span
+                            className={cn(
+                              "truncate",
+                              watch.projectId === null && "text-muted-foreground",
+                            )}
+                          >
+                            {watch.projectId === null
+                              ? "No default project"
+                              : (projectTitles.get(watch.projectId) ?? "Unknown project")}
+                          </span>
+                        </button>
+                      }
+                      value={watch.projectId}
+                    />
+                  </div>
+
+                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1 sm:self-end">
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium text-foreground">
+                        Investigate automatically
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        Starts when the message enters Triage.
+                      </span>
+                    </span>
+                    <Switch
+                      aria-label={`Automatically investigate issues filed from #${watch.channelName}`}
+                      checked={watch.autoInvestigate}
+                      disabled={busy}
+                      onCheckedChange={(checked) =>
+                        void run("Failed to change automatic investigation", () =>
+                          updateWatch({
+                            watchId: watch.id,
+                            patch: { autoInvestigate: checked === true },
+                          }),
+                        )
+                      }
+                    />
+                  </label>
+
+                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1 sm:col-start-2">
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium text-foreground">
+                        Auto-assign worker
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground">
+                        Uses the global rules below.
+                      </span>
+                    </span>
+                    <Switch
+                      aria-label={`Automatically assign issues filed from #${watch.channelName}`}
+                      checked={watch.autoAssign === true}
+                      disabled={busy}
+                      onCheckedChange={(checked) =>
+                        void run("Failed to change automatic assignment", () =>
+                          updateWatch({
+                            watchId: watch.id,
+                            patch: { autoAssign: checked === true },
+                          }),
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+
                 <TriggerControls
                   busy={busy}
                   onTrigger={(trigger) =>
@@ -557,12 +841,16 @@ export function IntakeSettingsPanel() {
                       updateWatch({ watchId: watch.id, patch: { trigger } }),
                     )
                   }
+                  projects={projects}
+                  projectTitles={projectTitles}
                   watch={watch}
                 />
               </div>
             ))
           )}
         </SettingsSection>
+
+        <IssueAutomationSettingsSection />
       </SettingsPageContainer>
 
       <AlertDialog

@@ -281,6 +281,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/issues-intake",
   },
   {
+    id: "issue-intake-automation",
+    title: "Issue auto-assignment and audits",
+    to: "/settings/issues-intake",
+  },
+  {
     id: "issue-enrichment",
     title: "Issue enrichment",
     to: "/settings/issues-enrichment",
