@@ -23,6 +23,7 @@ import {
   OrchestrationV2Checkpoint,
   OrchestrationV2CheckpointScope,
   OrchestrationV2Command,
+  OrchestrationV2ContinuationLaunchInput,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -59,6 +60,9 @@ const decodeOrchestrationV2ProviderThreadJson = Schema.decodeUnknownSync(
 );
 const decodeOrchestrationV2ProviderThread = Schema.decodeUnknownSync(OrchestrationV2ProviderThread);
 const decodeOrchestrationV2ThreadShell = Schema.decodeUnknownSync(OrchestrationV2ThreadShell);
+const decodeOrchestrationV2ContinuationLaunchInput = Schema.decodeUnknownSync(
+  OrchestrationV2ContinuationLaunchInput,
+);
 
 describe("orchestration V2 contracts", () => {
   it("lets legacy snapshot decoders ignore enrichment metadata", () => {
@@ -785,5 +789,23 @@ describe("orchestration V2 contracts", () => {
     });
 
     expect(shell.pendingBackgroundTasks).toEqual([]);
+  });
+
+  it("decodes an exact-run continuation launch with target model and workspace policy", () => {
+    const decoded = decodeOrchestrationV2ContinuationLaunchInput({
+      commandId: "command:continuation",
+      creationSource: "mobile",
+      sourceThreadId: "thread:source",
+      sourceRunId: "run:source",
+      targetThreadId: "thread:target",
+      modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet" },
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+      workspaceTarget: "new-worktree",
+    });
+
+    expect(decoded.sourceRunId).toBe("run:source");
+    expect(decoded.workspaceTarget).toBe("new-worktree");
+    expect(decoded.modelSelection.instanceId).toBe("claudeAgent");
   });
 });

@@ -114,7 +114,6 @@ import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { V2ItemInspector } from "./V2ItemInspector";
-import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
@@ -167,10 +166,7 @@ interface TimelineRowSharedState {
   onOpenFilePreview: (relativePath: string, line?: number) => void;
   onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
-  onForkFromRun: (input: {
-    readonly sourceThreadId: ThreadId;
-    readonly runId: RunId;
-  }) => Promise<void>;
+  onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -234,10 +230,7 @@ interface MessagesTimelineProps {
     readonly threadId: ThreadId;
     readonly title: string;
   } | null;
-  onForkFromRun: (input: {
-    readonly sourceThreadId: ThreadId;
-    readonly runId: RunId;
-  }) => Promise<void>;
+  onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -275,6 +268,8 @@ interface MessagesTimelineProps {
 // MessagesTimeline — list owner
 // ---------------------------------------------------------------------------
 
+const DEFAULT_ASYNC_FALSE = (): Promise<boolean> => Promise.resolve(false);
+
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
@@ -286,15 +281,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   editableUserMessageId = null,
   canSubmitUserMessageEdit = false,
-  onRequestEditUserMessage = async () => false,
-  onSubmitUserMessageEdit = async () => false,
+  onRequestEditUserMessage = DEFAULT_ASYNC_FALSE,
+  onSubmitUserMessageEdit = DEFAULT_ASYNC_FALSE,
   routeThreadKey,
   onOpenTurnDiff,
   onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
   onPanelSurfaceOpen = NOOP_PANEL_SURFACE_OPEN,
   onOpenThread,
   parentThreadLink = null,
-  onForkFromRun,
+  onContinueFromRun,
   onRollbackCheckpoint,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -637,7 +632,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenFilePreview,
       onPanelSurfaceOpen,
       onOpenThread,
-      onForkFromRun,
+      onContinueFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -666,7 +661,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenFilePreview,
       onPanelSurfaceOpen,
       onOpenThread,
-      onForkFromRun,
+      onContinueFromRun,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -1492,7 +1487,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-60 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             {row.projectedItem?.item.type === "assistant_message" ? (
-              <AssistantForkButton projectedItem={row.projectedItem} />
+              <AssistantContinuationButton projectedItem={row.projectedItem} />
             ) : null}
             <AssistantCopyButton row={row} />
             {row.projectedItem && row.projectedItem.item.status !== "completed" ? (
@@ -1519,21 +1514,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   );
 }
 
-function AssistantForkButton({
+function AssistantContinuationButton({
   projectedItem,
 }: {
   readonly projectedItem: NonNullable<Extract<TimelineRow, { kind: "message" }>["projectedItem"]>;
 }) {
   const ctx = use(TimelineRowCtx);
-  const [busy, setBusy] = useState(false);
-  const support = useV2ItemSupport({
-    environmentId: ctx.activeThreadEnvironmentId,
-    sourceThreadId: projectedItem.sourceThreadId,
-    sourceItemId: projectedItem.sourceItemId,
-  });
   const canFork = canForkProjectedAssistantItem({
     projectedItem,
-    capabilities: support.providerSession?.capabilities,
   });
 
   if (!canFork || projectedItem.item.runId === null) return null;
@@ -1547,20 +1535,16 @@ function AssistantForkButton({
             type="button"
             size="xs"
             variant="ghost"
-            disabled={busy}
             onClick={() => {
-              setBusy(true);
-              void ctx
-                .onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId })
-                .finally(() => setBusy(false));
+              ctx.onContinueFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId });
             }}
-            aria-label="Fork from this response"
+            aria-label="Continue in a new chat"
           />
         }
       >
-        <GitForkIcon className={cn("size-3", busy && "animate-pulse")} />
+        <GitForkIcon className="size-3" />
       </TooltipTrigger>
-      <TooltipPopup side="top">Fork from this response</TooltipPopup>
+      <TooltipPopup side="top">Continue in a new chat</TooltipPopup>
     </Tooltip>
   );
 }

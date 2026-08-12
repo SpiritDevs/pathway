@@ -14,6 +14,14 @@ shows across its development-server lists. The default range is `3000` through `
 When the current thread has active terminal sessions, the **Terminals** section lists them under
 **Running terminals**. Choose a terminal to return to it in the terminal drawer or right panel.
 
+The **Thread** section includes **Hand off…** after the chat has a completed agent response. Choose
+another provider or model to continue the same chat. The next message carries the conversation
+context into that provider while keeping the handoff visible in the thread history.
+
+Completed agent responses also have a **Continue in a new chat** action. Choose the model for the
+new chat, then continue in the current checkout or a new worktree. A new worktree starts from the
+source checkout's committed `HEAD`; uncommitted files remain only in the source checkout.
+
 When the active provider supports live quota reporting, **Usage** shows its remaining allowance and
 reset time. Providers with multiple limits can be expanded to see every window and any credit
 balance reported by that provider.

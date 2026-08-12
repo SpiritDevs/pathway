@@ -23,6 +23,7 @@ import {
   ChevronDownIcon,
   CloudDownloadIcon,
   CloudUploadIcon,
+  CornerUpRightIcon,
   ExternalLinkIcon,
   FileDiffIcon,
   GitBranchPlusIcon,
@@ -117,6 +118,7 @@ interface GitActionsControlProps {
   onOpenPullRequest?: ((number: number) => void) | undefined;
   displayMode?: "toolbar" | "panel";
   onOpenChanges?: () => void;
+  onHandoff?: () => void;
 }
 
 interface PendingDefaultBranchAction {
@@ -1085,6 +1087,7 @@ export default function GitActionsControl({
   onOpenPullRequest,
   displayMode = "toolbar",
   onOpenChanges,
+  onHandoff,
 }: GitActionsControlProps) {
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
@@ -1905,6 +1908,12 @@ export default function GitActionsControl({
                     >
                       <CloudUploadIcon />
                       Publish repository...
+                    </MenuItem>
+                  ) : null}
+                  {onHandoff ? (
+                    <MenuItem disabled={isGitActionRunning} onClick={onHandoff}>
+                      <CornerUpRightIcon />
+                      Hand off…
                     </MenuItem>
                   ) : null}
                   {gitStatusForActions?.refName === null && (

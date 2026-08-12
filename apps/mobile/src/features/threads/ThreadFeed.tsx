@@ -1,14 +1,13 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
-  ThreadId,
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
@@ -35,7 +34,6 @@ import {
 } from "react-native-nitro-markdown";
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   Platform,
@@ -90,7 +88,6 @@ import {
 import { buildReviewParsedDiff } from "../review/reviewModel";
 import { cn } from "../../lib/cn";
 import { deriveCenteredContentHorizontalPadding, type LayoutVariant } from "../../lib/layout";
-import { uuidv4 } from "../../lib/uuid";
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
@@ -120,12 +117,7 @@ import {
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { useAssetUrl } from "../../state/assets";
-import { appAtomRegistry } from "../../state/atom-registry";
-import { environmentThreadShells, threadEnvironment } from "../../state/threads";
-import { useAtomCommand } from "../../state/use-atom-command";
-import { useV2ItemSupport } from "../../state/v2-item-support";
 import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
-import { waitForThreadShellReady } from "./threadForkNavigation";
 import { resolveUserMessageIntentBadge } from "./userMessageIntentBadge";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -190,35 +182,19 @@ export interface ThreadFeedProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onContinueFromRun: (input: {
+    readonly sourceThreadId: import("@t3tools/contracts").ThreadId;
+    readonly sourceRunId: RunId;
+  }) => void;
 }
 
-async function waitForThreadShell(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-): Promise<boolean> {
-  const atom = environmentThreadShells.threadShellAtom(scopeThreadRef(environmentId, threadId));
-  return waitForThreadShellReady({
-    read: () => appAtomRegistry.get(atom) !== null,
-  });
-}
-
-function AssistantForkButton(props: {
-  readonly environmentId: EnvironmentId;
+function AssistantContinuationButton(props: {
   readonly iconColor: ColorValue;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
-  readonly sourceTitle: string;
+  readonly onContinueFromRun: ThreadFeedProps["onContinueFromRun"];
 }) {
-  const support = useV2ItemSupport({
-    environmentId: props.environmentId,
-    sourceThreadId: props.projectedItem.sourceThreadId,
-    sourceItemId: props.projectedItem.sourceItemId,
-  });
-  const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, "fork from response");
-  const navigation = useNavigation();
-  const [busy, setBusy] = useState(false);
   const canFork = canForkProjectedAssistantItem({
     projectedItem: props.projectedItem,
-    capabilities: support.providerSession?.capabilities,
   });
   const runId = props.projectedItem.item.runId;
 
@@ -227,51 +203,22 @@ function AssistantForkButton(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="Fork from this response"
-      disabled={busy}
+      accessibilityLabel="Continue in a new chat"
       onPress={() => {
-        const targetThreadId = ThreadId.make(uuidv4());
-        setBusy(true);
         void Haptics.selectionAsync();
-        void forkFromRun({
-          environmentId: props.environmentId,
-          input: {
-            sourceThreadId: props.projectedItem.sourceThreadId,
-            targetThreadId,
-            runId,
-            title: `${props.sourceTitle} fork`,
-            creationSource: "mobile",
-          },
-        })
-          .then(async (result) => {
-            if (result._tag !== "Success") return;
-            const targetThreadReady = await waitForThreadShell(props.environmentId, targetThreadId);
-            if (!targetThreadReady) {
-              Alert.alert(
-                "Fork created",
-                "Its thread data did not reach this client. Reconnect and try opening it from the thread list.",
-              );
-              return;
-            }
-            navigation.navigate("Thread", {
-              environmentId: props.environmentId,
-              threadId: targetThreadId,
-            });
-          })
-          .finally(() => setBusy(false));
+        props.onContinueFromRun({
+          sourceThreadId: props.projectedItem.sourceThreadId,
+          sourceRunId: runId,
+        });
       }}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
     >
-      {busy ? (
-        <ActivityIndicator size="small" />
-      ) : (
-        <SymbolView
-          name="arrow.triangle.branch"
-          size={13}
-          tintColor={props.iconColor}
-          type="monochrome"
-        />
-      )}
+      <SymbolView
+        name="arrow.triangle.branch"
+        size={13}
+        tintColor={props.iconColor}
+        type="monochrome"
+      />
     </Pressable>
   );
 }
@@ -948,6 +895,7 @@ function renderFeedEntry(
     readonly reviewCommentBubbleWidth: number;
     readonly userBubbleMaxWidth: number;
     readonly threadTitle: string;
+    readonly onContinueFromRun: ThreadFeedProps["onContinueFromRun"];
   },
 ) {
   const entry = info.item;
@@ -1146,11 +1094,10 @@ function renderFeedEntry(
         })}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
-            <AssistantForkButton
-              environmentId={props.environmentId}
+            <AssistantContinuationButton
               iconColor={iconSubtleColor}
               projectedItem={message.projectedItem}
-              sourceTitle={props.threadTitle}
+              onContinueFromRun={props.onContinueFromRun}
             />
             <CopyTextButton
               accessibilityLabel="Copy message"
@@ -2019,6 +1966,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         reviewCommentBubbleWidth,
         userBubbleMaxWidth,
         threadTitle: props.threadTitle,
+        onContinueFromRun: props.onContinueFromRun,
         skills: props.skills,
         workspaceRoot: props.workspaceRoot,
       }),
@@ -2043,6 +1991,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.environmentId,
       props.threadId,
       props.threadTitle,
+      props.onContinueFromRun,
       props.skills,
       props.workspaceRoot,
     ],

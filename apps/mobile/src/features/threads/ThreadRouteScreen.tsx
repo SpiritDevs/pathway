@@ -7,9 +7,16 @@ import {
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
-import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentId,
+  ThreadId,
+  type ModelSelection,
+  type ProjectScript,
+  type RunId,
+} from "@t3tools/contracts";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { Platform, ScrollView, View } from "react-native";
+import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentQuery } from "../../state/query";
@@ -58,7 +65,8 @@ import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-s
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
-import { threadEnvironment } from "../../state/threads";
+import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import {
   useAdaptiveWorkspaceLayout,
@@ -71,6 +79,12 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
+import {
+  ThreadContinuationSheet,
+  type MobileContinuationWorkspaceTarget,
+} from "./ThreadContinuationSheet";
+import { waitForThreadShellReady } from "./threadForkNavigation";
+import { uuidv4 } from "../../lib/uuid";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -196,6 +210,13 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const launchContinuation = useAtomCommand(
+    threadEnvironment.launchContinuation,
+    "thread continuation",
+  );
+  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -206,6 +227,18 @@ function ThreadRouteContent(
   const [inspectorSelection, setInspectorSelection] = useState<ThreadInspectorSelection | null>(
     () => (props.renderInspector ? { routeThreadIdentity, mode: "route" } : null),
   );
+  const [continuationRequest, setContinuationRequest] = useState<
+    | {
+        readonly kind: "continue";
+        readonly commandId: CommandId;
+        readonly sourceThreadId: ThreadId;
+        readonly sourceRunId: RunId;
+        readonly targetThreadId: ThreadId;
+      }
+    | { readonly kind: "handoff" }
+    | null
+  >(null);
+  const [continuationPending, setContinuationPending] = useState(false);
   const inspectorMode = (() => {
     if (inspectorSelection?.routeThreadIdentity === routeThreadIdentity) {
       if (inspectorSelection.mode === "files" && selectedThreadCwd === null) {
@@ -276,6 +309,117 @@ function ThreadRouteContent(
           }
         : null,
     [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
+  );
+  const handleContinueFromRun = useCallback(
+    (input: { readonly sourceThreadId: ThreadId; readonly sourceRunId: RunId }) => {
+      setContinuationRequest({
+        kind: "continue",
+        commandId: CommandId.make(uuidv4()),
+        targetThreadId: ThreadId.make(uuidv4()),
+        ...input,
+      });
+    },
+    [],
+  );
+  const canHandoff =
+    composer.selectedThreadActivityRun?.status === "completed" &&
+    !composer.activeThreadBusy &&
+    requests.activePendingApproval === null &&
+    requests.activePendingUserInput === null &&
+    (routeConnectionState === "connected" || routeConnectionState === "available");
+  const handleOpenHandoff = useCallback(() => {
+    if (!canHandoff) return;
+    setContinuationRequest({ kind: "handoff" });
+  }, [canHandoff]);
+  const handleSubmitContinuation = useCallback(
+    async (modelSelection: ModelSelection, workspaceTarget: MobileContinuationWorkspaceTarget) => {
+      const request = continuationRequest;
+      if (
+        request === null ||
+        continuationPending ||
+        selectedThread === null ||
+        composer.activeThreadBusy ||
+        requests.activePendingApproval !== null ||
+        requests.activePendingUserInput !== null ||
+        (routeConnectionState !== "connected" && routeConnectionState !== "available")
+      ) {
+        return;
+      }
+      setContinuationPending(true);
+      if (request.kind === "handoff") {
+        const result = await updateThreadMetadata({
+          environmentId: selectedThread.environmentId,
+          input: { threadId: selectedThread.id, modelSelection },
+        });
+        setContinuationPending(false);
+        if (result._tag === "Success") {
+          composer.onUpdateModelSelection(modelSelection);
+          setContinuationRequest(null);
+        } else {
+          Alert.alert("Could not hand off chat", "The provider could not be changed.");
+        }
+        return;
+      }
+
+      const targetThreadId = request.targetThreadId;
+      const result = await launchContinuation({
+        environmentId: selectedThread.environmentId,
+        input: {
+          commandId: request.commandId,
+          sourceThreadId: request.sourceThreadId,
+          sourceRunId: request.sourceRunId,
+          targetThreadId,
+          title: `${selectedThread.title} continuation`,
+          modelSelection,
+          runtimeMode: selectedThreadWithDraftSettings?.runtimeMode ?? selectedThread.runtimeMode,
+          interactionMode:
+            selectedThreadWithDraftSettings?.interactionMode ?? selectedThread.interactionMode,
+          workspaceTarget,
+          creationSource: "mobile",
+        },
+      });
+      setContinuationPending(false);
+      if (result._tag !== "Success") {
+        Alert.alert("Could not continue chat", "The new chat could not be created.");
+        return;
+      }
+      setContinuationRequest(null);
+      const targetAtom = environmentThreadShells.threadShellAtom({
+        environmentId: selectedThread.environmentId,
+        threadId: targetThreadId,
+      });
+      const ready = await waitForThreadShellReady({
+        read: () => appAtomRegistry.get(targetAtom) !== null,
+      });
+      if (!ready) {
+        Alert.alert(
+          "Chat created",
+          "Its thread data did not reach this device. Reconnect and open it from the thread list.",
+        );
+        return;
+      }
+      navigation.dispatch(
+        StackActions.push("Thread", {
+          environmentId: selectedThread.environmentId,
+          threadId: targetThreadId,
+        }),
+      );
+    },
+    [
+      composer.activeThreadBusy,
+      composer.onUpdateModelSelection,
+      continuationPending,
+      continuationRequest,
+      launchContinuation,
+      navigation,
+      requests.activePendingApproval,
+      requests.activePendingUserInput,
+      routeConnectionState,
+      selectedThread,
+      selectedThreadWithDraftSettings?.interactionMode,
+      selectedThreadWithDraftSettings?.runtimeMode,
+      updateThreadMetadata,
+    ],
   );
 
   /* ─── Native header theming ──────────────────────────────────────── */
@@ -597,6 +741,7 @@ function ThreadRouteContent(
     onOpenFilesInspector:
       fileInspector.supported && selectedThreadCwd !== null ? handleOpenFilesInspector : undefined,
     onOpenGitInspector: fileInspector.supported ? handleOpenGitInspector : undefined,
+    onHandoff: canHandoff ? handleOpenHandoff : undefined,
     currentBranch: selectedThread?.branch ?? null,
     gitStatus: gitStatus.data,
     gitOperationLabel: gitState.gitOperationLabel,
@@ -684,6 +829,13 @@ function ThreadRouteContent(
       icon: "point.topleft.down.curvedto.point.bottomright.up",
       onPress: handleOpenGitInspector,
     });
+    if (canHandoff) {
+      actions.push({
+        accessibilityLabel: "Hand off chat",
+        icon: "arrow.triangle.branch",
+        onPress: handleOpenHandoff,
+      });
+    }
     if (fileInspector.supported && selectedThreadCwd !== null) {
       actions.push({
         accessibilityLabel: "Toggle inspector",
@@ -694,6 +846,8 @@ function ThreadRouteContent(
     return actions;
   }, [
     fileInspector.supported,
+    canHandoff,
+    handleOpenHandoff,
     handleOpenFilesInspector,
     handleOpenTerminal,
     handleOpenGitInspector,
@@ -778,6 +932,7 @@ function ThreadRouteContent(
           onStopThread={handleStopThread}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
+          onContinueFromRun={handleContinueFromRun}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
@@ -843,6 +998,21 @@ function ThreadRouteContent(
       {renderThreadRouteBody(
         Platform.OS !== "android" && !layout.usesSplitView && !usesNativeHeaderGlass,
       )}
+      <ThreadContinuationSheet
+        visible={continuationRequest !== null}
+        kind={continuationRequest?.kind ?? "continue"}
+        sourceModelSelection={
+          selectedThreadWithDraftSettings?.modelSelection ?? selectedThread.modelSelection
+        }
+        serverConfig={serverConfig}
+        pending={continuationPending}
+        onDismiss={() => {
+          if (!continuationPending) setContinuationRequest(null);
+        }}
+        onSubmit={(modelSelection, workspaceTarget) => {
+          void handleSubmitContinuation(modelSelection, workspaceTarget);
+        }}
+      />
     </>
   );
 }
