@@ -37,12 +37,16 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   environmentId,
   threadRef,
+  onOpenFilePreview,
+  onPanelSurfaceOpen,
   cwd,
   workspaceRoot,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
   threadRef?: ScopedThreadRef | undefined;
+  onOpenFilePreview?: ((relativePath: string, line?: number) => void) | undefined;
+  onPanelSurfaceOpen?: (() => void) | undefined;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
 }) {
@@ -176,6 +180,8 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               text={collapsedPreview ?? ""}
               cwd={cwd}
               threadRef={threadRef}
+              onOpenFilePreview={onOpenFilePreview}
+              onPanelSurfaceOpen={onPanelSurfaceOpen}
               isStreaming={false}
             />
           ) : (
@@ -183,6 +189,8 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               text={displayedPlanMarkdown}
               cwd={cwd}
               threadRef={threadRef}
+              onOpenFilePreview={onOpenFilePreview}
+              onPanelSurfaceOpen={onPanelSurfaceOpen}
               isStreaming={false}
             />
           )}

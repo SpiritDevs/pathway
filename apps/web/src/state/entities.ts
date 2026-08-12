@@ -14,10 +14,29 @@ import { environmentServerConfigsAtom } from "./server";
 import { allEnvironmentShellsBootstrappedAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 import { waitForAtomValue } from "./waitForAtomValue";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_VISIBLE_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = Object.freeze([]);
+
+let previousThreadTitlesByKey: ReadonlyMap<string, string> = new Map();
+const threadTitlesByKeyAtom = Atom.make((get) => {
+  const next = new Map(
+    get(environmentThreadShells.threadShellsAtom).map(
+      (thread) =>
+        [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread.title] as const,
+    ),
+  );
+  if (
+    next.size === previousThreadTitlesByKey.size &&
+    [...next].every(([key, title]) => previousThreadTitlesByKey.get(key) === title)
+  ) {
+    return previousThreadTitlesByKey;
+  }
+  previousThreadTitlesByKey = next;
+  return previousThreadTitlesByKey;
+}).pipe(Atom.withLabel("web-thread-titles-by-key"));
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
@@ -96,6 +115,10 @@ export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+export function useThreadTitlesByKey(): ReadonlyMap<string, string> {
+  return useAtomValue(threadTitlesByKeyAtom);
 }
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {

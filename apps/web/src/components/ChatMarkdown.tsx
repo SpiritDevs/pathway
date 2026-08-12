@@ -104,6 +104,8 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
+  onOpenFilePreview?: ((relativePath: string, line?: number) => void) | undefined;
+  onPanelSurfaceOpen?: (() => void) | undefined;
   onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -790,6 +792,7 @@ interface MarkdownFileLinkProps {
   copyMarkdown: string;
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
+  onOpenFilePreview?: ((relativePath: string, line?: number) => void) | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
@@ -1092,6 +1095,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   copyMarkdown,
   theme,
   threadRef,
+  onOpenFilePreview,
   onOpen,
   onOpenInBrowser,
   className,
@@ -1136,8 +1140,12 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       handleOpenInEditor();
       return;
     }
+    if (onOpenFilePreview) {
+      onOpenFilePreview(workspaceRelativePath, line);
+      return;
+    }
     useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
-  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
+  }, [handleOpenInEditor, line, onOpenFilePreview, threadRef, workspaceRelativePath]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {
@@ -1312,6 +1320,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.copyMarkdown === next.copyMarkdown &&
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
+    previous.onOpenFilePreview === next.onOpenFilePreview &&
     previous.onOpen === next.onOpen &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
@@ -1326,6 +1335,7 @@ interface ChatMarkdownComponentsContext {
   readonly isStreaming: boolean;
   readonly markdownFileLinkMetaByHref: ReadonlyMap<string, MarkdownFileLinkMeta>;
   readonly onTaskListChange: ChatMarkdownProps["onTaskListChange"];
+  readonly onOpenFilePreview: ChatMarkdownProps["onOpenFilePreview"];
   readonly openInPreferredEditor: (
     targetPath: string,
   ) => Promise<AtomCommandResult<unknown, unknown>>;
@@ -1352,6 +1362,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     isStreaming,
     markdownFileLinkMetaByHref,
     onTaskListChange,
+    onOpenFilePreview,
     openInPreferredEditor,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
@@ -1388,6 +1399,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
         copyMarkdown={copyMarkdown}
         theme={resolvedTheme}
         threadRef={threadRef}
+        onOpenFilePreview={onOpenFilePreview}
         onOpen={openInPreferredEditor}
         onOpenInBrowser={
           threadRef && isPreviewSupportedInRuntime() && isBrowserPreviewFile(fileLinkMeta.filePath)
@@ -1577,6 +1589,8 @@ function ChatMarkdown({
   text,
   cwd,
   threadRef,
+  onOpenFilePreview,
+  onPanelSurfaceOpen,
   onTaskListChange,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
@@ -1660,11 +1674,14 @@ function ChatMarkdown({
         );
       }
       return openUrlInPreview({ threadRef, url, openPreview }).then((result) => {
-        if (result._tag === "Success") recordVisitForThread(threadRef, url);
+        if (result._tag === "Success") {
+          recordVisitForThread(threadRef, url);
+          onPanelSurfaceOpen?.();
+        }
         return result;
       });
     },
-    [openPreview, threadRef],
+    [onPanelSurfaceOpen, openPreview, threadRef],
   );
   const openMarkdownFileInPreview = useCallback(
     (path: string) => {
@@ -1685,9 +1702,12 @@ function ChatMarkdown({
         httpBaseUrl: preparedConnection.value.httpBaseUrl,
         createAssetUrl,
         openPreview,
+      }).then((result) => {
+        if (result._tag === "Success") onPanelSurfaceOpen?.();
+        return result;
       });
     },
-    [createAssetUrl, openPreview, preparedConnection, threadRef],
+    [createAssetUrl, onPanelSurfaceOpen, openPreview, preparedConnection, threadRef],
   );
   const markdownComponents = useMemo<Components>(
     () =>
@@ -1699,6 +1719,7 @@ function ChatMarkdown({
         isStreaming,
         markdownFileLinkMetaByHref,
         onTaskListChange,
+        onOpenFilePreview,
         openInPreferredEditor,
         openExternalLinkInPreview,
         openMarkdownFileInPreview,
@@ -1715,6 +1736,7 @@ function ChatMarkdown({
       isStreaming,
       markdownFileLinkMetaByHref,
       onTaskListChange,
+      onOpenFilePreview,
       openInPreferredEditor,
       openExternalLinkInPreview,
       openMarkdownFileInPreview,

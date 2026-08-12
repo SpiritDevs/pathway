@@ -185,6 +185,34 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("restores valid thread surfaces once and drops malformed identities", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "thread:child-A",
+            surfaces: [
+              { id: "thread:child-A", kind: "thread", resourceId: "child-A" },
+              { id: "thread:child-A", kind: "thread", resourceId: "child-A" },
+              { id: "thread:wrong", kind: "thread", resourceId: "child-B" },
+              { id: "thread:", kind: "thread", resourceId: "" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "thread:child-A",
+          surfaces: [{ id: "thread:child-A", kind: "thread", resourceId: "child-A" }],
+        },
+      },
+      threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
   it("drops persisted plan surfaces and does not reopen an empty panel", () => {
     expect(
       migratePersistedRightPanelState({
@@ -304,6 +332,44 @@ describe("rightPanelStore", () => {
     expect(
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
     ).toHaveLength(2);
+  });
+
+  it("opens each side chat once and reactivates an existing thread surface", () => {
+    const childA = ThreadId.make("child-A");
+    const childB = ThreadId.make("child-B");
+
+    useRightPanelStore.getState().openThread(refA, childA);
+    useRightPanelStore.getState().openThread(refA, childB);
+    useRightPanelStore.getState().openThread(refA, childA);
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "thread:child-A",
+      surfaces: [
+        { id: "thread:child-A", kind: "thread", resourceId: childA },
+        { id: "thread:child-B", kind: "thread", resourceId: childB },
+      ],
+    });
+  });
+
+  it("reconciles side chats against live thread shells", () => {
+    const childA = ThreadId.make("child-A");
+    const childB = ThreadId.make("child-B");
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.openThread(refA, childA);
+    store.openThread(refA, childB);
+
+    store.reconcileThreadSurfaces(refA, [childA]);
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "thread:child-A",
+      surfaces: [
+        { id: "diff", kind: "diff" },
+        { id: "thread:child-A", kind: "thread", resourceId: childA },
+      ],
+    });
   });
 
   it("reopening an inactive singleton activates its existing surface", () => {

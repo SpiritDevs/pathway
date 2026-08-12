@@ -7,8 +7,10 @@ import {
 } from "../../pendingUserInput";
 import { CheckIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
+import { shortcutScopeOwnsEvent } from "../ChatView.logic";
 
 interface PendingUserInputPanelProps {
+  shortcutScope?: "page" | "side-chat";
   pendingUserInputs: PendingUserInput[];
   respondingRequestIds: RuntimeRequestId[];
   answers: Record<string, PendingUserInputDraftAnswer>;
@@ -18,6 +20,7 @@ interface PendingUserInputPanelProps {
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
+  shortcutScope = "page",
   pendingUserInputs,
   respondingRequestIds,
   answers,
@@ -38,6 +41,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      shortcutScope={shortcutScope}
     />
   );
 });
@@ -49,6 +53,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  shortcutScope,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
@@ -56,6 +61,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  shortcutScope: "page" | "side-chat";
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -124,8 +130,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   useEffect(() => {
     if (!activeQuestion || responseDisabled) return;
     const handler = (event: globalThis.KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
+      const eventFromSideChat =
+        target instanceof Element && target.closest("[data-side-chat-surface]") !== null;
+      if (!shortcutScopeOwnsEvent(shortcutScope, eventFromSideChat)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -146,7 +155,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, responseDisabled]);
+  }, [activeQuestion, responseDisabled, shortcutScope]);
 
   if (!activeQuestion) {
     return null;

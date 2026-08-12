@@ -15,6 +15,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
+  FORK_THREAD_READINESS_ERROR,
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
@@ -26,6 +27,8 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  openForkedThreadSideChatWhenReady,
+  shortcutScopeOwnsEvent,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveEditableV2UserMessageId,
@@ -69,6 +72,63 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   });
 }
+
+describe("openForkedThreadSideChatWhenReady", () => {
+  const parentThreadRef = { environmentId, threadId };
+  const targetThreadRef = {
+    environmentId,
+    threadId: ThreadId.make("thread-fork"),
+  };
+
+  it("opens the ready fork as a child surface of the current thread", async () => {
+    const events: string[] = [];
+
+    const opened = await openForkedThreadSideChatWhenReady({
+      parentThreadRef,
+      targetThreadRef,
+      waitForThreadShell: async (ref) => {
+        expect(ref).toEqual(targetThreadRef);
+        events.push("ready");
+        return true;
+      },
+      openThread: (parentRef, childThreadId) => {
+        expect(parentRef).toEqual(parentThreadRef);
+        expect(childThreadId).toBe(targetThreadRef.threadId);
+        events.push("open-panel");
+      },
+      onThreadUnavailable: () => events.push("error"),
+    });
+
+    expect(opened).toBe(true);
+    expect(events).toEqual(["ready", "open-panel"]);
+  });
+
+  it("keeps the parent visible and reports an honest error when the fork shell is unavailable", async () => {
+    const openedThreadIds: ThreadId[] = [];
+    const errors: string[] = [];
+
+    const opened = await openForkedThreadSideChatWhenReady({
+      parentThreadRef,
+      targetThreadRef,
+      waitForThreadShell: async () => false,
+      openThread: (_parentRef, childThreadId) => openedThreadIds.push(childThreadId),
+      onThreadUnavailable: (message) => errors.push(message),
+    });
+
+    expect(opened).toBe(false);
+    expect(openedThreadIds).toEqual([]);
+    expect(errors).toEqual([FORK_THREAD_READINESS_ERROR]);
+  });
+});
+
+describe("shortcutScopeOwnsEvent", () => {
+  it("gives page and side-chat shortcuts exclusive ownership", () => {
+    expect(shortcutScopeOwnsEvent("page", false)).toBe(true);
+    expect(shortcutScopeOwnsEvent("page", true)).toBe(false);
+    expect(shortcutScopeOwnsEvent("side-chat", false)).toBe(false);
+    expect(shortcutScopeOwnsEvent("side-chat", true)).toBe(true);
+  });
+});
 
 const completedTurn = {
   runId: RunId.make("turn-1"),
