@@ -98,7 +98,7 @@ import {
 } from "./newIssueAttachments";
 
 const PICKER_CLASS =
-  "flex min-h-8 items-center gap-1.5 rounded-full border border-input bg-input/30 px-3 text-sm text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
+  "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 const PICKER_OPTION_CLASS =
   "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
 const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
@@ -526,13 +526,13 @@ export function NewIssueDialog({
         }}
         open={open}
       >
-        <DialogPopup className="h-[min(34rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[92rem] overflow-hidden max-sm:h-[calc(100vh-3rem)]">
-          <DialogHeader className="flex-row items-center gap-2 px-6 py-5 max-sm:px-4">
-            <span className="inline-flex min-h-8 items-center rounded-full border border-border/70 bg-muted/70 px-3 font-medium text-sm text-muted-foreground">
+        <DialogPopup className="h-[min(16.25rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-sm:h-[calc(100vh-3rem)]">
+          <DialogHeader className="flex-row items-center gap-1.5 px-4 py-2.5">
+            <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
               {store.config?.keyPrefix ?? "ISS"}
             </span>
-            <ChevronRightIcon className="size-4 text-muted-foreground" />
-            <DialogTitle className="font-sans text-lg">New issue</DialogTitle>
+            <ChevronRightIcon className="size-3.5 text-muted-foreground" />
+            <DialogTitle className="font-sans text-base">New issue</DialogTitle>
             <DialogDescription className="sr-only">
               {selectedProject === null
                 ? "Create an issue on this environment."
@@ -541,7 +541,7 @@ export function NewIssueDialog({
           </DialogHeader>
           <DialogPanel
             className={cn(
-              "flex min-h-[22rem] flex-col gap-4 px-9 pb-5 pt-4 max-sm:px-5",
+              "flex h-full min-h-0 flex-col gap-2 px-4 pb-3 pt-2",
               isDropTarget && "bg-primary/[0.035] outline-2 outline-inset outline-ring",
             )}
             onDragLeave={(event) => {
@@ -563,7 +563,7 @@ export function NewIssueDialog({
           >
             <input
               aria-label="Issue title"
-              className="w-full bg-transparent font-semibold text-3xl leading-tight text-foreground outline-none placeholder:text-muted-foreground/55 max-sm:text-2xl"
+              className="w-full bg-transparent font-semibold text-xl leading-tight text-foreground outline-none placeholder:text-muted-foreground/55"
               onChange={(event) => setTitle(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
@@ -576,7 +576,7 @@ export function NewIssueDialog({
             />
             <textarea
               aria-label="Issue description"
-              className="min-h-28 w-full flex-1 resize-none bg-transparent text-xl leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/55 max-sm:text-base"
+              className="min-h-10 w-full flex-1 resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/55"
               onChange={(event) => setDescription(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
@@ -778,7 +778,7 @@ export function NewIssueDialog({
 
               <button
                 aria-label={showMore ? "Hide more issue properties" : "Show more issue properties"}
-                className={cn(PICKER_CLASS, "size-8 justify-center px-0 pointer-coarse:size-11")}
+                className={cn(PICKER_CLASS, "size-7 justify-center px-0 pointer-coarse:size-11")}
                 onClick={() => setShowMore((current) => !current)}
                 type="button"
               >
@@ -829,7 +829,7 @@ export function NewIssueDialog({
             ) : null}
           </DialogPanel>
           <DialogFooter
-            className="flex-row items-center gap-3 border-t border-border/50 bg-transparent px-6 py-4 max-sm:px-4"
+            className="flex-row items-center gap-3 border-t border-border/50 bg-transparent px-4 py-2.5"
             variant="bare"
           >
             <input
@@ -848,7 +848,7 @@ export function NewIssueDialog({
               className="me-auto rounded-full"
               disabled={submitting}
               onClick={() => attachmentInputRef.current?.click()}
-              size="icon-lg"
+              size="icon-sm"
               variant="outline"
             >
               <PaperclipIcon />
@@ -863,10 +863,10 @@ export function NewIssueDialog({
               Create more
             </label>
             <Button
-              className="rounded-full px-5"
+              className="rounded-full px-4"
               disabled={!canSubmit}
               onClick={() => void submit()}
-              size="lg"
+              size="sm"
               type="button"
             >
               {submitting ? "Creating…" : "Create issue"}

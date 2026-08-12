@@ -1,16 +1,19 @@
 # Design QA
 
-- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-e7d86a38-d025-40cc-858b-510d8e8a340c.png`
-- Source pixels: 1526 x 538 at the supplied image density.
+- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-4e89e404-4909-4057-9e34-b6530ea46589.png`
+- Source pixels: 3360 x 1940 at the supplied Retina density.
+- Before implementation: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-b8f74ff7-d389-450b-b680-d915305963b8.png`
+- Before pixels: 3278 x 2030 at the supplied Retina density.
 - Target implementation: `apps/web/src/components/issues/NewIssueDialog.tsx`
 - Target state: desktop new-issue modal, open with default properties and no attachments.
-- Intended viewport: 1526 x 538 CSS px at device scale factor 1.
 - Implementation screenshot: unavailable because repository instructions require explicit browser permission.
 
 ## Full-view comparison evidence
 
-The source image was opened at original resolution. The implementation could not be captured in a
-browser during this pass, so no valid same-viewport combined comparison exists.
+Both supplied images were opened at original resolution. The Pathway modal measured approximately
+1456 x 540 CSS pixels at the captured density, while the Linear modal measured approximately
+752 x 260 CSS pixels. The implementation could not be captured in a browser during this pass, so
+no valid same-viewport combined comparison exists.
 
 ## Focused region comparison evidence
 
@@ -19,10 +22,10 @@ attachment control, create-more switch, and primary action still need a browser-
 
 ## Required fidelity surfaces
 
-- Fonts and typography: implemented with Pathway's existing font tokens and a larger title/body
-  hierarchy, but not visually compared.
-- Spacing and layout rhythm: implemented as a wide 32 px-radius composer with spacious central
-  fields and bottom-anchored properties, but not visually compared.
+- Fonts and typography: the title, description, breadcrumb, and property controls were reduced to
+  the compact hierarchy visible in the Linear source, but not browser-compared.
+- Spacing and layout rhythm: the desktop frame now targets 752 x 260 CSS pixels, with compressed
+  header, editor, property, and footer spacing. The mobile sheet remains viewport-height.
 - Colors and visual tokens: kept on Pathway semantic background, border, muted, and primary tokens;
   no sampled browser comparison was possible.
 - Image quality and asset fidelity: the reference contains UI icons only. The implementation uses
@@ -36,7 +39,7 @@ attachment control, create-more switch, and primary action still need a browser-
   selection, paste, drag-and-drop, preview removal, upload, and attachment comment creation.
 - Primary browser interactions tested: none; browser permission was not provided.
 - Browser console errors checked: no.
-- Focused unit tests, lint, formatting, and web/server/contracts typechecks pass.
+- Focused lint, formatting, and web typecheck results are recorded in the pull request.
 
 ## Findings
 
@@ -50,9 +53,9 @@ attachment control, create-more switch, and primary action still need a browser-
 ## Comparison history
 
 - Initial pass: blocked before comparison because an implementation capture was not authorized.
-- Fixes made from source inspection: replaced menu radio groups in the modal with controlled
-  popovers and native buttons; added coarse-pointer targets; added the Linear-shaped layout and
-  complete attachment flow.
+- Fixes made from source inspection: reduced the desktop frame from 1472 x 544 to 752 x 260 CSS
+  pixels; tightened typography, padding, property chips, attachment action, and primary action;
+  retained the existing controlled popovers, coarse-pointer targets, and attachment flow.
 - Post-fix visual evidence: unavailable.
 
 final result: blocked
