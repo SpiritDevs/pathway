@@ -1,6 +1,6 @@
 # MCP v2 migration (2026-07-28)
 
-Status: agreed design, not yet implemented.
+Status: implemented.
 Prerequisite for [local SMTP capture](./local-smtp-capture.md).
 
 Move Pathway's MCP server from the current stateful protocol to MCP

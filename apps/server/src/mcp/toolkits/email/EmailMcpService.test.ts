@@ -1,5 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  Client,
+  PROTOCOL_VERSION_META_KEY,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
+import {
   EmailMailSlug,
   EmailMessageId,
   EnvironmentId,
@@ -9,6 +16,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type EmailProjectSettings,
+  EmailMcpTaskState,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -17,12 +25,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { EmailStore, type CapturedEmailMessageInput } from "../../../email/EmailStore.ts";
 import * as EmailStoreLive from "../../../email/EmailStore.ts";
 import { EmailWaitStore } from "../../../email/EmailWaitStore.ts";
 import * as EmailWaitStoreLive from "../../../email/EmailWaitStore.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 import {
   emailMcpListCursor,
@@ -63,6 +73,87 @@ const invocation = (threadId: ThreadId): McpInvocationScope => ({
   capabilities: new Set(["email"]),
   issuedAt: 1,
 });
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const TaskCreateResponse = Schema.Struct({
+  result: Schema.Struct({
+    resultType: Schema.Literal("task"),
+    task: EmailMcpTaskState,
+  }),
+});
+const TaskStateResponse = Schema.Struct({
+  result: Schema.Struct({ resultType: Schema.Literal("complete"), task: EmailMcpTaskState }),
+});
+const ErrorResponse = Schema.Struct({
+  error: Schema.Struct({
+    code: Schema.Number,
+    data: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+});
+const ToolResponse = Schema.Struct({ result: Schema.Record(Schema.String, Schema.Unknown) });
+const SseNotification = Schema.Struct({
+  method: Schema.String,
+  params: Schema.Record(Schema.String, Schema.Unknown),
+});
+const decodeTaskCreateResponse = Schema.decodeUnknownEffect(TaskCreateResponse);
+const decodeTaskStateResponse = Schema.decodeUnknownEffect(TaskStateResponse);
+const decodeErrorResponse = Schema.decodeUnknownEffect(ErrorResponse);
+const decodeToolResponse = Schema.decodeUnknownEffect(ToolResponse);
+const decodeSseNotification = Schema.decodeUnknownSync(Schema.fromJsonString(SseNotification));
+
+const v2Request = (
+  method: string,
+  params: Record<string, unknown>,
+  tasks: boolean,
+  name?: string,
+) =>
+  new Request("http://pathway.test/mcp", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": McpHttpServer.MCP_PROTOCOL_VERSION,
+      "mcp-method": method,
+      ...(name === undefined ? {} : { "mcp-name": name }),
+    },
+    body: encodeJson({
+      jsonrpc: "2.0",
+      id: `${method}:test`,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: McpHttpServer.MCP_PROTOCOL_VERSION,
+          [CLIENT_INFO_META_KEY]: { name: "email-extension-test", version: "1.0.0" },
+          [CLIENT_CAPABILITIES_META_KEY]: tasks
+            ? { extensions: { [McpHttpServer.MCP_TASKS_EXTENSION]: {} } }
+            : {},
+        },
+      },
+    }),
+  });
+
+const makeSseNotificationReader = (reader: {
+  readonly read: () => Promise<{ readonly done: boolean; readonly value?: Uint8Array }>;
+}) => {
+  const decoder = new TextDecoder();
+  let buffered = "";
+  return async () => {
+    while (!buffered.includes("\n\n")) {
+      const next = await reader.read();
+      if (next.done) throw new Error("SSE stream closed before a notification arrived.");
+      if (next.value !== undefined) buffered += decoder.decode(next.value, { stream: true });
+    }
+    const boundary = buffered.indexOf("\n\n");
+    const frame = buffered.slice(0, boundary);
+    buffered = buffered.slice(boundary + 2);
+    const data = frame
+      .split("\n")
+      .find((line) => line.startsWith("data: "))
+      ?.slice("data: ".length);
+    if (data === undefined) throw new Error("SSE frame did not contain data.");
+    return decodeSseNotification(data);
+  };
+};
 
 const fixture = (
   id: string,
@@ -181,7 +272,7 @@ describe("EmailMcpService", () => {
               false,
             )
             .pipe(Effect.forkChild);
-          const notifications = yield* service.subscribeTaskNotifications;
+          const notifications = yield* service.subscribeTaskNotifications(invocation(threadA));
           const notificationFiber = yield* notifications.pipe(Stream.runHead, Effect.forkChild);
 
           const message = yield* store.capture(fixture("message:delivery", projectA, "project-a"));
@@ -243,7 +334,7 @@ describe("EmailMcpService", () => {
             );
             yield* waits.completeMatching(message);
 
-            const task = yield* service.getTask(taskId);
+            const task = yield* service.getTask(invocation(threadA), taskId);
             expect(task).toMatchObject({ status: "completed", result: { id: message.id } });
             const resumed = yield* service.waitFor(
               invocation(threadA),
@@ -317,6 +408,229 @@ describe("EmailMcpService", () => {
         });
         expect(pageTwo.map(({ id }) => id)).toEqual([oldest.id]);
       }),
+    ),
+  );
+
+  it.effect("serves durable tasks and opted-in email notifications over MCP v2", () =>
+    withDatabase(() =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* EmailMcpService;
+          const store = yield* EmailStore;
+          const waits = yield* EmailWaitStore;
+          const handler = yield* McpHttpServer.makeEmailTestHandler(projectSettings);
+          const caller = invocation(threadA);
+          const client = yield* Effect.acquireRelease(
+            Effect.promise(async () => {
+              const connected = new Client(
+                { name: "email-resource-test", version: "1.0.0" },
+                {
+                  capabilities: {},
+                  versionNegotiation: {
+                    mode: { pin: McpHttpServer.MCP_PROTOCOL_VERSION },
+                  },
+                },
+              );
+              await connected.connect(
+                new StreamableHTTPClientTransport(new URL("http://pathway.test/mcp"), {
+                  fetch: (input, init) =>
+                    handler.fetch(
+                      new Request(typeof input === "string" ? input : input.href, init),
+                      caller,
+                    ),
+                }),
+              );
+              return connected;
+            }),
+            (connected) => Effect.promise(() => connected.close()).pipe(Effect.orDie),
+          );
+          const discovered = yield* Effect.promise(() => client.discover());
+          expect(discovered.capabilities.resources?.subscribe).toBe(true);
+          expect(discovered.capabilities.extensions?.[McpHttpServer.MCP_TASKS_EXTENSION]).toEqual(
+            {},
+          );
+          const resources = yield* Effect.promise(() => client.listResources());
+          expect(resources.resources.map(({ uri }) => uri)).toContain(
+            "email://project/project-a/inbox",
+          );
+          const inbox = yield* Effect.promise(() =>
+            client.readResource({ uri: "email://project/project-a/inbox" }),
+          );
+          expect(inbox.contents).toEqual([
+            {
+              uri: "email://project/project-a/inbox",
+              mimeType: "application/json",
+              text: "[]",
+            },
+          ]);
+
+          const registrationEvents = yield* waits.subscribeRegistrations;
+          const registrationFiber = yield* registrationEvents.pipe(
+            Stream.filter(({ delivery }) => delivery === "long-poll"),
+            Stream.runHead,
+            Effect.forkChild,
+          );
+          const longPollFiber = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request(
+                "tools/call",
+                {
+                  name: "email_wait_for",
+                  arguments: { sender: "auth@example.test", subject: "verification" },
+                },
+                false,
+                "email_wait_for",
+              ),
+              caller,
+            ),
+          ).pipe(Effect.forkChild);
+          const registered = yield* Fiber.join(registrationFiber);
+          expect(Option.isSome(registered)).toBe(true);
+          const longPollMessage = yield* store.capture(
+            fixture("message:v2-long-poll", projectA, "project-a"),
+          );
+          yield* waits.completeMatching(longPollMessage);
+          const longPollResponse = yield* Fiber.join(longPollFiber);
+          const longPoll = yield* decodeToolResponse(
+            yield* Effect.promise(() => longPollResponse.json()),
+          );
+          expect(longPoll.result.resultType).toBe("complete");
+          expect(longPoll.result.task).toBeUndefined();
+
+          const createResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request(
+                "tools/call",
+                {
+                  name: "email_wait_for",
+                  arguments: { sender: "auth@example.test", subject: "verification" },
+                },
+                true,
+                "email_wait_for",
+              ),
+              caller,
+            ),
+          );
+          const created = yield* decodeTaskCreateResponse(
+            yield* Effect.promise(() => createResponse.json()),
+          );
+          expect(created.result.task.status).toBe("working");
+          expect((yield* service.getTask(caller, created.result.task.taskId)).taskId).toBe(
+            created.result.task.taskId,
+          );
+
+          const missingCapabilityResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request("tasks/get", { taskId: created.result.task.taskId }, false),
+              caller,
+            ),
+          );
+          const missingCapability = yield* decodeErrorResponse(
+            yield* Effect.promise(() => missingCapabilityResponse.json()),
+          );
+          expect(missingCapability.error.code).toBe(-32021);
+          expect(missingCapability.error.data?.requiredCapabilities).toEqual({
+            extensions: { [McpHttpServer.MCP_TASKS_EXTENSION]: {} },
+          });
+
+          const getResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request("tasks/get", { taskId: created.result.task.taskId }, true),
+              caller,
+            ),
+          );
+          const got = yield* decodeTaskStateResponse(
+            yield* Effect.promise(() => getResponse.json()),
+          );
+          expect(got.result.task.status).toBe("working");
+
+          const listenResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request(
+                "subscriptions/listen",
+                {
+                  notifications: {
+                    [McpHttpServer.MCP_TASKS_EXTENSION]: true,
+                    resourceSubscriptions: ["email://project/project-a/inbox"],
+                  },
+                },
+                true,
+              ),
+              caller,
+            ),
+          );
+          const reader = listenResponse.body!.getReader();
+          const readNotification = makeSseNotificationReader(reader);
+          const acknowledged = yield* Effect.promise(readNotification);
+          expect(acknowledged.method).toBe("notifications/subscriptions/acknowledged");
+
+          const message = yield* store.capture(fixture("message:v2-task", projectA, "project-a"));
+          yield* waits.completeMatching(message);
+          const first = yield* Effect.promise(readNotification);
+          const second = yield* Effect.promise(readNotification);
+          expect(new Set([first.method, second.method])).toEqual(
+            new Set(["notifications/resources/updated", "notifications/tasks"]),
+          );
+          const taskNotification = first.method === "notifications/tasks" ? first : second;
+          expect(taskNotification.params).toMatchObject({
+            taskId: created.result.task.taskId,
+            status: "completed",
+            result: { id: message.id },
+          });
+
+          const completedResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request("tasks/get", { taskId: created.result.task.taskId }, true),
+              caller,
+            ),
+          );
+          const completed = yield* decodeTaskStateResponse(
+            yield* Effect.promise(() => completedResponse.json()),
+          );
+          expect(completed.result.task.status).toBe("completed");
+          yield* Effect.promise(() => reader.cancel());
+
+          const cancelCreateResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request(
+                "tools/call",
+                { name: "email_wait_for", arguments: { subject: "never-arrives" } },
+                true,
+                "email_wait_for",
+              ),
+              caller,
+            ),
+          );
+          const cancelCreated = yield* decodeTaskCreateResponse(
+            yield* Effect.promise(() => cancelCreateResponse.json()),
+          );
+          const cancelResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request("tasks/cancel", { taskId: cancelCreated.result.task.taskId }, true),
+              caller,
+            ),
+          );
+          const cancelled = yield* decodeTaskStateResponse(
+            yield* Effect.promise(() => cancelResponse.json()),
+          );
+          expect(cancelled.result.task.status).toBe("cancelled");
+
+          const updateResponse = yield* Effect.promise(() =>
+            handler.fetch(
+              v2Request(
+                "tasks/update",
+                { taskId: cancelCreated.result.task.taskId, inputResponses: {} },
+                true,
+              ),
+              caller,
+            ),
+          );
+          const updated = yield* decodeTaskStateResponse(
+            yield* Effect.promise(() => updateResponse.json()),
+          );
+          expect(updated.result.task.status).toBe("cancelled");
+        }),
+      ),
     ),
   );
 });

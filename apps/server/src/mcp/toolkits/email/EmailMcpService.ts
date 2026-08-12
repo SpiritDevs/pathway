@@ -198,13 +198,22 @@ export class EmailMcpService extends Context.Service<
       invocation: McpInvocationScope,
       input: EmailMcpGetInput,
     ) => Effect.Effect<CapturedEmailMessage, EmailCaptureError>;
-    readonly getTask: (taskId: string) => Effect.Effect<EmailMcpTaskState, EmailCaptureError>;
+    readonly getTask: (
+      invocation: McpInvocationScope,
+      taskId: string,
+    ) => Effect.Effect<EmailMcpTaskState, EmailCaptureError>;
+    readonly updateTask: (
+      invocation: McpInvocationScope,
+      taskId: string,
+    ) => Effect.Effect<EmailMcpTaskState, EmailCaptureError>;
+    readonly cancelTask: (
+      invocation: McpInvocationScope,
+      taskId: string,
+    ) => Effect.Effect<EmailMcpTaskState, EmailCaptureError>;
     readonly taskNotifications: Stream.Stream<EmailMcpTaskState, EmailCaptureError>;
-    readonly subscribeTaskNotifications: Effect.Effect<
-      Stream.Stream<EmailMcpTaskState, EmailCaptureError>,
-      never,
-      Scope.Scope
-    >;
+    readonly subscribeTaskNotifications: (
+      invocation: McpInvocationScope,
+    ) => Effect.Effect<Stream.Stream<EmailMcpTaskState, EmailCaptureError>, never, Scope.Scope>;
   }
 >()("t3/mcp/toolkits/email/EmailMcpService") {}
 
@@ -219,19 +228,55 @@ const make = Effect.fn("EmailMcpService.make")(function* () {
     return message === null ? Option.none<CapturedEmailMessage>() : Option.some(message);
   });
 
+  const registrationForTask = Effect.fn("EmailMcpService.registrationForTask")(function* (
+    invocation: McpInvocationScope,
+    taskId: string,
+  ) {
+    const registration = yield* waits.getByTaskId(taskId);
+    if (
+      Option.isNone(registration) ||
+      registration.value.threadId !== invocation.threadId ||
+      registration.value.providerInstanceId !== invocation.providerInstanceId
+    ) {
+      return yield* failure("not-found", `Email task '${taskId}' was not found.`);
+    }
+    return registration.value;
+  });
+
+  const stateForRegistration = Effect.fn("EmailMcpService.stateForRegistration")(function* (
+    registration: EmailWaitRegistration,
+  ) {
+    const message =
+      registration.matchedMessageId === null
+        ? Option.none<CapturedEmailMessage>()
+        : yield* findMessage(registration.matchedMessageId);
+    return taskState(registration, Option.getOrNull(message));
+  });
+
   const getTask: EmailMcpService["Service"]["getTask"] = Effect.fn("EmailMcpService.getTask")(
-    function* (taskId) {
-      const registration = yield* waits.getByTaskId(taskId);
-      if (Option.isNone(registration)) {
-        return yield* failure("not-found", `Email task '${taskId}' was not found.`);
-      }
-      const message =
-        registration.value.matchedMessageId === null
-          ? Option.none<CapturedEmailMessage>()
-          : yield* findMessage(registration.value.matchedMessageId);
-      return taskState(registration.value, Option.getOrNull(message));
+    function* (invocation, taskId) {
+      return yield* stateForRegistration(yield* registrationForTask(invocation, taskId));
     },
   );
+
+  const updateTask: EmailMcpService["Service"]["updateTask"] = Effect.fn(
+    "EmailMcpService.updateTask",
+  )(function* (invocation, taskId) {
+    const state = yield* getTask(invocation, taskId);
+    if (state.status !== "working") return state;
+    return yield* failure("invalid", `Email task '${taskId}' is not awaiting client input.`);
+  });
+
+  const cancelTask: EmailMcpService["Service"]["cancelTask"] = Effect.fn(
+    "EmailMcpService.cancelTask",
+  )(function* (invocation, taskId) {
+    yield* registrationForTask(invocation, taskId);
+    const registration = yield* waits.cancelTask(taskId);
+    if (Option.isNone(registration)) {
+      return yield* failure("not-found", `Email task '${taskId}' was not found.`);
+    }
+    return yield* stateForRegistration(registration.value);
+  });
 
   const list: EmailMcpService["Service"]["list"] = Effect.fn("EmailMcpService.list")(
     function* (invocation, input) {
@@ -332,28 +377,26 @@ const make = Effect.fn("EmailMcpService.make")(function* () {
     },
   );
 
-  const taskNotifications = waits.completions.pipe(
-    Stream.flatMap(({ message, registrations }) =>
-      Stream.fromIterable(
-        registrations
-          .filter(({ taskId }) => taskId !== null)
-          .map((registration) => taskState(registration, message)),
-      ),
-    ),
+  const taskNotifications = waits.taskUpdates.pipe(
+    Stream.filter(({ registration }) => registration.taskId !== null),
+    Stream.map(({ message, registration }) => taskState(registration, message)),
   );
-  const subscribeTaskNotifications = waits.subscribeCompletions.pipe(
-    Effect.map((stream) =>
-      stream.pipe(
-        Stream.flatMap(({ message, registrations }) =>
-          Stream.fromIterable(
-            registrations
-              .filter(({ taskId }) => taskId !== null)
-              .map((registration) => taskState(registration, message)),
+  const subscribeTaskNotifications: EmailMcpService["Service"]["subscribeTaskNotifications"] = (
+    invocation,
+  ) =>
+    waits.subscribeTaskUpdates.pipe(
+      Effect.map((stream) =>
+        stream.pipe(
+          Stream.filter(
+            ({ registration }) =>
+              registration.taskId !== null &&
+              registration.threadId === invocation.threadId &&
+              registration.providerInstanceId === invocation.providerInstanceId,
           ),
+          Stream.map(({ message, registration }) => taskState(registration, message)),
         ),
       ),
-    ),
-  );
+    );
 
   return EmailMcpService.of({
     waitFor,
@@ -361,6 +404,8 @@ const make = Effect.fn("EmailMcpService.make")(function* () {
     list,
     get,
     getTask,
+    updateTask,
+    cancelTask,
     taskNotifications,
     subscribeTaskNotifications,
   });

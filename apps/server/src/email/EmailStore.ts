@@ -20,8 +20,10 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../config.ts";
 import { analyzeEmailDeliverability } from "./DeliverabilityAnalyzer.ts";
@@ -87,6 +89,8 @@ export interface EmailStoreShape {
   readonly analytics: (
     input: EmailAnalyticsInput,
   ) => Effect.Effect<EmailAnalyticsResult, EmailCaptureError>;
+  readonly stored: Stream.Stream<CapturedEmailMessage>;
+  readonly subscribeStored: Effect.Effect<Stream.Stream<CapturedEmailMessage>, never, Scope.Scope>;
 }
 
 export class EmailStore extends Context.Service<EmailStore, EmailStoreShape>()(
@@ -394,6 +398,7 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
     }),
     (opened) => Effect.sync(() => opened.close()).pipe(Effect.ignore),
   );
+  const stored = yield* PubSub.sliding<CapturedEmailMessage>(256);
 
   const insert: EmailStoreShape["insert"] = Effect.fn("EmailStore.insert")(
     function* (message, files) {
@@ -447,6 +452,7 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
         },
         catch: (cause) => storageError("Could not store captured email", cause),
       });
+      yield* PubSub.publish(stored, message);
     },
   );
 
@@ -665,6 +671,8 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
     applyRetention,
     allMessages,
     analytics,
+    stored: Stream.fromPubSub(stored),
+    subscribeStored: PubSub.subscribe(stored).pipe(Effect.map(Stream.fromSubscription)),
   });
 });
 

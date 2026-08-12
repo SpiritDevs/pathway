@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
   CommandId,
   EnvironmentId,
@@ -40,7 +41,6 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import { ClaudeProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
@@ -384,17 +384,6 @@ function waitForProjection(
   });
 }
 
-const client = McpSchema.McpServerClient.of({
-  clientId: 1,
-  protocolVersion: "2025-06-18",
-  initializePayload: {
-    protocolVersion: "2025-06-18",
-    capabilities: {},
-    clientInfo: { name: "orchestrator-mcp-test", version: "1.0.0" },
-  },
-  getClient: Effect.die("unused"),
-});
-
 /** Build a persisted-looking ScheduledTask from an upsert input for the in-memory stub. */
 function scheduledTaskFromUpsert(input: ScheduledTaskUpsertInput): ScheduledTask {
   const timestamp = IsoDateTime.make("2026-07-01T09:00:00.000Z");
@@ -570,17 +559,15 @@ describe("orchestrator MCP toolkit", () => {
               runNow: () => Effect.die("ScheduledTaskService.runNow is unused in this test"),
             }),
           );
-          const testLayer = McpHttpServer.OrchestratorToolkitRegistrationLive.pipe(
-            Layer.provideMerge(McpServer.McpServer.layer),
-            Layer.provideMerge(orchestrationLayer),
-            Layer.provide(providerRegistryLayer),
-            Layer.provide(scheduledTaskStubLayer),
-            Layer.provide(NodeServices.layer),
+          const testDependencies = Layer.mergeAll(
+            providerRegistryLayer,
+            scheduledTaskStubLayer,
+            NodeServices.layer,
           );
+          const testLayer = orchestrationLayer.pipe(Layer.provideMerge(testDependencies));
 
           yield* Effect.gen(function* () {
             const orchestrator = yield* OrchestratorV2;
-            const server = yield* McpServer.McpServer;
             yield* orchestrator.dispatch({
               type: "thread.create",
               createdBy: "user",
@@ -627,13 +614,34 @@ describe("orchestrator MCP toolkit", () => {
               capabilities: new Set(["orchestration"]),
               issuedAt: 1,
             };
-            const invoke = (name: string, args: Record<string, unknown>) =>
-              server
-                .callTool({ name, arguments: args })
-                .pipe(
-                  Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-                  Effect.provideService(McpSchema.McpServerClient, client),
+            const handler = yield* McpHttpServer.makeOrchestratorTestHandler;
+            const mcpClient = yield* Effect.acquireRelease(
+              Effect.promise(async () => {
+                const connected = new Client(
+                  { name: "orchestrator-mcp-test", version: "1.0.0" },
+                  {
+                    capabilities: {},
+                    versionNegotiation: {
+                      mode: { pin: McpHttpServer.MCP_PROTOCOL_VERSION },
+                    },
+                  },
                 );
+                await connected.connect(
+                  new StreamableHTTPClientTransport(new URL("http://pathway.test/mcp"), {
+                    fetch: (input, init) =>
+                      handler.fetch(
+                        new Request(typeof input === "string" ? input : input.href, init),
+                        invocation,
+                      ),
+                  }),
+                );
+                return connected;
+              }),
+              (connected) => Effect.promise(() => connected.close()).pipe(Effect.orDie),
+            );
+            const invoke = (name: string, args: Record<string, unknown>) =>
+              Effect.promise(() => mcpClient.callTool({ name, arguments: args }));
+            const listedTools = (yield* Effect.promise(() => mcpClient.listTools())).tools;
 
             if (parentRun === undefined || parentRun.rootNodeId === null) {
               return yield* Effect.die(new Error("Parent run missing."));
@@ -1125,34 +1133,32 @@ describe("orchestrator MCP toolkit", () => {
             );
             yield* Ref.set(continuationOffers, []);
 
-            const capabilitiesTool = server.tools.find(
-              ({ tool }) => tool.name === "orchestrator_capabilities",
+            const capabilitiesTool = listedTools.find(
+              ({ name }) => name === "orchestrator_capabilities",
             );
-            expect(capabilitiesTool?.tool.annotations?.readOnlyHint).toBe(true);
-            expect(capabilitiesTool?.tool.annotations?.idempotentHint).toBe(true);
-            const delegateTool = server.tools.find(({ tool }) => tool.name === "delegate_task");
-            expect(delegateTool?.tool.annotations?.destructiveHint).toBe(true);
-            expect(delegateTool?.tool.annotations?.openWorldHint).toBe(true);
-            const taskStatusTool = server.tools.find(({ tool }) => tool.name === "task_status");
-            expect(taskStatusTool?.tool.annotations?.readOnlyHint).toBe(false);
-            expect(taskStatusTool?.tool.annotations?.idempotentHint).toBe(true);
-            const createThreadsTool = server.tools.find(
-              ({ tool }) => tool.name === "create_threads",
+            expect(capabilitiesTool?.annotations?.readOnlyHint).toBe(true);
+            expect(capabilitiesTool?.annotations?.idempotentHint).toBe(true);
+            const delegateTool = listedTools.find(({ name }) => name === "delegate_task");
+            expect(delegateTool?.annotations?.destructiveHint).toBe(true);
+            expect(delegateTool?.annotations?.openWorldHint).toBe(true);
+            const taskStatusTool = listedTools.find(({ name }) => name === "task_status");
+            expect(taskStatusTool?.annotations?.readOnlyHint).toBe(false);
+            expect(taskStatusTool?.annotations?.idempotentHint).toBe(true);
+            const createThreadsTool = listedTools.find(({ name }) => name === "create_threads");
+            expect(createThreadsTool?.annotations?.destructiveHint).toBe(true);
+            const threadListTool = listedTools.find(({ name }) => name === "t3_thread_list");
+            expect(threadListTool?.annotations?.readOnlyHint).toBe(true);
+            expect(threadListTool?.annotations?.idempotentHint).toBe(true);
+            const threadReadTool = listedTools.find(({ name }) => name === "t3_thread_read");
+            expect(threadReadTool?.annotations?.readOnlyHint).toBe(false);
+            const threadSendTool = listedTools.find(({ name }) => name === "t3_thread_send");
+            expect(threadSendTool?.annotations?.destructiveHint).toBe(true);
+            const threadWaitTool = listedTools.find(({ name }) => name === "t3_thread_wait");
+            expect(threadWaitTool?.annotations?.readOnlyHint).toBe(true);
+            const threadInterruptTool = listedTools.find(
+              ({ name }) => name === "t3_thread_interrupt",
             );
-            expect(createThreadsTool?.tool.annotations?.destructiveHint).toBe(true);
-            const threadListTool = server.tools.find(({ tool }) => tool.name === "t3_thread_list");
-            expect(threadListTool?.tool.annotations?.readOnlyHint).toBe(true);
-            expect(threadListTool?.tool.annotations?.idempotentHint).toBe(true);
-            const threadReadTool = server.tools.find(({ tool }) => tool.name === "t3_thread_read");
-            expect(threadReadTool?.tool.annotations?.readOnlyHint).toBe(false);
-            const threadSendTool = server.tools.find(({ tool }) => tool.name === "t3_thread_send");
-            expect(threadSendTool?.tool.annotations?.destructiveHint).toBe(true);
-            const threadWaitTool = server.tools.find(({ tool }) => tool.name === "t3_thread_wait");
-            expect(threadWaitTool?.tool.annotations?.readOnlyHint).toBe(true);
-            const threadInterruptTool = server.tools.find(
-              ({ tool }) => tool.name === "t3_thread_interrupt",
-            );
-            expect(threadInterruptTool?.tool.annotations?.destructiveHint).toBe(true);
+            expect(threadInterruptTool?.annotations?.destructiveHint).toBe(true);
 
             const capabilities = yield* invoke("orchestrator_capabilities", {});
             expect(capabilities.isError).toBe(false);
@@ -1190,8 +1196,8 @@ describe("orchestrator MCP toolkit", () => {
               ]),
             });
 
-            const scheduleTool = server.tools.find(({ tool }) => tool.name === "schedule_task");
-            expect(scheduleTool?.tool.annotations?.destructiveHint).toBe(true);
+            const scheduleTool = listedTools.find(({ name }) => name === "schedule_task");
+            expect(scheduleTool?.annotations?.destructiveHint).toBe(true);
             const scheduleCall = yield* invoke("schedule_task", {
               prompt: "wake up in this thread and say hello",
               schedule: { type: "interval", everyMs: 60_000 },

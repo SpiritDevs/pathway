@@ -90,6 +90,11 @@ export interface EmailWaitCompletion {
   readonly registrations: ReadonlyArray<EmailWaitRegistration>;
 }
 
+export interface EmailWaitTaskUpdate {
+  readonly message: CapturedEmailMessage | null;
+  readonly registration: EmailWaitRegistration;
+}
+
 export class EmailWaitStore extends Context.Service<
   EmailWaitStore,
   {
@@ -105,9 +110,24 @@ export class EmailWaitStore extends Context.Service<
     readonly completeMatching: (
       message: CapturedEmailMessage,
     ) => Effect.Effect<ReadonlyArray<EmailWaitRegistration>, EmailCaptureError>;
+    readonly cancelTask: (
+      taskId: string,
+    ) => Effect.Effect<Option.Option<EmailWaitRegistration>, EmailCaptureError>;
+    readonly registrations: Stream.Stream<EmailWaitRegistration>;
+    readonly subscribeRegistrations: Effect.Effect<
+      Stream.Stream<EmailWaitRegistration>,
+      never,
+      Scope.Scope
+    >;
     readonly completions: Stream.Stream<EmailWaitCompletion>;
     readonly subscribeCompletions: Effect.Effect<
       Stream.Stream<EmailWaitCompletion>,
+      never,
+      Scope.Scope
+    >;
+    readonly taskUpdates: Stream.Stream<EmailWaitTaskUpdate>;
+    readonly subscribeTaskUpdates: Effect.Effect<
+      Stream.Stream<EmailWaitTaskUpdate>,
       never,
       Scope.Scope
     >;
@@ -151,7 +171,9 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
     (opened) => Effect.sync(() => opened.close()).pipe(Effect.ignore),
   );
   const crypto = yield* Crypto.Crypto;
+  const registrations = yield* PubSub.sliding<EmailWaitRegistration>(256);
   const completions = yield* PubSub.sliding<EmailWaitCompletion>(256);
+  const taskUpdates = yield* PubSub.sliding<EmailWaitTaskUpdate>(256);
 
   const rowBy = (column: "id" | "task_id", value: string): Option.Option<EmailWaitRegistration> => {
     const row = database
@@ -194,7 +216,11 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
             ) as WaitRow | undefined,
         catch: (cause) => storageError("Could not resume email wait", cause),
       });
-      if (existing !== undefined) return decodeWait(existing.registration_json);
+      if (existing !== undefined) {
+        const resumed = decodeWait(existing.registration_json);
+        yield* PubSub.publish(registrations, resumed);
+        return resumed;
+      }
       const registration = EmailWaitRegistration.make({
         id: EmailWaitRegistrationId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
         threadId: input.threadId,
@@ -231,6 +257,7 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
             ),
         catch: (cause) => storageError("Could not persist email wait", cause),
       });
+      yield* PubSub.publish(registrations, registration);
       return registration;
     },
   );
@@ -284,8 +311,47 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
     });
     if (completed.length > 0) {
       yield* PubSub.publish(completions, { message, registrations: completed });
+      yield* Effect.forEach(
+        completed.filter(({ taskId }) => taskId !== null),
+        (registration) => PubSub.publish(taskUpdates, { message, registration }),
+        { discard: true },
+      );
     }
     return completed;
+  });
+
+  const cancelTask: EmailWaitStore["Service"]["cancelTask"] = Effect.fn(
+    "EmailWaitStore.cancelTask",
+  )(function* (taskId) {
+    const cancelledMs = yield* Clock.currentTimeMillis;
+    const cancelled = yield* Effect.try({
+      try: () => {
+        const current = rowBy("task_id", taskId);
+        if (Option.isNone(current) || current.value.status !== "pending") {
+          return { registration: current, changed: false } as const;
+        }
+        const next = EmailWaitRegistration.make({
+          ...current.value,
+          status: "cancelled",
+          completedAt: iso(cancelledMs),
+        });
+        database
+          .prepare(`
+            UPDATE email_waits SET status = 'cancelled', completed_ms = ?, registration_json = ?
+            WHERE task_id = ? AND status = 'pending'
+          `)
+          .run(cancelledMs, encodeWait(next), taskId);
+        return { registration: Option.some(next), changed: true } as const;
+      },
+      catch: (cause) => storageError("Could not cancel email task", cause),
+    });
+    if (cancelled.changed && Option.isSome(cancelled.registration)) {
+      yield* PubSub.publish(taskUpdates, {
+        message: null,
+        registration: cancelled.registration.value,
+      });
+    }
+    return cancelled.registration;
   });
 
   return EmailWaitStore.of({
@@ -293,8 +359,15 @@ const make = Effect.fn("EmailWaitStore.make")(function* (databasePath: string) {
     get,
     getByTaskId,
     completeMatching,
+    cancelTask,
+    registrations: Stream.fromPubSub(registrations),
+    subscribeRegistrations: PubSub.subscribe(registrations).pipe(
+      Effect.map(Stream.fromSubscription),
+    ),
     completions: Stream.fromPubSub(completions),
     subscribeCompletions: PubSub.subscribe(completions).pipe(Effect.map(Stream.fromSubscription)),
+    taskUpdates: Stream.fromPubSub(taskUpdates),
+    subscribeTaskUpdates: PubSub.subscribe(taskUpdates).pipe(Effect.map(Stream.fromSubscription)),
   });
 });
 
