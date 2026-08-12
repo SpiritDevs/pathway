@@ -829,6 +829,7 @@ export const IssueCreateInput = Schema.Struct({
   /** Absent takes the first status by position, except on a triage item, which has none yet. */
   statusId: Schema.optional(IssueStatusId),
   priority: Schema.optional(IssuePriority),
+  assignee: Schema.optional(IssueAssignee),
   projectId: Schema.optional(ProjectId),
   milestoneId: Schema.optional(IssueMilestoneId),
   cycleId: Schema.optional(IssueCycleId),

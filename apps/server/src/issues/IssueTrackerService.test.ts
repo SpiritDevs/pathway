@@ -226,7 +226,11 @@ describe("IssueTrackerService", () => {
       const first = yield* tracker.create({ title: "First" }, ACTOR);
       const second = yield* tracker.create({ title: "Second" }, ACTOR);
       const elsewhere = yield* tracker.create(
-        { title: "In review", statusId: IssueStatusId.make("in-review") },
+        {
+          title: "In review",
+          statusId: IssueStatusId.make("in-review"),
+          assignee: { kind: "agent", provider: ProviderDriverKind.make("codex") },
+        },
         ACTOR,
       );
 
@@ -237,6 +241,10 @@ describe("IssueTrackerService", () => {
       // Absent status means the lowest-position backlog-or-unstarted column.
       assert.strictEqual(first.issue.statusId, "backlog");
       assert.strictEqual(elsewhere.issue.statusId, "in-review");
+      assert.deepStrictEqual(elsewhere.issue.assignee, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
       assert.isTrue(first.issue.sortOrder < second.issue.sortOrder);
 
       const snapshot = yield* tracker.getSnapshot();

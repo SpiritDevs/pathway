@@ -31,6 +31,16 @@ concern only.
 The **Active**, **Backlog**, and **All** tabs are driven by each status's workflow category, not by
 a list you maintain.
 
+### Creating an issue
+
+The new-issue composer keeps the title and description together with the properties you use most:
+status, priority, assignee, project, and labels. Use the **More** button for milestones, cycles,
+and parent issues.
+
+Use the paperclip to add up to eight images. You can also paste images into the description or drag
+them anywhere over the composer. Pathway shows a preview before creating the issue, then adds the
+images to its comment thread so they remain visible in the detail sheet.
+
 ### Filters and saved views
 
 The filter bar filters on **Status**, **Project**, **Label**, **Milestone**, **Cycle**,
