@@ -68,9 +68,11 @@ it for a security boundary.
 Attribution resolves in order, first match wins:
 
 1. SMTP AUTH username matches a project's mail slug
-2. Recipient domain — `anything@<slug>.test`
-3. Recipient plus-tag — `anything+<slug>@…`
-4. No match → the central **Unassigned** inbox
+2. SMTP AUTH password matches a project's capture password. This supports apps
+   that use one fixed SMTP account while sending to arbitrary test recipients.
+3. Recipient domain — `anything@<slug>.test`
+4. Recipient plus-tag — `anything+<slug>@…`
+5. No match → the central **Unassigned** inbox
 
 Nothing is ever dropped. The resolved project and _which rule matched_ are both
 stored and shown in the message's Metadata tab, so a misrouted email is
