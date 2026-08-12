@@ -12,23 +12,23 @@ import {
 
 describe("normalizeGitRemoteUrl", () => {
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
-    expect(normalizeGitRemoteUrl("git@github.com:T3Tools/T3Code.git")).toBe(
+    expect(normalizeGitRemoteUrl("git@github.com:coreybain/pathway.git")).toBe(
       "github.com/coreybain/pathway",
     );
-    expect(normalizeGitRemoteUrl("https://github.com/T3Tools/T3Code.git")).toBe(
+    expect(normalizeGitRemoteUrl("https://github.com/coreybain/pathway.git")).toBe(
       "github.com/coreybain/pathway",
     );
-    expect(normalizeGitRemoteUrl("ssh://git@github.com/T3Tools/T3Code")).toBe(
+    expect(normalizeGitRemoteUrl("ssh://git@github.com/coreybain/pathway")).toBe(
       "github.com/coreybain/pathway",
     );
   });
 
   it("preserves nested group paths for providers like GitLab", () => {
-    expect(normalizeGitRemoteUrl("git@gitlab.com:T3Tools/platform/T3Code.git")).toBe(
-      "gitlab.com/t3tools/platform/pathway",
+    expect(normalizeGitRemoteUrl("git@gitlab.com:coreybain/platform/pathway.git")).toBe(
+      "gitlab.com/coreybain/platform/pathway",
     );
-    expect(normalizeGitRemoteUrl("https://gitlab.com/T3Tools/platform/T3Code.git")).toBe(
-      "gitlab.com/t3tools/platform/pathway",
+    expect(normalizeGitRemoteUrl("https://gitlab.com/coreybain/platform/pathway.git")).toBe(
+      "gitlab.com/coreybain/platform/pathway",
     );
   });
 
@@ -45,11 +45,11 @@ describe("normalizeGitRemoteUrl", () => {
 describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
   it("extracts the owner and repository from common GitHub remote shapes", () => {
     expect(
-      parseGitHubRepositoryNameWithOwnerFromRemoteUrl("git@github.com:T3Tools/T3Code.git"),
-    ).toBe("T3Tools/T3Code");
+      parseGitHubRepositoryNameWithOwnerFromRemoteUrl("git@github.com:coreybain/pathway.git"),
+    ).toBe("coreybain/pathway");
     expect(
-      parseGitHubRepositoryNameWithOwnerFromRemoteUrl("https://github.com/T3Tools/T3Code.git"),
-    ).toBe("T3Tools/T3Code");
+      parseGitHubRepositoryNameWithOwnerFromRemoteUrl("https://github.com/coreybain/pathway.git"),
+    ).toBe("coreybain/pathway");
   });
 });
 

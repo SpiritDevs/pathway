@@ -35,7 +35,7 @@ const TelemetryEnvConfig = Config.all({
   posthogHost: Config.string("PATHWAY_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
-  enabled: Config.boolean("PATHWAY_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  enabled: Config.boolean("PATHWAY_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
   flushBatchSize: Config.number("PATHWAY_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.number("PATHWAY_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -70,7 +70,9 @@ export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const identifier = yield* getTelemetryIdentifier;
+  // Telemetry is opt-in. Do not even create/read an anonymous identifier for
+  // ordinary Pathway runs where telemetry has not been explicitly enabled.
+  const identifier = telemetryConfig.enabled ? yield* getTelemetryIdentifier : null;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
   const hostPlatform = yield* HostProcessPlatform;
@@ -119,7 +121,7 @@ export const make = Effect.gen(function* () {
           platform: hostPlatform,
           wsl: Option.getOrUndefined(telemetryConfig.wslDistroName),
           arch: hostArchitecture,
-          t3CodeVersion: packageJson.version,
+          pathwayVersion: packageJson.version,
           clientType,
         },
         timestamp: event.capturedAt,

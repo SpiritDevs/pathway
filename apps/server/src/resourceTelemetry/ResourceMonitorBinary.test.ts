@@ -33,7 +33,7 @@ describe("ResourceMonitorBinary", () => {
         Effect.provideService(HostProcessPlatform, "win32"),
         Effect.provideService(HostProcessArchitecture, "arm64"),
         Effect.provideService(HostProcessEnvironment, {
-          T3CODE_RESOURCE_MONITOR_PATH: binaryPath,
+          PATHWAY_RESOURCE_MONITOR_PATH: binaryPath,
         }),
       );
 
