@@ -147,9 +147,8 @@ function IssueListRowImpl({
         value={issue.priority}
       />
 
-      <span className="flex w-16 shrink-0 items-center gap-1 truncate font-mono text-xs text-muted-foreground/80">
-        <span className="min-w-0 truncate">{issue.key}</span>
-        {investigating ? <IssueInvestigatingChip compact /> : null}
+      <span className="w-16 shrink-0 truncate font-mono text-xs text-muted-foreground/80">
+        {issue.key}
       </span>
 
       <IssueStatusMenu
@@ -229,6 +228,8 @@ function IssueListRowImpl({
           }
         />
       ) : null}
+
+      {investigating ? <IssueInvestigatingChip /> : null}
 
       {projectTitle === null ? null : (
         <span className="hidden max-w-32 shrink-0 truncate text-xs text-muted-foreground lg:block">
