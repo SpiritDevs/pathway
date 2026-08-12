@@ -17,6 +17,7 @@ import {
   FileUpIcon,
   CalendarClockIcon,
   FlaskConicalIcon,
+  FolderIcon,
   GitBranchIcon,
   InboxIcon,
   KeyboardIcon,
@@ -60,6 +61,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
+  "/settings/projects": FolderIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
@@ -296,6 +298,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 <SidebarMenu className="ps-px">
                   {group.paths.map((to) => {
                     const Icon = SETTINGS_SECTION_ICONS[to];
+                    // Prefix match keeps the section active on nested routes
+                    // like /settings/projects/$projectKey.
                     const isActive = pathname === to || pathname.startsWith(`${to}/`);
                     return (
                       <SidebarMenuItem key={to}>

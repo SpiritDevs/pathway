@@ -2,6 +2,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
+  | "/settings/projects"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -32,6 +33,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
+  "/settings/projects": "Projects",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -59,7 +61,12 @@ export interface SettingsNavGroup {
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   {
     label: "Workspace",
-    paths: ["/settings/general", "/settings/appearance", "/settings/keybindings"],
+    paths: [
+      "/settings/general",
+      "/settings/appearance",
+      "/settings/keybindings",
+      "/settings/projects",
+    ],
   },
   {
     label: "Agents",
@@ -242,6 +249,37 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
+  },
+  {
+    id: "projects",
+    title: "Projects",
+    to: "/settings/projects",
+  },
+  // The settings themselves live on the per-project subpage, so the index section is the stable
+  // destination: the search hit gets you to the project list, and you pick a project from there.
+  {
+    id: "project-default-model",
+    title: "Project default model",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-new-thread-workspace",
+    title: "Project new-thread workspace",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-scripts",
+    title: "Project scripts",
+    to: "/settings/projects",
+    targetId: "projects",
+  },
+  {
+    id: "project-checkouts",
+    title: "Project checkouts",
+    to: "/settings/projects",
+    targetId: "projects",
   },
   {
     id: "providers",
