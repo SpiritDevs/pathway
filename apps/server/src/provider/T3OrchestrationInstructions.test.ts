@@ -12,6 +12,11 @@ describe("Pathway orchestration provider instructions", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level Pathway conversations");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Never use them merely");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "different provider");
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "pass that provider and model in `target`");
+    assert.include(
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+      "launches another provider's CLI through Bash or a wrapper",
+    );
   });
 
   it("documents structured schedules instead of JSON strings", () => {
