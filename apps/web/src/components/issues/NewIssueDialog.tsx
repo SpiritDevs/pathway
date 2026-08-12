@@ -118,7 +118,12 @@ function PickerPopover({
   return (
     <Popover onOpenChange={setOpen} open={open}>
       <PopoverTrigger render={trigger} />
-      <PopoverPopup align="start" className={cn("w-60 p-1.5", className)} side="bottom">
+      <PopoverPopup
+        align="start"
+        className={cn("w-60", className)}
+        side="bottom"
+        viewportClassName="p-1.5"
+      >
         <p className="px-2 py-1 text-xs font-medium text-muted-foreground">{title}</p>
         {children(() => setOpen(false))}
       </PopoverPopup>
