@@ -12,6 +12,7 @@ import { SlidersHorizontalIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
+  MenuGroup,
   MenuGroupLabel,
   MenuPopup,
   MenuRadioGroup,
@@ -48,6 +49,13 @@ export function IssuesViewOptions({
   const showGrouping = viewMode === "list";
   // Manual order is the stored fractional key, which only a drag inside a status column writes.
   const hint = issueSortModeHint(sortMode, grouping, viewMode);
+  const help =
+    hint ??
+    (sortMode === "manual"
+      ? viewMode === "board"
+        ? "Drag cards to reorder them or move them between statuses."
+        : "Manual order follows the card positions set by dragging in board view."
+      : null);
 
   return (
     <Menu>
@@ -56,9 +64,9 @@ export function IssuesViewOptions({
           <Button
             size="xs"
             title={
-              hint ??
+              help ??
               (showGrouping
-                ? `Grouped by ${ISSUE_GROUPING_LABELS[grouping].toLowerCase()}`
+                ? `Grouped by ${ISSUE_GROUPING_LABELS[grouping].toLowerCase()} and ordered by ${ISSUE_SORT_MODE_LABELS[sortMode].toLowerCase()}`
                 : `Ordered by ${ISSUE_SORT_MODE_LABELS[sortMode].toLowerCase()}`)
             }
             variant="ghost"
@@ -78,34 +86,38 @@ export function IssuesViewOptions({
       <MenuPopup align="end" className="min-w-52" side="bottom">
         {!showGrouping ? null : (
           <>
-            <MenuGroupLabel>Grouping</MenuGroupLabel>
-            <MenuRadioGroup
-              onValueChange={(next) => onGrouping(next as IssueViewGrouping)}
-              value={grouping}
-            >
-              {ISSUE_VIEW_GROUPINGS.map((option) => (
-                <MenuRadioItem key={option} value={option}>
-                  {ISSUE_GROUPING_LABELS[option]}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
+            <MenuGroup>
+              <MenuGroupLabel>Grouping</MenuGroupLabel>
+              <MenuRadioGroup
+                onValueChange={(next) => onGrouping(next as IssueViewGrouping)}
+                value={grouping}
+              >
+                {ISSUE_VIEW_GROUPINGS.map((option) => (
+                  <MenuRadioItem key={option} value={option}>
+                    {ISSUE_GROUPING_LABELS[option]}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
             <MenuSeparator />
           </>
         )}
-        <MenuGroupLabel>Ordering</MenuGroupLabel>
-        <MenuRadioGroup
-          onValueChange={(next) => onSortMode(next as IssueViewSortMode)}
-          value={sortMode}
-        >
-          {ISSUE_VIEW_SORT_MODES.map((option) => (
-            <MenuRadioItem key={option} value={option}>
-              {ISSUE_SORT_MODE_LABELS[option]}
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-        {hint === null ? null : (
-          <p className="px-2 pt-1.5 text-[11px] text-muted-foreground">{hint}</p>
-        )}
+        <MenuGroup>
+          <MenuGroupLabel>Ordering</MenuGroupLabel>
+          <MenuRadioGroup
+            onValueChange={(next) => onSortMode(next as IssueViewSortMode)}
+            value={sortMode}
+          >
+            {ISSUE_VIEW_SORT_MODES.map((option) => (
+              <MenuRadioItem key={option} value={option}>
+                {ISSUE_SORT_MODE_LABELS[option]}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+          {help === null ? null : (
+            <p className="max-w-52 px-2 pt-1.5 text-[11px] text-muted-foreground">{help}</p>
+          )}
+        </MenuGroup>
       </MenuPopup>
     </Menu>
   );

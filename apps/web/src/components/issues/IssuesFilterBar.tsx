@@ -20,7 +20,7 @@ import { CheckIcon, ListFilterIcon, PlusIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { Menu, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
@@ -206,19 +206,21 @@ export function IssuesFilterBar({
             }
           />
           <MenuPopup align="start" className="min-w-44" side="bottom">
-            <MenuGroupLabel>Filter by</MenuGroupLabel>
-            {addableFields.map((field) => (
-              <MenuItem
-                closeOnClick
-                key={field}
-                onClick={() => {
-                  setPendingFields((current) => [...current, field]);
-                  setOpenField(field);
-                }}
-              >
-                {ISSUES_FILTER_FIELD_LABELS[field]}
-              </MenuItem>
-            ))}
+            <MenuGroup>
+              <MenuGroupLabel>Filter by</MenuGroupLabel>
+              {addableFields.map((field) => (
+                <MenuItem
+                  closeOnClick
+                  key={field}
+                  onClick={() => {
+                    setPendingFields((current) => [...current, field]);
+                    setOpenField(field);
+                  }}
+                >
+                  {ISSUES_FILTER_FIELD_LABELS[field]}
+                </MenuItem>
+              ))}
+            </MenuGroup>
           </MenuPopup>
         </Menu>
       )}

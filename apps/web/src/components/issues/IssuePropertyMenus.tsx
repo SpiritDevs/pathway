@@ -23,6 +23,7 @@ import { cn } from "~/lib/utils";
 import {
   Menu,
   MenuCheckboxItem,
+  MenuGroup,
   MenuGroupLabel,
   MenuItem,
   MenuPopup,
@@ -75,22 +76,24 @@ export function IssueStatusMenu({
       <Menu>
         <MenuTrigger render={trigger} />
         <MenuPopup align={align} className="min-w-48" side="bottom">
-          <MenuGroupLabel>Status</MenuGroupLabel>
-          <MenuRadioGroup
-            value={value ?? ""}
-            onValueChange={(next) => {
-              if (next !== value) onSelect(next as IssueStatusId);
-            }}
-          >
-            {statuses.map((status) => (
-              <MenuRadioItem key={status.id} value={status.id}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <IssueStatusDot status={status} />
-                  <span className="truncate">{status.name}</span>
-                </span>
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
+          <MenuGroup>
+            <MenuGroupLabel>Status</MenuGroupLabel>
+            <MenuRadioGroup
+              value={value ?? ""}
+              onValueChange={(next) => {
+                if (next !== value) onSelect(next as IssueStatusId);
+              }}
+            >
+              {statuses.map((status) => (
+                <MenuRadioItem key={status.id} value={status.id}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <IssueStatusDot status={status} />
+                    <span className="truncate">{status.name}</span>
+                  </span>
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
         </MenuPopup>
       </Menu>
     </IssuePropertyGuard>
@@ -113,22 +116,24 @@ export function IssuePriorityMenu({
       <Menu>
         <MenuTrigger render={trigger} />
         <MenuPopup align={align} className="min-w-44" side="bottom">
-          <MenuGroupLabel>Priority</MenuGroupLabel>
-          <MenuRadioGroup
-            value={value ?? ""}
-            onValueChange={(next) => {
-              if (next !== value) onSelect(next as IssuePriority);
-            }}
-          >
-            {ISSUE_PRIORITY_ORDER.map((priority) => (
-              <MenuRadioItem key={priority} value={priority}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <IssuePriorityIcon priority={priority} />
-                  <span className="truncate">{ISSUE_PRIORITY_LABELS[priority]}</span>
-                </span>
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
+          <MenuGroup>
+            <MenuGroupLabel>Priority</MenuGroupLabel>
+            <MenuRadioGroup
+              value={value ?? ""}
+              onValueChange={(next) => {
+                if (next !== value) onSelect(next as IssuePriority);
+              }}
+            >
+              {ISSUE_PRIORITY_ORDER.map((priority) => (
+                <MenuRadioItem key={priority} value={priority}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <IssuePriorityIcon priority={priority} />
+                    <span className="truncate">{ISSUE_PRIORITY_LABELS[priority]}</span>
+                  </span>
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
         </MenuPopup>
       </Menu>
     </IssuePropertyGuard>
@@ -161,31 +166,33 @@ export function IssueLabelsMenu({
       <Menu>
         <MenuTrigger render={trigger} />
         <MenuPopup align={align} className="min-w-52" side="bottom">
-          <MenuGroupLabel>Labels</MenuGroupLabel>
-          {labels.length === 0 ? (
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">{emptyHint}</p>
-          ) : (
-            labels.map((label) => {
-              const state = issueLabelSelectionState(issues, label.id);
-              return (
-                <MenuCheckboxItem
-                  checked={state === "all"}
-                  key={label.id}
-                  onCheckedChange={() => onToggle(label.id, state !== "all")}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <IssueLabelDot color={label.color} />
-                    <span className="truncate">{label.name}</span>
-                    {state === "some" ? (
-                      <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                        some
-                      </span>
-                    ) : null}
-                  </span>
-                </MenuCheckboxItem>
-              );
-            })
-          )}
+          <MenuGroup>
+            <MenuGroupLabel>Labels</MenuGroupLabel>
+            {labels.length === 0 ? (
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">{emptyHint}</p>
+            ) : (
+              labels.map((label) => {
+                const state = issueLabelSelectionState(issues, label.id);
+                return (
+                  <MenuCheckboxItem
+                    checked={state === "all"}
+                    key={label.id}
+                    onCheckedChange={() => onToggle(label.id, state !== "all")}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <IssueLabelDot color={label.color} />
+                      <span className="truncate">{label.name}</span>
+                      {state === "some" ? (
+                        <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                          some
+                        </span>
+                      ) : null}
+                    </span>
+                  </MenuCheckboxItem>
+                );
+              })
+            )}
+          </MenuGroup>
         </MenuPopup>
       </Menu>
     </IssuePropertyGuard>
@@ -219,22 +226,24 @@ export function IssueProjectMenu({
       <Menu>
         <MenuTrigger render={trigger} />
         <MenuPopup align={align} className="min-w-52" side="bottom">
-          <MenuGroupLabel>Project</MenuGroupLabel>
-          <MenuRadioGroup
-            value={value ?? NO_PROJECT_VALUE}
-            onValueChange={(next) => {
-              onSelect(next === NO_PROJECT_VALUE ? null : (next as ProjectId));
-            }}
-          >
-            <MenuRadioItem value={NO_PROJECT_VALUE}>
-              <span className="text-muted-foreground">No project</span>
-            </MenuRadioItem>
-            {projects.map((project) => (
-              <MenuRadioItem key={project.id} value={project.id}>
-                <span className="truncate">{project.title}</span>
+          <MenuGroup>
+            <MenuGroupLabel>Project</MenuGroupLabel>
+            <MenuRadioGroup
+              value={value ?? NO_PROJECT_VALUE}
+              onValueChange={(next) => {
+                onSelect(next === NO_PROJECT_VALUE ? null : (next as ProjectId));
+              }}
+            >
+              <MenuRadioItem value={NO_PROJECT_VALUE}>
+                <span className="text-muted-foreground">No project</span>
               </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
+              {projects.map((project) => (
+                <MenuRadioItem key={project.id} value={project.id}>
+                  <span className="truncate">{project.title}</span>
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
           {onCreateProject ? (
             <>
               <MenuSeparator />
@@ -267,9 +276,11 @@ export function IssueDeleteMenu({
       <Menu>
         <MenuTrigger render={trigger} />
         <MenuPopup align="end" className={cn("min-w-52", className)} side="top">
-          <MenuGroupLabel>
-            Delete {count} {count === 1 ? "issue" : "issues"}?
-          </MenuGroupLabel>
+          <MenuGroup>
+            <MenuGroupLabel>
+              Delete {count} {count === 1 ? "issue" : "issues"}?
+            </MenuGroupLabel>
+          </MenuGroup>
           <MenuSeparator />
           <MenuItem onClick={onConfirm} variant="destructive">
             Delete

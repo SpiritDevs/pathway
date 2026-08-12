@@ -49,6 +49,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
   Menu,
+  MenuGroup,
   MenuGroupLabel,
   MenuPopup,
   MenuRadioGroup,
@@ -120,23 +121,25 @@ function IssueAssigneeMenu({
         }
       />
       <MenuPopup align="start" className="min-w-52" side="bottom">
-        <MenuGroupLabel>Assignee</MenuGroupLabel>
-        <MenuRadioGroup
-          onValueChange={(next) => {
-            const option = ASSIGNEE_OPTIONS.find((candidate) => candidate.value === next);
-            if (option !== undefined) onSelect(option.assignee);
-          }}
-          value={current}
-        >
-          {ASSIGNEE_OPTIONS.map((option) => (
-            <MenuRadioItem key={option.value} value={option.value}>
-              <span className="flex min-w-0 items-center gap-2">
-                <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
-                <span className="truncate">{option.label}</span>
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
+        <MenuGroup>
+          <MenuGroupLabel>Assignee</MenuGroupLabel>
+          <MenuRadioGroup
+            onValueChange={(next) => {
+              const option = ASSIGNEE_OPTIONS.find((candidate) => candidate.value === next);
+              if (option !== undefined) onSelect(option.assignee);
+            }}
+            value={current}
+          >
+            {ASSIGNEE_OPTIONS.map((option) => (
+              <MenuRadioItem key={option.value} value={option.value}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                  <span className="truncate">{option.label}</span>
+                </span>
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuGroup>
       </MenuPopup>
     </Menu>
   );
