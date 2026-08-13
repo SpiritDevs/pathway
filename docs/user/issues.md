@@ -259,6 +259,37 @@ attached, or when a run is already in flight — the button says which. It never
 **Settings → Issues → Enrichment** picks the model investigations use. It defaults to your text
 generation model, and changing it here does not change that one.
 
+### Mentioning an agent in a comment
+
+You can ask an agent something directly from an issue's comment thread. Mention it either way:
+
+- **Type it** as an ordinary markdown link naming a configured agent — `[Claude](Claude)` works,
+  and so does `[@Claude](claude)`; case does not matter and a leading `@` is decoration.
+- **Pick it** with the **@** button beside the composer, which lists your configured agents and
+  adds nothing to your text.
+
+Either way a chip appears next to the composer showing the agent and its model. Click the chip to
+configure the run — provider instance, model, reasoning effort, and service tier, the same options
+a chat turn has — or dismiss it to send a plain comment. Your words are never rewritten while you
+type; the mention becomes a pill only when the comment posts.
+
+Posting the comment starts **exactly one run** for that comment. The agent reads the issue — title,
+description, and the comment thread including your ask — and works in the project's directory
+read-only. Under your comment you'll see where it is: _waiting to start_, _thinking_, _researching
+the project_, _writing reply_, and finally how long it took. **Cancel** stops a queued or running
+run; a failed or canceled run offers **Retry**, which starts a fresh run with the same
+configuration. **Execution details** holds the live transcript, collapsed by default.
+
+The agent's answer arrives as a normal comment attributed to it, exactly like any other agent
+comment in the feed. When the reply calls for it, the run may also set the issue's priority, fill
+in an empty description, or replace a placeholder title — every such change is attributed in the
+activity feed. It never overwrites a title or description you wrote.
+
+A few boundaries worth knowing: one mention per comment (the first one wins), editing a comment
+never re-dispatches its run, deleting the mention comment cancels the run, and a mention needs the
+issue to be in a project with a directory attached — without one the run fails and says why.
+Mentions are a web and desktop feature; there is no issues surface on mobile.
+
 ### Agents reading and writing issues
 
 Coding agents get an issues toolkit automatically, whichever provider you use. They can search and

@@ -196,6 +196,17 @@ belongs to [IssueEnrichmentEngine.ts][28], which reports back through a recorder
 Deliberately **not a thread**, which is why threads needed no `hidden` flag. Fires on triage accept
 and from the manual Investigate button, never on import.
 
+#### Comment agent run
+
+One agent run dispatched by mentioning an agent in an issue comment — `[@Claude](mention:agent:…)`.
+Unlike an enrichment run it has **no table and no stream event of its own**: the whole record rides
+its origin comment as the optional `agentRun` field and republishes through `IssueCommentUpserted`,
+because a new `IssuesStreamEvent` tag would break older remote clients at decode. Same engine seam
+as enrichment (`IssueCommentAgentEngine`, recorder-bound, never importing the tracker), but with
+`canceled` as its own terminal state, retry-as-fresh-run, and the reply landing as an ordinary
+attributed comment recorded on the run as `replyCommentId`. Dispatch is user-composer-only. See
+[IssueTrackerService.ts][27] and [issue-tracker.md][25].
+
 #### Thread link
 
 One row of `issue_thread_links`: exactly one row per issue and thread pair, carrying the origin that

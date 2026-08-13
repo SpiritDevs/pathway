@@ -210,6 +210,44 @@ the tracker before the engine is reached, and are **tolerant**: triage accept st
 models only the first two so the checkbox can be disabled with a reason; the server is the
 authority and its answer is surfaced either way.
 
+## Comment agent runs
+
+Mentioning an agent in an issue comment dispatches one run per comment, and the run's whole record
+— state, phase, transcript, reply pointer — lives **on the comment** as the optional `agentRun`
+field rather than in its own stream event. That placement is the design decision: `IssuesStreamEvent`
+is a closed union that remote clients decode exhaustively, so a new tag would hard-break every older
+client at the socket, while an optional field on `IssueComment` rides the existing
+`IssueCommentUpserted` event and passes old decoders by. Every transition republishes the comment;
+reconnecting clients rebuild from `issues.getDetail` as with any other per-issue tail.
+
+The process side copies the enrichment seam exactly: `IssueCommentAgentEngine` owns spawning the
+configured model in the project's directory and parsing an answer out of it, the tracker owns the
+record, and they talk through a recorder bound to one run (`markRunning` / `setPhase` /
+`appendTranscript` / `succeed` / `fail`). The same acyclicity rule applies — the engine never
+imports `IssueTrackerService`. Mention resolution also lives on the engine seam
+(`resolveMention`), so the tracker never acquires a `ProviderInstanceRegistry` requirement and
+attribution comes from `instance.driverKind`, not from anything the client asserted.
+
+Differences from enrichment, each deliberate:
+
+- **`canceled` is its own terminal state**, not a flavour of `failed`: the thread renders "you
+  stopped this" apart from "this broke", and both offer retry. A cancel writes the terminal state
+  _before_ interrupting the fiber, so the record never races the process.
+- **Retry re-dispatches, never resumes**: it replaces `agentRun` with a fresh queued run (new id,
+  same pinned mention config), only from `failed` or `canceled`.
+- **The reply is an ordinary comment** attributed `{kind: "agent", provider}`, recorded on the run
+  as `replyCommentId`. A successful run may also apply a bounded issue patch as that same actor:
+  title only over a placeholder (`isPlaceholderIssueTitle`), description only over an empty one,
+  priority always — so the events feed shows attributed changes.
+- **Dispatch is user-composer-only**: `agentMention` on `commentCreate` is honoured only for the
+  `user` actor, so MCP- and agent-authored comments can never chain runs. Edits never re-dispatch;
+  deleting the origin comment cancels its live run; a startup sweep fails any run a dead server
+  left `queued`/`running`.
+
+The persisted mention is plain markdown — `[@Claude](mention:agent:claudeAgent)` — parsed with the
+`issueAgentMentionHref` helpers from the contracts, so any renderer that does not know the scheme
+degrades to a link label rather than garbage.
+
 ## Slack seam
 
 Three layers, because of the same acyclicity constraint:
