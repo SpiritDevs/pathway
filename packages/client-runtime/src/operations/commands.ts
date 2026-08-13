@@ -106,6 +106,15 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
+/** Ask the server to take the Preview browser away from the agent. The
+    allocated command id becomes the takeover id every later command fences on. */
+export type RequestBrowserTakeoverInput = ThreadCommandInput;
+
+/** Continue (or retry continuing) the thread after a takeover. */
+export interface ResolveBrowserTakeoverInput extends ThreadCommandInput {
+  readonly takeoverId: CommandId;
+}
+
 export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly title?: string;
   readonly modelSelection?: ModelSelection;
@@ -476,6 +485,38 @@ export const unsnoozeThread = Effect.fn("EnvironmentCommands.unsnoozeThread")(fu
     reason: input.reason,
   });
 });
+
+export const requestBrowserTakeover = Effect.fn("EnvironmentCommands.requestBrowserTakeover")(
+  function* (input: RequestBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.request",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+    });
+  },
+);
+
+export const proceedBrowserTakeover = Effect.fn("EnvironmentCommands.proceedBrowserTakeover")(
+  function* (input: ResolveBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.proceed",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      takeoverId: input.takeoverId,
+    });
+  },
+);
+
+export const releaseBrowserTakeover = Effect.fn("EnvironmentCommands.releaseBrowserTakeover")(
+  function* (input: ResolveBrowserTakeoverInput) {
+    return yield* dispatch({
+      type: "thread.browser-takeover.release",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      takeoverId: input.takeoverId,
+    });
+  },
+);
 
 export const visitThread = Effect.fn("EnvironmentCommands.visitThread")(function* (
   input: VisitThreadInput,

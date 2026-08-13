@@ -49,6 +49,7 @@ import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { previewBridge } from "./previewBridge";
+import { usePreviewAutomationHostStore } from "./previewAutomationHostStore";
 import {
   PreviewAutomationOperationError,
   PreviewAutomationOverlayTimeoutError,
@@ -721,6 +722,18 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
     ],
   );
   useAtomValue(automationRequestConsumerAtom);
+
+  // Publish this host's identity so takeover UI can tell whether this client is
+  // the desktop that owns the agent's browser for the environment.
+  useEffect(() => {
+    usePreviewAutomationHostStore.getState().publish(environmentId, {
+      clientId: automationClientId,
+      connectionId: automationConnectionId,
+    });
+    return () => {
+      usePreviewAutomationHostStore.getState().clear(environmentId);
+    };
+  }, [automationClientId, automationConnectionId, environmentId]);
 
   useEffect(() => {
     const report = () => {

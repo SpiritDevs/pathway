@@ -22,6 +22,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
+import { BrowserTakeoverService } from "./BrowserTakeoverService.ts";
 import { CheckpointRollbackServiceV2 } from "./CheckpointRollbackService.ts";
 import { EffectOutboxError, EffectOutboxV2, type OrchestrationEffectV2 } from "./EffectOutbox.ts";
 import {
@@ -150,6 +151,15 @@ function makeExecutorLayer(input: {
       ThreadTitleRegenerationService,
       ThreadTitleRegenerationService.of({
         execute: ({ requestId, kind }) => record(`title:${kind.type}:${requestId}`),
+      }),
+    ),
+    Layer.succeed(
+      BrowserTakeoverService,
+      BrowserTakeoverService.of({
+        establish: ({ takeoverId }) => record(`takeover:establish:${takeoverId}`),
+        proceed: ({ takeoverId }) => record(`takeover:proceed:${takeoverId}`),
+        release: ({ takeoverId }) => record(`takeover:release:${takeoverId}`),
+        recover: Effect.succeed({ failed: 0, rearmed: 0, completed: 0 }),
       }),
     ),
   );

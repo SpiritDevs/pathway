@@ -5,6 +5,8 @@ import {
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2AppThread,
+  type OrchestrationV2BrowserTakeover,
+  type OrchestrationV2BrowserTakeoverStatus,
   type OrchestrationV2ContextHandoff,
   type OrchestrationV2ContextSourcePoint,
   type OrchestrationV2ContextTransfer,
@@ -129,12 +131,35 @@ export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedErr
   }
 }
 
+/**
+ * A browser-takeover command named a takeover that is no longer the thread's
+ * current one (or no longer in a state that command can move). Separate from
+ * {@link OrchestratorDispatchError} because it is the expected outcome of a
+ * replayed effect racing a newer takeover: callers stop quietly instead of
+ * driving the marker to `failed`.
+ */
+export class OrchestratorBrowserTakeoverStaleError extends Schema.TaggedErrorClass<OrchestratorBrowserTakeoverStaleError>()(
+  "OrchestratorBrowserTakeoverStaleError",
+  {
+    commandId: CommandId,
+    commandType: Schema.String,
+    threadId: ThreadId,
+    takeoverId: CommandId,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Browser takeover ${this.takeoverId} on thread ${this.threadId} is stale: ${this.detail}`;
+  }
+}
+
 export const OrchestratorV2Error = Schema.Union([
   OrchestratorDispatchError,
   OrchestratorProjectionError,
   OrchestratorDomainEventStreamError,
   OrchestratorProviderAdapterError,
   OrchestratorCommandPreviouslyRejectedError,
+  OrchestratorBrowserTakeoverStaleError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -224,6 +249,11 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.mark-unread":
     case "thread.metadata.update":
     case "thread.title.regeneration.complete":
+    case "thread.browser-takeover.request":
+    case "thread.browser-takeover.transition":
+    case "thread.browser-takeover.proceed":
+    case "thread.browser-takeover.release":
+    case "thread.preview-activity.record":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":
@@ -293,6 +323,56 @@ function hasLiveRun(projection: OrchestrationV2ThreadProjection): boolean {
   return projection.runs.some(
     (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
   );
+}
+
+/**
+ * The run a browser takeover would pause, or null when there is nothing to
+ * pause.
+ *
+ * Eligibility is deliberately narrower than `ThreadManagementService.isActiveRun`
+ * (which counts "waiting" as active so queued work still lands behind it). A run
+ * at "waiting" has already ended its provider turn and is only draining, so
+ * there is no agent turn left to interrupt: from the takeover's point of view
+ * the agent has already finished, and the request is rejected rather than
+ * arming a takeover that could never pause anything. Matches `hasLiveRun`.
+ */
+function takeoverEligibleRun(projection: OrchestrationV2ThreadProjection): OrchestrationV2Run | null {
+  const eligible = projection.runs.filter(
+    (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
+  );
+  return eligible.at(-1) ?? null;
+}
+
+function isTerminalBrowserTakeoverStatus(status: OrchestrationV2BrowserTakeoverStatus): boolean {
+  return status === "completed" || status === "cancelled" || status === "failed";
+}
+
+/**
+ * Legal internal moves for `thread.browser-takeover.transition`. "requested" and
+ * "proceeding" are only ever entered by the user-facing request/proceed
+ * commands, so they are not transition targets. "failed" stays re-openable: a
+ * failed continuation can be retried with proceed, and a failed takeover can
+ * still be released.
+ */
+function browserTakeoverTransitionIsLegal(
+  from: OrchestrationV2BrowserTakeoverStatus,
+  to: Extract<
+    OrchestrationV2Command,
+    { readonly type: "thread.browser-takeover.transition" }
+  >["to"],
+): boolean {
+  switch (to) {
+    case "pausing":
+      return from === "requested";
+    case "active":
+      return from === "pausing";
+    case "completed":
+      return from === "proceeding";
+    case "cancelled":
+      return from !== "completed" && from !== "cancelled";
+    case "failed":
+      return !isTerminalBrowserTakeoverStatus(from) || from === "failed";
+  }
 }
 
 function delegatedCompletionWakeDetail(taskIds: ReadonlyArray<string>): string {
@@ -1957,6 +2037,275 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     }
   });
+
+  /**
+   * All four browser-takeover commands. They share one handler because they all
+   * mutate the same durable marker on the thread aggregate and all emit
+   * `thread.metadata-updated` — takeover state rides the thread payload rather
+   * than adding an event literal every client would have to learn.
+   */
+  const dispatchBrowserTakeover = Effect.fn("orchestrationV2.dispatch.browserTakeover")(function* (
+    command: Extract<
+      OrchestrationV2Command,
+      {
+        readonly type:
+          | "thread.browser-takeover.request"
+          | "thread.browser-takeover.transition"
+          | "thread.browser-takeover.proceed"
+          | "thread.browser-takeover.release";
+      }
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorProjectionError({
+            threadId: command.threadId,
+            cause,
+          }),
+      ),
+    );
+    const thread = projection.thread;
+    if (thread.deletedAt !== null) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    const marker = thread.browserTakeover ?? null;
+    const now = yield* DateTime.now;
+
+    const stale = (takeoverId: CommandId, detail: string) =>
+      new OrchestratorBrowserTakeoverStaleError({
+        commandId: command.commandId,
+        commandType: command.type,
+        threadId: command.threadId,
+        takeoverId,
+        detail,
+      });
+
+    let next: OrchestrationV2BrowserTakeover;
+    let pendingEffect: PendingOrchestrationEffectV2 | null = null;
+
+    switch (command.type) {
+      case "thread.browser-takeover.request": {
+        if (marker !== null && !isTerminalBrowserTakeoverStatus(marker.status)) {
+          // A same-id retry is normally absorbed by the command receipt before
+          // reaching the decider; reaching it here still means the takeover is
+          // already armed, so report it as stale rather than re-arming.
+          if (marker.id === command.commandId) {
+            return yield* stale(command.commandId, "takeover is already requested");
+          }
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} already has an active browser takeover.`,
+          });
+        }
+        const run = takeoverEligibleRun(projection);
+        if (run === null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} has no running agent turn to pause.`,
+          });
+        }
+        // Host/tab identity is snapshotted from the last coalesced activity
+        // record so the client can focus the exact tab even if the agent's
+        // session goes away while the takeover is pausing.
+        const activity = thread.previewActivity ?? null;
+        next = {
+          id: command.commandId,
+          status: "requested",
+          runId: run.id,
+          providerSessionId: activity?.providerSessionId ?? null,
+          tabId: activity?.tabId ?? null,
+          hostClientId: activity?.hostClientId ?? null,
+          hostConnectionId: null,
+          failure: null,
+          requestedAt: now,
+          updatedAt: now,
+        };
+        pendingEffect = {
+          id: `effect:${command.commandId}:browser-takeover.establish`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "browser-takeover.establish", takeoverId: command.commandId },
+        };
+        break;
+      }
+      case "thread.browser-takeover.transition": {
+        if (marker === null || marker.id !== command.takeoverId) {
+          return yield* stale(command.takeoverId, "no longer the thread's current takeover");
+        }
+        if (!browserTakeoverTransitionIsLegal(marker.status, command.to)) {
+          return yield* stale(
+            command.takeoverId,
+            `cannot move from ${marker.status} to ${command.to}`,
+          );
+        }
+        if (command.to === "failed" && command.failure === undefined) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "A failed browser-takeover transition must carry a failure reason.",
+          });
+        }
+        next = {
+          ...marker,
+          status: command.to,
+          ...(command.hostClientId === undefined ? {} : { hostClientId: command.hostClientId }),
+          ...(command.hostConnectionId === undefined
+            ? {}
+            : { hostConnectionId: command.hostConnectionId }),
+          ...(command.tabId === undefined ? {} : { tabId: command.tabId }),
+          failure: command.to === "failed" ? (command.failure ?? null) : null,
+          updatedAt: now,
+        };
+        break;
+      }
+      case "thread.browser-takeover.proceed": {
+        if (marker === null || marker.id !== command.takeoverId) {
+          return yield* stale(command.takeoverId, "no longer the thread's current takeover");
+        }
+        // Retrying a continuation that failed to send is the one way back out of
+        // a terminal state; anything else must go through a fresh request.
+        const retryable = marker.status === "failed" && marker.failure === "continuation_failed";
+        if (marker.status !== "active" && !retryable) {
+          return yield* stale(command.takeoverId, `cannot proceed from ${marker.status}`);
+        }
+        next = { ...marker, status: "proceeding", failure: null, updatedAt: now };
+        pendingEffect = {
+          id: `effect:${command.commandId}:browser-takeover.proceed`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "browser-takeover.proceed", takeoverId: command.takeoverId },
+        };
+        break;
+      }
+      case "thread.browser-takeover.release": {
+        if (marker === null || marker.id !== command.takeoverId) {
+          return yield* stale(command.takeoverId, "no longer the thread's current takeover");
+        }
+        if (
+          marker.status !== "active" &&
+          marker.status !== "pausing" &&
+          marker.status !== "failed"
+        ) {
+          return yield* stale(command.takeoverId, `cannot release from ${marker.status}`);
+        }
+        // The marker only reaches "cancelled" once the fence is actually back in
+        // the agent's hands, so the client never shows control as returned while
+        // automation is still blocked.
+        next = { ...marker, updatedAt: now };
+        pendingEffect = {
+          id: `effect:${command.commandId}:browser-takeover.release`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: { type: "browser-takeover.release", takeoverId: command.takeoverId },
+        };
+        break;
+      }
+    }
+
+    const updatedThread: OrchestrationV2AppThread = {
+      ...thread,
+      browserTakeover: next,
+      updatedAt: now,
+    };
+    yield* emit(
+      events,
+      command,
+    )({
+      type: "thread.metadata-updated",
+      threadId: command.threadId,
+      providerInstanceId: updatedThread.providerInstanceId,
+      occurredAt: now,
+      payload: updatedThread,
+    });
+    if (pendingEffect !== null) {
+      const effect = pendingEffect;
+      yield* Ref.update(effects, (existing) => [...existing, effect]);
+    }
+  });
+
+  /**
+   * Coalesced preview automation observation. The broker cannot know which run
+   * is live, so the run id is derived here from the projection rather than
+   * trusted from the caller: a stale caller must never make a finished run look
+   * like it is still driving the browser.
+   */
+  const dispatchPreviewActivityRecord = Effect.fn("orchestrationV2.dispatch.previewActivityRecord")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.preview-activity.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProjectionError({
+              threadId: command.threadId,
+              cause,
+            }),
+        ),
+      );
+      const thread = projection.thread;
+      if (thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is deleted.`,
+        });
+      }
+      const runId = takeoverEligibleRun(projection)?.id ?? null;
+      const existing = thread.previewActivity ?? null;
+      // Every browser action that survives the broker's own coalescing still
+      // arrives here, so an unchanged tuple is rejected instead of writing an
+      // event: a no-op event would rewrite the thread payload (and wake every
+      // client) on each navigation. The activity sink swallows this rejection.
+      if (
+        existing !== null &&
+        existing.runId === runId &&
+        existing.providerSessionId === command.providerSessionId &&
+        existing.tabId === command.tabId &&
+        existing.hostClientId === command.hostClientId
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} preview activity is unchanged.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      const updatedThread: OrchestrationV2AppThread = {
+        ...thread,
+        previewActivity: {
+          runId,
+          providerSessionId: command.providerSessionId,
+          tabId: command.tabId,
+          hostClientId: command.hostClientId,
+          lastActivityAt: now,
+        },
+        // Preview activity is agent telemetry, not user-visible thread activity:
+        // bumping updatedAt would resurface the thread as recently active on
+        // every navigation.
+        updatedAt: thread.updatedAt,
+      };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: updatedThread.providerInstanceId,
+        occurredAt: now,
+        payload: updatedThread,
+      });
+    },
+  );
 
   const dispatchProviderSessionDetach = Effect.fn("orchestrationV2.dispatch.providerSessionDetach")(
     function* (
@@ -6884,6 +7233,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.model-selection.set":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
+        break;
+      case "thread.browser-takeover.request":
+      case "thread.browser-takeover.transition":
+      case "thread.browser-takeover.proceed":
+      case "thread.browser-takeover.release":
+        yield* dispatchBrowserTakeover(command, events, effects);
+        break;
+      case "thread.preview-activity.record":
+        yield* dispatchPreviewActivityRecord(command, events);
         break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);

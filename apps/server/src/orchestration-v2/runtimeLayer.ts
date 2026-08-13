@@ -7,6 +7,10 @@ import { ProjectionProjectRepositoryLive } from "../persistence/Layers/Projectio
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
+import {
+  fenceRegistryLayer as browserTakeoverFenceRegistryLayer,
+  layer as browserTakeoverServiceLayer,
+} from "./BrowserTakeoverService.ts";
 import { layer as checkpointCaptureServiceLayer } from "./CheckpointCaptureService.ts";
 import { layer as checkpointServiceLayer } from "./CheckpointService.ts";
 import { layer as checkpointRollbackServiceLayer } from "./CheckpointRollbackService.ts";
@@ -229,6 +233,14 @@ const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe
     Layer.mergeAll(threadManagementProvided, ProjectionProjectRepositoryLive, TextGeneration.layer),
   ),
 );
+// The fence registry is exported alongside the service: the composition root
+// that builds the preview automation broker registers the live fence into it at
+// startup (orchestration and the broker are mutually dependent, so the binding
+// cannot be a layer edge).
+const browserTakeoverFenceRegistryProvided = browserTakeoverFenceRegistryLayer;
+const browserTakeoverProvided = browserTakeoverServiceLayer.pipe(
+  Layer.provide(Layer.merge(threadManagementProvided, browserTakeoverFenceRegistryProvided)),
+);
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -239,6 +251,7 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       providerTurnStartServiceProvided,
       runtimeRequestServiceProvided,
       threadTitleRegenerationProvided,
+      browserTakeoverProvided,
     ),
   ),
 );
@@ -260,6 +273,8 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
 export const OrchestrationV2LayerLive = Layer.mergeAll(
   orchestratorProvided,
   threadManagementProvided,
+  browserTakeoverProvided,
+  browserTakeoverFenceRegistryProvided,
   effectWorkerProvided,
   providerSessionManagerProvided,
   providerRuntimeRecoveryProvided,
