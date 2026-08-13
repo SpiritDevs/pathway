@@ -94,6 +94,8 @@ import {
   type IssueThreadLink,
   type IssueThreadLinkInput,
   type IssueThreadLinksResult,
+  type IssueLinksForThreadResult,
+  type IssueThreadRefInput,
   type IssueThreadUnlinkInput,
   type IssueTrackerConfigResult,
   IssueTrackerError,
@@ -535,6 +537,9 @@ export interface IssueTrackerServiceShape {
   readonly getThreadLinks: (
     input: IssueRefInput,
   ) => Effect.Effect<IssueThreadLinksResult, IssueTrackerError>;
+  readonly getIssueLinksForThread: (
+    input: IssueThreadRefInput,
+  ) => Effect.Effect<IssueLinksForThreadResult, IssueTrackerError>;
   /**
    * Store the Slack bot token, or clear it with an empty string.
    *
@@ -3238,6 +3243,15 @@ export const make = Effect.gen(function* () {
     return { issueId: input.issueId, links: yield* readThreadLinks(input.issueId) };
   });
 
+  const getIssueLinksForThread: IssueTrackerServiceShape["getIssueLinksForThread"] = Effect.fn(
+    "IssueTrackerService.getIssueLinksForThread",
+  )(function* (input) {
+    const links = yield* threadLinkRepository
+      .listByThread(input)
+      .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
+    return { threadId: input.threadId, links };
+  });
+
   // ── Slack intake ─────────────────────────────────────────────────────
 
   const secretFailure = (operation: string) => (cause: SecretStoreError) =>
@@ -3914,6 +3928,7 @@ export const make = Effect.gen(function* () {
     linkThread,
     unlinkThread,
     getThreadLinks,
+    getIssueLinksForThread,
     slackSetToken,
     slackGetStatus,
     slackListChannels,

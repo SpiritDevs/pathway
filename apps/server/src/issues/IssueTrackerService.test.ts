@@ -1380,6 +1380,13 @@ describe("IssueTrackerService", () => {
         [[null, threadId]],
       );
       assert.strictEqual(threadEvents[0]?.kind, "field_changed");
+
+      const threadSide = yield* tracker.getIssueLinksForThread({ threadId });
+      assert.strictEqual(threadSide.threadId, threadId);
+      assert.deepStrictEqual(
+        threadSide.links.map((link) => [link.issueId, link.origin]),
+        [[issue.id, "manual"]],
+      );
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

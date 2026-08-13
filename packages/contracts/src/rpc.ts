@@ -115,6 +115,7 @@ import {
   IssueEnrichmentRunResult,
   IssueEnrichmentRunsResult,
   IssueEnrichmentStartInput,
+  IssueLinksForThreadResult,
   IssueLabelCreateInput,
   IssueLabelDeleteInput,
   IssueLabelResult,
@@ -128,6 +129,7 @@ import {
   IssueMilestonesReorderInput,
   IssueMilestonesResult,
   IssueRefInput,
+  IssueThreadRefInput,
   IssueRelationCreateInput,
   IssueRelationDeleteInput,
   IssueRelationsResult,
@@ -1479,6 +1481,15 @@ export const WsIssuesGetThreadLinksRpc = Rpc.make(ISSUES_WS_METHODS.getThreadLin
   error: IssuesRpcError,
 });
 
+export const WsIssuesGetIssueLinksForThreadRpc = Rpc.make(
+  ISSUES_WS_METHODS.getIssueLinksForThread,
+  {
+    payload: IssueThreadRefInput,
+    success: IssueLinksForThreadResult,
+    error: IssuesRpcError,
+  },
+);
+
 export const WsIssuesSlackSetTokenRpc = Rpc.make(ISSUES_WS_METHODS.slackSetToken, {
   payload: SlackSetTokenInput,
   success: SlackIntakeStatusResult,
@@ -1581,6 +1592,7 @@ export const IssuesRpcs = RpcGroup.make(
   WsIssuesLinkThreadRpc,
   WsIssuesUnlinkThreadRpc,
   WsIssuesGetThreadLinksRpc,
+  WsIssuesGetIssueLinksForThreadRpc,
   WsIssuesSlackSetTokenRpc,
   WsIssuesSlackGetStatusRpc,
   WsIssuesSlackListChannelsRpc,

@@ -58,6 +58,7 @@ import {
   listTriageIssues,
   mergeIssueDetail,
   mergeIssueEnrichmentRuns,
+  mergeIssueLinksForThread,
   slackChannelNames,
   todayIssueDate,
   upcomingIssueCycles,
@@ -978,6 +979,22 @@ describe("applyIssueAgentStreamEvent", () => {
         issue: issue("1"),
       }),
     ).toBe(EMPTY_ISSUE_AGENT_STATE);
+  });
+});
+
+describe("mergeIssueLinksForThread", () => {
+  it("applies issue-side link and unlink patches to the persisted thread read", () => {
+    const threadId = ThreadId.make("t1");
+    const persisted = [link("1", "t1"), link("2", "t1", "2026-08-12T00:00:01.000Z")];
+    const patches = new Map([
+      [IssueId.make("1"), []],
+      [IssueId.make("3"), [link("3", "t1", "2026-08-12T00:00:02.000Z")]],
+      [IssueId.make("4"), [link("4", "another-thread")]],
+    ]);
+
+    expect(
+      mergeIssueLinksForThread(persisted, patches, threadId).map((entry) => entry.issueId),
+    ).toEqual(["2", "3"]);
   });
 });
 

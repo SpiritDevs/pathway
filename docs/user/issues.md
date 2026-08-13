@@ -127,8 +127,9 @@ the model constrained to the assigned provider and initially using a compatible 
 Choose **Current checkout** to work in the project's main workspace, or **New worktree** and select
 the branch it should start from. Pressing the button creates a fresh thread, sends the
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New
-worktrees also run the project's configured setup tasks. Dragging cards around a board never
-launches an agent.
+worktrees also run the project's configured setup tasks. The new thread keeps the originating issue
+in its details menu, where the current status and priority stay visible and the full detail sheet is
+one click away. Dragging cards around a board never launches an agent.
 
 When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
 selected provider, model, and reasoning level on the issue. **Start new thread** opens with that

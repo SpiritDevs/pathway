@@ -13,6 +13,7 @@ const testState = vi.hoisted(() => ({
   providerUsage: vi.fn(),
   providerUsageList: vi.fn(),
   runtimeControls: vi.fn(),
+  threadIssuePanel: vi.fn(),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
@@ -49,6 +50,12 @@ vi.mock("../usage/ProviderUsage", () => ({
 vi.mock("./ThreadAutomationsPanel", () => ({
   ThreadAutomationsPanel: () => null,
 }));
+vi.mock("./ThreadIssuePanel", () => ({
+  ThreadIssuePanel: (props: unknown) => {
+    testState.threadIssuePanel(props);
+    return null;
+  },
+}));
 vi.mock("./ThreadRelationshipsControl", () => ({
   ThreadRelationshipsPanel: () => null,
 }));
@@ -62,6 +69,7 @@ describe("ThreadDetailsPanel", () => {
     testState.providerUsage.mockReset();
     testState.providerUsageList.mockReset();
     testState.runtimeControls.mockReset();
+    testState.threadIssuePanel.mockReset();
   });
 
   it("passes checked-in t3.json scripts to the project scripts control", () => {
@@ -123,6 +131,10 @@ describe("ThreadDetailsPanel", () => {
       threadRef: { environmentId, threadId: props.threadId },
       enabled: true,
       displayMode: "panel",
+    });
+    expect(testState.threadIssuePanel).toHaveBeenCalledWith({
+      threadId: props.threadId,
+      enabled: true,
     });
   });
 

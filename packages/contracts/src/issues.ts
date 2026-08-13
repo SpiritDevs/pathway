@@ -73,6 +73,8 @@ export const ISSUES_WS_METHODS = {
   linkThread: "issues.linkThread",
   unlinkThread: "issues.unlinkThread",
   getThreadLinks: "issues.getThreadLinks",
+  /** Reads issue links from the thread side, including how each link was created. */
+  getIssueLinksForThread: "issues.getIssueLinksForThread",
   /** Write-only: the bot token never comes back out. An empty string clears it. */
   slackSetToken: "issues.slackSetToken",
   slackGetStatus: "issues.slackGetStatus",
@@ -1390,12 +1392,22 @@ export type IssueThreadLinkInput = typeof IssueThreadLinkInput.Type;
 export const IssueThreadUnlinkInput = Schema.Struct({ issueId: IssueId, threadId: ThreadId });
 export type IssueThreadUnlinkInput = typeof IssueThreadUnlinkInput.Type;
 
+export const IssueThreadRefInput = Schema.Struct({ threadId: ThreadId });
+export type IssueThreadRefInput = typeof IssueThreadRefInput.Type;
+
 /** The issue's whole thread list after the write, matching the stream event beside it. */
 export const IssueThreadLinksResult = Schema.Struct({
   issueId: IssueId,
   links: Schema.Array(IssueThreadLink),
 });
 export type IssueThreadLinksResult = typeof IssueThreadLinksResult.Type;
+
+/** The thread-side read has no issue id until the persisted links answer. */
+export const IssueLinksForThreadResult = Schema.Struct({
+  threadId: ThreadId,
+  links: Schema.Array(IssueThreadLink),
+});
+export type IssueLinksForThreadResult = typeof IssueLinksForThreadResult.Type;
 
 /**
  * The bot token, on its way in and never on its way out.

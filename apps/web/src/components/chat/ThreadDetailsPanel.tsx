@@ -25,6 +25,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { cn } from "../../lib/utils";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadIssuePanel } from "./ThreadIssuePanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import {
   EnvironmentProviderUsage,
@@ -220,6 +221,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             ) : null}
           </div>
         </section>
+
+        {!props.draftId ? (
+          <ThreadIssuePanel threadId={props.threadId} enabled={props.resourcesEnabled} />
+        ) : null}
 
         {props.activeProjectScripts ? (
           <section
