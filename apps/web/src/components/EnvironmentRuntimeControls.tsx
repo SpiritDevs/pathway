@@ -16,7 +16,10 @@ import { useKnownTerminalSessions } from "~/state/terminalSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useTerminalUiStateStore } from "~/terminalUiStateStore";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "./chat/threadDetailsPanelStyles";
+import {
+  THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS,
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+} from "./chat/threadDetailsPanelStyles";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
 import { toastManager } from "./ui/toast";
 import { openDiscoveredPort } from "./preview/openDiscoveredPort";
@@ -231,7 +234,15 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
           )}
           <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
             <RuntimeDisclosure
-              icon={<RadioTower className="size-4 shrink-0" aria-hidden="true" />}
+              icon={
+                <RadioTower
+                  className={cn(
+                    "size-4 shrink-0",
+                    displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+                  )}
+                  aria-hidden="true"
+                />
+              }
               label="Local servers"
               count={servers.length}
               displayMode={displayMode}
@@ -270,7 +281,15 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
           )}
           <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
             <RuntimeDisclosure
-              icon={<TerminalSquare className="size-4 shrink-0" aria-hidden="true" />}
+              icon={
+                <TerminalSquare
+                  className={cn(
+                    "size-4 shrink-0",
+                    displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+                  )}
+                  aria-hidden="true"
+                />
+              }
               label="Running terminals"
               count={activeTerminalSessions.length}
               displayMode={displayMode}
