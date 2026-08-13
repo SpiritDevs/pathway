@@ -95,7 +95,6 @@ const sendMail = (input: {
   readonly text?: string;
   readonly raw?: string;
   readonly attachment?: { readonly filename: string; readonly content: string };
-  readonly requireTls?: boolean;
 }) =>
   Effect.acquireUseRelease(
     Effect.sync(() =>
@@ -103,9 +102,6 @@ const sendMail = (input: {
         host: "127.0.0.1",
         port: input.port,
         secure: false,
-        requireTLS: input.requireTls ?? false,
-        ignoreTLS: !(input.requireTls ?? false),
-        tls: { rejectUnauthorized: false },
         ...(input.authUsername === undefined && input.authPassword === undefined
           ? {}
           : {
@@ -187,7 +183,6 @@ describe("EmailCaptureService SMTP listener", () => {
             authUsername: "alpha",
             to: "person@example.com",
             subject: "AUTH route",
-            requireTls: true,
           });
           const password = yield* sendAndReceive(capture, {
             port,

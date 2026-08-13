@@ -391,6 +391,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       authOptional: true,
       authMethods: ["PLAIN", "LOGIN"],
       allowInsecureAuth: true,
+      disabledCommands: ["STARTTLS"],
       disableReverseLookup: true,
       logger: false,
       onConnect(session, callback) {

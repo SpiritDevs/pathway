@@ -51,8 +51,10 @@ One listener, one fixed port, on by default with the server.
 - A taken port surfaces a visible error in Email settings and Diagnostics. It
   never silently shifts to another port — `.env` files across projects depend
   on the port staying put.
-- STARTTLS is advertised with a self-signed cert; plaintext is still accepted.
-  Some frameworks refuse to send without TLS on offer.
+- Plaintext SMTP is used for local capture. STARTTLS is not advertised: a
+  generic self-signed certificate cannot be trusted by ordinary SMTP clients,
+  and advertising one makes clients such as Nodemailer upgrade and reject an
+  otherwise valid local capture connection.
 
 ### Auth
 
