@@ -56,6 +56,7 @@ import {
   issueMilestonesForProject,
   issueRelationDisplays,
   issueSortOrderForDrop,
+  issuesByKey,
   listTriageIssues,
   mergeIssueDetail,
   mergeIssueEnrichmentRuns,
@@ -496,6 +497,20 @@ describe("findIssue", () => {
     expect(findIssue(store, "abc")?.key).toBe("PAT-221");
     expect(findIssue(store, "PAT-221")?.id).toBe("abc");
     expect(findIssue(store, "PAT-999")).toBeNull();
+  });
+});
+
+describe("issuesByKey", () => {
+  it("indexes every issue by its key, soft-deleted rows included", () => {
+    const store = storeOf([
+      issue("1", { key: "PAT-1" }),
+      issue("2", { key: "PAT-2", deletedAt: NOW }),
+    ]);
+    const byKey = issuesByKey(store);
+
+    expect([...byKey.keys()]).toEqual(["PAT-1", "PAT-2"]);
+    expect(byKey.get("PAT-2")?.id).toBe("2");
+    expect(byKey.get("PAT-999")).toBeUndefined();
   });
 });
 
@@ -1065,6 +1080,17 @@ describe("startWorkIssuesByThread", () => {
 
     expect(issues.get(ThreadId.make("work"))?.key).toBe("PAT-1");
     expect(issues.has(ThreadId.make("manual"))).toBe(false);
+  });
+
+  it("ignores a mention link, which says the thread talked about an issue, not that it came from one", () => {
+    const first = issue("1");
+    const mention = { ...link("1", "chat"), origin: "mention" as const };
+    const issues = startWorkIssuesByThread(
+      new Map([[first.id, first]]),
+      new Map([[first.id, [mention]]]),
+    );
+
+    expect(issues.has(ThreadId.make("chat"))).toBe(false);
   });
 
   it("keeps the oldest start-work issue when persisted data contains more than one", () => {

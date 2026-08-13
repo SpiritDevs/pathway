@@ -8,8 +8,12 @@ import {
   type ServerProvider,
   type ServerProviderUsageSnapshot,
 } from "@t3tools/contracts";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEnvironments } from "~/state/environments";
@@ -17,7 +21,10 @@ import { serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { SettingsSection } from "../settings/settingsLayout";
+import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
@@ -35,6 +42,137 @@ function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
 
 function providerName(provider: ProviderUsageDriver): string {
   return PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make(provider)] ?? provider;
+}
+
+interface ProviderUsageRefreshTarget {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderUsageDriver;
+  readonly label: string;
+}
+
+function providerUsageSnapshotKey(
+  environmentId: EnvironmentId,
+  instanceId: ProviderInstanceId,
+): string {
+  return `${environmentId}:${instanceId}`;
+}
+
+function refreshFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "The provider did not return updated usage.";
+}
+
+function useForcedProviderUsageRefresh(
+  environmentId: EnvironmentId,
+  targets: ReadonlyArray<ProviderUsageRefreshTarget>,
+) {
+  const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
+    reportFailure: false,
+  });
+  const [refreshedSnapshots, setRefreshedSnapshots] = useState<
+    ReadonlyMap<string, ServerProviderUsageSnapshot>
+  >(() => new Map());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const inFlightRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    if (inFlightRef.current || targets.length === 0) return;
+    inFlightRef.current = true;
+    setIsRefreshing(true);
+    const failed: Array<{ readonly target: ProviderUsageRefreshTarget; readonly error: unknown }> =
+      [];
+    try {
+      await Promise.all(
+        targets.map(async (target) => {
+          const result = await refreshUsage({
+            environmentId,
+            input: {
+              instanceId: target.instanceId,
+              provider: target.provider,
+              forceRefresh: true,
+            },
+          });
+          if (result._tag === "Success") {
+            setRefreshedSnapshots((current) => {
+              const next = new Map(current);
+              next.set(providerUsageSnapshotKey(environmentId, target.instanceId), result.value);
+              return next;
+            });
+          } else if (!isAtomCommandInterrupted(result)) {
+            failed.push({ target, error: squashAtomCommandFailure(result) });
+          }
+        }),
+      );
+
+      if (failed.length > 0) {
+        const failedLabels = failed.map(({ target }) => target.label).join(", ");
+        const allFailed = failed.length === targets.length;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: allFailed ? "Couldn’t refresh usage" : "Some usage couldn’t be refreshed",
+            description:
+              targets.length === 1
+                ? refreshFailureMessage(failed[0]?.error)
+                : `Couldn’t refresh ${failedLabels}.`,
+          }),
+        );
+      }
+    } finally {
+      inFlightRef.current = false;
+      setIsRefreshing(false);
+    }
+  }, [environmentId, refreshUsage, targets]);
+
+  return { isRefreshing, refresh, refreshedSnapshots };
+}
+
+function usageSectionHeading({
+  id,
+  refreshDisabled,
+  refreshing,
+  onRefresh,
+}: {
+  readonly id?: string;
+  readonly refreshDisabled: boolean;
+  readonly refreshing: boolean;
+  readonly onRefresh: () => Promise<void>;
+}) {
+  const handleRefreshClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void onRefresh();
+  };
+
+  return (
+    <div className="flex min-h-6 items-center justify-between gap-2 px-3.5 pb-1 pt-3">
+      <h3 id={id} className="text-[11px] font-medium text-muted-foreground">
+        Usage
+      </h3>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              data-keep-action-card-open
+              aria-label="Refresh usage"
+              aria-busy={refreshing}
+              disabled={refreshDisabled || refreshing}
+              onClick={handleRefreshClick}
+              className="pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
+            >
+              <RefreshCwIcon
+                className={cn("size-3.5", refreshing && "text-foreground")}
+                aria-hidden="true"
+              />
+            </Button>
+          }
+        />
+        <TooltipPopup side="top">Refresh usage</TooltipPopup>
+      </Tooltip>
+    </div>
+  );
 }
 
 function useProviderUsage(input: {
@@ -165,47 +303,72 @@ export function EnvironmentProviderUsage({
   enabled,
   displayMode = "card",
   grouped = false,
+  refreshedSnapshot,
+  parentRefreshing = false,
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
   enabled: boolean;
   displayMode?: "card" | "panel";
   grouped?: boolean;
+  refreshedSnapshot?: ServerProviderUsageSnapshot;
+  parentRefreshing?: boolean;
 }) {
   const isPanel = displayMode === "panel";
   const [open, setOpen] = useState(false);
+  const usageProvider = provider.driver as ProviderUsageDriver;
   const usage = useProviderUsage({
     environmentId,
     instanceId: provider.instanceId,
-    provider: provider.driver as ProviderUsageDriver,
+    provider: usageProvider,
     enabled,
   });
-  const displayName = provider.displayName ?? providerName(provider.driver as ProviderUsageDriver);
-  const primary = selectPrimaryProviderUsageLimit(usage.data);
-  const limits = usage.data?.status === "ok" ? deriveProviderUsageLimits(usage.data.limits) : [];
+  const displayName = provider.displayName ?? providerName(usageProvider);
+  const refreshTargets = useMemo(
+    () => [{ instanceId: provider.instanceId, provider: usageProvider, label: displayName }],
+    [displayName, provider.instanceId, usageProvider],
+  );
+  const singleRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
+  const snapshot =
+    refreshedSnapshot ??
+    singleRefresh.refreshedSnapshots.get(
+      providerUsageSnapshotKey(environmentId, provider.instanceId),
+    ) ??
+    usage.data;
+  const refreshing = grouped ? parentRefreshing : singleRefresh.isRefreshing;
+  const primary = selectPrimaryProviderUsageLimit(snapshot);
+  const limits = snapshot?.status === "ok" ? deriveProviderUsageLimits(snapshot.limits) : [];
   const summary =
     primary?.remainingLabel ??
     (usage.isPending
       ? "Loading…"
-      : usage.data?.status === "needs-auth"
+      : snapshot?.status === "needs-auth"
         ? "Not signed in"
-        : usage.data?.status === "error" || usage.error
+        : snapshot?.status === "error" || usage.error
           ? "Unavailable"
           : "Usage");
+
+  const heading =
+    !grouped && isPanel
+      ? usageSectionHeading({
+          refreshDisabled: !enabled,
+          refreshing,
+          onRefresh: singleRefresh.refresh,
+        })
+      : null;
 
   if (!shouldCollapseProviderUsage(limits)) {
     return (
       <section
         aria-label={`${displayName} provider usage`}
         className={cn(
+          !grouped && isPanel && "group/usage",
           !grouped && "border-t",
           !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
         )}
       >
         {grouped ? null : isPanel ? (
-          <div className="px-3.5 pb-1 pt-3">
-            <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
-          </div>
+          heading
         ) : (
           <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
         )}
@@ -224,9 +387,9 @@ export function EnvironmentProviderUsage({
                   <p className="mb-1 truncate text-xs font-medium text-foreground">{displayName}</p>
                 ) : null}
                 <UsageLimitRow limit={primary} compact resetInline />
-                {usage.data?.status === "ok" && usage.data.usageLines.length > 0 ? (
+                {snapshot?.status === "ok" && snapshot.usageLines.length > 0 ? (
                   <div className="mt-2 space-y-1 border-t border-border/70 pt-2">
-                    {usage.data.usageLines.map((line) => (
+                    {snapshot.usageLines.map((line) => (
                       <div
                         key={`${line.label}:${line.value}`}
                         className="flex items-baseline justify-between gap-3 text-xs"
@@ -244,7 +407,7 @@ export function EnvironmentProviderUsage({
           ) : (
             <div className="px-2 py-1.5">
               <ProviderUsageDetails
-                snapshot={usage.data}
+                snapshot={snapshot}
                 loading={usage.isPending}
                 error={usage.error}
                 compact
@@ -260,14 +423,13 @@ export function EnvironmentProviderUsage({
     <section
       aria-label={`${displayName} provider usage`}
       className={cn(
+        !grouped && isPanel && "group/usage",
         !grouped && "border-t",
         !grouped && (isPanel ? "border-border/65" : "border-border/70 py-2"),
       )}
     >
       {grouped ? null : isPanel ? (
-        <div className="px-3.5 pb-1 pt-3">
-          <p className="text-[11px] font-medium text-muted-foreground">Usage</p>
-        </div>
+        heading
       ) : (
         <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
       )}
@@ -313,7 +475,7 @@ export function EnvironmentProviderUsage({
           <CollapsiblePanel>
             <div className="px-2 pt-2 pb-1">
               <ProviderUsageDetails
-                snapshot={usage.data}
+                snapshot={snapshot}
                 loading={usage.isPending}
                 error={usage.error}
                 compact
@@ -334,39 +496,59 @@ export function EnvironmentProviderUsageList({
   enabled: boolean;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
-  const supported = (providers ?? []).filter(
-    (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+  const supported = useMemo(
+    () =>
+      (providers ?? []).filter(
+        (provider) =>
+          provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+      ),
+    [providers],
   );
+  const refreshTargets = useMemo(
+    () =>
+      supported.map((provider) => ({
+        instanceId: provider.instanceId,
+        provider: provider.driver as ProviderUsageDriver,
+        label: provider.displayName ?? providerName(provider.driver as ProviderUsageDriver),
+      })),
+    [supported],
+  );
+  const usageRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
 
   if (providers !== null && supported.length === 0) return null;
 
   return (
     <section
       aria-labelledby="new-thread-provider-usage-heading"
-      className="border-t border-border/65"
+      className="group/usage border-t border-border/65"
     >
-      <div className="px-3.5 pb-1 pt-3">
-        <h3
-          id="new-thread-provider-usage-heading"
-          className="text-[11px] font-medium text-muted-foreground"
-        >
-          Usage
-        </h3>
-      </div>
+      {usageSectionHeading({
+        id: "new-thread-provider-usage-heading",
+        refreshDisabled: !enabled || supported.length === 0,
+        refreshing: usageRefresh.isRefreshing,
+        onRefresh: usageRefresh.refresh,
+      })}
       {providers === null ? (
         <p className="px-4 pb-3 pt-1 text-xs text-muted-foreground">Loading provider accounts…</p>
       ) : (
         <div className="divide-y divide-border/70">
-          {supported.map((provider) => (
-            <EnvironmentProviderUsage
-              key={provider.instanceId}
-              environmentId={environmentId}
-              provider={provider}
-              enabled={enabled}
-              displayMode="panel"
-              grouped
-            />
-          ))}
+          {supported.map((provider) => {
+            const refreshedSnapshot = usageRefresh.refreshedSnapshots.get(
+              providerUsageSnapshotKey(environmentId, provider.instanceId),
+            );
+            return (
+              <EnvironmentProviderUsage
+                key={provider.instanceId}
+                environmentId={environmentId}
+                provider={provider}
+                enabled={enabled}
+                displayMode="panel"
+                grouped
+                {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
+                parentRefreshing={usageRefresh.isRefreshing}
+              />
+            );
+          })}
         </div>
       )}
     </section>

@@ -93,6 +93,13 @@ export interface IssueListRowProps {
   readonly today: string;
   readonly onRowClick: (issue: Issue, event: MouseEvent) => void;
   readonly onOpen: (issue: Issue) => void;
+  /**
+   * The right-click. It fires from anywhere in the row, inline property buttons included: the guard
+   * those sit behind stops clicks and keys, not `contextmenu`, so the row menu wins over the
+   * browser's — which is the behaviour a right-click on a row is asking for either way. Absent on
+   * the pages that host no menu, which leaves the browser's own where it was.
+   */
+  readonly onContextMenu?: (issue: Issue, event: MouseEvent) => void;
   readonly onStatus: (issue: Issue, statusId: IssueStatusId) => void;
   readonly onPriority: (issue: Issue, priority: IssuePriority) => void;
   readonly onToggleLabel: (issue: Issue, labelId: IssueLabelId, add: boolean) => void;
@@ -113,6 +120,7 @@ function IssueListRowImpl({
   today,
   onRowClick,
   onOpen,
+  onContextMenu,
   onStatus,
   onPriority,
   onToggleLabel,
@@ -130,6 +138,9 @@ function IssueListRowImpl({
       )}
       data-issue-key={issue.key}
       onClick={(event) => onRowClick(issue, event)}
+      onContextMenu={
+        onContextMenu === undefined ? undefined : (event) => onContextMenu(issue, event)
+      }
       onDoubleClick={() => onOpen(issue)}
       role="option"
     >

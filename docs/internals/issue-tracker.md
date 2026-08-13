@@ -141,11 +141,16 @@ stream, observes opted-in Slack issues, and writes ordinary attributed tracker c
 and audit policy live in server settings; the chosen worker model and matched rule ids are pinned on
 the issue so later settings changes cannot relabel work already assigned.
 
-Linking the first `start-work` thread moves the card to the configured work status. The seed prompt
-names the configured review destination, and the worker uses the issue toolkit to move the card
-there only after implementation and verification are actually complete. Entering that status is
-the audit boundary; a terminal provider turn alone is deliberately not one, because intermediate
-questions and follow-ups also end turns.
+A `start-work` link _appearing_ moves the card to the configured work status; a `mention` link never
+moves a card, because it records that a conversation named an issue, not that anyone is working on
+it. Appearance is the trigger rather than presence, and the coordinator seeds what it has already
+acted on from stored links at boot: the tracker republishes an issue's whole thread list whenever
+any link on it changes, so reacting to a list that merely _contains_ a start-work link would reapply
+the work status and the assignee every time a later mention — or a restart's replay — touched the
+issue, dragging a card the user moved to review back into progress. The seed prompt names the configured review destination, and the worker uses the
+issue toolkit to move the card there only after implementation and verification are actually
+complete. Entering that status is the audit boundary; a terminal provider turn alone is deliberately
+not one, because intermediate questions and follow-ups also end turns.
 
 Every selected auditor is a read-only text-generation run over the worktree. Claims are persisted
 in `issue_automation_audits` under `(issue, review trigger, rule, auditor index)`, making stream
@@ -155,6 +160,34 @@ back to work and queues the combined findings onto the linked thread for each co
 worker, in order; the original worker is the fallback. The last worker returns the card to review.
 All passes move it to the explicit success status or the next status in workflow order. A bounded
 remediation count prevents reviewer disagreement from creating an unbounded worker/auditor loop.
+
+## Mention links
+
+`issue_thread_links` holds one row per issue and thread pair with the origin it was created from:
+`start-work`, `manual`, or `mention`. The first two are explicit. The third is derived, and it is
+derived on the server — a completed message is scanned for issue-key-shaped candidates
+(`findIssueKeyMentions` / `extractIssueKeyMentions` in [issues.ts][contracts], which drop fenced and
+indented code blocks, inline code spans, bare URLs, and `[text](dest)` links first, so a key is
+never linked from something the renderer does not show as prose), and every distinct key is read
+straight from `IssueRepository.getByKey` before anything is written. That read, not
+`getSnapshot`, is the resolution path: this runs on every settled message, and the snapshot both
+finalizes ended cycles — a write — and reads the whole tracker. The scan is deliberately loose and
+**validation is the false-positive filter**: a key with no issue behind it, or one whose issue is
+soft-deleted, links nothing. A thread whose lineage says `subagent` links nothing either, because a
+delegated child thread is not on any list a person can open. Restating a pair keeps the strongest
+origin (`start-work` > `manual` > `mention`), so a mention can never demote the link the automation
+coordinator reads.
+
+Mentions are silent in the activity feed: `linkThread` writes a change-log row only when the
+resulting origin is not `mention` — a first explicit link, or an upgrade out of `mention` when
+somebody attaches the thread or starts work on it — and `unlinkThread` logs only when the row it
+removed was explicit. Restating a link that already holds the same effective origin writes nothing
+and publishes nothing at all, since a republished thread list is both a broadcast to every client
+and an automation trigger.
+
+History is scanned exactly once. A `projection_state` watermark under `issue-mention-links` bounds
+the historical backfill, so a restart resumes where the walk stopped instead of rereading every
+message, and live messages are handled as they complete.
 
 ## Enrichment seam
 
