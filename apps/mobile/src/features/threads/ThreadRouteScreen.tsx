@@ -1005,6 +1005,7 @@ function ThreadRouteContent(
           selectedThreadWithDraftSettings?.modelSelection ?? selectedThread.modelSelection
         }
         serverConfig={serverConfig}
+        canCreateWorktree={gitStatus.data?.isRepo === true}
         pending={continuationPending}
         onDismiss={() => {
           if (!continuationPending) setContinuationRequest(null);

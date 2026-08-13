@@ -22,6 +22,7 @@ export function ContinuationDialog(props: {
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
   readonly keybindings?: ResolvedKeybindingsConfig;
+  readonly canCreateWorktree: boolean;
   readonly pending: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSubmit: (
@@ -103,12 +104,14 @@ export function ContinuationDialog(props: {
                 pending={props.pending}
                 onClick={() => props.onSubmit(selection, "current")}
               />
-              <ContinuationChoice
-                title="Use a new worktree"
-                description="Start from the source checkout's committed HEAD"
-                pending={props.pending}
-                onClick={() => props.onSubmit(selection, "new-worktree")}
-              />
+              {props.canCreateWorktree ? (
+                <ContinuationChoice
+                  title="Use a new worktree"
+                  description="Start from the source checkout's committed HEAD"
+                  pending={props.pending}
+                  onClick={() => props.onSubmit(selection, "new-worktree")}
+                />
+              ) : null}
             </div>
           )}
         </div>

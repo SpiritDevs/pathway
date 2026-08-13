@@ -1,6 +1,7 @@
 import {
   CommandId,
   type OrchestrationV2ContextHandoff,
+  type OrchestrationV2ContextTransfer,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
@@ -173,7 +174,10 @@ export const layer: Layer.Layer<
           : { resumeFromSession: existingSessionProjection }),
       });
       let effectiveHandoffs = handoffs;
-      let nativeForkFallbackHandoff: OrchestrationV2ContextHandoff | null = null;
+      let nativeForkFallback: {
+        readonly handoff: OrchestrationV2ContextHandoff;
+        readonly transfer: OrchestrationV2ContextTransfer;
+      } | null = null;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (nativeForkTransfer !== undefined) {
           // Native fork is provider-side and cannot be transactionally rolled
@@ -251,52 +255,19 @@ export const layer: Layer.Layer<
             maxChars: session.providerSession.capabilities.context.maxRecommendedHandoffChars,
             createdAt,
           });
-          nativeForkFallbackHandoff = handoff;
+          nativeForkFallback = {
+            handoff,
+            transfer: {
+              ...nativeForkTransfer,
+              targetProviderInstanceId: run.providerInstanceId,
+              targetRunId: run.id,
+              status: "resolved_portable",
+              resolution: { strategy: "portable_context", contextHandoffId: handoff.id },
+              error: null,
+              updatedAt: createdAt,
+            },
+          };
           effectiveHandoffs = [...handoffs, handoff];
-          yield* eventSink.write({
-            events: [
-              {
-                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                type: "context-handoff.updated",
-                threadId: projection.thread.id,
-                runId: run.id,
-                providerInstanceId: run.providerInstanceId,
-                occurredAt: createdAt,
-                payload: handoff,
-              },
-              {
-                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                type: "context-transfer.updated",
-                threadId: projection.thread.id,
-                runId: run.id,
-                providerInstanceId: run.providerInstanceId,
-                occurredAt: createdAt,
-                payload: {
-                  ...nativeForkTransfer,
-                  targetProviderInstanceId: run.providerInstanceId,
-                  targetRunId: run.id,
-                  status: "resolved_portable",
-                  resolution: { strategy: "portable_context", contextHandoffId: handoff.id },
-                  error: null,
-                  updatedAt: createdAt,
-                },
-              },
-              {
-                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                type: "provider-thread.updated",
-                threadId: projection.thread.id,
-                driver: providerThread.driver,
-                providerInstanceId: run.providerInstanceId,
-                occurredAt: createdAt,
-                payload: {
-                  ...providerThread,
-                  forkedFrom: null,
-                  handoffIds: Array.from(new Set([...providerThread.handoffIds, handoff.id])),
-                  updatedAt: createdAt,
-                },
-              },
-            ],
-          });
           return yield* session.ensureThread({
             threadId: projection.thread.id,
             modelSelection: run.modelSelection,
@@ -399,7 +370,10 @@ export const layer: Layer.Layer<
         return;
       }
       const now = yield* DateTime.now;
-      const fallbackHandoff = nativeForkFallbackHandoff as OrchestrationV2ContextHandoff | null;
+      const fallback = nativeForkFallback as {
+        readonly handoff: OrchestrationV2ContextHandoff;
+        readonly transfer: OrchestrationV2ContextTransfer;
+      } | null;
       const runningProviderThread: OrchestrationV2ProviderThread = {
         ...loadedProviderThread,
         id: providerThread.id,
@@ -411,10 +385,10 @@ export const layer: Layer.Layer<
         firstRunOrdinal: providerThread.firstRunOrdinal ?? run.ordinal,
         lastRunOrdinal: run.ordinal,
         handoffIds:
-          fallbackHandoff === null
+          fallback === null
             ? providerThread.handoffIds
-            : Array.from(new Set([...providerThread.handoffIds, fallbackHandoff.id])),
-        forkedFrom: fallbackHandoff === null ? providerThread.forkedFrom : null,
+            : Array.from(new Set([...providerThread.handoffIds, fallback.handoff.id])),
+        forkedFrom: fallback === null ? providerThread.forkedFrom : null,
         status: "active",
         createdAt: providerThread.createdAt,
         updatedAt: now,
@@ -435,6 +409,28 @@ export const layer: Layer.Layer<
         startedAt: now,
       };
       const events: Array<OrchestrationV2DomainEvent> = [
+        ...(fallback === null
+          ? []
+          : [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+                type: "context-handoff.updated" as const,
+                threadId: projection.thread.id,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: fallback.handoff.createdAt,
+                payload: fallback.handoff,
+              },
+              {
+                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+                type: "context-transfer.updated" as const,
+                threadId: projection.thread.id,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: fallback.handoff.createdAt,
+                payload: fallback.transfer,
+              },
+            ]),
         {
           id: yield* idAllocator.allocate.event({
             threadId: projection.thread.id,
@@ -458,7 +454,7 @@ export const layer: Layer.Layer<
         },
         ...(nativeForkTransfer === undefined || runningProviderThread.nativeThreadRef === null
           ? []
-          : fallbackHandoff === null
+          : fallback === null
             ? [
                 {
                   id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
@@ -493,13 +489,13 @@ export const layer: Layer.Layer<
                   providerInstanceId: run.providerInstanceId,
                   occurredAt: now,
                   payload: {
-                    ...nativeForkTransfer,
+                    ...fallback.transfer,
                     targetProviderInstanceId: run.providerInstanceId,
                     targetRunId: run.id,
                     status: "consumed" as const,
                     resolution: {
                       strategy: "portable_context" as const,
-                      contextHandoffId: fallbackHandoff.id,
+                      contextHandoffId: fallback.handoff.id,
                     },
                     error: null,
                     updatedAt: now,

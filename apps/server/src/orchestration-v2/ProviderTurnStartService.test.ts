@@ -191,7 +191,7 @@ it("does not create a native fork after the starting attempt was cancelled", asy
   }).pipe(Effect.provide(testLayer), Effect.runPromise);
 });
 
-it("durably resolves a failed native fork as portable context", async () => {
+it("atomically resolves a failed native fork as portable context when startup commits", async () => {
   const threadId = ThreadId.make("thread_provider_turn_start_native_fallback");
   const sourceThreadId = ThreadId.make("thread_provider_turn_start_native_fallback_source");
   const runId = RunId.make("run_provider_turn_start_native_fallback");
@@ -385,17 +385,19 @@ it("durably resolves a failed native fork as portable context", async () => {
     expect(forkThread).toHaveBeenCalledOnce();
     expect(ensureThread).toHaveBeenCalledOnce();
     expect(startRootRun).toHaveBeenCalledOnce();
-    const fallbackEvents = durableWrites.flatMap((entry) => entry.events);
+    expect(durableWrites).toEqual([]);
+    const fallbackEvents = currentWrites.flatMap((entry) => entry.events);
     expect(fallbackEvents.some((event) => event.type === "context-handoff.updated")).toBe(true);
-    const transfer = fallbackEvents.find((event) => event.type === "context-transfer.updated")
-      ?.payload as { status?: string; resolution?: { strategy?: string } } | undefined;
+    const transfers = fallbackEvents
+      .filter((event) => event.type === "context-transfer.updated")
+      .map((event) => event.payload) as ReadonlyArray<{
+      status?: string;
+      resolution?: { strategy?: string };
+    }>;
+    const transfer = transfers[0];
     expect(transfer?.status).toBe("resolved_portable");
     expect(transfer?.resolution?.strategy).toBe("portable_context");
-    const consumedTransfer = currentWrites
-      .flatMap((entry) => entry.events)
-      .find((event) => event.type === "context-transfer.updated")?.payload as
-      | { status?: string; resolution?: { strategy?: string } }
-      | undefined;
+    const consumedTransfer = transfers[1];
     expect(consumedTransfer?.status).toBe("consumed");
     expect(consumedTransfer?.resolution?.strategy).toBe("portable_context");
     expect(startedMessage).toContain("Context handoff (full_thread_summary):");
