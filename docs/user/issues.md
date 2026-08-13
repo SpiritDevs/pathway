@@ -130,7 +130,8 @@ the branch it should start from. Pressing the button creates a fresh thread, sen
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New
 worktrees also run the project's configured setup tasks. The new thread keeps the originating issue
 in its details menu, where the current status and priority stay visible and the full detail sheet is
-one click away. Dragging cards around a board never launches an agent.
+one click away. Its issue code also appears in the thread sidebar card and hover details; select the
+code there to open the issue directly. Dragging cards around a board never launches an agent.
 
 Use the arrow beside **Start new thread** and choose **Create pending thread** when you want to
 prepare the same prompt, model, images, and workspace without sending the first turn. The pending

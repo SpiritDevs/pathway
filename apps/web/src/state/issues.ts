@@ -725,6 +725,38 @@ const issueAgentStateAtom = Atom.make(
 ).pipe(Atom.withLabel("web-issue-agent-state"));
 
 /**
+ * The issue that created each work thread. Manual links remain a detail-sheet concern: the
+ * sidebar code is provenance, matching the thread-details issue panel.
+ */
+export function startWorkIssuesByThread(
+  issuesById: ReadonlyMap<IssueId, Issue>,
+  linksByIssue: ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>>,
+): ReadonlyMap<ThreadId, Issue> {
+  const candidates = new Map<ThreadId, { readonly issue: Issue; readonly createdAt: string }>();
+  for (const [issueId, links] of linksByIssue) {
+    const issue = issuesById.get(issueId);
+    if (issue === undefined) continue;
+    for (const link of links) {
+      if (link.origin !== "start-work") continue;
+      const current = candidates.get(link.threadId);
+      if (
+        current === undefined ||
+        link.createdAt < current.createdAt ||
+        (link.createdAt === current.createdAt && issue.key < current.issue.key)
+      ) {
+        candidates.set(link.threadId, { issue, createdAt: link.createdAt });
+      }
+    }
+  }
+  return new Map([...candidates].map(([threadId, candidate]) => [threadId, candidate.issue]));
+}
+
+const startWorkIssuesByThreadAtom = Atom.make(
+  (get): ReadonlyMap<ThreadId, Issue> =>
+    startWorkIssuesByThread(get(issuesStoreAtom).issuesById, get(issueAgentStateAtom).linksByIssue),
+).pipe(Atom.withLabel("web-start-work-issues-by-thread"));
+
+/**
  * The issues with an investigation in flight, for the marker on a list row or a board card. One
  * subscription for the whole list rather than one per row, and the set only changes identity when
  * its membership does.
@@ -1520,6 +1552,11 @@ export function useIssueLinksForThread(
 /** For the list and the board: one subscription, membership-stable, no per-row reads. */
 export function useInvestigatingIssueIds(): ReadonlySet<IssueId> {
   return useAtomValue(investigatingIssueIdsAtom);
+}
+
+/** One subscription for the whole sidebar; avoids a thread-link request per rendered thread. */
+export function useStartWorkIssuesByThread(): ReadonlyMap<ThreadId, Issue> {
+  return useAtomValue(startWorkIssuesByThreadAtom);
 }
 
 /** Runs observed on this connection, used to avoid offering a duplicate investigation by default. */

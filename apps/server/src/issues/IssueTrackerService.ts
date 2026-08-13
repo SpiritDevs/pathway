@@ -1128,6 +1128,10 @@ export const make = Effect.gen(function* () {
     commentRepository
       .listByIssue({ issueId })
       .pipe(Effect.mapError(storage("Failed to read the issue comments")));
+  const listThreadLinks = () =>
+    threadLinkRepository
+      .listAll()
+      .pipe(Effect.mapError(storage("Failed to read the issue thread links")));
 
   const namingOf = (
     statuses: ReadonlyArray<IssueStatus>,
@@ -3965,6 +3969,13 @@ export const make = Effect.gen(function* () {
           // read of the tracker, so it carries any lazy cycle finalisation with it.
           const subscription = yield* PubSub.subscribe(changes);
           const snapshot = yield* getSnapshot();
+          const threadLinks = yield* listThreadLinks();
+          const threadLinksByIssue = new Map<IssueId, Array<IssueThreadLink>>();
+          for (const link of threadLinks) {
+            const links = threadLinksByIssue.get(link.issueId);
+            if (links === undefined) threadLinksByIssue.set(link.issueId, [link]);
+            else links.push(link);
+          }
           const initial: ReadonlyArray<IssuesStreamEvent> = [
             { _tag: "StatusesChanged", statuses: snapshot.statuses },
             { _tag: "LabelsChanged", labels: snapshot.labels },
@@ -3975,6 +3986,11 @@ export const make = Effect.gen(function* () {
             { _tag: "SlackStatusChanged", status: snapshot.slackStatus },
             { _tag: "ConfigChanged", config: snapshot.config },
             ...snapshot.issues.map((issue) => ({ _tag: "IssueUpserted" as const, issue })),
+            ...threadLinksByIssue.entries().map(([issueId, links]) => ({
+              _tag: "IssueThreadLinksChanged" as const,
+              issueId,
+              links,
+            })),
           ];
           return Stream.concat(Stream.fromIterable(initial), Stream.fromSubscription(subscription));
         }),

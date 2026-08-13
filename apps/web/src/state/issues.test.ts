@@ -60,6 +60,7 @@ import {
   mergeIssueEnrichmentRuns,
   mergeIssueLinksForThread,
   slackChannelNames,
+  startWorkIssuesByThread,
   todayIssueDate,
   upcomingIssueCycles,
   type IssueAgentState,
@@ -979,6 +980,44 @@ describe("applyIssueAgentStreamEvent", () => {
         issue: issue("1"),
       }),
     ).toBe(EMPTY_ISSUE_AGENT_STATE);
+  });
+});
+
+describe("startWorkIssuesByThread", () => {
+  it("indexes start-work links and ignores manual attachments", () => {
+    const first = issue("1");
+    const second = issue("2");
+    const manual = { ...link("2", "manual"), origin: "manual" as const };
+    const issues = startWorkIssuesByThread(
+      new Map([
+        [first.id, first],
+        [second.id, second],
+      ]),
+      new Map([
+        [first.id, [link("1", "work")]],
+        [second.id, [manual]],
+      ]),
+    );
+
+    expect(issues.get(ThreadId.make("work"))?.key).toBe("PAT-1");
+    expect(issues.has(ThreadId.make("manual"))).toBe(false);
+  });
+
+  it("keeps the oldest start-work issue when persisted data contains more than one", () => {
+    const first = issue("1");
+    const second = issue("2");
+    const issues = startWorkIssuesByThread(
+      new Map([
+        [first.id, first],
+        [second.id, second],
+      ]),
+      new Map([
+        [first.id, [link("1", "work", "2026-08-12T00:00:02.000Z")]],
+        [second.id, [link("2", "work", "2026-08-12T00:00:01.000Z")]],
+      ]),
+    );
+
+    expect(issues.get(ThreadId.make("work"))?.key).toBe("PAT-2");
   });
 });
 

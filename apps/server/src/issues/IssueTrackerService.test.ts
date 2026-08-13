@@ -1447,6 +1447,26 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("replays persisted thread links when the issue stream opens", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Already linked" }, ACTOR);
+      const threadId = ThreadId.make("thread-1");
+      yield* tracker.linkThread({ issueId: issue.id, threadId, origin: "start-work" }, ACTOR);
+
+      const events = yield* Stream.runCollect(Stream.take(tracker.stream, 10));
+      const replayed = events.at(-1);
+      assert.strictEqual(replayed?._tag, "IssueThreadLinksChanged");
+      if (replayed?._tag === "IssueThreadLinksChanged") {
+        assert.strictEqual(replayed.issueId, issue.id);
+        assert.deepStrictEqual(
+          replayed.links.map((link) => link.threadId),
+          [threadId],
+        );
+      }
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
   it.effect("refuses an enrichment run when the issue has no repository to read", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;

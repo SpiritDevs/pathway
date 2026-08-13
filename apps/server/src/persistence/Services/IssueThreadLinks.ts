@@ -45,6 +45,14 @@ export interface IssueThreadLinkRepositoryShape {
   ) => Effect.Effect<void, IssueTrackerRepositoryError>;
 
   /**
+   * Every link, ordered so a caller can group it without introducing unstable row order.
+   */
+  readonly listAll: () => Effect.Effect<
+    ReadonlyArray<IssueThreadLink>,
+    IssueTrackerRepositoryError
+  >;
+
+  /**
    * One issue's threads, oldest first.
    */
   readonly listByIssue: (
