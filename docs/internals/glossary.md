@@ -196,6 +196,16 @@ belongs to [IssueEnrichmentEngine.ts][28], which reports back through a recorder
 Deliberately **not a thread**, which is why threads needed no `hidden` flag. Fires on triage accept
 and from the manual Investigate button, never on import.
 
+#### Thread link
+
+One row of `issue_thread_links`: exactly one row per issue and thread pair, carrying the origin that
+pair was created with — `start-work`, `manual`, or `mention`. Linking the same pair again keeps the
+**strongest** origin (`start-work` > `manual` > `mention`) rather than overwriting it, so a mention
+can never demote the link automation reads. `mention` links are written by the `IssueMentionLinker`
+reactor from issue keys found in completed messages and validated against real issues; the other two
+are explicit, from **Start new thread** and from the issues toolkit. Only `start-work` drives
+automation — a `mention` is provenance. See [IssueTrackerService.ts][27] and [issue-tracker.md][25].
+
 #### Rootless project
 
 A project whose `workspaceRoot` is null — created from a name alone, with no directory attached. It
