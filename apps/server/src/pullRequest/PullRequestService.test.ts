@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   PullRequestProviderError,
@@ -145,12 +146,16 @@ function fakeProvider(
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
+  readonly resolveIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
 }) {
   return PullRequestService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
+        Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+          resolve: input.resolveIdentity ?? (() => Effect.succeed(null)),
+        }),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
@@ -168,6 +173,43 @@ function makeService(input: {
     ),
   );
 }
+
+it.effect("resolves a cold project's repository identity before reading its change request", () =>
+  Effect.gen(function* () {
+    let actionRepository: string | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "pathway", workspaceRoot: "/pathway" })],
+      providers: [
+        fakeProvider("github", {
+          runAction: (input) => {
+            actionRepository = input.repository;
+            return Effect.void;
+          },
+        }),
+      ],
+      resolveIdentity: (workspaceRoot) => {
+        assert.strictEqual(workspaceRoot, "/pathway");
+        return Effect.succeed(
+          project({
+            id: "resolved",
+            title: "pathway",
+            workspaceRoot,
+            repository: "coreybain/pathway",
+          }).repositoryIdentity!,
+        );
+      },
+    });
+
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "coreybain/pathway",
+      number: 4849,
+      action: "close",
+    });
+
+    assert.strictEqual(actionRepository, "coreybain/pathway");
+  }),
+);
 
 it.effect("refines unknown self-hosted GitLab projects before listing merge requests", () =>
   Effect.gen(function* () {

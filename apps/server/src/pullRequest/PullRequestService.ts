@@ -42,6 +42,7 @@ import {
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   type ProviderChangeRequest,
@@ -373,7 +374,37 @@ function repositoryIdentityOf(project: OrchestrationProjectShell): string | null
 export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+
+  /**
+   * Shell snapshots keep optional repository metadata non-blocking so navigation never waits on
+   * git. A change-request read is different: without that identity it would call a supported host
+   * unsupported, or answer with an empty list, while the background enrichment is still queued.
+   * Resolve only the projects this request can use; the resolver's cache shares an in-flight read
+   * with background enrichment, so a cold request waits for the same work rather than starting a
+   * second git process.
+   */
+  const resolveMissingProjectIdentities = (
+    projects: ReadonlyArray<OrchestrationProjectShell>,
+    filter: Pick<PullRequestListInput, "projectId">,
+  ) =>
+    Effect.forEach(
+      projects,
+      (project) => {
+        if (
+          !isRootedProject(project) ||
+          (project.repositoryIdentity !== null && project.repositoryIdentity !== undefined) ||
+          (filter.projectId !== undefined && project.id !== filter.projectId)
+        ) {
+          return Effect.succeed(project);
+        }
+        return repositoryIdentities
+          .resolve(project.workspaceRoot)
+          .pipe(Effect.map((repositoryIdentity) => ({ ...project, repositoryIdentity })));
+      },
+      { concurrency: REPOSITORY_CONCURRENCY },
+    );
 
   const refineUnknownProjectKinds = (
     projects: ReadonlyArray<OrchestrationProjectShell>,
@@ -447,8 +478,15 @@ export const make = Effect.gen(function* () {
           }),
       ),
       Effect.flatMap((snapshot) =>
-        refineUnknownProjectKinds(snapshot.projects, filter).pipe(
-          Effect.map((refinedKinds) => ({ refinedKinds, snapshot })),
+        resolveMissingProjectIdentities(snapshot.projects, filter).pipe(
+          Effect.flatMap((projects) =>
+            refineUnknownProjectKinds(projects, filter).pipe(
+              Effect.map((refinedKinds) => ({
+                refinedKinds,
+                snapshot: { ...snapshot, projects },
+              })),
+            ),
+          ),
         ),
       ),
       Effect.map(({ refinedKinds, snapshot }) => {
