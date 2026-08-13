@@ -123,8 +123,8 @@ investigated on import.
 An issue can be assigned to you or to an agent. Assigning an agent records the intent; it does not
 start anything. Model, reasoning, and workspace controls appear beside **Start new thread**, with
 the model constrained to the assigned provider and initially using a compatible project default.
-Choose **Current checkout** to work in the project's main workspace, or **New branch** to create an
-isolated worktree from the checked-out branch. Pressing the button creates a fresh thread, sends the
+Choose **Current checkout** to work in the project's main workspace, or **New worktree** and select
+the branch it should start from. Pressing the button creates a fresh thread, sends the
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New
 worktrees also run the project's configured setup tasks. Dragging cards around a board never
 launches an agent.

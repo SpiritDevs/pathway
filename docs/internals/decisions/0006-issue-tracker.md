@@ -115,9 +115,9 @@ Agents have **full write access, including completing and deleting**. Soft delet
 Agents can be assignees. Assignment records intent and surfaces a "Start new thread" action that
 creates and dispatches a fresh thread seeded with the issue's title, description, todos, links, and
 images — it does not auto-spawn. The assignee constrains the provider; model, reasoning, and current
-checkout versus new-worktree options are selected before launch. A new worktree follows the normal
-thread preparation path, including generated branch naming and configured setup scripts. A stray
-kanban drag must not start three agents.
+checkout versus new-worktree options and the worktree's base ref are selected before launch. A new
+worktree follows the normal thread preparation path, including generated branch naming and
+configured setup scripts. A stray kanban drag must not start three agents.
 
 ### Enrichment
 

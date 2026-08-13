@@ -14,10 +14,11 @@ import type {
   ModelSelection,
   ProviderInstanceId,
   ThreadId,
+  VcsRef,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { FolderIcon, GitBranchIcon, MessageSquareIcon, PlayIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import type { ProviderInstanceEntry } from "~/providerInstances";
@@ -48,6 +49,8 @@ function IssueStartWorkLauncher({
   starting,
   startWorkBlockReason,
   currentBranch,
+  branchRefs,
+  branchesPending,
   newWorktreeBlockReason,
   onStartWork,
 }: {
@@ -58,12 +61,25 @@ function IssueStartWorkLauncher({
   starting: boolean;
   startWorkBlockReason: string | null;
   currentBranch: string | null;
+  branchRefs: ReadonlyArray<VcsRef>;
+  branchesPending: boolean;
   newWorktreeBlockReason: string | null;
-  onStartWork: (modelSelection: ModelSelection, workspaceMode: IssueStartWorkWorkspaceMode) => void;
+  onStartWork: (
+    modelSelection: ModelSelection,
+    workspaceMode: IssueStartWorkWorkspaceMode,
+    baseBranch: string | null,
+  ) => void;
 }) {
   const [modelSelection, setModelSelection] = useState(initialModelSelection);
   const [workspaceMode, setWorkspaceMode] =
     useState<IssueStartWorkWorkspaceMode>("current_checkout");
+  const [selectedBaseBranch, setSelectedBaseBranch] = useState<string | null>(currentBranch);
+  useEffect(() => {
+    if (selectedBaseBranch !== null) return;
+    setSelectedBaseBranch(
+      currentBranch ?? branchRefs.find((ref) => ref.isDefault)?.name ?? branchRefs[0]?.name ?? null,
+    );
+  }, [branchRefs, currentBranch, selectedBaseBranch]);
   const activeEntry =
     instanceEntries.find((entry) => entry.instanceId === modelSelection?.instanceId) ?? null;
   const hasTraits =
@@ -86,6 +102,11 @@ function IssueStartWorkLauncher({
   const blockReason =
     startWorkBlockReason ??
     (workspaceMode === "new_worktree" ? newWorktreeBlockReason : null) ??
+    (workspaceMode === "new_worktree" && selectedBaseBranch === null
+      ? branchesPending
+        ? "Loading branches."
+        : "Choose a base branch for the new worktree."
+      : null) ??
     (modelSelection === null || activeEntry === null
       ? `No available ${providerLabel} model can start this work.`
       : null);
@@ -173,15 +194,52 @@ function IssueStartWorkLauncher({
                 <span className="flex items-start gap-2">
                   <GitBranchIcon className="mt-0.5 size-4" />
                   <span className="flex min-w-0 flex-col">
-                    <span>New branch</span>
+                    <span>New worktree</span>
                     <span className="text-xs text-muted-foreground">
-                      Create an isolated worktree and run its setup tasks.
+                      Branch from a ref you choose and run its setup tasks.
                     </span>
                   </span>
                 </span>
               </SelectItem>
             </SelectPopup>
           </Select>
+
+          {workspaceMode === "new_worktree" ? (
+            <>
+              <span className="text-[11px] text-muted-foreground">From branch</span>
+              <Select
+                disabled={starting || branchRefs.length === 0}
+                onValueChange={(value) => setSelectedBaseBranch(value)}
+                value={selectedBaseBranch}
+              >
+                <SelectTrigger
+                  aria-label={`Base branch for starting work on ${issue.key}`}
+                  className="w-full min-w-0 text-foreground/90"
+                  size="sm"
+                >
+                  <SelectValue>
+                    {selectedBaseBranch ??
+                      (branchesPending ? "Loading branches…" : "Choose branch")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup className="w-72">
+                  {branchRefs.map((ref) => (
+                    <SelectItem key={ref.name} value={ref.name}>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <GitBranchIcon className="size-4" />
+                        <span className="min-w-0 flex-1 truncate">{ref.name}</span>
+                        {ref.current || ref.isDefault || ref.isRemote ? (
+                          <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                            {ref.current ? "current" : ref.isDefault ? "default" : "remote"}
+                          </span>
+                        ) : null}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </>
+          ) : null}
         </div>
       )}
 
@@ -189,7 +247,9 @@ function IssueStartWorkLauncher({
         className="w-full justify-start"
         disabled={starting || blockReason !== null}
         onClick={() => {
-          if (modelSelection !== null) onStartWork(modelSelection, workspaceMode);
+          if (modelSelection !== null) {
+            onStartWork(modelSelection, workspaceMode, selectedBaseBranch);
+          }
         }}
         size="sm"
         title={blockReason ?? undefined}
@@ -212,6 +272,8 @@ export function IssueAgentSection({
   starting,
   startWorkBlockReason,
   currentBranch,
+  branchRefs,
+  branchesPending,
   newWorktreeBlockReason,
   onStartWork,
   onOpenThread,
@@ -229,9 +291,15 @@ export function IssueAgentSection({
   /** Null when Start work can be pressed; otherwise the sentence explaining why not. */
   startWorkBlockReason: string | null;
   currentBranch: string | null;
+  branchRefs: ReadonlyArray<VcsRef>;
+  branchesPending: boolean;
   /** Null when a branch can be created; otherwise shown on the disabled workspace option. */
   newWorktreeBlockReason: string | null;
-  onStartWork: (modelSelection: ModelSelection, workspaceMode: IssueStartWorkWorkspaceMode) => void;
+  onStartWork: (
+    modelSelection: ModelSelection,
+    workspaceMode: IssueStartWorkWorkspaceMode,
+    baseBranch: string | null,
+  ) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onUnlinkThread: (threadId: ThreadId) => void;
 }) {
@@ -248,6 +316,8 @@ export function IssueAgentSection({
           key={`${issue.assignee?.kind === "agent" ? issue.assignee.provider : "none"}:${initialModelSelection?.instanceId ?? "none"}:${initialModelSelection?.model ?? "none"}:${JSON.stringify(initialModelSelection?.options ?? [])}`}
           modelOptionsByInstance={modelOptionsByInstance}
           currentBranch={currentBranch}
+          branchRefs={branchRefs}
+          branchesPending={branchesPending}
           newWorktreeBlockReason={newWorktreeBlockReason}
           onStartWork={onStartWork}
           starting={starting}

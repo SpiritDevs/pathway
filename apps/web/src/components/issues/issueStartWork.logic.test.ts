@@ -179,11 +179,11 @@ describe("resolveIssueStartWorkWorkspacePlan", () => {
     });
   });
 
-  it("uses the checked-out branch as the base for an isolated task worktree", () => {
-    expect(resolveIssueStartWorkWorkspacePlan("new_worktree", "main")).toEqual({
+  it("uses the selected branch as the base for an isolated task worktree", () => {
+    expect(resolveIssueStartWorkWorkspacePlan("new_worktree", "release/next")).toEqual({
       envMode: "worktree",
-      branch: "main",
-      prepareWorktreeBaseBranch: "main",
+      branch: "release/next",
+      prepareWorktreeBaseBranch: "release/next",
     });
   });
 

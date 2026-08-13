@@ -43,14 +43,14 @@ export interface IssueStartWorkWorkspacePlan {
  */
 export function resolveIssueStartWorkWorkspacePlan(
   mode: IssueStartWorkWorkspaceMode,
-  currentBranch: string | null,
+  baseBranch: string | null,
 ): IssueStartWorkWorkspacePlan | null {
   if (mode === "new_worktree") {
-    if (currentBranch === null) return null;
+    if (baseBranch === null) return null;
     return {
       envMode: "worktree",
-      branch: currentBranch,
-      prepareWorktreeBaseBranch: currentBranch,
+      branch: baseBranch,
+      prepareWorktreeBaseBranch: baseBranch,
     };
   }
   return { envMode: "local", branch: null, prepareWorktreeBaseBranch: null };

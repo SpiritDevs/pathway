@@ -72,6 +72,7 @@ import {
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useBranches } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom } from "~/state/server";
 import {
@@ -617,18 +618,19 @@ function IssueDetailBody({
   );
   const currentProjectBranch =
     startWorkGitStatus.data?.isRepo === true ? startWorkGitStatus.data.refName : null;
+  const startWorkBranches = useBranches({
+    environmentId: project?.environmentId ?? null,
+    cwd: project?.workspaceRoot ?? null,
+  });
+  const startWorkBranchRefs = startWorkBranches.data?.refs ?? [];
   const newWorktreeBlockReason =
     project?.workspaceRoot == null
       ? "Choose a project with a connected workspace before creating a branch."
-      : startWorkGitStatus.isPending
-        ? "Checking the project's Git branch."
-        : startWorkGitStatus.error !== null
-          ? "The project's Git status is unavailable."
-          : startWorkGitStatus.data?.isRepo !== true
-            ? "This project is not a Git repository."
-            : currentProjectBranch === null
-              ? "Check out a branch before creating a worktree."
-              : null;
+      : startWorkGitStatus.error !== null
+        ? "The project's Git status is unavailable."
+        : startWorkGitStatus.data !== null && startWorkGitStatus.data.isRepo !== true
+          ? "This project is not a Git repository."
+          : startWorkBranches.error;
 
   const startWorkProvider = issue.assignee?.kind === "agent" ? issue.assignee.provider : null;
   const startWorkInstanceEntries = useMemo(() => {
@@ -750,6 +752,7 @@ function IssueDetailBody({
     (
       modelSelection: ModelSelection,
       workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+      baseBranch: string | null = null,
     ) => {
       if (
         project === null ||
@@ -763,10 +766,7 @@ function IssueDetailBody({
       setStartingWork(true);
       void (async () => {
         try {
-          const workspacePlan = resolveIssueStartWorkWorkspacePlan(
-            workspaceMode,
-            currentProjectBranch,
-          );
+          const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
           if (workspacePlan === null) {
             throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
           }
@@ -774,6 +774,12 @@ function IssueDetailBody({
             branch: workspacePlan.branch,
             worktreePath: null,
             envMode: workspacePlan.envMode,
+            startFromOrigin:
+              workspaceMode === "new_worktree"
+                ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
+                  ? false
+                  : settings.newWorktreesStartFromOrigin
+                : false,
             // An issue launch is a task boundary. It must never consume an unrelated empty draft.
             forceNew: true,
           });
@@ -917,7 +923,6 @@ function IssueDetailBody({
       acceptTriage,
       issue,
       linkThread,
-      currentProjectBranch,
       newWorktreeBlockReason,
       openNewThread,
       parent,
@@ -930,9 +935,11 @@ function IssueDetailBody({
       store,
       settings.issueAutomation.statusTransitions.workFinishedStatusId,
       settings.issueAutomation.statusTransitions.workStartedStatusId,
+      settings.newWorktreesStartFromOrigin,
       startThreadTurn,
       startWorkAttachmentsReady,
       startWorkAttachmentUrls,
+      startWorkBranchRefs,
       updateIssue,
     ],
   );
@@ -1234,6 +1241,8 @@ function IssueDetailBody({
                 links={threadLinks}
                 modelOptionsByInstance={startWorkModelOptionsByInstance}
                 currentBranch={currentProjectBranch}
+                branchRefs={startWorkBranchRefs}
+                branchesPending={startWorkBranches.isPending && startWorkBranches.data === null}
                 newWorktreeBlockReason={newWorktreeBlockReason}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
