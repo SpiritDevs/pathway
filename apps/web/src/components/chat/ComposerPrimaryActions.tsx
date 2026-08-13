@@ -1,5 +1,6 @@
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import type { ActiveTurnSendMode } from "@t3tools/contracts/settings";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -20,6 +21,7 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  activeTurnSendMode?: ActiveTurnSendMode;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -59,6 +61,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  activeTurnSendMode = "steer",
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -227,7 +230,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               : isSendBusy
                 ? "Sending"
                 : isRunning
-                  ? "Send message to steer active turn"
+                  ? activeTurnSendMode === "queue"
+                    ? "Queue message behind active turn"
+                    : "Send message to steer active turn"
                   : "Send message"
       }
     >
@@ -257,7 +262,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   return (
     <Tooltip>
       <TooltipTrigger render={sendButton} />
-      <TooltipPopup side="top">Send now to steer the active turn</TooltipPopup>
+      <TooltipPopup side="top">
+        {activeTurnSendMode === "queue"
+          ? "Queue behind the active turn"
+          : "Send now to steer the active turn"}
+      </TooltipPopup>
     </Tooltip>
   );
 });

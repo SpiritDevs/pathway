@@ -2,14 +2,22 @@ import type { SessionPhase } from "../../types";
 
 export type ComposerDispatchMode = "auto" | "queue" | "steer" | "restart";
 export type ActiveTurnComposerAction = Exclude<ComposerDispatchMode, "auto">;
+export type ActiveTurnSendAction = Extract<ActiveTurnComposerAction, "queue" | "steer">;
 
-/** One policy seam for the future configurable active-turn default action. */
+export function alternateActiveTurnSendAction(action: ActiveTurnSendAction): ActiveTurnSendAction {
+  return action === "queue" ? "steer" : "queue";
+}
+
+/** Resolve the primary or alternate active-turn action selected in composer settings. */
 export function resolveComposerDispatchMode(input: {
   readonly phase: SessionPhase;
-  readonly queueModifier: boolean;
+  readonly alternateModifier: boolean;
   readonly activeTurnDefault?: ActiveTurnComposerAction;
 }): ComposerDispatchMode {
   if (input.phase !== "running") return "auto";
-  if (input.queueModifier) return "queue";
-  return input.activeTurnDefault ?? "steer";
+  const defaultAction = input.activeTurnDefault ?? "steer";
+  if (input.alternateModifier) {
+    return defaultAction === "restart" ? "queue" : alternateActiveTurnSendAction(defaultAction);
+  }
+  return defaultAction;
 }

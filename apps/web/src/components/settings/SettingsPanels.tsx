@@ -18,9 +18,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
+  DEFAULT_ACTIVE_TURN_SEND_MODE,
   DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
+  DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
+  type ActiveTurnSendMode,
   type EnvironmentIdentificationMode,
   MAX_CODE_FONT_SIZE,
   MAX_DEVELOPMENT_SERVER_PORT,
@@ -118,6 +120,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThemeLibrary } from "./ThemeSettings";
@@ -158,6 +161,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const ACTIVE_TURN_SEND_MODE_LABELS: Record<ActiveTurnSendMode, string> = {
+  queue: "Queue",
+  steer: "Steer",
+};
 
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<BackgroundActivityProfile, string> = {
   balanced: "Balanced",
@@ -1952,6 +1960,43 @@ export function GeneralSettingsPanel() {
               }}
               aria-label="Project grouping"
             />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("active-turn-send-action")}
+          description="Choose what Send and Enter do while an agent is working. Command/Ctrl+Enter uses the other action."
+          resetAction={
+            settings.activeTurnSendMode !== DEFAULT_ACTIVE_TURN_SEND_MODE ? (
+              <SettingResetButton
+                label="queue or steer messages"
+                onClick={() =>
+                  updateSettings({ activeTurnSendMode: DEFAULT_ACTIVE_TURN_SEND_MODE })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ToggleGroup
+              aria-label="Queue or steer messages"
+              className="shrink-0"
+              size="sm"
+              variant="outline"
+              value={[settings.activeTurnSendMode]}
+              onValueChange={(value) => {
+                const nextMode = value[0];
+                if (nextMode === "queue" || nextMode === "steer") {
+                  updateSettings({ activeTurnSendMode: nextMode });
+                }
+              }}
+            >
+              <Toggle aria-label="Queue active-turn messages" value="queue">
+                {ACTIVE_TURN_SEND_MODE_LABELS.queue}
+              </Toggle>
+              <Toggle aria-label="Steer with active-turn messages" value="steer">
+                {ACTIVE_TURN_SEND_MODE_LABELS.steer}
+              </Toggle>
+            </ToggleGroup>
           }
         />
 

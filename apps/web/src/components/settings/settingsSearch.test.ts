@@ -61,6 +61,16 @@ describe("searchSettings", () => {
     ]);
   });
 
+  it("finds the queue or steer preference", () => {
+    expect(searchSettings("queue or steer")).toEqual([
+      {
+        id: "active-turn-send-action",
+        title: "Queue or steer messages",
+        to: "/settings/general",
+      },
+    ]);
+  });
+
   it("keeps catalog order for multiple title matches", () => {
     expect(searchSettings("update", ITEMS).map((item) => item.id)).toEqual([
       "provider-updates",

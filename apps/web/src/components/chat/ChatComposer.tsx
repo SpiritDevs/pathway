@@ -234,7 +234,11 @@ import type {
   PendingApproval,
   PendingUserInput,
 } from "../../session-logic";
-import { resolveComposerDispatchMode, type ComposerDispatchMode } from "./composerDispatch";
+import {
+  alternateActiveTurnSendAction,
+  resolveComposerDispatchMode,
+  type ComposerDispatchMode,
+} from "./composerDispatch";
 import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
@@ -422,7 +426,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
-  queueShortcutLabel: string;
+  alternateShortcutLabel: string;
+  activeTurnSendMode: "queue" | "steer";
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -441,13 +446,15 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       ) : null}
       {props.isRunning && props.hasSendableContent ? (
         <span className="hidden text-[11px] text-muted-foreground/70 sm:inline">
-          <kbd className="font-mono">{props.queueShortcutLabel}</kbd> to queue
+          <kbd className="font-mono">{props.alternateShortcutLabel}</kbd> to{" "}
+          {alternateActiveTurnSendAction(props.activeTurnSendMode)}
         </span>
       ) : null}
       <ComposerPrimaryActions
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        activeTurnSendMode={props.activeTurnSendMode}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -1873,7 +1880,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         return;
       }
-      onSend(event, dispatchMode ?? resolveComposerDispatchMode({ phase, queueModifier: false }));
+      onSend(
+        event,
+        dispatchMode ??
+          resolveComposerDispatchMode({
+            phase,
+            alternateModifier: false,
+            activeTurnDefault: settings.activeTurnSendMode,
+          }),
+      );
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
@@ -1884,6 +1899,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       noProviderAvailable,
       onSend,
       phase,
+      settings.activeTurnSendMode,
       shouldBlurMobileComposerOnSubmit,
     ],
   );
@@ -1947,7 +1963,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         undefined,
         resolveComposerDispatchMode({
           phase,
-          queueModifier: event.metaKey || event.ctrlKey,
+          alternateModifier: event.metaKey || event.ctrlKey,
+          activeTurnDefault: settings.activeTurnSendMode,
         }),
       );
       return true;
@@ -3271,7 +3288,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
-                  queueShortcutLabel={isMacPlatform(navigator.platform) ? "⌘↵" : "Ctrl+Enter"}
+                  alternateShortcutLabel={isMacPlatform(navigator.platform) ? "⌘↵" : "Ctrl+Enter"}
+                  activeTurnSendMode={settings.activeTurnSendMode}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}

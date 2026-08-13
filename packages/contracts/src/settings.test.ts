@@ -17,6 +17,23 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
+describe("ClientSettings active-turn send mode", () => {
+  it("defaults to steering and accepts either send mode", () => {
+    expect(decodeClientSettings({}).activeTurnSendMode).toBe("steer");
+    expect(decodeClientSettingsPatch({ activeTurnSendMode: "queue" }).activeTurnSendMode).toBe(
+      "queue",
+    );
+    expect(decodeClientSettingsPatch({ activeTurnSendMode: "steer" }).activeTurnSendMode).toBe(
+      "steer",
+    );
+  });
+
+  it("rejects unsupported send modes", () => {
+    expect(() => decodeClientSettings({ activeTurnSendMode: "restart" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ activeTurnSendMode: "auto" })).toThrow();
+  });
+});
+
 describe("ClientSettings development server ports", () => {
   it("defaults to the common development range and accepts a custom range", () => {
     expect(decodeClientSettings({}).developmentServerPortRange).toEqual(

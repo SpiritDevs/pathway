@@ -1,31 +1,42 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveComposerDispatchMode } from "./composerDispatch";
+import { alternateActiveTurnSendAction, resolveComposerDispatchMode } from "./composerDispatch";
+
+describe("alternateActiveTurnSendAction", () => {
+  it("returns the opposite action for the composer hint", () => {
+    expect(alternateActiveTurnSendAction("queue")).toBe("steer");
+    expect(alternateActiveTurnSendAction("steer")).toBe("queue");
+  });
+});
 
 describe("resolveComposerDispatchMode", () => {
   it("starts an ordinary turn while idle", () => {
-    expect(resolveComposerDispatchMode({ phase: "ready", queueModifier: false })).toBe("auto");
+    expect(resolveComposerDispatchMode({ phase: "ready", alternateModifier: false })).toBe("auto");
   });
 
-  it("steers by default and reserves Mod+Enter for queueing while running", () => {
-    expect(resolveComposerDispatchMode({ phase: "running", queueModifier: false })).toBe("steer");
-    expect(resolveComposerDispatchMode({ phase: "running", queueModifier: true })).toBe("queue");
+  it("steers by default and reserves Mod+Enter for the alternate action while running", () => {
+    expect(resolveComposerDispatchMode({ phase: "running", alternateModifier: false })).toBe(
+      "steer",
+    );
+    expect(resolveComposerDispatchMode({ phase: "running", alternateModifier: true })).toBe(
+      "queue",
+    );
   });
 
-  it("accepts a configured default without changing the queue shortcut", () => {
+  it("inverts queue and steer when the alternate modifier is pressed", () => {
     expect(
       resolveComposerDispatchMode({
         phase: "running",
-        queueModifier: false,
-        activeTurnDefault: "restart",
-      }),
-    ).toBe("restart");
-    expect(
-      resolveComposerDispatchMode({
-        phase: "running",
-        queueModifier: true,
-        activeTurnDefault: "restart",
+        alternateModifier: false,
+        activeTurnDefault: "queue",
       }),
     ).toBe("queue");
+    expect(
+      resolveComposerDispatchMode({
+        phase: "running",
+        alternateModifier: true,
+        activeTurnDefault: "queue",
+      }),
+    ).toBe("steer");
   });
 });

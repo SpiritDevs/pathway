@@ -255,4 +255,18 @@ describe("active-turn primary action", () => {
     expect(markup).toContain('aria-label="Send message to steer active turn"');
     expect(markup).not.toContain('aria-label="Stop generation"');
   });
+
+  it("labels the primary action as queueing when queue is the selected default", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        ...activeTurnProps,
+        isRunning: true,
+        hasSendableContent: true,
+        activeTurnSendMode: "queue",
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Queue message behind active turn"');
+    expect(markup).not.toContain("steer active turn");
+  });
 });
