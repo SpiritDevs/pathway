@@ -34,7 +34,10 @@ import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { resolveThreadProviderSession } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  resolveActiveThreadRun,
+  resolveThreadProviderSession,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import {
@@ -244,6 +247,7 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  readEnvironmentSupportsBrowserTakeover,
   resolveThreadDetailRef,
   useProject,
   useProjects,
@@ -294,6 +298,15 @@ import {
 } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import {
+  browserTakeoverBannerItem,
+  dismissBrowserTakeoverBannerForSession,
+  resolveBrowserTakeoverBanner,
+} from "./chat/browserTakeoverBanner";
+import {
+  selectPreviewAutomationHostClientId,
+  usePreviewAutomationHostStore,
+} from "./preview/previewAutomationHostStore";
 import { QueuedRunsControl } from "./chat/QueuedRunsControl";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -4702,8 +4715,9 @@ function ChatViewContent(props: ChatViewProps) {
     updateThreadMetadata,
   ]);
   // The stack renders items[0] front-most and tucks the rest behind hover, so
-  // ordering is priority: system banners, then the branch-mismatch notice,
-  // and the informational parked-thread banner last — it must never cover another.
+  // ordering is priority: system banners, the browser takeover (it is asking the
+  // user to act right now), then the branch-mismatch notice, and the
+  // informational parked-thread banner last — it must never cover another.
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -4752,13 +4766,167 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
+  // Browser takeover (ISS-41). The server owns the state machine; this client
+  // only renders the projection, sends the three user commands, and — on the
+  // desktop that actually hosts the browser — focuses the tab when it lands.
+  const requestBrowserTakeoverMutation = useAtomCommand(threadEnvironment.requestBrowserTakeover, {
+    reportFailure: false,
+  });
+  const proceedBrowserTakeoverMutation = useAtomCommand(threadEnvironment.proceedBrowserTakeover, {
+    reportFailure: false,
+  });
+  const releaseBrowserTakeoverMutation = useAtomCommand(threadEnvironment.releaseBrowserTakeover, {
+    reportFailure: false,
+  });
+  const browserTakeoverHostClientId = usePreviewAutomationHostStore((state) =>
+    selectPreviewAutomationHostClientId(state, activeThreadRef?.environmentId ?? null),
+  );
+  // Dismissal lives in a module-level set; this tick just forces a re-render.
+  const [browserTakeoverDismissTick, setBrowserTakeoverDismissTick] = useState(0);
+  // Keyed by thread so a request resolving for thread A never re-enables B.
+  const [browserTakeoverRequestThreadKey, setBrowserTakeoverRequestThreadKey] = useState<
+    string | null
+  >(null);
+  const projectedBrowserTakeover = serverProjection?.thread.browserTakeover ?? null;
+  const activeBrowserTakeoverRunId = useMemo(
+    () =>
+      serverProjection === null ? null : (resolveActiveThreadRun(serverProjection)?.id ?? null),
+    [serverProjection],
+  );
+  // Re-read every render (a cheap map lookup) rather than inside the memo: the
+  // answer flips when the first projection lands, which need not move any other
+  // dependency of the memo below.
+  const supportsBrowserTakeover =
+    activeThreadRef !== null && readEnvironmentSupportsBrowserTakeover(activeThreadRef);
+  const browserTakeoverDescriptor = useMemo(() => {
+    if (!activeThreadRef || !supportsBrowserTakeover) return null;
+    return resolveBrowserTakeoverBanner({
+      threadKey: activeThreadKey,
+      takeover: projectedBrowserTakeover,
+      previewActivity: serverProjection?.thread.previewActivity ?? null,
+      activeRunId: activeBrowserTakeoverRunId,
+      previewSupported: isPreviewSupportedInRuntime(),
+      automationHostClientId: browserTakeoverHostClientId,
+      requestPending:
+        browserTakeoverRequestThreadKey !== null &&
+        browserTakeoverRequestThreadKey === activeThreadKey,
+    });
+    // browserTakeoverDismissTick is read through the module-level dismissal set,
+    // so the tick has to be an explicit dependency to re-evaluate.
+  }, [
+    activeBrowserTakeoverRunId,
+    activeThreadKey,
+    activeThreadRef,
+    browserTakeoverHostClientId,
+    browserTakeoverRequestThreadKey,
+    projectedBrowserTakeover,
+    serverProjection?.thread.previewActivity,
+    supportsBrowserTakeover,
+    browserTakeoverDismissTick,
+  ]);
+  // Focus the browser once per takeover: keyed by takeover id so re-renders,
+  // navigation away and back, or a later status change never re-open the panel.
+  const focusedBrowserTakeoverIdRef = useRef<CommandId | null>(null);
+  useEffect(() => {
+    const takeover = projectedBrowserTakeover;
+    if (!takeover || takeover.status !== "active" || !activeThreadRef) return;
+    if (focusedBrowserTakeoverIdRef.current === takeover.id) return;
+    // Only the desktop hosting the agent's browser can hand the user the page.
+    if (
+      browserTakeoverHostClientId === null ||
+      browserTakeoverHostClientId !== takeover.hostClientId
+    ) {
+      return;
+    }
+    focusedBrowserTakeoverIdRef.current = takeover.id;
+    if (takeover.tabId === null || !isPreviewSupportedInRuntime()) return;
+    useRightPanelStore.getState().openBrowser(activeThreadRef, takeover.tabId);
+    setActivePreviewTab(activeThreadRef, takeover.tabId);
+  }, [activeThreadRef, browserTakeoverHostClientId, projectedBrowserTakeover]);
+  const handleRequestBrowserTakeover = useCallback(async () => {
+    if (!activeThreadRef) return;
+    const threadKey = scopedThreadKey(activeThreadRef);
+    setBrowserTakeoverRequestThreadKey(threadKey);
+    try {
+      const result = await requestBrowserTakeoverMutation({
+        environmentId: activeThreadRef.environmentId,
+        input: { threadId: activeThreadRef.threadId },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to take over the browser",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setBrowserTakeoverRequestThreadKey((current) => (current === threadKey ? null : current));
+    }
+  }, [activeThreadRef, requestBrowserTakeoverMutation]);
+  const browserTakeoverId = browserTakeoverDescriptor?.takeoverId ?? null;
+  const handleProceedBrowserTakeover = useCallback(async () => {
+    if (!activeThreadRef || browserTakeoverId === null) return;
+    const result = await proceedBrowserTakeoverMutation({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, takeoverId: browserTakeoverId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to resume the agent",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [activeThreadRef, browserTakeoverId, proceedBrowserTakeoverMutation]);
+  const handleReleaseBrowserTakeover = useCallback(async () => {
+    if (!activeThreadRef || browserTakeoverId === null) return;
+    const result = await releaseBrowserTakeoverMutation({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, takeoverId: browserTakeoverId },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to end the browser takeover",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [activeThreadRef, browserTakeoverId, releaseBrowserTakeoverMutation]);
+  const browserTakeoverBanner = useMemo<ComposerBannerStackItem | null>(() => {
+    if (browserTakeoverDescriptor === null) return null;
+    return browserTakeoverBannerItem(browserTakeoverDescriptor, {
+      onTakeOver: () => void handleRequestBrowserTakeover(),
+      onProceed: () => void handleProceedBrowserTakeover(),
+      onRelease: () => void handleReleaseBrowserTakeover(),
+      onDismiss: () => {
+        dismissBrowserTakeoverBannerForSession(browserTakeoverDescriptor.dismissKey);
+        setBrowserTakeoverDismissTick((tick) => tick + 1);
+      },
+    });
+  }, [
+    browserTakeoverDescriptor,
+    handleProceedBrowserTakeover,
+    handleReleaseBrowserTakeover,
+    handleRequestBrowserTakeover,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const browserTakeoverItems = browserTakeoverBanner === null ? [] : [browserTakeoverBanner];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...systemComposerBannerItems, ...parkedThreadItems];
+      return [...systemComposerBannerItems, ...browserTakeoverItems, ...parkedThreadItems];
     }
     return [
       ...systemComposerBannerItems,
+      ...browserTakeoverItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
         variant: "info",
@@ -4802,6 +4970,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
+    browserTakeoverBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,

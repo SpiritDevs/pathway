@@ -244,6 +244,17 @@ export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boo
     projects lastVisitedAt on thread shells. Same version-skew contract as
     settlement: against older servers, clients keep the browser-local visited
     state instead. */
+/** Whether the environment's server understands thread.browser-takeover.*.
+    There is no capability flag to read: pre-takeover servers simply omit
+    `browserTakeover` / `previewActivity` from the thread they project, so probe
+    the projected payload. Same version-skew contract as settlement — a client
+    that cannot tell renders no takeover UI instead of sending commands the
+    server would reject. */
+export function readEnvironmentSupportsBrowserTakeover(ref: ScopedThreadRef): boolean {
+  const thread = readThreadProjection(ref)?.projection.thread;
+  return thread !== undefined && ("browserTakeover" in thread || "previewActivity" in thread);
+}
+
 export function readEnvironmentSupportsVisitedTracking(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities

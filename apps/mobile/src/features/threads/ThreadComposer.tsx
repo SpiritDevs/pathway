@@ -68,11 +68,16 @@ import {
   resolveProviderOptionDescriptors,
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
+import { useThreadBrowserTakeoverStatus } from "../../state/use-thread-detail";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import { buildThreadSettingsMenu } from "./thread-settings-menu";
 import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
-import { resolveCollapsedComposerAction } from "./threadComposerPresentation";
+import {
+  resolveBrowserTakeoverPill,
+  resolveCollapsedComposerAction,
+  type BrowserTakeoverPillState,
+} from "./threadComposerPresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -272,6 +277,42 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
   );
 });
 
+/**
+ * Status only: a browser takeover is driven from the Pathway desktop that hosts
+ * the agent's browser, so there is nothing to press here — hence a plain View
+ * rather than the Pressable the connection pill uses.
+ */
+const ComposerBrowserTakeoverPill = memo(function ComposerBrowserTakeoverPill(props: {
+  readonly status: BrowserTakeoverPillState;
+}) {
+  return (
+    <Animated.View
+      className="absolute inset-x-0 bottom-full items-center pb-2"
+      entering={FadeInDown.duration(180)}
+      exiting={FadeOutDown.duration(140)}
+      pointerEvents="none"
+    >
+      <View
+        accessibilityRole="text"
+        accessibilityLiveRegion="polite"
+        className="max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm dark:bg-neutral-900/90"
+      >
+        {props.status.kind === "working" ? (
+          <ActivityIndicator size="small" color="#8e8e93" />
+        ) : (
+          <View className="h-2 w-2 rounded-full bg-amber-500" />
+        )}
+        <Text
+          className="max-w-[260px] text-sm font-t3-bold leading-snug text-foreground"
+          numberOfLines={2}
+        >
+          {props.status.label}
+        </Text>
+      </View>
+    </Animated.View>
+  );
+});
+
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
@@ -345,6 +386,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     environmentLabel: props.environmentLabel,
     threadSyncPhase: props.threadSyncPhase,
   });
+  const browserTakeover = useThreadBrowserTakeoverStatus({
+    environmentId: props.environmentId,
+    threadId: props.selectedThread.id,
+  });
+  const browserTakeoverStatus = resolveBrowserTakeoverPill(browserTakeover);
   const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
   const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
   const selectedProviderStatus = useMemo(() => {
@@ -731,11 +777,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </View>
         ) : null}
 
+        {/* Both pills own the same slot above the composer; a broken connection
+            outranks takeover status, which cannot progress without it anyway. */}
         {connectionStatus ? (
           <ComposerConnectionStatusPill
             status={connectionStatus}
             onPress={props.onReconnectEnvironment}
           />
+        ) : browserTakeoverStatus ? (
+          <ComposerBrowserTakeoverPill status={browserTakeoverStatus} />
         ) : null}
 
         <ComposerSurface
