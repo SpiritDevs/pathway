@@ -182,6 +182,13 @@ const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "pathway:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "pathway:sidebar:snoozed-expanded";
+// Manual arrangement of the active inbox. Local-only, unlike pinned order:
+// there is no server order key for unpinned threads, so the arranged order
+// lives here as a list of scoped thread keys. Module-level schema/default so
+// useLocalStorage's decode memo sees stable identities across renders.
+const ACTIVE_ORDER_KEY = "pathway:sidebar:active-order";
+const ActiveOrderSchema = Schema.Array(Schema.String);
+const EMPTY_ACTIVE_ORDER: readonly string[] = [];
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -400,19 +407,19 @@ function SnoozePopoverButton(props: {
   );
 }
 
-// Subset of useSortable applied to a pinned card's root <li>. Listeners go
-// on the whole card (no dedicated handle): the pointer sensor's distance
-// constraint keeps plain clicks working, and we skip dnd-kit's aria
-// attributes since there is no keyboard sensor and the card body already
-// carries its own button semantics.
-type SortablePinnedRowBag = Pick<
+// Subset of useSortable applied to a card's root <li> (pinned and active
+// sections). Listeners go on the whole card (no dedicated handle): the
+// pointer sensor's distance constraint keeps plain clicks working, and we
+// skip dnd-kit's aria attributes since there is no keyboard sensor and the
+// card body already carries its own button semantics.
+type SortableThreadRowBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
 >;
 
-function SortablePinnedThreadRow(props: {
+function SortableThreadRow(props: {
   id: string;
-  children: (bag: SortablePinnedRowBag) => ReactNode;
+  children: (bag: SortableThreadRowBag) => ReactNode;
 }) {
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
@@ -670,7 +677,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Present only on pinned cards whose server supports reordering: dnd-kit
   // sortable bag applied to the card root so the whole card drags (the
   // pointer sensor's distance constraint keeps plain clicks working).
-  sortable?: SortablePinnedRowBag | undefined;
+  sortable?: SortableThreadRowBag | undefined;
   // Compact wake countdown ("2h") for rows in the snoozed shelf.
   snoozeWakeLabelText: string | null;
   // When a snooze ended (timer or early wake); drives the Woke pill until
@@ -1987,6 +1994,35 @@ export default function Sidebar() {
     threads,
   ]);
 
+  // Drag-to-reorder for the active inbox. Purely client-local (this device
+  // only): a drop saves the full visible key order, and this memo re-derives
+  // the render order from it synchronously — no optimistic hold needed,
+  // unlike the pinned block's server round-trip. Threads the user has never
+  // arranged (anything created after the last drag) keep inbox behavior and
+  // stack newest-first ABOVE the arranged run — a new thread must not spawn
+  // buried under old arranged rows. Saved keys whose threads left the
+  // section (settled, snoozed, pinned) match nothing and are rewritten out
+  // by the next drop.
+  const [activeOrderPreference, setActiveOrderPreference] = useLocalStorage(
+    ACTIVE_ORDER_KEY,
+    EMPTY_ACTIVE_ORDER,
+    ActiveOrderSchema,
+  );
+  const orderedActiveThreads = useMemo(() => {
+    if (activeOrderPreference.length === 0) return activeThreads;
+    const arrangedKeys = new Set(activeOrderPreference);
+    const isArranged = (thread: EnvironmentThreadShell) =>
+      arrangedKeys.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+    return [
+      ...activeThreads.filter((thread) => !isArranged(thread)),
+      ...orderItemsByPreferredIds({
+        items: activeThreads.filter(isArranged),
+        preferredIds: activeOrderPreference,
+        getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      }),
+    ];
+  }, [activeOrderPreference, activeThreads]);
+
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
@@ -2106,8 +2142,13 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...orderedActiveThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [pinnedThreads, orderedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -2437,7 +2478,7 @@ export default function Sidebar() {
   // win) and ANY membership change (new pin, unpin, snooze/wake) also
   // release it: the override can't say where members it never saw belong,
   // and holding it would launder a stale order into later drags.
-  const pinnedDndSensors = useSensors(
+  const threadDndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
   const [optimisticPinnedOrder, setOptimisticPinnedOrder] = useState<{
@@ -2601,6 +2642,25 @@ export default function Sidebar() {
       })();
     },
     [orderedPinnedThreads, reorderPinnedThread, reorderablePinnedKeys],
+  );
+  // Active-inbox drop: persist the whole visible order, not a delta. Saving
+  // every key (not just the moved one) both freezes the arrangement the user
+  // was looking at and self-prunes keys of threads that have left the
+  // section since the previous drop.
+  const handleActiveDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeKey = String(event.active.id);
+      const overKey = event.over === null ? null : String(event.over.id);
+      if (overKey === null || activeKey === overKey) return;
+      const keys = orderedActiveThreads.map((thread) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+      const fromIndex = keys.indexOf(activeKey);
+      const toIndex = keys.indexOf(overKey);
+      if (fromIndex === -1 || toIndex === -1) return;
+      setActiveOrderPreference(arrayMove(keys, fromIndex, toIndex));
+    },
+    [orderedActiveThreads, setActiveOrderPreference],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
   const snoozingThreadKeysRef = useRef(new Set<string>());
@@ -3504,7 +3564,7 @@ export default function Sidebar() {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
                     section: "pinned" | "active" | "snoozed" | "settled",
-                    sortable?: SortablePinnedRowBag,
+                    sortable?: SortableThreadRowBag,
                   ) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
@@ -3620,7 +3680,7 @@ export default function Sidebar() {
                     />,
                     <DndContext
                       key="pinned-dnd"
-                      sensors={pinnedDndSensors}
+                      sensors={threadDndSensors}
                       collisionDetection={closestCenter}
                       modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
                       onDragEnd={handlePinnedDragEnd}
@@ -3641,9 +3701,9 @@ export default function Sidebar() {
                             return renderThreadRow(thread, "pinned");
                           }
                           return (
-                            <SortablePinnedThreadRow key={threadKey} id={threadKey}>
+                            <SortableThreadRow key={threadKey} id={threadKey}>
                               {(bag) => renderThreadRow(thread, "pinned", bag)}
-                            </SortablePinnedThreadRow>
+                            </SortableThreadRow>
                           );
                         })}
                       </SortableContext>
@@ -3659,9 +3719,35 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
-                  }
+                  // Active rows are always sortable: unlike pins the order is
+                  // client-local, so there is no server capability to gate on.
+                  items.push(
+                    <DndContext
+                      key="active-dnd"
+                      sensors={threadDndSensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                      onDragEnd={handleActiveDragEnd}
+                    >
+                      <SortableContext
+                        items={orderedActiveThreads.map((thread) =>
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        )}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {orderedActiveThreads.map((thread) => {
+                          const threadKey = scopedThreadKey(
+                            scopeThreadRef(thread.environmentId, thread.id),
+                          );
+                          return (
+                            <SortableThreadRow key={threadKey} id={threadKey}>
+                              {(bag) => renderThreadRow(thread, "active", bag)}
+                            </SortableThreadRow>
+                          );
+                        })}
+                      </SortableContext>
+                    </DndContext>,
+                  );
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when
