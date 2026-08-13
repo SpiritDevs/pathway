@@ -2,6 +2,7 @@ import type {
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ThreadProjection,
+  RunId,
 } from "@t3tools/contracts";
 import { copySorted } from "@t3tools/shared/Array";
 
@@ -118,6 +119,79 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       (capabilities?.supportsActiveSteering === true ||
         capabilities?.supportsSteeringByInterruptRestart === true),
   };
+}
+
+export interface QueuedRunReorder {
+  readonly runId: RunId;
+  /** The run the moved run should sit in front of; `null` places it at the bottom. */
+  readonly beforeRunId: RunId | null;
+  /** The queue order the move produces, for optimistic display until the projection catches up. */
+  readonly order: ReadonlyArray<RunId>;
+}
+
+/**
+ * Translates a finished sort — the run being moved and the run it was dropped
+ * onto — into the `queued-run.reorder` contract. Returns `null` when the drop
+ * changes nothing, which is how a no-op drag avoids sending a command.
+ */
+export function resolveQueuedRunReorder(input: {
+  /** The queue as displayed, top first. */
+  readonly orderedRunIds: ReadonlyArray<RunId>;
+  readonly activeRunId: RunId;
+  readonly overRunId: RunId;
+}): QueuedRunReorder | null {
+  const from = input.orderedRunIds.indexOf(input.activeRunId);
+  const to = input.orderedRunIds.indexOf(input.overRunId);
+  if (from === -1 || to === -1 || from === to) return null;
+  const order = [...input.orderedRunIds];
+  order.splice(from, 1);
+  order.splice(to, 0, input.activeRunId);
+  return { runId: input.activeRunId, beforeRunId: order[to + 1] ?? null, order };
+}
+
+/**
+ * Applies an optimistic order to the projected queue. An order that no longer
+ * describes the same set of runs is ignored rather than patched, so a queue
+ * that changed underneath a drag renders the server's truth.
+ */
+export function orderQueuedRuns(
+  queued: ReadonlyArray<QueuedThreadRun>,
+  order: ReadonlyArray<RunId> | null,
+): ReadonlyArray<QueuedThreadRun> {
+  if (order === null || order.length !== queued.length) return queued;
+  const byRunId = new Map(queued.map((entry) => [entry.run.id, entry]));
+  const ordered: Array<QueuedThreadRun> = [];
+  for (const runId of order) {
+    const entry = byRunId.get(runId);
+    if (entry === undefined) return queued;
+    ordered.push(entry);
+  }
+  return ordered;
+}
+
+/**
+ * Whether an optimistic order should be dropped in favour of the projection.
+ *
+ * The optimistic order only outlives the drag while the projection still shows
+ * what it showed when the drag ended (`baselineRunIds`). Once the projection
+ * moves — to the dragged order, to a different order because another device
+ * reordered first, or to a different set of runs because one started, was
+ * cancelled, or arrived — the server is the authority and the local order goes.
+ */
+export function isQueuedRunOrderStale(input: {
+  readonly serverRunIds: ReadonlyArray<RunId>;
+  readonly order: ReadonlyArray<RunId>;
+  /** The projected order at the moment the drag was committed. */
+  readonly baselineRunIds: ReadonlyArray<RunId>;
+}): boolean {
+  const serverMatches = (other: ReadonlyArray<RunId>) =>
+    input.serverRunIds.length === other.length &&
+    input.serverRunIds.every((runId, index) => other[index] === runId);
+
+  if (input.serverRunIds.length !== input.order.length) return true;
+  const ordered = new Set(input.order);
+  if (input.serverRunIds.some((runId) => !ordered.has(runId))) return true;
+  return serverMatches(input.order) || !serverMatches(input.baselineRunIds);
 }
 
 export function canForkProjectedAssistantItem(input: {
