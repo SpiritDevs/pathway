@@ -39,7 +39,11 @@ import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
 import {
+  actionIncludesCommitStep,
   buildMenuItems,
+  canScopeCommitToThread,
+  collectThreadTouchedPaths,
+  type CommitFileScope,
   formatGitActionElapsed,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
   type GitActionProgressPresentation,
@@ -52,9 +56,11 @@ import {
   resolveGitActionProgressPresentation,
   resolveGitActionResultToastTiming,
   resolveLiveThreadBranchUpdate,
+  resolveScopedCommitFilePaths,
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
   resolveThreadBranchUpdate,
+  splitWorkingTreeFilesByThread,
 } from "./GitActionsControl.logic";
 import { AnimatedHeight } from "./AnimatedHeight";
 import { Button } from "~/components/ui/button";
@@ -84,7 +90,7 @@ import {
   useVcsInitAction,
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
-import { useThreadShell } from "~/state/entities";
+import { useThreadShell, useThreadVisibleTurnItems } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -128,6 +134,7 @@ interface PendingDefaultBranchAction {
   commitMessage?: string;
   onConfirmed?: () => void;
   filePaths?: string[];
+  applyCommitScope?: boolean;
 }
 
 type PublishProviderKind = Extract<
@@ -145,6 +152,11 @@ interface RunGitActionWithToastInput {
   statusOverride?: VcsStatusResult | null;
   featureBranch?: boolean;
   filePaths?: string[];
+  /**
+   * Resolve the staged file subset from the current commit scope (this
+   * thread's work vs all changes) at execution time. Explicit filePaths win.
+   */
+  applyCommitScope?: boolean;
 }
 
 interface InlineGitActionSuccess {
@@ -322,6 +334,9 @@ function getMenuActionDisabledReason({
 const COMMIT_DIALOG_TITLE = "Commit changes";
 const COMMIT_DIALOG_DESCRIPTION =
   "Review and confirm your commit. Leave the message blank to auto-generate one.";
+
+const COMMIT_SCOPE_OPTION_CLASS =
+  "flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-background px-3 py-2 text-left outline-none transition-[background-color,border-color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background hover:border-foreground/20 hover:bg-muted/50 data-checked:border-primary data-checked:ring-2 data-checked:ring-primary/35 dark:border-transparent dark:bg-white/[0.035] dark:hover:bg-accent dark:data-checked:bg-primary/10 dark:data-checked:ring-1 dark:data-checked:ring-primary/30";
 
 function GitActionItemIcon({
   icon,
@@ -1221,6 +1236,27 @@ export default function GitActionsControl({
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
 
+  const visibleTurnItems = useThreadVisibleTurnItems(activeThreadRef);
+  const threadScopeSplit = useMemo(
+    () =>
+      splitWorkingTreeFilesByThread({
+        workingTreePaths: (gitStatusForActions?.workingTree.files ?? []).map((file) => file.path),
+        touchedPaths: collectThreadTouchedPaths(visibleTurnItems),
+      }),
+    [gitStatusForActions, visibleTurnItems],
+  );
+  const canScopeToThread = canScopeCommitToThread(threadScopeSplit);
+  // Commit-including actions default to staging only this thread's recorded
+  // work; the confirmation dialogs let the user widen back to all changes.
+  const [commitScope, setCommitScope] = useState<CommitFileScope>("thread");
+  const dialogCommitScope: CommitFileScope | "custom" =
+    !canScopeToThread || excludedFiles.size === 0
+      ? "all"
+      : excludedFiles.size === threadScopeSplit.otherFiles.length &&
+          threadScopeSplit.otherFiles.every((path) => excludedFiles.has(path))
+        ? "thread"
+        : "custom";
+
   const initAction = useVcsInitAction(sourceControlScope);
   const runImmediateGitAction = useGitStackedAction(sourceControlScope);
   const pullAction = useVcsPullAction(sourceControlScope);
@@ -1363,6 +1399,7 @@ export default function GitActionsControl({
       statusOverride,
       featureBranch = false,
       filePaths,
+      applyCommitScope = false,
     }: RunGitActionWithToastInput) => {
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.refName ?? null;
@@ -1392,12 +1429,18 @@ export default function GitActionsControl({
           ...(commitMessage ? { commitMessage } : {}),
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
+          ...(applyCommitScope ? { applyCommitScope } : {}),
         });
         return;
       }
       onConfirmed?.();
       setInlineSuccess(null);
 
+      const effectiveFilePaths =
+        filePaths ??
+        (applyCommitScope && actionIncludesCommitStep(action)
+          ? resolveScopedCommitFilePaths({ scope: commitScope, split: threadScopeSplit })
+          : undefined);
       const scopedToastData = threadToastData ? { ...threadToastData } : undefined;
       const actionId = randomUUID();
 
@@ -1406,7 +1449,7 @@ export default function GitActionsControl({
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
-        ...(filePaths ? { filePaths } : {}),
+        ...(effectiveFilePaths ? { filePaths: effectiveFilePaths } : {}),
       });
 
       if (result._tag === "Failure") {
@@ -1457,6 +1500,7 @@ export default function GitActionsControl({
             closeResultToast();
             void runGitActionWithToast({
               action: toastCta.action.kind,
+              applyCommitScope: true,
             });
           },
         };
@@ -1505,26 +1549,30 @@ export default function GitActionsControl({
 
   const continuePendingDefaultBranchAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, onConfirmed, filePaths, applyCommitScope } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(applyCommitScope ? { applyCommitScope } : {}),
       skipDefaultBranchPrompt: true,
     });
   };
 
   const checkoutFeatureBranchAndContinuePendingAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitMessage, onConfirmed, filePaths, applyCommitScope } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(applyCommitScope ? { applyCommitScope } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
@@ -1611,7 +1659,7 @@ export default function GitActionsControl({
       return;
     }
     if (quickAction.action) {
-      void runGitActionWithToast({ action: quickAction.action });
+      void runGitActionWithToast({ action: quickAction.action, applyCommitScope: true });
     }
   };
 
@@ -1625,7 +1673,11 @@ export default function GitActionsControl({
       void runGitActionWithToast({ action: "create_pr" });
       return;
     }
-    setExcludedFiles(new Set());
+    setExcludedFiles(
+      commitScope === "thread" && canScopeToThread
+        ? new Set(threadScopeSplit.otherFiles)
+        : new Set(),
+    );
     setIsEditingFiles(false);
     setIsCommitDialogOpen(true);
   };
@@ -1992,6 +2044,36 @@ export default function GitActionsControl({
                   )}
                 </span>
               </div>
+              {canScopeToThread && (
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Scope</span>
+                  <RadioGroup
+                    aria-label="Commit scope"
+                    value={dialogCommitScope === "custom" ? null : dialogCommitScope}
+                    onValueChange={(value) => {
+                      const scope = value as CommitFileScope;
+                      setCommitScope(scope);
+                      setExcludedFiles(
+                        scope === "thread" ? new Set(threadScopeSplit.otherFiles) : new Set(),
+                      );
+                    }}
+                    className="grid grid-cols-2 gap-2"
+                  >
+                    <RadioPrimitive.Root
+                      value="thread"
+                      className={cn(COMMIT_SCOPE_OPTION_CLASS, "px-2.5 py-1.5 text-xs")}
+                    >
+                      This thread&apos;s work ({threadScopeSplit.threadFiles.length})
+                    </RadioPrimitive.Root>
+                    <RadioPrimitive.Root
+                      value="all"
+                      className={cn(COMMIT_SCOPE_OPTION_CLASS, "px-2.5 py-1.5 text-xs")}
+                    >
+                      All changes ({allFiles.length})
+                    </RadioPrimitive.Root>
+                  </RadioGroup>
+                </div>
+              )}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -2152,6 +2234,37 @@ export default function GitActionsControl({
             </DialogTitle>
             <DialogDescription>{pendingDefaultBranchActionCopy?.description}</DialogDescription>
           </DialogHeader>
+          {pendingDefaultBranchAction?.applyCommitScope &&
+            pendingDefaultBranchAction.includesCommit &&
+            canScopeToThread && (
+              <DialogPanel>
+                <RadioGroup
+                  aria-label="Commit scope"
+                  value={commitScope}
+                  onValueChange={(value) => setCommitScope(value as CommitFileScope)}
+                  className="grid gap-2"
+                >
+                  <RadioPrimitive.Root value="thread" className={COMMIT_SCOPE_OPTION_CLASS}>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-sm font-medium">This thread&apos;s work only</span>
+                      <span className="text-xs text-muted-foreground">
+                        Commits the {threadScopeSplit.threadFiles.length} of {allFiles.length}{" "}
+                        changed files this thread touched.
+                      </span>
+                    </span>
+                  </RadioPrimitive.Root>
+                  <RadioPrimitive.Root value="all" className={COMMIT_SCOPE_OPTION_CLASS}>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-sm font-medium">All work</span>
+                      <span className="text-xs text-muted-foreground">
+                        Commits all {allFiles.length} changed files, including work from other
+                        threads.
+                      </span>
+                    </span>
+                  </RadioPrimitive.Root>
+                </RadioGroup>
+              </DialogPanel>
+            )}
           <DialogFooter className="dark:border-transparent dark:bg-transparent sm:flex-wrap sm:items-center">
             <Button
               className="w-full sm:mr-auto sm:w-auto"

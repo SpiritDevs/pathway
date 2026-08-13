@@ -1,8 +1,11 @@
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { OrchestrationV2ProjectedTurnItem, VcsStatusResult } from "@t3tools/contracts";
 import { assert, describe, it } from "vite-plus/test";
 import {
+  actionIncludesCommitStep,
   buildGitActionProgressStages,
   buildMenuItems,
+  canScopeCommitToThread,
+  collectThreadTouchedPaths,
   formatGitActionElapsed,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -11,8 +14,10 @@ import {
   resolveGitActionResultToastTiming,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
+  resolveScopedCommitFilePaths,
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
+  splitWorkingTreeFilesByThread,
 } from "./GitActionsControl.logic";
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
@@ -1236,5 +1241,84 @@ describe("resolveAutoFeatureBranchName", () => {
   it("falls back to feature/update when no preferred name is provided", () => {
     const ref = resolveAutoFeatureBranchName(["main"]);
     assert.equal(ref, "feature/update");
+  });
+});
+
+function projectedItem(item: Record<string, unknown>): OrchestrationV2ProjectedTurnItem {
+  return {
+    position: 0,
+    visibility: "local",
+    sourceThreadId: "thread-1",
+    sourceItemId: "item-1",
+    item,
+  } as unknown as OrchestrationV2ProjectedTurnItem;
+}
+
+describe("thread commit scope", () => {
+  it("collects paths from file_change and checkpoint items only", () => {
+    const touched = collectThreadTouchedPaths([
+      projectedItem({ type: "file_change", fileName: "./apps/web/src/App.tsx" }),
+      projectedItem({
+        type: "checkpoint",
+        files: [{ path: "packages/contracts/src/git.ts", kind: "modified" }],
+      }),
+      projectedItem({ type: "command_execution", input: "cat apps/server/src/ws.ts" }),
+    ]);
+    assert.deepEqual([...touched].toSorted(), [
+      "apps/web/src/App.tsx",
+      "packages/contracts/src/git.ts",
+    ]);
+  });
+
+  it("splits working tree files by exact and full-segment suffix matches", () => {
+    const split = splitWorkingTreeFilesByThread({
+      workingTreePaths: [
+        "apps/web/src/App.tsx",
+        "packages/contracts/src/git.ts",
+        "apps/web/src/Other.tsx",
+      ],
+      touchedPaths: new Set([
+        "/Users/dev/repo/apps/web/src/App.tsx",
+        "packages/contracts/src/git.ts",
+      ]),
+    });
+    assert.deepEqual(split.threadFiles, ["apps/web/src/App.tsx", "packages/contracts/src/git.ts"]);
+    assert.deepEqual(split.otherFiles, ["apps/web/src/Other.tsx"]);
+  });
+
+  it("does not treat a shared basename as a match", () => {
+    const split = splitWorkingTreeFilesByThread({
+      workingTreePaths: ["apps/web/src/index.ts"],
+      touchedPaths: new Set(["packages/shared/src/index.ts"]),
+    });
+    assert.deepEqual(split.threadFiles, []);
+    assert.deepEqual(split.otherFiles, ["apps/web/src/index.ts"]);
+  });
+
+  it("only offers thread scoping when the thread owns a strict subset", () => {
+    assert.equal(canScopeCommitToThread({ threadFiles: ["a.ts"], otherFiles: ["b.ts"] }), true);
+    assert.equal(canScopeCommitToThread({ threadFiles: ["a.ts", "b.ts"], otherFiles: [] }), false);
+    assert.equal(canScopeCommitToThread({ threadFiles: [], otherFiles: ["b.ts"] }), false);
+  });
+
+  it("resolves the staged subset only for a meaningful thread scope", () => {
+    const split = { threadFiles: ["a.ts"], otherFiles: ["b.ts"] };
+    assert.deepEqual(resolveScopedCommitFilePaths({ scope: "thread", split }), ["a.ts"]);
+    assert.equal(resolveScopedCommitFilePaths({ scope: "all", split }), undefined);
+    assert.equal(
+      resolveScopedCommitFilePaths({
+        scope: "thread",
+        split: { threadFiles: ["a.ts"], otherFiles: [] },
+      }),
+      undefined,
+    );
+  });
+
+  it("marks exactly the commit-including stacked actions", () => {
+    assert.equal(actionIncludesCommitStep("commit"), true);
+    assert.equal(actionIncludesCommitStep("commit_push"), true);
+    assert.equal(actionIncludesCommitStep("commit_push_pr"), true);
+    assert.equal(actionIncludesCommitStep("push"), false);
+    assert.equal(actionIncludesCommitStep("create_pr"), false);
   });
 });

@@ -1,6 +1,7 @@
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
+  OrchestrationV2ProjectedTurnItem,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -384,6 +385,101 @@ export function resolveQuickAction(
     kind: "show_hint",
     hint: "Branch is up to date. No action needed.",
   };
+}
+
+export type CommitFileScope = "thread" | "all";
+
+export interface ThreadScopeFileSplit {
+  readonly threadFiles: readonly string[];
+  readonly otherFiles: readonly string[];
+}
+
+export function actionIncludesCommitStep(action: GitStackedAction): boolean {
+  return action === "commit" || action === "commit_push" || action === "commit_push_pr";
+}
+
+function normalizeScopePath(path: string): string {
+  let normalized = path.replaceAll("\\", "/");
+  while (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
+/**
+ * Working-tree paths from the thread's recorded work: file edits reported by
+ * the provider plus per-turn checkpoint file summaries. Superseded (rolled
+ * back) items are already absent from the visible projection.
+ */
+export function collectThreadTouchedPaths(
+  items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): ReadonlySet<string> {
+  const touched = new Set<string>();
+  for (const projected of items) {
+    const item = projected.item;
+    if (item.type === "file_change") {
+      touched.add(normalizeScopePath(item.fileName));
+    } else if (item.type === "checkpoint") {
+      for (const file of item.files) {
+        touched.add(normalizeScopePath(file.path));
+      }
+    }
+  }
+  return touched;
+}
+
+/**
+ * Splits the dirty working-tree files into those attributable to the thread
+ * and the rest. Provider items may record absolute paths while git status is
+ * repo-relative, so a path also matches when one form is a full-segment
+ * suffix of the other.
+ */
+export function splitWorkingTreeFilesByThread(input: {
+  readonly workingTreePaths: ReadonlyArray<string>;
+  readonly touchedPaths: ReadonlySet<string>;
+}): ThreadScopeFileSplit {
+  const threadFiles: string[] = [];
+  const otherFiles: string[] = [];
+  for (const path of input.workingTreePaths) {
+    const normalized = normalizeScopePath(path);
+    let isThreadFile = false;
+    for (const touched of input.touchedPaths) {
+      if (
+        touched === normalized ||
+        touched.endsWith(`/${normalized}`) ||
+        normalized.endsWith(`/${touched}`)
+      ) {
+        isThreadFile = true;
+        break;
+      }
+    }
+    if (isThreadFile) {
+      threadFiles.push(path);
+    } else {
+      otherFiles.push(path);
+    }
+  }
+  return { threadFiles, otherFiles };
+}
+
+/**
+ * Scoping to the thread only matters when the thread owns some of the dirty
+ * files and other work owns the rest; otherwise every commit-scope choice
+ * stages the same set.
+ */
+export function canScopeCommitToThread(split: ThreadScopeFileSplit): boolean {
+  return split.threadFiles.length > 0 && split.otherFiles.length > 0;
+}
+
+/** The filePaths subset for a scoped commit; undefined means stage everything. */
+export function resolveScopedCommitFilePaths(input: {
+  readonly scope: CommitFileScope;
+  readonly split: ThreadScopeFileSplit;
+}): string[] | undefined {
+  if (input.scope !== "thread" || !canScopeCommitToThread(input.split)) {
+    return undefined;
+  }
+  return [...input.split.threadFiles];
 }
 
 export function requiresDefaultBranchConfirmation(
