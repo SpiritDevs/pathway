@@ -1,10 +1,11 @@
 import { cn } from "~/lib/utils";
 
-export type IssueDetailTab = "details" | "activity" | "investigation";
+export type IssueDetailTab = "details" | "activity" | "comments" | "investigation";
 
 const TABS: ReadonlyArray<{ readonly id: IssueDetailTab; readonly label: string }> = [
   { id: "details", label: "Details" },
   { id: "activity", label: "Activity" },
+  { id: "comments", label: "Comments" },
   { id: "investigation", label: "Investigation" },
 ];
 
@@ -12,12 +13,14 @@ export function IssueDetailTabs({
   value,
   onChange,
   activityCount,
+  commentCount,
   investigationCount,
   investigating,
 }: {
   value: IssueDetailTab;
   onChange: (tab: IssueDetailTab) => void;
   activityCount: number;
+  commentCount: number;
   investigationCount: number;
   investigating: boolean;
 }) {
@@ -32,9 +35,11 @@ export function IssueDetailTabs({
         const count =
           tab.id === "activity"
             ? activityCount
-            : tab.id === "investigation"
-              ? investigationCount
-              : 0;
+            : tab.id === "comments"
+              ? commentCount
+              : tab.id === "investigation"
+                ? investigationCount
+                : 0;
 
         return (
           <button

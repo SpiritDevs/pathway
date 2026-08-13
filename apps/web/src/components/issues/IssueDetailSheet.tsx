@@ -1115,7 +1115,8 @@ function IssueDetailBody({
               />
 
               <IssueDetailTabs
-                activityCount={events.length + comments.length}
+                activityCount={events.length}
+                commentCount={comments.length}
                 investigating={activeRun !== null}
                 investigationCount={enrichmentRuns.length}
                 onChange={setActiveTab}
@@ -1195,6 +1196,9 @@ function IssueDetailBody({
                     issueKeys={issueKeys}
                     projectTitles={projectTitles}
                   />
+                </div>
+              ) : activeTab === "comments" ? (
+                <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
                     comments={comments}
                     isPending={detailPending}
@@ -1225,8 +1229,7 @@ function IssueDetailBody({
                         Repository investigation
                       </h3>
                       <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                        Read-only analysis. Finished runs are also left as agent comments in
-                        Activity.
+                        Read-only analysis. Finished runs are also left in Comments.
                       </p>
                     </div>
                     <Button

@@ -250,7 +250,7 @@ export function IssueComments({
   };
 
   return (
-    <section className="flex flex-col gap-2 border-t border-border/50 pt-3">
+    <section className="flex flex-col gap-2 pb-10">
       <h3 className="text-xs font-medium text-muted-foreground">Comments</h3>
 
       {comments.length === 0 ? (
