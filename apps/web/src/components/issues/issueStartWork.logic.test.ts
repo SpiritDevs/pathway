@@ -22,6 +22,7 @@ import {
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
+  resolveIssueStartWorkWorkspacePlan,
 } from "./issueStartWork.logic";
 
 const NOW = "2026-08-12T00:00:00.000Z";
@@ -166,6 +167,28 @@ describe("issueDetailUrl", () => {
       "http://localhost:5733/issues?issue=PAT-12",
     );
     expect(issueDetailPath("A B")).toBe("/issues?issue=A%20B");
+  });
+});
+
+describe("resolveIssueStartWorkWorkspacePlan", () => {
+  it("starts current-checkout work in a distinct local thread without worktree preparation", () => {
+    expect(resolveIssueStartWorkWorkspacePlan("current_checkout", "main")).toEqual({
+      envMode: "local",
+      branch: null,
+      prepareWorktreeBaseBranch: null,
+    });
+  });
+
+  it("uses the checked-out branch as the base for an isolated task worktree", () => {
+    expect(resolveIssueStartWorkWorkspacePlan("new_worktree", "main")).toEqual({
+      envMode: "worktree",
+      branch: "main",
+      prepareWorktreeBaseBranch: "main",
+    });
+  });
+
+  it("refuses to invent a worktree base when the checkout has no branch", () => {
+    expect(resolveIssueStartWorkWorkspacePlan("new_worktree", null)).toBe(null);
   });
 });
 

@@ -71,6 +71,7 @@ import {
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom } from "~/state/server";
 import {
   issueRelationDisplays,
@@ -108,6 +109,7 @@ import {
 } from "~/state/issues";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { vcsEnvironment } from "~/state/vcs";
 import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
 import { useRightPanelSheetMaxWidth } from "../RightPanelSheet";
 import { PREVIEW_PANEL_MIN_WIDTH } from "../preview/PreviewPanelShell";
@@ -165,7 +167,9 @@ import {
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
+  resolveIssueStartWorkWorkspacePlan,
   type IssueStartWorkRelation,
+  type IssueStartWorkWorkspaceMode,
 } from "./issueStartWork.logic";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 
@@ -577,6 +581,28 @@ function IssueDetailBody({
           ) ?? null),
     [issue.projectId, primaryEnvironmentId, projects],
   );
+  const startWorkGitStatus = useEnvironmentQuery(
+    project?.workspaceRoot
+      ? vcsEnvironment.status({
+          environmentId: project.environmentId,
+          input: { cwd: project.workspaceRoot },
+        })
+      : null,
+  );
+  const currentProjectBranch =
+    startWorkGitStatus.data?.isRepo === true ? startWorkGitStatus.data.refName : null;
+  const newWorktreeBlockReason =
+    project?.workspaceRoot == null
+      ? "Choose a project with a connected workspace before creating a branch."
+      : startWorkGitStatus.isPending
+        ? "Checking the project's Git branch."
+        : startWorkGitStatus.error !== null
+          ? "The project's Git status is unavailable."
+          : startWorkGitStatus.data?.isRepo !== true
+            ? "This project is not a Git repository."
+            : currentProjectBranch === null
+              ? "Check out a branch before creating a worktree."
+              : null;
 
   const startWorkProvider = issue.assignee?.kind === "agent" ? issue.assignee.provider : null;
   const startWorkInstanceEntries = useMemo(() => {
@@ -695,15 +721,35 @@ function IssueDetailBody({
 
   /** The explicit press creates and dispatches the thread before changing the issue workflow. */
   const handleStartWork = useCallback(
-    (modelSelection: ModelSelection) => {
-      if (project === null || startingWork || !startWorkAttachmentsReady) return;
+    (
+      modelSelection: ModelSelection,
+      workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+    ) => {
+      if (
+        project === null ||
+        project.workspaceRoot === null ||
+        startingWork ||
+        !startWorkAttachmentsReady
+      ) {
+        return;
+      }
+      const projectWorkspaceRoot = project.workspaceRoot;
       setStartingWork(true);
       void (async () => {
         try {
+          const workspacePlan = resolveIssueStartWorkWorkspacePlan(
+            workspaceMode,
+            currentProjectBranch,
+          );
+          if (workspacePlan === null) {
+            throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
+          }
           const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
-            // Start work is an immediate action. Preparing a new worktree needs an interactive
-            // branch choice, so this one-click path starts in the project's current checkout.
-            envMode: "local",
+            branch: workspacePlan.branch,
+            worktreePath: null,
+            envMode: workspacePlan.envMode,
+            // An issue launch is a task boundary. It must never consume an unrelated empty draft.
+            forceNew: true,
           });
           if (opened === null) return;
           const relations: Array<IssueStartWorkRelation> = [];
@@ -783,6 +829,16 @@ function IssueDetailBody({
                   worktreePath: session.worktreePath,
                   createdAt: session.createdAt,
                 },
+                ...(workspacePlan.prepareWorktreeBaseBranch === null
+                  ? {}
+                  : {
+                      prepareWorktree: {
+                        projectCwd: projectWorkspaceRoot,
+                        baseBranch: workspacePlan.prepareWorktreeBaseBranch,
+                        ...(session.startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }),
               },
               createdAt,
             },
@@ -835,6 +891,8 @@ function IssueDetailBody({
       acceptTriage,
       issue,
       linkThread,
+      currentProjectBranch,
+      newWorktreeBlockReason,
       openNewThread,
       parent,
       project,
@@ -1148,12 +1206,14 @@ function IssueDetailBody({
                 issue={issue}
                 links={threadLinks}
                 modelOptionsByInstance={startWorkModelOptionsByInstance}
+                currentBranch={currentProjectBranch}
+                newWorktreeBlockReason={newWorktreeBlockReason}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
                 onUnlinkThread={handleUnlinkThread}
                 starting={startingWork}
                 startWorkBlockReason={
-                  project === null
+                  project?.workspaceRoot == null
                     ? ISSUE_INVESTIGATE_BLOCK_REASONS["no-project"]
                     : storeStatus === "disconnected"
                       ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected

@@ -120,14 +120,17 @@ investigated on import.
 ### Assigning an agent
 
 An issue can be assigned to you or to an agent. Assigning an agent records the intent; it does not
-start anything. Model and reasoning controls appear beside the **Start work** button, constrained
-to the assigned provider and initially using a compatible project default. Pressing the button
-opens an unsent thread seeded with the issue's title, description, todos, and links and carries
-those choices into its composer. Dragging cards around a board never launches an agent.
+start anything. Model, reasoning, and workspace controls appear beside **Start new thread**, with
+the model constrained to the assigned provider and initially using a compatible project default.
+Choose **Current checkout** to work in the project's main workspace, or **New branch** to create an
+isolated worktree from the checked-out branch. Pressing the button creates a fresh thread, sends the
+issue's title, description, todos, links, and images as its first turn, and starts the agent. New
+worktrees also run the project's configured setup tasks. Dragging cards around a board never
+launches an agent.
 
 When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
-selected provider, model, and reasoning level on the issue. **Start work** opens with that exact
-selection. The worker prompt also names the configured review status, so the agent can move the
+selected provider, model, and reasoning level on the issue. **Start new thread** opens with that
+exact selection. The worker prompt also names the configured review status, so the agent can move the
 issue there with the issues tools once implementation and verification are genuinely complete.
 
 ### Investigate

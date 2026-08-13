@@ -27,6 +27,35 @@ import { resolveSelectableProviderInstanceEntry } from "~/providerInstances";
 import type { ModelEsque } from "../chat/providerIconUtils";
 import { issueAttachmentIds } from "./issueCommentAttachments";
 
+export type IssueStartWorkWorkspaceMode = "current_checkout" | "new_worktree";
+
+export interface IssueStartWorkWorkspacePlan {
+  readonly envMode: "local" | "worktree";
+  /** The base branch shown on the draft before a new worktree is provisioned. */
+  readonly branch: string | null;
+  /** Null means the first turn runs in the project's current checkout. */
+  readonly prepareWorktreeBaseBranch: string | null;
+}
+
+/**
+ * Resolves the issue launcher's compact workspace choice into the two pieces the normal
+ * new-thread pipeline needs: draft context and, for an isolated task, first-turn worktree prep.
+ */
+export function resolveIssueStartWorkWorkspacePlan(
+  mode: IssueStartWorkWorkspaceMode,
+  currentBranch: string | null,
+): IssueStartWorkWorkspacePlan | null {
+  if (mode === "new_worktree") {
+    if (currentBranch === null) return null;
+    return {
+      envMode: "worktree",
+      branch: currentBranch,
+      prepareWorktreeBaseBranch: currentBranch,
+    };
+  }
+  return { envMode: "local", branch: null, prepareWorktreeBaseBranch: null };
+}
+
 // ── Model choice ──────────────────────────────────────────────────────
 
 /**

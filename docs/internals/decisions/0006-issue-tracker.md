@@ -112,11 +112,12 @@ Agents are first-class here. A new `issues` MCP toolkit follows
 Agents have **full write access, including completing and deleting**. Soft deletes and the
 `issue_events` log are what make that recoverable; there is no approval gate.
 
-Agents can be assignees. Assignment records intent and surfaces a "Start work" button that opens a
-thread seeded with the issue's title, description, todos, and links — it does not auto-spawn. The
-assignee constrains the provider; model and reasoning options are selected before opening the draft
-and written into that draft's existing composer state. A stray kanban drag must not start three
-agents.
+Agents can be assignees. Assignment records intent and surfaces a "Start new thread" action that
+creates and dispatches a fresh thread seeded with the issue's title, description, todos, links, and
+images — it does not auto-spawn. The assignee constrains the provider; model, reasoning, and current
+checkout versus new-worktree options are selected before launch. A new worktree follows the normal
+thread preparation path, including generated branch naming and configured setup scripts. A stray
+kanban drag must not start three agents.
 
 ### Enrichment
 
