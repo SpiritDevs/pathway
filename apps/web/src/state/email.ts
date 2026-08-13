@@ -34,6 +34,8 @@ import {
   EMAIL_WS_METHODS,
   type CapturedEmailMessage,
   type CapturedEmailSummary,
+  type EmailAnalyticsInput,
+  type EmailAnalyticsResult,
   type EmailCaptureSettings,
   type EmailInboxScope,
   type EmailInboxSummary,
@@ -263,6 +265,17 @@ const emailSettingsQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRun
   idleTtlMs: 60_000,
 });
 
+/**
+ * The aggregate read behind the Analytics view. Same warmth as the mailbox snapshot: a scope or a
+ * range flipped back and forth inside a minute is answered from cache rather than re-aggregated.
+ */
+const emailAnalyticsQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:email:analytics",
+  tag: EMAIL_WS_METHODS.analytics,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
 const emailTriggerRulesQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:email:trigger-rules",
   tag: EMAIL_WS_METHODS.triggerRulesList,
@@ -350,6 +363,46 @@ export function useEmailInboxSummaries(scope: EmailInboxScope): ReadonlyArray<Em
  */
 export function useEmailUnreadTotal(): number {
   return totalEmailUnreadCount(useEmailInboxSummaries(ALL_EMAIL_SCOPE));
+}
+
+export interface EmailAnalyticsView {
+  /** Null until the first read lands, and held across a refetch so the charts never blank. */
+  readonly analytics: EmailAnalyticsResult | null;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+/**
+ * One scope's aggregates over one window.
+ *
+ * Refetched off the stream's `revision` for the same reason the message list is — a capture changes
+ * the counts — and through `refresh()` rather than by re-keying, so a message landing mid-look
+ * updates the columns in place instead of blanking the chart for a round trip.
+ *
+ * A null `input` (no environment, or the view not asking yet) reads as no request at all.
+ */
+export function useEmailAnalytics(input: EmailAnalyticsInput | null): EmailAnalyticsView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const revision = useAtomValue(emailStreamViewAtom).state.revision;
+  // The window is rebuilt from the range on every render; the family keys on the JSON of its input,
+  // so an unchanged window resolves to the same atom without a memo.
+  const query = useEnvironmentQuery(
+    environmentId === null || input === null ? null : emailAnalyticsQuery({ environmentId, input }),
+  );
+
+  const refetch = useEffectEvent(() => query.refresh());
+  useEffect(() => {
+    if (revision === 0) return;
+    refetch();
+  }, [revision]);
+
+  return {
+    analytics: query.data ?? null,
+    isPending: query.isPending,
+    error: query.error,
+    refresh: query.refresh,
+  };
 }
 
 export interface EmailSettingsView {
