@@ -239,6 +239,7 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
                   className={cn(
                     "size-4 shrink-0",
                     displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+                    displayMode === "panel" && "-translate-x-0.5",
                   )}
                   aria-hidden="true"
                 />
