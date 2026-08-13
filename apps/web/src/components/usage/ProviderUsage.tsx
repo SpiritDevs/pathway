@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type EnvironmentId,
@@ -13,7 +17,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEnvironments } from "~/state/environments";
@@ -35,6 +39,7 @@ import {
 } from "./providerUsageDisplay";
 
 const SUPPORTED_PROVIDERS = new Set<ProviderUsageDriver>(["codex", "claudeAgent", "cursor"]);
+const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
 
 function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
   return SUPPORTED_PROVIDERS.has(driver as ProviderUsageDriver);
@@ -163,7 +168,11 @@ function usageSectionHeading({
               className="pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
             >
               <RefreshCwIcon
-                className={cn("size-3.5", refreshing && "text-foreground")}
+                className={cn(
+                  "size-3.5",
+                  refreshing && "text-foreground",
+                  refreshing && SLOW_REFRESH_SPIN_CLASS,
+                )}
                 aria-hidden="true"
               />
             </Button>
@@ -558,11 +567,11 @@ export function EnvironmentProviderUsageList({
 function ProviderUsageCard({
   environmentId,
   provider,
-  refreshVersion,
+  refreshedSnapshot,
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
-  refreshVersion: number;
+  refreshedSnapshot?: ServerProviderUsageSnapshot;
 }) {
   const usageProvider = provider.driver as ProviderUsageDriver;
   const usage = useProviderUsage({
@@ -571,29 +580,6 @@ function ProviderUsageCard({
     provider: usageProvider,
     enabled: true,
   });
-  const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
-    reportFailure: false,
-  });
-  const [refreshedSnapshot, setRefreshedSnapshot] = useState<ServerProviderUsageSnapshot | null>(
-    null,
-  );
-  useEffect(() => {
-    if (refreshVersion === 0) return;
-    let cancelled = false;
-    void refreshUsage({
-      environmentId,
-      input: {
-        instanceId: provider.instanceId,
-        provider: usageProvider,
-        forceRefresh: true,
-      },
-    }).then((result) => {
-      if (!cancelled && result._tag === "Success") setRefreshedSnapshot(result.value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [environmentId, provider.instanceId, refreshUsage, refreshVersion, usageProvider]);
   const snapshot = refreshedSnapshot ?? usage.data;
   const statusLabel = snapshot?.stale
     ? "Last known"
@@ -651,12 +637,13 @@ function ProviderUsageCard({
 
 function EnvironmentProviderUsageCards({
   environmentId,
-  refreshVersion,
+  providers,
+  refreshedSnapshots,
 }: {
   environmentId: EnvironmentId;
-  refreshVersion: number;
+  providers: ReadonlyArray<ServerProvider> | null;
+  refreshedSnapshots: ReadonlyMap<string, ServerProviderUsageSnapshot>;
 }) {
-  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const supported = (providers ?? []).filter(
     (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
   );
@@ -670,14 +657,19 @@ function EnvironmentProviderUsageCards({
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {supported.map((provider) => (
-            <ProviderUsageCard
-              key={provider.instanceId}
-              environmentId={environmentId}
-              provider={provider}
-              refreshVersion={refreshVersion}
-            />
-          ))}
+          {supported.map((provider) => {
+            const refreshedSnapshot = refreshedSnapshots.get(
+              providerUsageSnapshotKey(environmentId, provider.instanceId),
+            );
+            return (
+              <ProviderUsageCard
+                key={provider.instanceId}
+                environmentId={environmentId}
+                provider={provider}
+                {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
+              />
+            );
+          })}
         </div>
       )}
     </div>
@@ -798,7 +790,25 @@ export function ProviderUsageSettingsSection({
 }: {
   readonly environmentId: EnvironmentId;
 }) {
-  const [refreshVersion, setRefreshVersion] = useState(0);
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
+  const supported = useMemo(
+    () =>
+      (providers ?? []).filter(
+        (provider) =>
+          provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+      ),
+    [providers],
+  );
+  const refreshTargets = useMemo(
+    () =>
+      supported.map((provider) => ({
+        instanceId: provider.instanceId,
+        provider: provider.driver as ProviderUsageDriver,
+        label: provider.displayName ?? providerName(provider.driver as ProviderUsageDriver),
+      })),
+    [supported],
+  );
+  const usageRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
 
   return (
     <SettingsSection
@@ -807,9 +817,15 @@ export function ProviderUsageSettingsSection({
         <button
           type="button"
           className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => setRefreshVersion((value) => value + 1)}
+          aria-label="Refresh provider usage"
+          aria-busy={usageRefresh.isRefreshing}
+          disabled={usageRefresh.isRefreshing || supported.length === 0}
+          onClick={() => void usageRefresh.refresh()}
         >
-          <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+          <RefreshCwIcon
+            className={cn("size-3.5", usageRefresh.isRefreshing && SLOW_REFRESH_SPIN_CLASS)}
+            aria-hidden="true"
+          />
           Refresh
         </button>
       }
@@ -821,7 +837,8 @@ export function ProviderUsageSettingsSection({
         <div className="space-y-5">
           <EnvironmentProviderUsageCards
             environmentId={environmentId}
-            refreshVersion={refreshVersion}
+            providers={providers}
+            refreshedSnapshots={usageRefresh.refreshedSnapshots}
           />
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">

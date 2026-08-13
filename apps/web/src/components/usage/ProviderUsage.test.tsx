@@ -78,7 +78,11 @@ vi.mock("../ui/toast", () => ({
   toastManager: { add: testState.toast },
 }));
 
-import { EnvironmentProviderUsage, EnvironmentProviderUsageList } from "./ProviderUsage";
+import {
+  EnvironmentProviderUsage,
+  EnvironmentProviderUsageList,
+  ProviderUsageSettingsSection,
+} from "./ProviderUsage";
 
 const environmentId = EnvironmentId.make("usage-environment");
 const codexId = ProviderInstanceId.make("codex");
@@ -133,6 +137,17 @@ function renderList(): ReactElement<Record<string, unknown>> {
 
 function findRefreshButton(tree: ReactElement<Record<string, unknown>>) {
   return visitElements(tree, (element) => element.props["aria-label"] === "Refresh usage");
+}
+
+function findSpinningRefreshIcon(tree: ReactElement<Record<string, unknown>>) {
+  return visitElements(
+    tree,
+    (element) =>
+      typeof element.props.className === "string" &&
+      element.props.className.includes("animate-spin") &&
+      element.props.className.includes("[animation-duration:2s]") &&
+      element.props.className.includes("motion-reduce:animate-none"),
+  );
 }
 
 function clickEvent() {
@@ -209,6 +224,7 @@ describe("provider usage panel refresh", () => {
     const pendingPanel = renderSingle();
     expect(findRefreshButton(pendingPanel)?.props.disabled).toBe(true);
     expect(findRefreshButton(pendingPanel)?.props["aria-busy"]).toBe(true);
+    expect(findSpinningRefreshIcon(pendingPanel)).not.toBeNull();
     expect(visitElements(pendingPanel, (element) => element.props.open === true)).not.toBeNull();
     expect(
       visitElements(pendingPanel, (element) => element.props.snapshot === initial),
@@ -218,6 +234,7 @@ describe("provider usage panel refresh", () => {
     await flushPromises();
     const updatedPanel = renderSingle();
     expect(findRefreshButton(updatedPanel)?.props.disabled).toBe(false);
+    expect(findSpinningRefreshIcon(updatedPanel)).toBeNull();
     expect(
       visitElements(updatedPanel, (element) => element.props.snapshot === refreshed),
     ).not.toBeNull();
@@ -301,5 +318,57 @@ describe("provider usage panel refresh", () => {
       title: "Some usage couldn’t be refreshed",
       description: "Couldn’t refresh Claude.",
     });
+  });
+
+  it("spins the provider-settings refresh icon only while all usage refreshes are pending", async () => {
+    atoms.providers = [provider("codex", codexId), provider("claudeAgent", claudeId)];
+    let finishRefresh: (() => void) | undefined;
+    testState.refresh.mockImplementation(
+      ({ input }: { readonly input: { readonly instanceId: ProviderInstanceId } }) =>
+        new Promise((resolve) => {
+          const previousFinish = finishRefresh;
+          finishRefresh = () => {
+            previousFinish?.();
+            resolve(
+              AsyncResult.success(
+                input.instanceId === codexId
+                  ? snapshot(codexId, "codex", 40)
+                  : snapshot(claudeId, "claudeAgent", 50),
+              ),
+            );
+          };
+        }),
+    );
+
+    hooks.beginRender();
+    const settings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
+      Record<string, unknown>
+    >;
+    const button = visitElements(
+      settings,
+      (element) => element.props["aria-label"] === "Refresh provider usage",
+    );
+    (button?.props.onClick as (() => void) | undefined)?.();
+
+    hooks.beginRender();
+    const pendingSettings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
+      Record<string, unknown>
+    >;
+    const pendingButton = visitElements(
+      pendingSettings,
+      (element) => element.props["aria-label"] === "Refresh provider usage",
+    );
+    expect(pendingButton?.props.disabled).toBe(true);
+    expect(pendingButton?.props["aria-busy"]).toBe(true);
+    expect(findSpinningRefreshIcon(pendingSettings)).not.toBeNull();
+    expect(testState.refresh).toHaveBeenCalledTimes(2);
+
+    finishRefresh?.();
+    await flushPromises();
+    hooks.beginRender();
+    const settledSettings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
+      Record<string, unknown>
+    >;
+    expect(findSpinningRefreshIcon(settledSettings)).toBeNull();
   });
 });
