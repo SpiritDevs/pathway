@@ -234,6 +234,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
+    readonly browserTakeoverLayer?: Layer.Layer<BrowserTakeoverService, never, OrchestratorV2>;
   } = {},
 ): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
   const serverConfigLayer = Layer.effect(
@@ -372,23 +373,6 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
       recover: Effect.succeed({ failed: 0, rearmed: 0, completed: 0 }),
     }),
   );
-  const effectExecutorProvided = effectExecutorLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        runFinalizationServiceProvided,
-        checkpointRollbackServiceProvided,
-        providerSessionManagerProvided,
-        providerTurnControlServiceProvided,
-        providerTurnStartServiceProvided,
-        runtimeRequestServiceProvided,
-        threadTitleRegenerationTestLayer,
-        browserTakeoverTestLayer,
-      ),
-    ),
-  );
-  const effectWorkerProvided = effectWorkerLayer.pipe(
-    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
-  );
   const orchestratorProvided = orchestratorLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -404,6 +388,30 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         threadForkServiceLayer,
       ),
     ),
+  );
+  // Integration suites can swap in the real browser-takeover service. The layer
+  // they supply is built against this harness' orchestrator so the takeover
+  // service, the effect worker and the test observe one projection.
+  const browserTakeoverProvided =
+    options.browserTakeoverLayer === undefined
+      ? browserTakeoverTestLayer
+      : options.browserTakeoverLayer.pipe(Layer.provide(orchestratorProvided));
+  const effectExecutorProvided = effectExecutorLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        runFinalizationServiceProvided,
+        checkpointRollbackServiceProvided,
+        providerSessionManagerProvided,
+        providerTurnControlServiceProvided,
+        providerTurnStartServiceProvided,
+        runtimeRequestServiceProvided,
+        threadTitleRegenerationTestLayer,
+        browserTakeoverProvided,
+      ),
+    ),
+  );
+  const effectWorkerProvided = effectWorkerLayer.pipe(
+    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
   );
   const replayRuntime = Layer.merge(orchestratorProvided, effectWorkerProvided);
 

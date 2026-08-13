@@ -91,6 +91,10 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
 
+#### Browser takeover
+
+A durable handover of the agent's Preview browser to the user: the run is interrupted, preview automation is fenced off, and the user drives the pinned tab until they proceed or end it. The marker on the thread (`requested`, `pausing`, `active`, `proceeding`, `completed`, `cancelled`, `failed`) is owned by the server, so clients never infer exclusivity locally. The state machine lives in [BrowserTakeoverService.ts][30] and runs as durable effects on their own outbox lane; exclusivity is enforced by the fence in [PreviewAutomationTakeover.ts][31], which [PreviewAutomationBroker.ts][32] checks before routing any automation request. Proceeding sends one deterministic continuation message so the agent resumes from the browser's current state. See [browser takeover][33] for the user-facing behavior.
+
 ### Provider runtime
 
 The live backend agent implementation and its event stream. The main service is [ProviderService.ts][14], the adapter contract is [ProviderAdapter.ts][15], and the overview is in [providers.md][16].
@@ -348,3 +352,7 @@ that change lands.
 [27]: ../../apps/server/src/issues/IssueTrackerService.ts
 [28]: ../../apps/server/src/issues/IssueEnrichmentEngine.ts
 [29]: ../../apps/web/src/state/issues.ts
+[30]: ../../apps/server/src/orchestration-v2/BrowserTakeoverService.ts
+[31]: ../../apps/server/src/mcp/PreviewAutomationTakeover.ts
+[32]: ../../apps/server/src/mcp/PreviewAutomationBroker.ts
+[33]: ../user/browser-takeover.md
