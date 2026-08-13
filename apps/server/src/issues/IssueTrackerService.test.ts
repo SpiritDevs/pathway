@@ -1556,7 +1556,7 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeDependencyLayer())),
   );
 
-  it.effect("automatically applies investigation fields and a system-owned generic title", () =>
+  it.effect("appends the summary and replaces an untouched Slack-generated title", () =>
     Effect.gen(function* () {
       const finished = yield* Deferred.make<void, never>();
       const result: IssueEnrichmentResult = {
@@ -1582,7 +1582,8 @@ describe("IssueTrackerService", () => {
       const { issue } = yield* tracker.intakeCreateIssue({
         channelId: "C1",
         messageTs: "1723459200.000100",
-        title: "",
+        title: "editor menu has no actions",
+        description: "**Slack comment:**\n\neditor menu has no actions",
         projectId: PROJECT,
       });
 
@@ -1593,7 +1594,10 @@ describe("IssueTrackerService", () => {
         (candidate) => candidate.id === issue.id,
       );
       assert.strictEqual(updated?.title, result.suggestedTitle);
-      assert.strictEqual(updated?.description, result.suggestedDescription);
+      assert.strictEqual(
+        updated?.description,
+        `**Slack comment:**\n\neditor menu has no actions\n\n${result.summary}`,
+      );
       assert.strictEqual(updated?.priority, "medium");
 
       const automaticChanges = (yield* tracker.getEvents({ issueId: issue.id })).events.filter(
@@ -1639,7 +1643,7 @@ describe("IssueTrackerService", () => {
         (candidate) => candidate.id === issue.id,
       );
       assert.strictEqual(updated?.title, "Untitled");
-      assert.strictEqual(updated?.description, result.suggestedDescription);
+      assert.strictEqual(updated?.description, result.summary);
       assert.strictEqual(updated?.priority, "high");
       assert.strictEqual(
         (yield* tracker.getEnrichmentRuns({ issueId: issue.id })).runs[0]?.result?.suggestedTitle,

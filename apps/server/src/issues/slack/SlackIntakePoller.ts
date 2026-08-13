@@ -550,7 +550,7 @@ export const make = Effect.gen(function* () {
         channelId: input.watch.channelId,
         messageTs: input.message.ts,
         title: slackTitleFromText(description),
-        description,
+        description: description.trim().length === 0 ? "" : `**Slack comment:**\n\n${description}`,
         projectId: input.route.projectId,
         cycleId: input.route.cycleId,
         permalink,

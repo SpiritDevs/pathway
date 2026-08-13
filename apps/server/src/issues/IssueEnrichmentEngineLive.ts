@@ -302,6 +302,7 @@ export const make = Effect.gen(function* () {
         key: issue.key,
         title: issue.title,
         description: issue.description,
+        slackIngested: issue.slackSource !== null,
         statusName: statusById.get(issue.statusId)?.name ?? "(unknown)",
         priority: issue.priority,
         labelNames: issue.labelIds.flatMap((labelId) => {

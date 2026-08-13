@@ -79,6 +79,8 @@ export interface InvestigationPromptInput {
   readonly key: string;
   readonly title: string;
   readonly description: string;
+  /** Slack supplied the initial title and body, so the investigation may refine the title. */
+  readonly slackIngested?: boolean | undefined;
   readonly statusName: string;
   readonly priority: IssuePriority;
   /** The labels already on this issue, by name. */
@@ -155,7 +157,7 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
     "3. Which of the open issues listed below are genuinely related, by key.",
     "4. Which of the existing labels listed below apply.",
     "5. A priority.",
-    "6. A title and a description, but only for an issue that arrived without usable ones.",
+    "6. A title and a description where the issue rules below allow them.",
     "",
     "Answer with a single JSON object and nothing else. No prose before or after it, no code",
     "fence. The object has these keys:",
@@ -170,10 +172,20 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
     "Use an empty array where you have nothing to say. Do not invent an issue key or a label name",
     "that is not on the lists. Priority and safe missing-field suggestions may be applied",
     "automatically after the run; labels remain for a person to review.",
+    "The summary is appended to the issue description after the run. Write it as a useful,",
+    "standalone explanation of the work; do not merely repeat the issue's source text.",
     "",
-    'Include "suggestedTitle" only when the title above is one of the intake placeholders —',
-    '"Slack message", "Untitled", "New issue", or empty. Otherwise leave the key out; a title a',
-    "person wrote is not up for replacement, however uninformative it reads.",
+    ...(input.slackIngested
+      ? [
+          'This issue was ingested from Slack. Include "suggestedTitle" even though it already has',
+          "a title: Slack generated that title from the first line, and your title should state the",
+          "specific job to be done. A later user edit is protected when the result is applied.",
+        ]
+      : [
+          'Include "suggestedTitle" only when the title above is one of the intake placeholders —',
+          '"Slack message", "Untitled", "New issue", or empty. Otherwise leave the key out; a title a',
+          "person wrote is not up for replacement, however uninformative it reads.",
+        ]),
     "When you do include it: one line, concise, descriptive of the problem, no trailing punctuation.",
     'Include "suggestedDescription" only when the description above is empty or near-empty.',
     "Otherwise leave the key out. When you do include it: concise markdown, built strictly from the",

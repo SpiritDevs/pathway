@@ -149,11 +149,13 @@ read-only mode and records what it found as an **Investigation** comment:
 - the files the work probably lands in,
 - related issues,
 - suggested labels and a priority,
-- a title or description when the issue arrived without useful ones.
+- a more specific title when an integration supplied the original one.
 
-Pathway applies the priority and an empty description when the investigation finishes. It also
-replaces a generic title supplied by an integration, such as **Slack message**. A title created or
-edited by you is never replaced without confirmation, and labels remain suggestions you apply.
+Pathway applies the priority and appends the agent's summary to the bottom of the description,
+separated from the original report by a blank line. For Slack intake, the source message stays
+below a **Slack comment** label and the investigation replaces Slack's generated title
+with a specific description of the job. A title created or edited by you is never replaced without
+confirmation, and labels remain suggestions you apply.
 
 The run cannot edit, stage, or commit anything. One investigation runs at a time and a second
 queues behind it. You will see the live transcript in the issue's investigation panel.
