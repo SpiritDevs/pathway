@@ -95,7 +95,7 @@ export function IssueAssigneeMenu({
               value={current}
             >
               {ASSIGNEE_OPTIONS.map((option) => (
-                <MenuRadioItem key={option.value} value={option.value}>
+                <MenuRadioItem closeOnClick key={option.value} value={option.value}>
                   <span className="flex min-w-0 items-center gap-2">
                     <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
                     <span className="truncate">{option.label}</span>
@@ -138,7 +138,7 @@ export function IssueStatusMenu({
               }}
             >
               {statuses.map((status) => (
-                <MenuRadioItem key={status.id} value={status.id}>
+                <MenuRadioItem closeOnClick key={status.id} value={status.id}>
                   <span className="flex min-w-0 items-center gap-2">
                     <IssueStatusDot status={status} />
                     <span className="truncate">{status.name}</span>
@@ -178,7 +178,7 @@ export function IssuePriorityMenu({
               }}
             >
               {ISSUE_PRIORITY_ORDER.map((priority) => (
-                <MenuRadioItem key={priority} value={priority}>
+                <MenuRadioItem closeOnClick key={priority} value={priority}>
                   <span className="flex min-w-0 items-center gap-2">
                     <IssuePriorityIcon priority={priority} />
                     <span className="truncate">{ISSUE_PRIORITY_LABELS[priority]}</span>
@@ -290,11 +290,11 @@ export function IssueProjectMenu({
                 onSelect(next === NO_PROJECT_VALUE ? null : (next as ProjectId));
               }}
             >
-              <MenuRadioItem value={NO_PROJECT_VALUE}>
+              <MenuRadioItem closeOnClick value={NO_PROJECT_VALUE}>
                 <span className="text-muted-foreground">{nullLabel}</span>
               </MenuRadioItem>
               {projects.map((project) => (
-                <MenuRadioItem key={project.id} value={project.id}>
+                <MenuRadioItem closeOnClick key={project.id} value={project.id}>
                   <span className="truncate">{project.title}</span>
                 </MenuRadioItem>
               ))}
