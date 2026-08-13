@@ -260,6 +260,7 @@ describe("buildIssueStartWorkPrompt", () => {
     expect(prompt).toContain("## Description\nIt fails one run in ten.");
     expect(prompt).toContain("Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("`issues_update` and `issues_comment`");
+    expect(prompt).toContain("`issues_comment_evidence`");
     expect(prompt).toContain("do not use Linear or another external issue tracker");
   });
 

@@ -10,6 +10,8 @@ import {
   DesktopPreviewConfigInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
+  DesktopPreviewRecordingReadInputSchema,
+  DesktopPreviewRecordingReadResultSchema,
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
@@ -354,6 +356,16 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const readRecording = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_RECORDING_READ_CHANNEL,
+  payload: DesktopPreviewRecordingReadInputSchema,
+  result: DesktopPreviewRecordingReadResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.readRecording")(function* ({ path, offset, length }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.readRecording(path, offset, length);
+  }),
+});
+
 export const methods = [
   createTab,
   closeTab,
@@ -390,4 +402,5 @@ export const methods = [
   startRecording,
   stopRecording,
   saveRecording,
+  readRecording,
 ] as const;

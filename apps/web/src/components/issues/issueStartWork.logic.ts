@@ -190,7 +190,7 @@ export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): strin
       ? ""
       : ` When the implementation and its verification are genuinely finished, use \`issues_update\` to move it to ${context.completionStatusName}; that transition starts its configured audits.`;
   blocks.push(
-    `Start by reading the issue with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the issue current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.${completionInstruction}`,
+    `Start by reading the issue with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the issue current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. When you verify visible behavior in Preview, attach a useful screenshot or short recording with \`issues_comment_evidence\` and explain what it proves. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.${completionInstruction}`,
   );
 
   return `${blocks.join("\n\n")}\n`;

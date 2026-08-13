@@ -108,6 +108,18 @@ inline while labelling an issue.
   one from either end and the other end shows the matching side automatically.
 - **Comments** support the same rich composer as the chat, and you can attach images.
 
+### Browser evidence from agents
+
+An agent working from an issue can attach its browser verification directly to the issue instead
+of leaving the proof inside its conversation. Screenshots appear inline, and short Preview
+recordings play in the comment and in the issue's attachment shelf. The comment remains attributed
+to the agent and should explain what it verified, what the evidence demonstrates, and any known
+limitations.
+
+For a video, the agent starts and stops a Preview recording, then attaches the returned recording
+to the issue. Pathway copies that recording into the environment's issue attachment store, so it is
+still available when the issue is opened from another device or over a remote connection.
+
 ## Importing from Linear
 
 **Settings → Issues → Import** takes a Linear CSV export as-is. It reads the exported keys, titles,
@@ -178,6 +190,12 @@ generation model, and changing it here does not change that one.
 Coding agents get an issues toolkit automatically, whichever provider you use. They can search and
 read issues, create and update them, comment, delete, and restore, and link the thread they are
 working in to an issue.
+
+Issue reads include every image attachment in the issue-level attachment list and on the comment
+that owns it, together with that comment's body, author, and timestamp. Pathway sends a bounded set
+of those images directly with the issue read so the agent can inspect them visually. If an issue has
+more images than fit safely in that response, the agent can read any remaining image individually
+with its attachment id. Issue attachments are images only.
 
 Agent writes are not gated behind an approval, so treat them like your own: deletes are soft and
 reversible with **Restore**, and every write is attributed in the activity feed with the provider

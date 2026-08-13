@@ -36,7 +36,11 @@ import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
-import { issueCommentAttachmentIds, issueCommentComposerState } from "./issueCommentAttachments";
+import {
+  isIssueVideoAttachmentUrl,
+  issueCommentAttachmentIds,
+  issueCommentComposerState,
+} from "./issueCommentAttachments";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
 import {
   PendingIssueImageAttachment,
@@ -49,10 +53,7 @@ const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
 
 const COMMENT_NAMING: IssueEventNaming = { providerLabels: PROVIDER_LABELS };
 
-/**
- * Images only, which is all the store accepts. A signed URL is minted per attachment, so this is
- * mounted only when there is something to fetch.
- */
+/** A signed URL is minted per attachment, so this mounts only when there is something to fetch. */
 function CommentAttachments({
   environmentId,
   attachmentIds,
@@ -70,7 +71,18 @@ function CommentAttachments({
     <div className="mt-1.5 flex flex-wrap gap-2">
       {attachmentIds.map((attachmentId, index) => {
         const url = urls[index] ?? null;
-        return url === null ? null : (
+        if (url === null) return null;
+        return isIssueVideoAttachmentUrl(url) ? (
+          <video
+            aria-label="Comment video attachment"
+            className="max-h-64 max-w-full rounded-lg border border-border/60"
+            controls
+            key={attachmentId}
+            playsInline
+            preload="metadata"
+            src={url}
+          />
+        ) : (
           <img
             alt="Comment attachment"
             className="max-h-40 rounded-lg border border-border/60"

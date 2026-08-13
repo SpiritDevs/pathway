@@ -31,6 +31,10 @@ import {
   type IssueStatusCategory,
   type IssueStatusId,
   type IssuesSnapshot,
+  ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
+  PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
+  type PreviewAutomationRecordingChunk,
+  type PreviewAutomationSnapshot,
   IssueTrackerError,
   ProviderDriverKind,
   ThreadId,
@@ -47,11 +51,13 @@ import {
   type ProjectionProject,
 } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import {
   ISSUES_MCP_LIST_DEFAULT_LIMIT,
   ISSUES_MCP_LIST_MAX_LIMIT,
   IssuesToolkit,
   type IssuesMcpDetail,
+  type IssuesMcpAttachment,
   type IssuesMcpRow,
 } from "./tools.ts";
 
@@ -94,6 +100,12 @@ const invalid = (message: string, subject?: string) =>
   });
 
 const storage = (message: string) => new IssueTrackerError({ reason: "storage", message });
+
+const evidenceFailure = (cause: { readonly message: string }) =>
+  new IssueTrackerError({
+    reason: "storage",
+    message: `Failed to capture browser evidence: ${cause.message}`,
+  });
 
 /** `"Backlog", "Todo", "Done"` — the tail of every "no such thing" message. */
 export const quoteOptions = (values: Iterable<string>): string => {
@@ -369,6 +381,35 @@ const labelNamesOf = (index: TrackerIndex, issue: Issue): ReadonlyArray<string> 
     return label ? [label.name] : [];
   });
 
+const formatIssueAttachments = (
+  comments: IssueDetail["comments"],
+): ReadonlyArray<IssuesMcpAttachment> => {
+  const seen = new Set<string>();
+  const attachments: Array<IssuesMcpAttachment> = [];
+  for (const [commentIndex, comment] of comments.entries()) {
+    for (const attachmentId of comment.attachmentIds) {
+      if (seen.has(attachmentId)) continue;
+      seen.add(attachmentId);
+      attachments.push({
+        attachmentId,
+        commentNumber: commentIndex + 1,
+        author: formatIssueActor(comment.author) ?? "unknown",
+        commentBody: comment.body,
+        commentCreatedAt: comment.createdAt,
+      });
+    }
+  }
+  return attachments;
+};
+
+const formatMcpComment = (comment: IssueDetail["comments"][number]) => ({
+  author: formatIssueActor(comment.author) ?? "unknown",
+  body: comment.body,
+  attachmentIds: comment.attachmentIds,
+  createdAt: comment.createdAt,
+  editedAt: comment.editedAt,
+});
+
 export const formatIssueRow = (index: TrackerIndex, issue: Issue): IssuesMcpRow => {
   const status = index.statusById.get(issue.statusId);
   const parent = issue.parentId === null ? undefined : index.issuesById.get(issue.parentId);
@@ -433,12 +474,8 @@ const formatIssueDetail = (
           ]
         : [];
     }),
-    comments: detail.comments.map((comment) => ({
-      author: formatIssueActor(comment.author) ?? "unknown",
-      body: comment.body,
-      createdAt: comment.createdAt,
-      editedAt: comment.editedAt,
-    })),
+    comments: detail.comments.map(formatMcpComment),
+    attachments: formatIssueAttachments(detail.comments),
     threads: threads.map((link) => ({
       threadId: link.threadId,
       origin: link.origin,
@@ -541,6 +578,25 @@ const handlers = {
       const detail = yield* tracker.getDetail({ issueId: issue.id });
       const links = yield* tracker.getThreadLinks({ issueId: issue.id });
       return formatIssueDetail(index, issue, detail, links.links);
+    }),
+
+  issues_get_attachment: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const detail = yield* tracker.getDetail({ issueId: issue.id });
+      const attachmentId = input.attachmentId.trim();
+      const attachment = formatIssueAttachments(detail.comments).find(
+        (candidate) => candidate.attachmentId === attachmentId,
+      );
+      if (attachment === undefined) {
+        return yield* notFound(
+          `No attachment ${attachmentId || "(empty)"} belongs to ${issue.key}.`,
+          attachmentId,
+        );
+      }
+      return { key: issue.key, attachment };
     }),
 
   issues_create: (input) =>
@@ -664,13 +720,97 @@ const handlers = {
       const created = yield* tracker.commentCreate({ issueId: issue.id, body: input.body }, actor);
       return {
         key: issue.key,
-        comment: {
-          author: formatIssueActor(created.comment.author) ?? "unknown",
-          body: created.comment.body,
-          createdAt: created.comment.createdAt,
-          editedAt: created.comment.editedAt,
-        },
+        comment: formatMcpComment(created.comment),
       };
+    }),
+
+  issues_comment_evidence: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const issue = yield* resolveIssue(index, input.key);
+      const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
+        Effect.mapError(evidenceFailure),
+      );
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+
+      let mimeType: "image/png" | "video/mp4" | "video/webm";
+      let bytes: Uint8Array;
+      if (input.evidence._tag === "screenshot") {
+        const snapshot = yield* broker
+          .invoke<PreviewAutomationSnapshot>({
+            scope,
+            operation: "snapshot",
+            input: {},
+            ...(input.evidence.tabId === undefined ? {} : { tabId: input.evidence.tabId }),
+          })
+          .pipe(Effect.mapError(evidenceFailure));
+        mimeType = "image/png";
+        bytes = Buffer.from(snapshot.screenshot.data, "base64");
+      } else {
+        const artifact = input.evidence.artifact;
+        const artifactMimeType = artifact.mimeType.trim().toLowerCase().split(";", 1)[0];
+        if (artifactMimeType !== "video/mp4" && artifactMimeType !== "video/webm") {
+          return yield* invalid(
+            `Preview recording ${artifact.id} has unsupported type ${artifact.mimeType}.`,
+            issue.key,
+          );
+        }
+        if (
+          artifact.sizeBytes <= 0 ||
+          artifact.sizeBytes > ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES
+        ) {
+          return yield* invalid(
+            `Preview recording ${artifact.id} is empty or larger than the 25 MB evidence limit.`,
+            issue.key,
+          );
+        }
+        const chunks: Buffer[] = [];
+        let offset = 0;
+        while (offset < artifact.sizeBytes) {
+          const chunk = yield* broker
+            .invoke<PreviewAutomationRecordingChunk>({
+              scope,
+              operation: "recordingStop",
+              input: {
+                artifactRead: {
+                  path: artifact.path,
+                  offset,
+                  length: Math.min(
+                    PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
+                    artifact.sizeBytes - offset,
+                  ),
+                },
+              },
+              timeoutMs: 60_000,
+            })
+            .pipe(Effect.mapError(evidenceFailure));
+          const decoded = Buffer.from(chunk.data, "base64");
+          if (
+            chunk.offset !== offset ||
+            chunk.totalBytes !== artifact.sizeBytes ||
+            chunk.nextOffset !== offset + decoded.byteLength ||
+            decoded.byteLength === 0
+          ) {
+            return yield* invalid(
+              `Preview recording ${artifact.id} changed or returned an invalid chunk while it was being attached.`,
+              issue.key,
+            );
+          }
+          chunks.push(decoded);
+          offset = chunk.nextOffset;
+        }
+        mimeType = artifactMimeType;
+        bytes = Buffer.concat(chunks, artifact.sizeBytes);
+      }
+
+      const stored = yield* tracker.storeCommentEvidence({ issueId: issue.id, mimeType, bytes });
+      const created = yield* tracker.commentCreate(
+        { issueId: issue.id, body: input.body, attachmentIds: [stored.attachmentId] },
+        actor,
+      );
+      return { key: issue.key, comment: formatMcpComment(created.comment) };
     }),
 
   issues_delete: (input) =>

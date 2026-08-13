@@ -10,6 +10,7 @@ import {
   issueAttachmentComment,
   issueAttachmentIds,
   issueCommentAttachmentIds,
+  isIssueVideoAttachmentUrl,
 } from "./issueCommentAttachments";
 import {
   PendingIssueImageAttachment,
@@ -33,21 +34,33 @@ function AttachmentGallery({
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
       {attachmentIds.map((attachmentId, index) => {
         const url = urls[index] ?? null;
-        return url === null ? null : (
+        if (url === null) return null;
+        return (
           <li className="shrink-0" key={attachmentId}>
-            <a
-              aria-label={`Open attachment ${index + 1}`}
-              className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              href={url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <img
-                alt={`Issue attachment ${index + 1}`}
-                className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
+            {isIssueVideoAttachmentUrl(url) ? (
+              <video
+                aria-label={`Issue recording ${index + 1}`}
+                className="h-16 w-28 rounded-md border border-border/60 object-cover"
+                controls
+                playsInline
+                preload="metadata"
                 src={url}
               />
-            </a>
+            ) : (
+              <a
+                aria-label={`Open attachment ${index + 1}`}
+                className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={url}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <img
+                  alt={`Issue attachment ${index + 1}`}
+                  className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
+                  src={url}
+                />
+              </a>
+            )}
           </li>
         );
       })}

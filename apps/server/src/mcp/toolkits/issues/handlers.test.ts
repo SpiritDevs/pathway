@@ -3,6 +3,8 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
   IssueStatusId,
+  PREVIEW_AUTOMATION_OPERATIONS,
+  PreviewTabId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -10,12 +12,14 @@ import {
   IssueTrackerError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
+import { resolveAttachmentPathById } from "../../../attachmentStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as IssueEnrichmentEngine from "../../../issues/IssueEnrichmentEngine.ts";
 import * as SlackIntakeEngine from "../../../issues/slack/SlackIntakeEngine.ts";
@@ -42,9 +46,11 @@ import { SlackIntakeLedgerRepositoryLive } from "../../../persistence/Layers/Sla
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { IssuesToolkitHandlersLive } from "./handlers.ts";
 import {
   IssuesToolkit,
+  type IssuesMcpGetAttachmentResult,
   type IssuesMcpCommentResult,
   type IssuesMcpDetail,
   type IssuesMcpIssueResult,
@@ -80,6 +86,7 @@ const TestLayer = Layer.mergeAll(
     Layer.provide(SlackIntakeEngine.layerStub),
   ),
   IssuesToolkitHandlersLive,
+  PreviewAutomationBroker.layer,
 ).pipe(
   Layer.provideMerge(
     Layer.mergeAll(
@@ -264,8 +271,16 @@ describe("issues MCP toolkit", () => {
           { issueId: blocker.issue.id, relatedIssueId: parent.issue.id, kind: "blocks" },
           { kind: "user" },
         );
+        const uploaded = yield* tracker.uploadCommentAttachment({
+          issueId: parent.issue.id,
+          dataUrl: `data:image/png;base64,${Buffer.from("issue-image").toString("base64")}`,
+        });
         yield* tracker.commentCreate(
-          { issueId: parent.issue.id, body: "Looking at it." },
+          {
+            issueId: parent.issue.id,
+            body: "Looking at it.",
+            attachmentIds: [uploaded.attachmentId],
+          },
           { kind: "user" },
         );
         yield* tracker.linkThread(
@@ -298,11 +313,141 @@ describe("issues MCP toolkit", () => {
           ]),
           [["user", "Looking at it."]],
         );
+        assert.deepStrictEqual(detail.comments[0]?.attachmentIds, [uploaded.attachmentId]);
+        assert.deepStrictEqual(detail.attachments, [
+          {
+            attachmentId: uploaded.attachmentId,
+            commentNumber: 1,
+            author: "user",
+            commentBody: "Looking at it.",
+            commentCreatedAt: detail.comments[0]!.createdAt,
+          },
+        ]);
+        const attachment = yield* callTool<IssuesMcpGetAttachmentResult>("issues_get_attachment", {
+          key: parent.issue.key,
+          attachmentId: uploaded.attachmentId,
+        });
+        assert.deepStrictEqual(attachment, {
+          key: parent.issue.key,
+          attachment: detail.attachments[0],
+        });
+        const foreignAttachment = yield* callTool<IssuesMcpGetAttachmentResult>(
+          "issues_get_attachment",
+          { key: blocker.issue.key, attachmentId: uploaded.attachmentId },
+        ).pipe(Effect.flip);
+        assert.strictEqual(foreignAttachment.reason, "not-found");
+        assert.include(foreignAttachment.message, blocker.issue.key);
         assert.deepStrictEqual(
           detail.threads.map((link: { readonly threadId: string }) => link.threadId),
           [THREAD],
         );
       }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect(
+    "captures screenshots and remotely transfers recordings into attributed issue comments",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* IssueTrackerService;
+          const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+          const config = yield* ServerConfig.ServerConfig;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const { issue } = yield* tracker.create(
+            { title: "Review the browser proof" },
+            {
+              kind: "user",
+            },
+          );
+          const tabId = PreviewTabId.make("preview-tab-1");
+          const recording = Buffer.from("remote-preview-recording");
+          const events = yield* broker.connect({
+            clientId: "evidence-client",
+            environmentId: invocation.environmentId,
+            supportedOperations: [...PREVIEW_AUTOMATION_OPERATIONS],
+          });
+          yield* Stream.runForEach(events, (event) => {
+            if (event.type !== "request") return Effect.void;
+            const result =
+              event.request.operation === "snapshot"
+                ? {
+                    url: "http://localhost:5173/settings",
+                    title: "Settings",
+                    loading: false,
+                    visibleText: "Payment Methods",
+                    interactiveElements: [],
+                    accessibilityTree: null,
+                    consoleEntries: [],
+                    networkEntries: [],
+                    actionTimeline: [],
+                    screenshot: {
+                      mimeType: "image/png" as const,
+                      data: Buffer.from("preview-screenshot").toString("base64"),
+                      width: 1280,
+                      height: 800,
+                    },
+                  }
+                : (() => {
+                    const input = (
+                      event.request.input as {
+                        readonly artifactRead: {
+                          readonly offset: number;
+                          readonly length: number;
+                        };
+                      }
+                    ).artifactRead;
+                    const data = recording.subarray(input.offset, input.offset + input.length);
+                    return {
+                      data: data.toString("base64"),
+                      offset: input.offset,
+                      nextOffset: input.offset + data.byteLength,
+                      totalBytes: recording.byteLength,
+                    };
+                  })();
+            return broker.respond({
+              clientId: "evidence-client",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: true,
+              result,
+            });
+          }).pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+
+          const screenshot = yield* callTool<IssuesMcpCommentResult>("issues_comment_evidence", {
+            key: issue.key,
+            body: "Verified the renamed control in Preview.",
+            evidence: { _tag: "screenshot", tabId },
+          });
+          assert.strictEqual(screenshot.comment.author, "agent:codex");
+          assert.lengthOf(screenshot.comment.attachmentIds, 1);
+
+          const video = yield* callTool<IssuesMcpCommentResult>("issues_comment_evidence", {
+            key: issue.key,
+            body: "Recorded the complete interaction and successful result.",
+            evidence: {
+              _tag: "recording",
+              artifact: {
+                id: "browser-recording-proof",
+                tabId,
+                path: "/remote/path/browser-recording-proof.webm",
+                mimeType: "video/webm",
+                sizeBytes: recording.byteLength,
+                createdAt: "2026-08-13T00:00:00.000Z",
+              },
+            },
+          });
+          assert.strictEqual(video.comment.author, "agent:codex");
+          assert.lengthOf(video.comment.attachmentIds, 1);
+          const videoPath = resolveAttachmentPathById({
+            attachmentsDir: config.attachmentsDir,
+            attachmentId: video.comment.attachmentIds[0]!,
+          });
+          assert.isNotNull(videoPath);
+          assert.isTrue(videoPath?.endsWith(".webm"));
+          assert.deepStrictEqual(yield* fileSystem.readFile(videoPath!), recording);
+        }),
+      ).pipe(Effect.provide(TestLayer)),
   );
 
   it.effect("creates and updates by name, resolving status by category and project by title", () =>

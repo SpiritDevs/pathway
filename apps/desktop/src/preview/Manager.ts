@@ -2460,6 +2460,42 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
   });
 
+  const readRecording = Effect.fn("PreviewManager.readRecording")(function* (
+    artifactPath: string,
+    offset: number,
+    length: number,
+  ) {
+    const resolvedPath = yield* resolveArtifactPath(artifactPath);
+    return yield* fileSystem.open(resolvedPath, { flag: "r" }).pipe(
+      Effect.flatMap((file) =>
+        Effect.gen(function* () {
+          const stat = yield* file.stat;
+          const totalBytes = Number(stat.size);
+          const requestedBytes = Math.max(0, Math.min(length, totalBytes - offset));
+          yield* file.seek(offset, "start");
+          const data = yield* file
+            .readAlloc(requestedBytes)
+            .pipe(Effect.map(Option.getOrElse(() => new Uint8Array())));
+          return {
+            data,
+            offset,
+            nextOffset: offset + data.byteLength,
+            totalBytes,
+          };
+        }),
+      ),
+      Effect.scoped,
+      Effect.mapError(
+        (cause) =>
+          new PreviewOperationError({
+            operation: "readRecording",
+            artifactPath: resolvedPath,
+            cause,
+          }),
+      ),
+    );
+  });
+
   const automationStatus = Effect.fn("PreviewManager.automationStatus")(function* (tabId: string) {
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (!tab || tab.webContentsId == null) {
@@ -3168,6 +3204,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     registerWebview,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     revealArtifact,
+    readRecording,
     saveRecording,
     setAnnotationTheme,
     setColorScheme,
@@ -3475,6 +3512,19 @@ export class PreviewManager extends Context.Service<
       mimeType: string,
       data: Uint8Array,
     ) => Effect.Effect<DesktopPreviewRecordingArtifact, PreviewManagerError>;
+    readonly readRecording: (
+      path: string,
+      offset: number,
+      length: number,
+    ) => Effect.Effect<
+      {
+        readonly data: Uint8Array;
+        readonly offset: number;
+        readonly nextOffset: number;
+        readonly totalBytes: number;
+      },
+      PreviewManagerError
+    >;
     readonly automationStatus: (
       tabId: string,
     ) => Effect.Effect<PreviewAutomationStatus, PreviewManagerError>;
@@ -3584,6 +3634,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     startRecording: operations.startRecording,
     stopRecording: operations.stopRecording,
     saveRecording: operations.saveRecording,
+    readRecording: operations.readRecording,
     automationStatus: operations.automationStatus,
     automationSnapshot: operations.automationSnapshot,
     automationClick: operations.automationClick,

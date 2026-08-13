@@ -146,6 +146,7 @@ import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
+import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
   issueAssigneePatch,
@@ -854,6 +855,7 @@ function IssueDetailBody({
       const files: File[] = [];
       for (const [index, url] of startWorkAttachmentUrls.entries()) {
         if (url === null) throw new Error("The issue images are still loading. Try again.");
+        if (isIssueVideoAttachmentUrl(url)) continue;
         const response = await fetch(url);
         if (!response.ok) throw new Error("An issue image could not be loaded.");
         const blob = await response.blob();

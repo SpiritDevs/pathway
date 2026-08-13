@@ -190,6 +190,8 @@ export const SLACK_MAX_CHANNEL_WATCHES = 50;
 export const SLACK_MAX_REACTION_ROUTES = 20;
 /** One comment attachment, held to the same ceiling a turn's image is. */
 export const ISSUE_COMMENT_ATTACHMENT_MAX_BYTES = PROVIDER_SEND_TURN_MAX_IMAGE_BYTES;
+/** Short browser recordings attached by agents as review evidence. */
+export const ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES = 25 * 1024 * 1024;
 /**
  * The wire bound on the upload. Base64 spends four characters on every three bytes, and the
  * `data:image/webp;base64,` header and any wrapping whitespace ride on top of that.

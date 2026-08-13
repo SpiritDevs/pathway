@@ -63,6 +63,7 @@ import type {
   PreviewSessionSnapshot,
 } from "./preview.ts";
 import {
+  PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
   PreviewAutomationClickInput,
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
@@ -959,6 +960,23 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
+export const DesktopPreviewRecordingReadInputSchema = Schema.Struct({
+  path: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(4096)),
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  length: Schema.Int.check(
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES),
+  ),
+});
+
+export const DesktopPreviewRecordingReadResultSchema = Schema.Struct({
+  data: Schema.Uint8Array,
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  nextOffset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+export type DesktopPreviewRecordingReadResult = typeof DesktopPreviewRecordingReadResultSchema.Type;
+
 export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationClickInput,
@@ -1115,6 +1133,11 @@ export interface DesktopPreviewBridge {
       mimeType: string,
       data: Uint8Array,
     ) => Promise<DesktopPreviewRecordingArtifact>;
+    read: (
+      path: string,
+      offset: number,
+      length: number,
+    ) => Promise<DesktopPreviewRecordingReadResult>;
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
   automation: {

@@ -10,7 +10,12 @@ import {
 } from "./attachmentPaths.ts";
 import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 
-const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
+const SAFE_VIDEO_FILE_EXTENSIONS = [".mp4", ".webm"] as const;
+const ATTACHMENT_FILENAME_EXTENSIONS = [
+  ...SAFE_IMAGE_FILE_EXTENSIONS,
+  ...SAFE_VIDEO_FILE_EXTENSIONS,
+  ".bin",
+];
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -143,6 +148,23 @@ export function resolveAttachmentPath(input: {
     attachmentsDir: input.attachmentsDir,
     relativePath: attachmentRelativePath(input.attachment),
   });
+}
+
+/** Evidence videos belong only to issue comments, while normal chat attachments stay image-only. */
+export function resolveIssueEvidenceAttachmentPath(input: {
+  readonly attachmentsDir: string;
+  readonly attachmentId: string;
+  readonly mimeType: string;
+}): string | null {
+  if (parseIssueSegmentFromAttachmentId(input.attachmentId) === null) return null;
+  const mimeType = input.mimeType.trim().toLowerCase().split(";", 1)[0];
+  const extension = mimeType === "video/mp4" ? ".mp4" : mimeType === "video/webm" ? ".webm" : null;
+  return extension === null
+    ? null
+    : resolveAttachmentRelativePath({
+        attachmentsDir: input.attachmentsDir,
+        relativePath: `${input.attachmentId}${extension}`,
+      });
 }
 
 export function resolveAttachmentPathById(input: {

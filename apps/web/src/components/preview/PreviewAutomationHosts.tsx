@@ -8,6 +8,7 @@ import {
   type EnvironmentId,
   type PreviewAutomationNavigateInput,
   type PreviewAutomationOpenInput,
+  type PreviewAutomationRecordingReadInput,
   type PreviewAutomationResizeInput,
   type PreviewAutomationResizeResult,
   type PreviewAutomationSetColorSchemeInput,
@@ -22,6 +23,7 @@ import {
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
+import * as Encoding from "effect/Encoding";
 
 import {
   applyPreviewServerSnapshot,
@@ -635,6 +637,19 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             };
           }
           case "recordingStop": {
+            const readInput = (request.input as { readonly artifactRead?: unknown }).artifactRead;
+            if (readInput !== undefined) {
+              if (!previewBridge) {
+                throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+              }
+              const input = readInput as PreviewAutomationRecordingReadInput;
+              const chunk = await previewBridge.recording.read(
+                input.path,
+                input.offset,
+                input.length,
+              );
+              return { ...chunk, data: Encoding.encodeBase64(chunk.data) };
+            }
             const activeRecordings = readActiveBrowserRecordingTargets(threadRef);
             const activeTabIds = new Set(
               activeRecordings.map((recording) => recording.serverTabId),

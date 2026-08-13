@@ -26,6 +26,8 @@ import {
   IssueStatusCategory,
   IssueThreadLinkOrigin,
   IssueTrackerError,
+  PreviewAutomationRecordingArtifact,
+  PreviewTabId,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -33,6 +35,7 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import { IssueTrackerService } from "../../../issues/IssueTrackerService.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 
 /** How many rows `issues_list` answers with when the caller does not say. */
 export const ISSUES_MCP_LIST_DEFAULT_LIMIT = 50;
@@ -52,6 +55,8 @@ const dependencies = [
   IssueTrackerService,
   ProjectionProjectRepository,
 ];
+
+const evidenceDependencies = [...dependencies, PreviewAutomationBroker.PreviewAutomationBroker];
 
 const ASSIGNEE_GRAMMAR =
   'Who owns the issue: "user" for the human on this environment, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
@@ -128,9 +133,29 @@ export const IssuesMcpComment = Schema.Struct({
   /** "user", "agent:codex", or "system:import" — the feed says who wrote it. */
   author: Schema.String,
   body: Schema.String,
+  /** Images owned by this comment, in display order. */
+  attachmentIds: Schema.Array(Schema.String),
   createdAt: Schema.String,
   editedAt: Schema.NullOr(Schema.String),
 });
+
+/**
+ * One item in the issue-level attachment shelf. Attachments are physically owned by comments;
+ * carrying the source comment here lets an agent understand an image without reconstructing the
+ * relationship from two arrays.
+ */
+export const IssuesMcpAttachment = Schema.Struct({
+  attachmentId: Schema.String,
+  kind: Schema.optional(Schema.Literals(["image", "video", "file"])),
+  mimeType: Schema.optional(Schema.String),
+  sizeBytes: Schema.optional(Schema.Int),
+  /** One-based position in `comments`, matching how the accompanying MCP image block is labelled. */
+  commentNumber: Schema.Int,
+  author: Schema.String,
+  commentBody: Schema.String,
+  commentCreatedAt: Schema.String,
+});
+export type IssuesMcpAttachment = typeof IssuesMcpAttachment.Type;
 
 export const IssuesMcpThreadLink = Schema.Struct({
   threadId: Schema.String,
@@ -159,6 +184,8 @@ export const IssuesMcpDetail = Schema.Struct({
   todos: Schema.Array(IssuesMcpTodo),
   relations: Schema.Array(IssuesMcpRelation),
   comments: Schema.Array(IssuesMcpComment),
+  /** Every attachment on the issue, deduplicated in comment order with its source comment. */
+  attachments: Schema.Array(IssuesMcpAttachment),
   /** Threads recorded as working this issue. A link is a record, not a running turn. */
   threads: Schema.Array(IssuesMcpThreadLink),
   createdAt: Schema.String,
@@ -218,6 +245,20 @@ export type IssuesMcpListResult = typeof IssuesMcpListResult.Type;
 export const IssuesMcpGetInput = Schema.Struct({
   key: issueKeyField("read"),
 });
+
+export const IssuesMcpGetAttachmentInput = Schema.Struct({
+  key: issueKeyField("read an attachment from"),
+  attachmentId: Schema.String.annotate({
+    description:
+      "Attachment id returned by issues_get. The attachment must belong to a comment on this issue.",
+  }),
+});
+
+export const IssuesMcpGetAttachmentResult = Schema.Struct({
+  key: Schema.String,
+  attachment: IssuesMcpAttachment,
+});
+export type IssuesMcpGetAttachmentResult = typeof IssuesMcpGetAttachmentResult.Type;
 
 export const IssuesMcpCreateInput = Schema.Struct({
   title: Schema.String.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)).annotate({
@@ -301,6 +342,34 @@ export const IssuesMcpCommentInput = Schema.Struct({
   }),
 });
 
+export const IssuesMcpCommentEvidenceInput = Schema.Struct({
+  key: issueKeyField("attach browser evidence to"),
+  body: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(ISSUE_COMMENT_MAX_CHARS),
+  ).annotate({
+    description:
+      "Markdown comment explaining what was verified, what the evidence shows, and any limitations.",
+  }),
+  evidence: Schema.Union([
+    Schema.TaggedStruct("screenshot", {
+      tabId: Schema.optional(PreviewTabId).annotate({
+        description:
+          "Exact collaborative browser tab to capture. Omit to use this agent session's current tab.",
+      }),
+    }),
+    Schema.TaggedStruct("recording", {
+      artifact: PreviewAutomationRecordingArtifact.annotate({
+        description:
+          "The complete artifact returned by preview_recording_stop in this agent session.",
+      }),
+    }),
+  ]).annotate({
+    description:
+      "Capture the current Preview tab as a screenshot, or attach a recording returned by preview_recording_stop.",
+  }),
+});
+
 export const IssuesMcpCommentResult = Schema.Struct({
   key: Schema.String,
   comment: IssuesMcpComment,
@@ -356,12 +425,23 @@ export const IssuesListTool = readonlyTrackerTool(
 export const IssuesGetTool = readonlyTrackerTool(
   Tool.make("issues_get", {
     description:
-      "Read one issue in full by key: description, labels, milestone and cycle, sub-issue keys, checklist todos, relations with their direction, the comment thread, and any threads linked to it. Read-only. Works on soft-deleted issues too, so a delete can be reviewed before restoring it.",
+      "Read one issue in full by key: description, labels, milestone and cycle, sub-issue keys, checklist todos, relations, comments, and attachments. Each comment includes its attachment ids; the issue-level attachment list includes the source comment body and author. Available images are returned directly as MCP image content, within a bounded eager-load budget; use issues_get_attachment for any listed image that was not included. Read-only. Works on soft-deleted issues too.",
     parameters: IssuesMcpGetInput,
     success: IssuesMcpDetail,
     failure: IssueTrackerError,
     dependencies,
   }).annotate(Tool.Title, "Get issue detail"),
+);
+
+export const IssuesGetAttachmentTool = readonlyTrackerTool(
+  Tool.make("issues_get_attachment", {
+    description:
+      "Read one attachment listed by issues_get together with its source comment body, author, and timestamp. Images are returned directly as MCP image content. Video metadata is returned as text because MCP has no inline video content block; the video remains playable on the Pathway issue. The attachment must belong to the named issue. Read-only.",
+    parameters: IssuesMcpGetAttachmentInput,
+    success: IssuesMcpGetAttachmentResult,
+    failure: IssueTrackerError,
+    dependencies,
+  }).annotate(Tool.Title, "Get issue attachment"),
 );
 
 export const IssuesCreateTool = writeTrackerTool(
@@ -398,6 +478,17 @@ export const IssuesCommentTool = writeTrackerTool(
     dependencies,
   }).annotate(Tool.Title, "Comment on issue"),
 );
+
+export const IssuesCommentEvidenceTool = writeTrackerTool(
+  Tool.make("issues_comment_evidence", {
+    description:
+      "Capture browser proof and post it to an issue as an attributed markdown comment with an inline attachment. For a screenshot, this captures the current Preview tab. For video, call preview_recording_start and preview_recording_stop first, then pass the returned artifact unchanged. The evidence is copied into the issue so it remains reviewable from other devices. This is visible to everyone reading the issue.",
+    parameters: IssuesMcpCommentEvidenceInput,
+    success: IssuesMcpCommentResult,
+    failure: IssueTrackerError,
+    dependencies: evidenceDependencies,
+  }).annotate(Tool.Title, "Attach browser evidence to issue"),
+).annotate(Tool.OpenWorld, true);
 
 export const IssuesDeleteTool = writeTrackerTool(
   Tool.make("issues_delete", {
@@ -443,9 +534,11 @@ export const IssuesLinkThreadTool = writeTrackerTool(
 export const IssuesToolkit = Toolkit.make(
   IssuesListTool,
   IssuesGetTool,
+  IssuesGetAttachmentTool,
   IssuesCreateTool,
   IssuesUpdateTool,
   IssuesCommentTool,
+  IssuesCommentEvidenceTool,
   IssuesDeleteTool,
   IssuesRestoreTool,
   IssuesLinkThreadTool,

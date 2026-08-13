@@ -15,14 +15,18 @@ import {
   type McpHttpHandler,
   type ServerEvent,
 } from "@modelcontextprotocol/server";
+import Mime from "@effect/platform-node/Mime";
 import {
   EmailMcpTaskState,
   EmailMcpWaitForInput,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EmailProjectSettings,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -34,6 +38,8 @@ import { AiError, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import * as ServerConfig from "../config.ts";
 import * as EmailStoreLive from "../email/EmailStore.ts";
 import * as EmailWaitStoreLive from "../email/EmailWaitStore.ts";
 import { IssueTrackerService } from "../issues/IssueTrackerService.ts";
@@ -49,7 +55,12 @@ import * as EmailMcpService from "./toolkits/email/EmailMcpService.ts";
 import { EmailToolkitHandlersLive } from "./toolkits/email/handlers.ts";
 import { EmailToolkit } from "./toolkits/email/tools.ts";
 import { IssuesToolkitHandlersLive } from "./toolkits/issues/handlers.ts";
-import { IssuesToolkit } from "./toolkits/issues/tools.ts";
+import {
+  IssuesMcpDetail,
+  IssuesMcpGetAttachmentResult,
+  IssuesToolkit,
+  type IssuesMcpAttachment,
+} from "./toolkits/issues/tools.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import {
@@ -153,6 +164,21 @@ interface EncodedToolResult {
   readonly encodedResult: object | string | number | boolean | null;
 }
 
+const ISSUES_MCP_INLINE_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+
+interface LoadedIssueAttachment {
+  readonly data?: string;
+  readonly kind: "image" | "video" | "file";
+  readonly mimeType: string;
+  readonly path: string;
+  readonly sizeBytes: number;
+}
+
+const encodeIssueDetailJson = Schema.encodeSync(Schema.fromJsonString(IssuesMcpDetail));
+const encodeIssueAttachmentResultJson = Schema.encodeSync(
+  Schema.fromJsonString(IssuesMcpGetAttachmentResult),
+);
+
 interface BuiltToolkit {
   readonly tools: Record<string, Tool.Any>;
   readonly handle: (
@@ -231,6 +257,196 @@ const invokeBuiltTool = (
           ...(typeof encodedResult === "object" ? { structuredContent: encodedResult } : {}),
           content: [{ type: "text" as const, text: JSON.stringify(encodedResult) }],
         }),
+      }),
+    ),
+  );
+
+const inspectIssueAttachment = Effect.fn("McpHttpServer.inspectIssueAttachment")(function* (
+  attachmentId: string,
+): Effect.fn.Return<
+  LoadedIssueAttachment | null,
+  never,
+  ServerConfig.ServerConfig | FileSystem.FileSystem
+> {
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = resolveAttachmentPathById({
+    attachmentsDir: config.attachmentsDir,
+    attachmentId,
+  });
+  if (path === null) return null;
+  const mimeType = Mime.getType(path);
+  if (mimeType === null) return null;
+  const info = yield* fileSystem.stat(path).pipe(Effect.orElseSucceed(() => null));
+  return info === null || info.type !== "File"
+    ? null
+    : {
+        kind: mimeType.startsWith("image/")
+          ? "image"
+          : mimeType.startsWith("video/")
+            ? "video"
+            : "file",
+        mimeType,
+        path,
+        sizeBytes: Number(info.size),
+      };
+});
+
+const loadIssueAttachmentImage = Effect.fn("McpHttpServer.loadIssueAttachmentImage")(function* (
+  attachment: LoadedIssueAttachment | null,
+): Effect.fn.Return<LoadedIssueAttachment | null, never, FileSystem.FileSystem> {
+  if (attachment === null || attachment.kind !== "image") return attachment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const bytes = yield* fileSystem.readFile(attachment.path).pipe(Effect.orElseSucceed(() => null));
+  return bytes === null ? null : { ...attachment, data: Encoding.encodeBase64(bytes) };
+});
+
+const withIssueAttachmentMetadata = (
+  attachment: IssuesMcpAttachment,
+  loaded: LoadedIssueAttachment | null,
+): IssuesMcpAttachment =>
+  loaded === null
+    ? attachment
+    : {
+        ...attachment,
+        kind: loaded.kind,
+        mimeType: loaded.mimeType,
+        sizeBytes: loaded.sizeBytes,
+      };
+
+const issueAttachmentLabel = (
+  issueKey: string,
+  attachment: IssuesMcpAttachment,
+  position: number,
+  total: number,
+) =>
+  [
+    `Issue attachment ${position} of ${total} on ${issueKey}`,
+    `Attachment id: ${attachment.attachmentId}`,
+    `Source: comment ${attachment.commentNumber} by ${attachment.author} at ${attachment.commentCreatedAt}`,
+    `Comment body:\n${attachment.commentBody}`,
+  ].join("\n");
+
+export const issueDetailCallToolResult = Effect.fn("McpHttpServer.issueDetailCallToolResult")(
+  function* (
+    detail: IssuesMcpDetail,
+  ): Effect.fn.Return<CallToolResult, never, ServerConfig.ServerConfig | FileSystem.FileSystem> {
+    const loadedById = new Map<string, LoadedIssueAttachment | null>();
+    const attachments = yield* Effect.forEach(detail.attachments, (attachment) =>
+      inspectIssueAttachment(attachment.attachmentId).pipe(
+        Effect.tap((loaded) => Effect.sync(() => loadedById.set(attachment.attachmentId, loaded))),
+        Effect.map((loaded) => withIssueAttachmentMetadata(attachment, loaded)),
+      ),
+    );
+    const enrichedDetail = { ...detail, attachments };
+    const content: CallToolResult["content"] = [
+      { type: "text", text: encodeIssueDetailJson(enrichedDetail) },
+    ];
+    let included = 0;
+    let includedBytes = 0;
+    const eager = attachments.slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
+    for (const [index, attachment] of eager.entries()) {
+      const image = yield* loadIssueAttachmentImage(
+        loadedById.get(attachment.attachmentId) ?? null,
+      );
+      if (
+        image === null ||
+        image.data === undefined ||
+        includedBytes + image.sizeBytes > ISSUES_MCP_INLINE_ATTACHMENT_MAX_BYTES
+      ) {
+        continue;
+      }
+      included += 1;
+      includedBytes += image.sizeBytes;
+      content.push(
+        {
+          type: "text",
+          text: issueAttachmentLabel(detail.key, attachment, index + 1, attachments.length),
+        },
+        { type: "image", data: image.data, mimeType: image.mimeType },
+      );
+    }
+    if (included < attachments.length) {
+      const omitted = attachments.length - included;
+      content.push({
+        type: "text",
+        text: `${omitted} issue attachment${omitted === 1 ? " was" : "s were"} not included directly in this bounded response. Use issues_get_attachment for another listed image; video evidence remains playable on the Pathway issue.`,
+      });
+    }
+    return { isError: false, structuredContent: enrichedDetail, content };
+  },
+);
+
+export const issueAttachmentCallToolResult = Effect.fn(
+  "McpHttpServer.issueAttachmentCallToolResult",
+)(function* (
+  result: IssuesMcpGetAttachmentResult,
+): Effect.fn.Return<CallToolResult, never, ServerConfig.ServerConfig | FileSystem.FileSystem> {
+  const inspected = yield* inspectIssueAttachment(result.attachment.attachmentId);
+  const image = yield* loadIssueAttachmentImage(inspected);
+  const enrichedResult = {
+    ...result,
+    attachment: withIssueAttachmentMetadata(result.attachment, image),
+  };
+  if (image === null) {
+    return {
+      isError: true,
+      structuredContent: enrichedResult,
+      content: [
+        {
+          type: "text",
+          text: `Attachment ${result.attachment.attachmentId} belongs to ${result.key}, but its bytes are unavailable.`,
+        },
+      ],
+    };
+  }
+  if (image.data === undefined) {
+    return {
+      isError: false,
+      structuredContent: enrichedResult,
+      content: [
+        { type: "text", text: encodeIssueAttachmentResultJson(enrichedResult) },
+        { type: "text", text: issueAttachmentLabel(result.key, enrichedResult.attachment, 1, 1) },
+        {
+          type: "text",
+          text: `This attachment is ${image.mimeType} (${image.sizeBytes} bytes). MCP has no inline video content block; it is attached to and playable from the Pathway issue.`,
+        },
+      ],
+    };
+  }
+  return {
+    isError: false,
+    structuredContent: enrichedResult,
+    content: [
+      { type: "text", text: encodeIssueAttachmentResultJson(enrichedResult) },
+      { type: "text", text: issueAttachmentLabel(result.key, enrichedResult.attachment, 1, 1) },
+      { type: "image", data: image.data, mimeType: image.mimeType },
+    ],
+  };
+});
+
+const invokeIssueTool = (
+  built: BuiltToolkit,
+  name: "issues_get" | "issues_get_attachment",
+  payload: object,
+  invocation: McpInvocationContext.McpInvocationScope,
+  attachmentContext: Context.Context<ServerConfig.ServerConfig | FileSystem.FileSystem>,
+  runtimeContext: Context.Context<never>,
+): Promise<CallToolResult> =>
+  Effect.runPromiseWith(runtimeContext)(
+    built.handle(name, payload).pipe(
+      Stream.unwrap,
+      Stream.run(Sink.last()),
+      Effect.flatMap(Effect.fromOption),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+      Effect.tapCause(Effect.logError),
+      Effect.matchCauseEffect({
+        onFailure: (cause) => Effect.succeed(toolFailure(cause)),
+        onSuccess: ({ encodedResult }) =>
+          (name === "issues_get"
+            ? issueDetailCallToolResult(encodedResult as IssuesMcpDetail)
+            : issueAttachmentCallToolResult(encodedResult as IssuesMcpGetAttachmentResult)
+          ).pipe(Effect.provide(attachmentContext)),
       }),
     ),
   );
@@ -379,6 +595,9 @@ export interface PathwayMcpHandler {
 interface HandlerBuildOptions {
   readonly toolkits: ReadonlyArray<BuiltToolkit>;
   readonly snapshot?: BuiltToolkit;
+  readonly issueAttachmentContext?: Context.Context<
+    ServerConfig.ServerConfig | FileSystem.FileSystem
+  >;
   readonly email?: EmailMcpService.EmailMcpService["Service"];
   readonly projects?: ReadonlyArray<EmailProjectSettings>;
   readonly runtimeContext: Context.Context<never>;
@@ -431,7 +650,17 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
             annotations,
           },
           (payload) =>
-            invokeBuiltTool(built, tool.name, payload, invocation, options.runtimeContext),
+            (tool.name === "issues_get" || tool.name === "issues_get_attachment") &&
+            options.issueAttachmentContext !== undefined
+              ? invokeIssueTool(
+                  built,
+                  tool.name,
+                  payload,
+                  invocation,
+                  options.issueAttachmentContext,
+                  options.runtimeContext,
+                )
+              : invokeBuiltTool(built, tool.name, payload, invocation, options.runtimeContext),
         );
       }
       if (snapshotRegistration !== undefined) {
@@ -863,10 +1092,15 @@ const McpV2HttpHandlerLive = Layer.effect(
     const emailStore = yield* EmailStoreLive.EmailStore;
     const settingsService = yield* ServerSettingsService;
     const settings = yield* settingsService.getSettings;
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
     const runtimeContext = yield* Effect.context<never>();
     const handler = makePathwayMcpHandler({
       toolkits,
       snapshot,
+      issueAttachmentContext: Context.make(ServerConfig.ServerConfig, serverConfig).pipe(
+        Context.add(FileSystem.FileSystem, fileSystem),
+      ),
       email: emailService,
       projects: settings.emailCapture.projects,
       runtimeContext,

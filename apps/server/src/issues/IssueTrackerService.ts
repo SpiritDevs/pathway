@@ -14,6 +14,7 @@
 import {
   ISSUE_DESCRIPTION_MAX_CHARS,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
+  ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
   ISSUE_MAX_PARENT_DEPTH,
   ISSUE_TITLE_MAX_CHARS,
   SLACK_MAX_CHANNEL_WATCHES,
@@ -152,6 +153,7 @@ import {
   createIssueAttachmentId,
   parseIssueSegmentFromAttachmentId,
   resolveAttachmentPath,
+  resolveIssueEvidenceAttachmentPath,
   toSafeIssueAttachmentSegment,
 } from "../attachmentStore.ts";
 import { ServerSecretStore, type SecretStoreError } from "../auth/ServerSecretStore.ts";
@@ -470,6 +472,12 @@ export interface IssueTrackerServiceShape {
   readonly uploadCommentAttachment: (
     input: IssueCommentAttachmentUploadInput,
   ) => Effect.Effect<IssueCommentAttachmentUploadResult, IssueTrackerError>;
+  /** Store trusted Preview evidence without widening the public image-upload RPC. */
+  readonly storeCommentEvidence: (input: {
+    readonly issueId: IssueId;
+    readonly mimeType: "image/png" | "video/mp4" | "video/webm";
+    readonly bytes: Uint8Array;
+  }) => Effect.Effect<IssueCommentAttachmentUploadResult, IssueTrackerError>;
   /**
    * Saved views: a named filter, grouping, sort, and layout. They write no `issue_events` rows —
    * a view is a lens on the tracker, and nothing about an issue moved when one was renamed.
@@ -2761,65 +2769,97 @@ export const make = Effect.gen(function* () {
    * attachment normalisation (`orchestration/Normalizer.ts`) rather than inventing a second
    * decode: same data-URL parser, same images-only rule, same ceiling.
    */
+  const writeCommentAttachment = Effect.fn("IssueTrackerService.writeCommentAttachment")(
+    function* (input: {
+      readonly issueId: IssueId;
+      readonly mimeType: "image/png" | "video/mp4" | "video/webm" | string;
+      readonly bytes: Uint8Array;
+    }) {
+      yield* requireIssueRecord(input.issueId);
+
+      // The issue segment of the id is what `validateCommentAttachments` later checks a comment's
+      // attachments against, and what keeps thread attachment cleanup from sweeping this file.
+      const attachmentId = createIssueAttachmentId(input.issueId);
+      if (attachmentId === null) {
+        return yield* invalid("This issue cannot own an attachment.", input.issueId);
+      }
+
+      const mimeType = input.mimeType.toLowerCase();
+      const attachmentPath = mimeType.startsWith("image/")
+        ? resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment: {
+              type: "image",
+              id: attachmentId,
+              name: attachmentId,
+              mimeType,
+              sizeBytes: input.bytes.byteLength,
+            },
+          })
+        : resolveIssueEvidenceAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachmentId,
+            mimeType,
+          });
+      if (attachmentPath === null) {
+        return yield* new IssueTrackerError({
+          reason: "storage",
+          message: "Failed to resolve a path for the comment attachment.",
+        });
+      }
+
+      yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new IssueTrackerError({
+              reason: "storage",
+              message: `Failed to create the attachment directory: ${cause.message}`,
+            }),
+        ),
+      );
+      yield* fileSystem.writeFile(attachmentPath, input.bytes).pipe(
+        Effect.mapError(
+          (cause) =>
+            new IssueTrackerError({
+              reason: "storage",
+              message: `Failed to write the comment attachment: ${cause.message}`,
+            }),
+        ),
+      );
+
+      return { attachmentId };
+    },
+  );
+
   const uploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] = Effect.fn(
     "IssueTrackerService.uploadCommentAttachment",
   )(function* (input) {
-    yield* requireIssueRecord(input.issueId);
-
     const parsed = parseBase64DataUrl(input.dataUrl);
     if (parsed === null || !parsed.mimeType.startsWith("image/")) {
       return yield* invalid("A comment attachment must be a base64 image data URL.", input.issueId);
     }
-
     const bytes = Buffer.from(parsed.base64, "base64");
     if (bytes.byteLength === 0 || bytes.byteLength > ISSUE_COMMENT_ATTACHMENT_MAX_BYTES) {
       return yield* invalid("The comment attachment is empty or too large.", input.issueId);
     }
-
-    // The issue segment of the id is what `validateCommentAttachments` later checks a comment's
-    // attachments against, and what keeps thread attachment cleanup from sweeping this file.
-    const attachmentId = createIssueAttachmentId(input.issueId);
-    if (attachmentId === null) {
-      return yield* invalid("This issue cannot own an attachment.", input.issueId);
-    }
-
-    const attachmentPath = resolveAttachmentPath({
-      attachmentsDir: serverConfig.attachmentsDir,
-      attachment: {
-        type: "image",
-        id: attachmentId,
-        name: attachmentId,
-        mimeType: parsed.mimeType.toLowerCase(),
-        sizeBytes: bytes.byteLength,
-      },
+    return yield* writeCommentAttachment({
+      issueId: input.issueId,
+      mimeType: parsed.mimeType,
+      bytes,
     });
-    if (attachmentPath === null) {
-      return yield* new IssueTrackerError({
-        reason: "storage",
-        message: "Failed to resolve a path for the comment attachment.",
-      });
+  });
+
+  const storeCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = Effect.fn(
+    "IssueTrackerService.storeCommentEvidence",
+  )(function* (input) {
+    const maximumBytes =
+      input.mimeType === "image/png"
+        ? ISSUE_COMMENT_ATTACHMENT_MAX_BYTES
+        : ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES;
+    if (input.bytes.byteLength === 0 || input.bytes.byteLength > maximumBytes) {
+      return yield* invalid("The issue evidence is empty or too large.", input.issueId);
     }
-
-    yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new IssueTrackerError({
-            reason: "storage",
-            message: `Failed to create the attachment directory: ${cause.message}`,
-          }),
-      ),
-    );
-    yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-      Effect.mapError(
-        (cause) =>
-          new IssueTrackerError({
-            reason: "storage",
-            message: `Failed to write the comment attachment: ${cause.message}`,
-          }),
-      ),
-    );
-
-    return { attachmentId };
+    return yield* writeCommentAttachment(input);
   });
 
   const publishViews = () =>
@@ -3935,6 +3975,7 @@ export const make = Effect.gen(function* () {
     commentDelete,
     commentsList,
     uploadCommentAttachment,
+    storeCommentEvidence,
     viewCreate,
     viewUpdate,
     viewDelete,
