@@ -455,7 +455,7 @@ export function EnvironmentProviderUsage({
               driverKind={provider.driver}
               displayName={displayName}
               accentColor={provider.accentColor}
-              className="size-4"
+              className={cn("size-4", isPanel && "-translate-x-2")}
               iconClassName="size-4"
             />
             <span className="min-w-0 flex-1 truncate">{grouped ? displayName : summary}</span>
