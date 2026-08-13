@@ -13,7 +13,12 @@ import {
   TriangleAlertIcon,
   WrapTextIcon,
 } from "lucide-react";
-import type { ScopedThreadRef, ServerProviderSkill } from "@t3tools/contracts";
+import {
+  extractIssueKeyMentions,
+  parseIssueAgentMentionHref,
+  type ScopedThreadRef,
+  type ServerProviderSkill,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -44,6 +49,17 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
+import {
+  issueMentionSignature,
+  parseIssueMentionSignature,
+  renderIssueMentionMarkdownChildren,
+  type IssueMentionIndex,
+} from "./chat/IssueMentionText";
+import {
+  ISSUE_AGENT_MENTION_PROTOCOL,
+  renderIssueAgentMentionAnchor,
+} from "./chat/IssueAgentMentionPill";
+import { inlineChildrenComponents } from "./chat/markdownInlineChildren";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import { CHAT_FILE_TAG_CHIP_CLASS_NAME, FileTagChipContent } from "./chat/FileTagChip";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
@@ -84,6 +100,7 @@ import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useActiveEnvironmentId } from "../state/entities";
+import { useIssuesByKey } from "../state/issues";
 import { serverEnvironment } from "../state/server";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
@@ -115,6 +132,8 @@ interface ChatMarkdownProps {
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+
+const EMPTY_ISSUE_MENTION_CANDIDATES: ReadonlyArray<string> = [];
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -158,7 +177,9 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), "file"],
+    // `mention:` carries an agent mention pill. Unlisted protocols lose their href to the
+    // sanitizer, which would leave the pill's own scheme indistinguishable from plain text.
+    href: [...(defaultSchema.protocols?.href ?? []), "file", ISSUE_AGENT_MENTION_PROTOCOL],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
@@ -1333,6 +1354,7 @@ interface ChatMarkdownComponentsContext {
   readonly fileLinkParentSuffixByPath: ReadonlyMap<string, string>;
   readonly inlineCodeFileLinkMetaByText: ReadonlyMap<string, MarkdownFileLinkMeta>;
   readonly isStreaming: boolean;
+  readonly issuesByKey: IssueMentionIndex;
   readonly markdownFileLinkMetaByHref: ReadonlyMap<string, MarkdownFileLinkMeta>;
   readonly onTaskListChange: ChatMarkdownProps["onTaskListChange"];
   readonly onOpenFilePreview: ChatMarkdownProps["onOpenFilePreview"];
@@ -1360,6 +1382,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     fileLinkParentSuffixByPath,
     inlineCodeFileLinkMetaByText,
     isStreaming,
+    issuesByKey,
     markdownFileLinkMetaByHref,
     onTaskListChange,
     onOpenFilePreview,
@@ -1371,6 +1394,14 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     text,
     threadRef,
   } = ctx;
+  // Mentions run first and splice their text into strings and links, so the skill pass that runs
+  // after still sees the plain strings it needs to find `$skill` in.
+  const issueMentions = { issuesByKey, isStreaming };
+  const renderInlineChildren = (children: ReactNode) =>
+    renderSkillInlineMarkdownChildren(
+      renderIssueMentionMarkdownChildren(children, issueMentions),
+      skills,
+    );
   const fileLinkChip = (
     fileLinkMeta: MarkdownFileLinkMeta,
     copyMarkdown: string,
@@ -1412,8 +1443,10 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
   };
 
   return {
+    // Headings and table cells: no rendering of their own, just the inline transforms.
+    ...inlineChildrenComponents(renderInlineChildren),
     p({ node: _node, children, ...props }) {
-      return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
+      return <p {...props}>{renderInlineChildren(children)}</p>;
     },
     li({ node, children, ...props }) {
       const listItemStart = node?.position?.start.offset;
@@ -1421,7 +1454,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
         typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
       return (
         <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
-          {renderSkillInlineMarkdownChildren(children, skills)}
+          {renderInlineChildren(children)}
         </li>
       );
     },
@@ -1455,6 +1488,10 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
       );
     },
     a({ node, href, children, ...props }) {
+      // Before anything href-keyed: a mention is a pill, not a link, and it must never be mistaken
+      // for a relative path by the file-link resolver.
+      const mentionPill = renderIssueAgentMentionAnchor(href, children, props.className);
+      if (mentionPill !== null) return mentionPill;
       const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
       const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
       if (!fileLinkMeta) {
@@ -1598,6 +1635,24 @@ function ChatMarkdown({
   lineBreaks = false,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
+  // What this message could be mentioning, from its own text alone: no store, no subscription, and
+  // nothing at all while the text is still arriving, when linkifying is off anyway.
+  const issueMentionCandidates = useMemo(
+    () => (isStreaming ? EMPTY_ISSUE_MENTION_CANDIDATES : extractIssueKeyMentions(text)),
+    [isStreaming, text],
+  );
+  // Only a message that names a key subscribes to the tracker. The ones that do then narrow it to
+  // their own keys through a signature: an issue write anywhere else in the tracker leaves the
+  // signature — and so the index, the components, and this message's parsed markdown — untouched.
+  const issuesByKey = useIssuesByKey(issueMentionCandidates.length > 0);
+  const mentionSignature = useMemo(
+    () => issueMentionSignature(issueMentionCandidates, issuesByKey),
+    [issueMentionCandidates, issuesByKey],
+  );
+  const mentionedIssuesByKey = useMemo(
+    () => parseIssueMentionSignature(mentionSignature),
+    [mentionSignature],
+  );
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
   });
@@ -1646,6 +1701,9 @@ function ChatMarkdown({
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
   const markdownUrlTransform = useCallback((href: string) => {
+    // `defaultUrlTransform` drops every protocol it does not know, which would empty the mention
+    // href the anchor component keys the pill off.
+    if (parseIssueAgentMentionHref(href) !== null) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
   // Re-emit highlighted content as markdown so copying out of the rendered
@@ -1717,6 +1775,7 @@ function ChatMarkdown({
         fileLinkParentSuffixByPath,
         inlineCodeFileLinkMetaByText,
         isStreaming,
+        issuesByKey: mentionedIssuesByKey,
         markdownFileLinkMetaByHref,
         onTaskListChange,
         onOpenFilePreview,
@@ -1735,6 +1794,7 @@ function ChatMarkdown({
       inlineCodeFileLinkMetaByText,
       isStreaming,
       markdownFileLinkMetaByHref,
+      mentionedIssuesByKey,
       onTaskListChange,
       onOpenFilePreview,
       openInPreferredEditor,
@@ -1746,15 +1806,11 @@ function ChatMarkdown({
       threadRef,
     ],
   );
-
-  return (
-    <div
-      className={cn(
-        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80",
-        className,
-      )}
-      onCopy={handleCopy}
-    >
+  // react-markdown parses on every render, so the element is memoised rather than the components
+  // alone: a re-render that changes nothing it reads — an issue write, a store event — reuses this
+  // element, and React skips the subtree instead of re-running remark and rehype over the message.
+  const markdownElement = useMemo(
+    () => (
       <ReactMarkdown
         remarkPlugins={
           lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
@@ -1765,6 +1821,19 @@ function ChatMarkdown({
       >
         {text}
       </ReactMarkdown>
+    ),
+    [lineBreaks, markdownComponents, markdownUrlTransform, text],
+  );
+
+  return (
+    <div
+      className={cn(
+        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80",
+        className,
+      )}
+      onCopy={handleCopy}
+    >
+      {markdownElement}
     </div>
   );
 }

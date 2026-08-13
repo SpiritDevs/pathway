@@ -30,6 +30,7 @@ import {
   type IssueStatus,
   type IssueStatusCategory,
   type IssueStatusId,
+  type IssueThreadLinkOrigin,
   type IssuesSnapshot,
   ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
   PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES,
@@ -435,7 +436,7 @@ const formatIssueDetail = (
   detail: IssueDetail,
   threads: ReadonlyArray<{
     readonly threadId: ThreadId;
-    readonly origin: "start-work" | "manual";
+    readonly origin: IssueThreadLinkOrigin;
     readonly createdAt: string;
   }>,
 ): IssuesMcpDetail => {

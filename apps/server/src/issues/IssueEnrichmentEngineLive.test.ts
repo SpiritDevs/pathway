@@ -58,6 +58,7 @@ import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import * as IssueCommentAgentEngine from "./IssueCommentAgentEngine.ts";
 import * as IssueEnrichmentEngineLive from "./IssueEnrichmentEngineLive.ts";
 import * as SlackIntakeEngine from "./slack/SlackIntakeEngine.ts";
 import { IssueTrackerService, layer as issueTrackerLayer } from "./IssueTrackerService.ts";
@@ -182,7 +183,9 @@ const buildTracker = (
           ),
         ),
       ),
-      // Intake is not what these tests are about; the stub is enough to satisfy the tracker.
+      // Intake and the comment agent are not what these tests are about; the stubs are enough to
+      // satisfy the tracker.
+      Layer.provide(IssueCommentAgentEngine.layerStub),
       Layer.provide(SlackIntakeEngine.layerStub),
     ),
   );

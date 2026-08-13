@@ -5,6 +5,7 @@ import {
   Issue,
   IssueAssignee,
   IssueComment,
+  IssueCommentAgentRun,
   IssueCommentCreateInput,
   IssueCycle,
   IssueDate,
@@ -37,6 +38,10 @@ import {
   SlackIntakeStatus,
   SlackIntakeTrigger,
   SlackSetTokenInput,
+  extractIssueKeyMentions,
+  findIssueKeyMentions,
+  issueAgentMentionHref,
+  parseIssueAgentMentionHref,
   issueCycleStatusOn,
   issueMilestoneStatusOn,
   isPlaceholderIssueTitle,
@@ -248,6 +253,23 @@ const COMMENT_JSON = {
   attachmentIds: ["attachment-1"],
   createdAt: "2026-08-12T00:00:00Z",
   editedAt: null,
+};
+
+const COMMENT_AGENT_RUN_JSON = {
+  id: "comment-run-1",
+  state: "running",
+  mention: {
+    kind: "agent",
+    provider: "claudeAgent",
+    modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" },
+  },
+  phase: "researching",
+  transcript: "reading the issue\n",
+  error: null,
+  replyCommentId: null,
+  createdAt: "2026-08-12T00:00:00Z",
+  startedAt: "2026-08-12T00:00:01Z",
+  finishedAt: null,
 };
 
 describe("Issue", () => {
@@ -737,6 +759,59 @@ describe("IssueComment", () => {
   });
 });
 
+describe("IssueCommentAgentRun", () => {
+  it("rides the comment as an optional field, so a comment written before it decodes unchanged", () => {
+    // The compat pin: run state must never need a new stream event or a comment migration.
+    expect("agentRun" in decodeComment(COMMENT_JSON)).toBe(false);
+    expect(decodeComment({ ...COMMENT_JSON, agentRun: null }).agentRun).toBeNull();
+  });
+
+  it("round-trips a live run on its comment through the JSON codec", () => {
+    const codec = Schema.toCodecJson(IssueComment);
+    const comment = decodeComment({ ...COMMENT_JSON, agentRun: COMMENT_AGENT_RUN_JSON });
+
+    expect(comment.agentRun?.state).toBe("running");
+    expect(comment.agentRun?.mention.modelSelection.model).toBe("claude-opus-5");
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(comment))).toStrictEqual(
+      comment,
+    );
+  });
+
+  it("tells canceled from failed: only a failure carries an error", () => {
+    const decodeRun = Schema.decodeUnknownSync(IssueCommentAgentRun);
+    const canceled = decodeRun({
+      ...COMMENT_AGENT_RUN_JSON,
+      state: "canceled",
+      phase: null,
+      finishedAt: "2026-08-12T00:01:00Z",
+    });
+    expect([canceled.state, canceled.error]).toStrictEqual(["canceled", null]);
+
+    expect(() => decodeRun({ ...COMMENT_AGENT_RUN_JSON, state: "done" })).toThrow();
+    expect(() => decodeRun({ ...COMMENT_AGENT_RUN_JSON, phase: "typing" })).toThrow();
+  });
+
+  it("takes only a model selection at dispatch: attribution is the server's to resolve", () => {
+    const created = decodeCommentCreate({
+      issueId: "issue-1",
+      body: "please review [@Claude](mention:agent:claudeAgent)",
+      agentMention: { modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" } },
+    });
+    expect(created.agentMention?.modelSelection.instanceId).toBe("claudeAgent");
+    expect(decodeCommentCreate({ issueId: "issue-1", body: "hi" }).agentMention).toBeUndefined();
+  });
+
+  it("round-trips the mention href scheme, and refuses anything that is not an agent mention", () => {
+    const kind = parseIssueAgentMentionHref("mention:agent:claudeAgent");
+    expect(kind).toBe("claudeAgent");
+    expect(kind && parseIssueAgentMentionHref(issueAgentMentionHref(kind))).toBe("claudeAgent");
+    expect(parseIssueAgentMentionHref("https://example.com")).toBeNull();
+    expect(parseIssueAgentMentionHref("mention:agent:")).toBeNull();
+    expect(parseIssueAgentMentionHref("mention:agent:Not A Slug")).toBeNull();
+    expect(parseIssueAgentMentionHref("mention:user:someone")).toBeNull();
+  });
+});
+
 describe("IssueDetail", () => {
   it("round-trips one issue's tail, with relations read from both ends", () => {
     const codec = Schema.toCodecJson(IssueDetail);
@@ -984,9 +1059,81 @@ describe("IssueThreadLink", () => {
   it("names where the link came from, and refuses an origin it does not have", () => {
     expect(decodeThreadLink(THREAD_LINK_JSON).origin).toBe("start-work");
     expect(decodeThreadLink({ ...THREAD_LINK_JSON, origin: "manual" }).origin).toBe("manual");
+    // A key said in the conversation is a third way a thread arrives on an issue, and the weakest:
+    // the schema carries it, and the tracker is what refuses to let it demote the other two.
+    expect(decodeThreadLink({ ...THREAD_LINK_JSON, origin: "mention" }).origin).toBe("mention");
     // Assignment records intent and a link records the thread that followed; nothing auto-spawns,
     // so there is no origin standing for one.
     expect(() => decodeThreadLink({ ...THREAD_LINK_JSON, origin: "auto" })).toThrow();
+  });
+});
+
+describe("issue key mentions", () => {
+  // The table is the contract: a candidate is what the renderer would linkify and what the
+  // reactor would try to resolve, so both halves of the feature read the same rows.
+  const cases: ReadonlyArray<readonly [string, string, ReadonlyArray<string>]> = [
+    ["a plain sentence", "Picking up ISS-30 next", ["ISS-30"]],
+    ["a sentence that ends on the key", "Fixed ISS-30.", ["ISS-30"]],
+    ["two different keys", "ISS-30 blocks PAT-12", ["ISS-30", "PAT-12"]],
+    ["the same key twice", "ISS-30 again, still ISS-30", ["ISS-30"]],
+    ["a branch name", "Pushed ISS-31-fix", []],
+    ["a path segment", "See docs/ISS-31 for the write-up", []],
+    ["a file name", "Wrote ISS-31.md", []],
+    ["a URL path", "https://x/ISS-31", []],
+    ["an inline code span", "The label `ISS-31` is literal", []],
+    ["a fenced block", ["Before", "```", "ISS-31", "```", "After"].join("\n"), []],
+    ["a key quoted after prose", "Landed ISS-30, see `ISS-31`", ["ISS-30"]],
+    // A backtick used as punctuation is not the start of a span: spans are a per-line construct,
+    // so an odd one cannot pair with a real span further down and swallow the prose between.
+    [
+      "a key after an unbalanced backtick",
+      "Avoid the ` character.\nISS-1 tracks it; run `pnpm test` next.",
+      ["ISS-1"],
+    ],
+    // CommonMark closes a fence only on the same character at the same or greater run length.
+    [
+      "a nested fence",
+      ["````md", "```", "ISS-31", "```", "````", "Then ISS-30"].join("\n"),
+      ["ISS-30"],
+    ],
+    ["a tilde fence a backtick cannot close", ["~~~", "```", "ISS-31", "~~~"].join("\n"), []],
+    ["an unterminated fence", ["```", "ISS-31", "still inside ISS-30"].join("\n"), []],
+    // A pasted log is an indented code block, and a wrapped paragraph is not.
+    ["an indented block", ["Log:", "", "    warn: ISS-31 missing"].join("\n"), []],
+    ["a wrapped paragraph", ["Landed ISS-30", "    and it is done"].join("\n"), ["ISS-30"]],
+    ["a markdown link", "See [ISS-30](https://tracker/ISS-31) for the write-up", []],
+    ["a link whose text is prose", "See [the write-up](https://tracker?key=ISS-31)", []],
+    ["a bare URL with a query", "https://tracker/issues?key=ISS-31", []],
+    ["a bare URL with a fragment", "Read https://tracker/issues#ISS-31 first", []],
+    ["a key beside a link", "ISS-30 is tracked at https://tracker/x?key=ISS-31", ["ISS-30"]],
+  ];
+
+  for (const [name, markdown, expected] of cases) {
+    it(`extracts ${name}`, () => {
+      expect(extractIssueKeyMentions(markdown)).toStrictEqual(expected);
+    });
+  }
+
+  it("reports every candidate in order with the offset a renderer needs", () => {
+    expect(findIssueKeyMentions("ISS-30 blocks ISS-30 and PAT-12")).toStrictEqual([
+      { key: "ISS-30", index: 0 },
+      { key: "ISS-30", index: 14 },
+      { key: "PAT-12", index: 25 },
+    ]);
+    // Repeats collapse only on the way to the tracker: the renderer has to link both occurrences.
+    expect(extractIssueKeyMentions("ISS-30 blocks ISS-30 and PAT-12")).toStrictEqual([
+      "ISS-30",
+      "PAT-12",
+    ]);
+  });
+
+  // Documented rather than fixed: tightening the pattern enough to reject this would also reject
+  // real prefixes, and a candidate costs nothing until it fails to resolve to an issue.
+  it("matches key-shaped tokens that are not keys, leaving the tracker to reject them", () => {
+    expect(findIssueKeyMentions("encoded as UTF-8").map((mention) => mention.key)).toStrictEqual([
+      "UTF-8",
+    ]);
+    expect(extractIssueKeyMentions("encoded as UTF-8")).toStrictEqual(["UTF-8"]);
   });
 });
 

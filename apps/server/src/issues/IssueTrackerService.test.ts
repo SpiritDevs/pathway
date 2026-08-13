@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
+  IssueCommentAgentRunId,
   IssueEnrichmentRunId,
   IssueId,
   IssueMilestoneId,
@@ -24,6 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
@@ -48,6 +50,11 @@ import { SlackIntakeLedgerRepositoryLive } from "../persistence/Layers/SlackInta
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { IssueEnrichmentRunRepository } from "../persistence/Services/IssueEnrichmentRuns.ts";
+import {
+  IssueCommentAgentEngine,
+  type IssueCommentAgentEngineShape,
+  type IssueCommentAgentStartRequest,
+} from "./IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentEngineShape } from "./IssueEnrichmentEngine.ts";
 import { SlackIntakeEngine, type SlackIntakeEngineShape } from "./slack/SlackIntakeEngine.ts";
 import { IssueTrackerService, layer } from "./IssueTrackerService.ts";
@@ -88,6 +95,31 @@ const makeFakeEngine = (
   overrides: Partial<IssueEnrichmentEngineShape> = {},
 ): IssueEnrichmentEngineShape => ({
   resolveModelSelection: Effect.succeed(ENRICHMENT_MODEL),
+  start: () => Effect.void,
+  cancel: () => Effect.void,
+  ...overrides,
+});
+
+/**
+ * The comment agent engine, faked. Same seam, same reason: these tests drive the record half —
+ * the run on the comment, the reply, the cancel — without spawning a CLI.
+ */
+const makeFakeCommentAgentEngine = (
+  overrides: Partial<IssueCommentAgentEngineShape> = {},
+): IssueCommentAgentEngineShape => ({
+  resolveMention: ({ modelSelection }) =>
+    modelSelection.instanceId === ENRICHMENT_MODEL.instanceId
+      ? Effect.succeed({
+          kind: "agent",
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection,
+        })
+      : Effect.fail(
+          new IssueTrackerError({
+            reason: "invalid",
+            message: `There is no provider instance named ${modelSelection.instanceId}.`,
+          }),
+        ),
   start: () => Effect.void,
   cancel: () => Effect.void,
   ...overrides,
@@ -147,9 +179,11 @@ const makeDependencyLayer = () =>
 const makeTestLayer = (
   engine: IssueEnrichmentEngineShape = makeFakeEngine(),
   slack: SlackIntakeEngineShape = makeFakeSlackEngine(),
+  commentAgent: IssueCommentAgentEngineShape = makeFakeCommentAgentEngine(),
 ) =>
   layer.pipe(
     Layer.provide(Layer.succeed(IssueEnrichmentEngine, engine)),
+    Layer.provide(Layer.succeed(IssueCommentAgentEngine, commentAgent)),
     Layer.provide(Layer.succeed(SlackIntakeEngine, slack)),
     Layer.provideMerge(makeDependencyLayer()),
   );
@@ -161,11 +195,13 @@ const makeTestLayer = (
 const buildTracker = (
   engine: IssueEnrichmentEngineShape = makeFakeEngine(),
   slack: SlackIntakeEngineShape = makeFakeSlackEngine(),
+  commentAgent: IssueCommentAgentEngineShape = makeFakeCommentAgentEngine(),
 ) =>
   Effect.provide(
     IssueTrackerService,
     layer.pipe(
       Layer.provide(Layer.succeed(IssueEnrichmentEngine, engine)),
+      Layer.provide(Layer.succeed(IssueCommentAgentEngine, commentAgent)),
       Layer.provide(Layer.succeed(SlackIntakeEngine, slack)),
     ),
   );
@@ -1497,22 +1533,22 @@ describe("IssueTrackerService", () => {
       const threadId = ThreadId.make("thread-1");
 
       const linked = yield* tracker.linkThread(
-        { issueId: issue.id, threadId, origin: "start-work" },
+        { issueId: issue.id, threadId, origin: "manual" },
         ACTOR,
       );
       assert.deepStrictEqual(
         linked.links.map((link) => [link.threadId, link.origin]),
-        [[threadId, "start-work"]],
+        [[threadId, "manual"]],
       );
 
-      // The same thread again is the same fact restated: the origin moves, the row does not
-      // multiply, and `createdAt` stays at when the thread started on this issue.
+      // The same thread again is the same fact restated: a stronger origin moves it, the row does
+      // not multiply, and `createdAt` stays at when the thread started on this issue.
       const relinked = yield* tracker.linkThread(
-        { issueId: issue.id, threadId, origin: "manual" },
+        { issueId: issue.id, threadId, origin: "start-work" },
         ACTOR,
       );
       assert.strictEqual(relinked.links.length, 1);
-      assert.strictEqual(relinked.links[0]?.origin, "manual");
+      assert.strictEqual(relinked.links[0]?.origin, "start-work");
       assert.strictEqual(relinked.links[0]?.createdAt, linked.links[0]?.createdAt);
 
       const { events } = yield* tracker.getEvents({ issueId: issue.id });
@@ -1527,7 +1563,159 @@ describe("IssueTrackerService", () => {
       assert.strictEqual(threadSide.threadId, threadId);
       assert.deepStrictEqual(
         threadSide.links.map((link) => [link.issueId, link.origin]),
-        [[issue.id, "manual"]],
+        [[issue.id, "start-work"]],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("keeps the stronger origin when a mention restates a link somebody made", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Ship the toolkit" }, ACTOR);
+      const threadId = ThreadId.make("thread-1");
+
+      const started = yield* tracker.linkThread(
+        { issueId: issue.id, threadId, origin: "start-work" },
+        ACTOR,
+      );
+      // A key said in the conversation must not overwrite the fact that this thread was started
+      // from the issue, nor restamp when that happened.
+      const mentioned = yield* tracker.linkThread(
+        { issueId: issue.id, threadId, origin: "mention" },
+        ACTOR,
+      );
+      assert.strictEqual(mentioned.links.length, 1);
+      assert.strictEqual(mentioned.links[0]?.origin, "start-work");
+      assert.strictEqual(mentioned.links[0]?.createdAt, started.links[0]?.createdAt);
+
+      // The first link already logged; the mention adds nothing on top of it.
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      assert.strictEqual(events.filter((event) => event.field === "thread").length, 1);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("upgrades a mention link when somebody attaches the same thread by hand", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Ship the toolkit" }, ACTOR);
+      const threadId = ThreadId.make("thread-1");
+
+      yield* tracker.linkThread({ issueId: issue.id, threadId, origin: "mention" }, ACTOR);
+      const attached = yield* tracker.linkThread(
+        { issueId: issue.id, threadId, origin: "manual" },
+        ACTOR,
+      );
+      assert.strictEqual(attached.links.length, 1);
+      assert.strictEqual(attached.links[0]?.origin, "manual");
+
+      // The mention arrived silently, so the upgrade is the first visible thing that happened to
+      // this pair: a person attaching a thread has to reach the feed, not be swallowed because a
+      // row already existed.
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      assert.deepStrictEqual(
+        events
+          .filter((event) => event.field === "thread")
+          .map((event) => [event.before, event.after]),
+        [[null, threadId]],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("restates a link without writing a row or announcing anything", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Ship the toolkit" }, ACTOR);
+      const threadId = ThreadId.make("thread-1");
+      yield* tracker.linkThread({ issueId: issue.id, threadId, origin: "mention" }, ACTOR);
+
+      // Every chat message that names the key relinks this pair. Nothing about the issue changed,
+      // so no client is woken and no automation is re-triggered: the second event collected here
+      // is the unlink, which means the restated link in between announced nothing.
+      const events = yield* Stream.runCollect(
+        Stream.take(
+          tracker.stream.pipe(Stream.filter((event) => event._tag === "IssueThreadLinksChanged")),
+          2,
+        ).pipe(
+          Stream.merge(
+            Stream.fromEffect(
+              tracker
+                .linkThread({ issueId: issue.id, threadId, origin: "mention" }, ACTOR)
+                .pipe(Effect.andThen(tracker.unlinkThread({ issueId: issue.id, threadId }, ACTOR))),
+            ).pipe(Stream.drain),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(
+        events.map((event) => event.links.length),
+        [1, 0],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("forgets a mention quietly and a thread somebody attached loudly", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Ship the toolkit" }, ACTOR);
+      const mentioned = ThreadId.make("thread-mentioned");
+      const attached = ThreadId.make("thread-attached");
+      yield* tracker.linkThread(
+        { issueId: issue.id, threadId: mentioned, origin: "mention" },
+        ACTOR,
+      );
+      yield* tracker.linkThread({ issueId: issue.id, threadId: attached, origin: "manual" }, ACTOR);
+
+      yield* tracker.unlinkThread({ issueId: issue.id, threadId: mentioned }, ACTOR);
+      yield* tracker.unlinkThread({ issueId: issue.id, threadId: attached }, ACTOR);
+
+      // Removing a link the feed never announced must not announce a removal: the mention's whole
+      // life is invisible, and only the attached thread leaves a pair of rows behind.
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      assert.deepStrictEqual(
+        events
+          .filter((event) => event.field === "thread")
+          .map((event) => [event.before, event.after]),
+        [
+          [null, attached],
+          [attached, null],
+        ],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("records a first mention link and publishes it without touching the change log", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Ship the toolkit" }, ACTOR);
+      const threadId = ThreadId.make("thread-1");
+
+      const events = yield* Stream.runCollect(
+        Stream.take(
+          tracker.stream.pipe(Stream.filter((event) => event._tag === "IssueThreadLinksChanged")),
+          1,
+        ).pipe(
+          Stream.merge(
+            Stream.fromEffect(
+              tracker.linkThread({ issueId: issue.id, threadId, origin: "mention" }, ACTOR),
+            ).pipe(Stream.drain),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(
+        events.at(-1)?.links.map((link) => [link.threadId, link.origin]),
+        [[threadId, "mention"]],
+      );
+
+      // The relation is durable, but an automatic mention is not activity: the feed stays empty
+      // so a chatty thread cannot bury the changes a person made.
+      const { links } = yield* tracker.getThreadLinks({ issueId: issue.id });
+      assert.deepStrictEqual(
+        links.map((link) => [link.threadId, link.origin]),
+        [[threadId, "mention"]],
+      );
+      const { events: logged } = yield* tracker.getEvents({ issueId: issue.id });
+      assert.deepStrictEqual(
+        logged.filter((event) => event.field === "thread"),
+        [],
       );
     }).pipe(Effect.provide(makeTestLayer())),
   );
@@ -1870,6 +2058,501 @@ describe("IssueTrackerService", () => {
       }
       // Nothing is in flight any more, so the issue can be investigated again.
       assert.deepStrictEqual(yield* runs.listUnfinished(), []);
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+  // ── Comment agent runs ───────────────────────────────────────────────
+
+  it.effect("writes the queued run onto the comment and hands exactly one to the engine", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void, never>();
+      const requests = yield* Ref.make<ReadonlyArray<IssueCommentAgentStartRequest>>([]);
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: (request) =>
+            Ref.update(requests, (seen) => [...seen, request]).pipe(
+              Effect.andThen(Deferred.succeed(started, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+
+      const { comment } = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+
+      assert.strictEqual(comment.agentRun?.state, "queued");
+      assert.strictEqual(comment.agentRun?.transcript, "");
+      assert.isNull(comment.agentRun?.phase ?? null);
+      assert.isNull(comment.agentRun?.replyCommentId ?? null);
+      assert.isNull(comment.agentRun?.startedAt ?? null);
+      // The server resolves attribution from the instance: a client never asserts the provider.
+      assert.deepStrictEqual(comment.agentRun?.mention, {
+        kind: "agent",
+        provider: "claudeAgent",
+        modelSelection: ENRICHMENT_MODEL,
+      });
+
+      yield* Deferred.await(started);
+      const dispatched = yield* Ref.get(requests);
+      assert.strictEqual(dispatched.length, 1);
+      assert.strictEqual(dispatched[0]?.run.id, comment.agentRun?.id);
+      assert.strictEqual(dispatched[0]?.comment.id, comment.id);
+      assert.strictEqual(dispatched[0]?.issue.id, issue.id);
+      // The engine is handed the project's directory, which is why a rootless one never gets here.
+      assert.strictEqual(dispatched[0]?.workspaceRoot, "/tmp/pathway");
+
+      // An ordinary comment is inert, and so is an edit of the one that carried the mention.
+      yield* tracker.commentCreate({ issueId: issue.id, body: "Never mind" }, ACTOR);
+      yield* tracker.commentUpdate(
+        { commentId: comment.id, patch: { body: "[@Claude](mention:agent:claudeAgent) again?" } },
+        ACTOR,
+      );
+      assert.strictEqual((yield* Ref.get(requests)).length, 1);
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("never dispatches a run for a comment an agent or MCP wrote", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<IssueCommentAgentStartRequest>>([]);
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: (request) => Ref.update(requests, (seen) => [...seen, request]),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+
+      // The composer is the only caller that may mention: an agent answering its own mention is
+      // the loop this rule exists to prevent.
+      yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) and again",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        AGENT,
+      );
+
+      const { comments } = yield* tracker.commentsList({ issueId: issue.id });
+      assert.strictEqual(comments.length, 1);
+      assert.isNull(comments[0]?.agentRun ?? null);
+      assert.deepStrictEqual(yield* Ref.get(requests), []);
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("refuses a mention naming an instance this server does not have", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+
+      const refused = yield* Effect.flip(
+        tracker.commentCreate(
+          {
+            issueId: issue.id,
+            body: "[@Ghost](mention:agent:ghost) hello",
+            agentMention: {
+              modelSelection: { instanceId: ProviderInstanceId.make("ghost"), model: "ghost-1" },
+            },
+          },
+          ACTOR,
+        ),
+      );
+      assert.strictEqual(refused.reason, "invalid");
+
+      // The mention is resolved before anything is written, so the refusal leaves no comment.
+      assert.deepStrictEqual((yield* tracker.commentsList({ issueId: issue.id })).comments, []);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("fails the run rather than the comment when the issue has nothing to read", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<IssueCommentAgentStartRequest>>([]);
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: (request) => Ref.update(requests, (seen) => [...seen, request]),
+        }),
+      );
+      yield* seedProject(ROOTLESS_PROJECT, null);
+      const { issue } = yield* tracker.create(
+        { title: "Ask me", projectId: ROOTLESS_PROJECT },
+        ACTOR,
+      );
+
+      yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+
+      // The person's comment is already on screen; taking it back would be the wrong half to undo.
+      const [written] = (yield* tracker.commentsList({ issueId: issue.id })).comments;
+      assert.strictEqual(written?.agentRun?.state, "failed");
+      assert.include(written?.agentRun?.error ?? "", "project directory");
+      assert.isNotNull(written?.agentRun?.finishedAt);
+      assert.deepStrictEqual(yield* Ref.get(requests), []);
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("lands a cancel in canceled with no error, and refuses to cancel it twice", () =>
+    Effect.gen(function* () {
+      const canceled = yield* Deferred.make<IssueCommentAgentRunId, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        // The default `start` reports nothing, which is a run still queued when the cancel lands.
+        makeFakeCommentAgentEngine({
+          cancel: ({ runId }) => Deferred.succeed(canceled, runId).pipe(Effect.asVoid),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+      const { comment } = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+
+      const stopped = yield* tracker.cancelCommentAgentRun({ commentId: comment.id }, ACTOR);
+      assert.strictEqual(stopped.comment.agentRun?.state, "canceled");
+      // A cancel is not an error: the thread renders "you stopped this" apart from "this broke".
+      assert.isNull(stopped.comment.agentRun?.error ?? null);
+      assert.isNull(stopped.comment.agentRun?.phase ?? null);
+      assert.isNotNull(stopped.comment.agentRun?.finishedAt);
+      // The record is written before the process is interrupted.
+      assert.strictEqual(yield* Deferred.await(canceled), comment.agentRun?.id);
+
+      const refused = yield* Effect.flip(
+        tracker.cancelCommentAgentRun({ commentId: comment.id }, ACTOR),
+      );
+      assert.strictEqual(refused.reason, "conflict");
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("retries a stopped run as a fresh one and refuses to retry one still in flight", () =>
+    Effect.gen(function* () {
+      const requests = yield* Ref.make<ReadonlyArray<IssueCommentAgentStartRequest>>([]);
+      // Both dispatches are detached, so the second one is what this waits on rather than a sleep.
+      const dispatchedTwice = yield* Deferred.make<void, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: (request) =>
+            Ref.updateAndGet(requests, (seen) => [...seen, request]).pipe(
+              Effect.flatMap((seen) =>
+                seen.length < 2 ? Effect.void : Deferred.succeed(dispatchedTwice, undefined),
+              ),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+      const { comment } = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+
+      const tooSoon = yield* Effect.flip(
+        tracker.retryCommentAgentRun({ commentId: comment.id }, ACTOR),
+      );
+      assert.strictEqual(tooSoon.reason, "conflict");
+
+      yield* tracker.cancelCommentAgentRun({ commentId: comment.id }, ACTOR);
+      const retried = yield* tracker.retryCommentAgentRun({ commentId: comment.id }, ACTOR);
+
+      // A new run, never a resumed one, pinned to the mention the comment was submitted with.
+      assert.strictEqual(retried.comment.agentRun?.state, "queued");
+      assert.notStrictEqual(retried.comment.agentRun?.id, comment.agentRun?.id);
+      assert.strictEqual(retried.comment.agentRun?.transcript, "");
+      assert.isNull(retried.comment.agentRun?.finishedAt ?? null);
+      assert.deepStrictEqual(retried.comment.agentRun?.mention, comment.agentRun?.mention);
+      assert.strictEqual(retried.comment.body, comment.body);
+
+      yield* Deferred.await(dispatchedTwice);
+      const dispatched = yield* Ref.get(requests);
+      assert.deepStrictEqual(
+        dispatched.map((request) => request.run.id),
+        [comment.agentRun?.id, retried.comment.agentRun?.id],
+      );
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("stops the run when the comment that started it is deleted", () =>
+    Effect.gen(function* () {
+      const canceled = yield* Deferred.make<IssueCommentAgentRunId, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          cancel: ({ runId }) => Deferred.succeed(canceled, runId).pipe(Effect.asVoid),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+      const { comment } = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+
+      const { comments } = yield* tracker.commentDelete({ commentId: comment.id }, ACTOR);
+      assert.deepStrictEqual(comments, []);
+      // Deleting the question stops the answer: nothing is left to report a transition onto.
+      assert.strictEqual(yield* Deferred.await(canceled), comment.agentRun?.id);
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("posts the answer as an attributed comment and applies what it proposed", () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: ({ recorder }) =>
+            recorder.markRunning.pipe(
+              Effect.andThen(recorder.setPhase("researching")),
+              Effect.andThen(recorder.appendTranscript("reading ")),
+              Effect.andThen(recorder.appendTranscript("files\n")),
+              Effect.andThen(
+                recorder.succeed({
+                  reply: "The decoder drops the queued turn.",
+                  update: {
+                    title: "Reconnect drops the queued turn",
+                    description: "A relay reconnect loses the queued turn.",
+                    priority: "high",
+                  },
+                }),
+              ),
+              Effect.andThen(Deferred.succeed(finished, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      // A placeholder title and an empty description are the two the agent may fill in.
+      const { issue } = yield* tracker.create({ title: "Untitled", projectId: PROJECT }, ACTOR);
+      const { comment } = yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+      yield* Deferred.await(finished);
+
+      const { comments } = yield* tracker.commentsList({ issueId: issue.id });
+      const [origin, reply] = comments;
+      assert.strictEqual(origin?.id, comment.id);
+      assert.strictEqual(origin?.agentRun?.state, "completed");
+      assert.strictEqual(origin?.agentRun?.transcript, "reading files\n");
+      assert.isNull(origin?.agentRun?.phase ?? null);
+      assert.isNull(origin?.agentRun?.error ?? null);
+      assert.isNotNull(origin?.agentRun?.startedAt);
+      assert.isNotNull(origin?.agentRun?.finishedAt);
+
+      // The answer is an ordinary comment by an ordinary author, and carries no run of its own.
+      assert.strictEqual(origin?.agentRun?.replyCommentId, reply?.id);
+      assert.strictEqual(reply?.body, "The decoder drops the queued turn.");
+      assert.deepStrictEqual(reply?.author, AGENT);
+      assert.isNull(reply?.agentRun ?? null);
+
+      const updated = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      assert.strictEqual(updated?.title, "Reconnect drops the queued turn");
+      assert.strictEqual(updated?.description, "A relay reconnect loses the queued turn.");
+      assert.strictEqual(updated?.priority, "high");
+      assert.isTrue(
+        (yield* tracker.getEvents({ issueId: issue.id })).events
+          .filter((event) => event.kind === "field_changed")
+          .every((event) => event.actor.kind === "agent"),
+      );
+
+      // There is nothing left to stop, and cancelling would erase the answer.
+      const refused = yield* Effect.flip(
+        tracker.cancelCommentAgentRun({ commentId: comment.id }, ACTOR),
+      );
+      assert.strictEqual(refused.reason, "conflict");
+      const noRetry = yield* Effect.flip(
+        tracker.retryCommentAgentRun({ commentId: comment.id }, ACTOR),
+      );
+      assert.strictEqual(noRetry.reason, "conflict");
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("keeps a title and a description somebody already wrote", () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: ({ recorder }) =>
+            recorder
+              .succeed({
+                reply: "Here is what I found.",
+                update: {
+                  title: "A title of my own",
+                  description: "A description of my own",
+                  priority: "urgent",
+                },
+              })
+              .pipe(Effect.andThen(Deferred.succeed(finished, undefined)), Effect.asVoid),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create(
+        {
+          title: "Reconnect drops the queued turn",
+          description: "It has been happening since Tuesday.",
+          projectId: PROJECT,
+        },
+        ACTOR,
+      );
+      yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+      yield* Deferred.await(finished);
+
+      const updated = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      // An issue somebody titled is theirs, and a description somebody wrote is not the agent's
+      // to overwrite. Priority is one word and reversible in a click, so it is not guarded.
+      assert.strictEqual(updated?.title, "Reconnect drops the queued turn");
+      assert.strictEqual(updated?.description, "It has been happening since Tuesday.");
+      assert.strictEqual(updated?.priority, "urgent");
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("publishes every transition of a run as an ordinary comment upsert", () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void, never>();
+      const tracker = yield* buildTracker(
+        makeFakeEngine(),
+        makeFakeSlackEngine(),
+        makeFakeCommentAgentEngine({
+          start: ({ recorder }) =>
+            recorder.markRunning.pipe(
+              Effect.andThen(recorder.setPhase("researching")),
+              // A repeated phase is not a transition, so it publishes nothing.
+              Effect.andThen(recorder.setPhase("researching")),
+              Effect.andThen(recorder.appendTranscript("reading files\n")),
+              Effect.andThen(recorder.succeed({ reply: "It is the decoder." })),
+              Effect.andThen(Deferred.succeed(finished, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+
+      // `IssuesStreamEvent` is a closed union older remote clients decode exhaustively: a run
+      // reports through the comment event that already exists rather than a variant of its own.
+      const events = yield* Stream.runCollect(
+        Stream.take(
+          Stream.filter(tracker.stream, (event) => event._tag === "IssueCommentUpserted"),
+          6,
+        ).pipe(
+          Stream.merge(
+            Stream.fromEffect(
+              Effect.gen(function* () {
+                yield* tracker.commentCreate(
+                  {
+                    issueId: issue.id,
+                    body: "[@Claude](mention:agent:claudeAgent) what broke?",
+                    agentMention: { modelSelection: ENRICHMENT_MODEL },
+                  },
+                  ACTOR,
+                );
+                yield* Deferred.await(finished);
+              }),
+            ).pipe(Stream.drain),
+          ),
+        ),
+      );
+
+      assert.deepStrictEqual(
+        events.map((event) =>
+          event._tag === "IssueCommentUpserted"
+            ? [event.comment.agentRun?.state ?? null, event.comment.agentRun?.phase ?? null]
+            : [event._tag, null],
+        ),
+        [
+          // The comment and its queued run, written in one go.
+          ["queued", null],
+          ["running", null],
+          ["running", "researching"],
+          ["running", "researching"],
+          // The answer, an ordinary comment carrying no run, then the run that produced it.
+          [null, null],
+          ["completed", null],
+        ],
+      );
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("fails a comment agent run a previous server left in flight, at startup", () =>
+    Effect.gen(function* () {
+      // The default engine reports nothing, so the run is still queued when this server "dies".
+      const before = yield* buildTracker();
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* before.create({ title: "Ask me", projectId: PROJECT }, ACTOR);
+      const { comment } = yield* before.commentCreate(
+        {
+          issueId: issue.id,
+          body: "[@Claude](mention:agent:claudeAgent) what broke?",
+          agentMention: { modelSelection: ENRICHMENT_MODEL },
+        },
+        ACTOR,
+      );
+      assert.strictEqual(comment.agentRun?.state, "queued");
+
+      // A second build of the layer is a restart of the server.
+      const after = yield* buildTracker();
+      const [swept] = (yield* after.commentsList({ issueId: issue.id })).comments;
+      assert.strictEqual(swept?.agentRun?.state, "failed");
+      assert.include(swept?.agentRun?.error ?? "", "restarted");
+      assert.isNotNull(swept?.agentRun?.finishedAt);
+
+      // Nothing is in flight any more, so the same comment can be asked again.
+      const retried = yield* after.retryCommentAgentRun({ commentId: comment.id }, ACTOR);
+      assert.strictEqual(retried.comment.agentRun?.state, "queued");
     }).pipe(Effect.provide(makeDependencyLayer())),
   );
   // ── Slack intake ─────────────────────────────────────────────────────

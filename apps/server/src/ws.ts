@@ -2291,6 +2291,18 @@ const makeWsRpcLayer = (
             issueTracker.commentDelete(input, issueActor),
             { "rpc.aggregate": "issues" },
           ),
+        [ISSUES_WS_METHODS.cancelCommentAgentRun]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.cancelCommentAgentRun,
+            issueTracker.cancelCommentAgentRun(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
+        [ISSUES_WS_METHODS.retryCommentAgentRun]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.retryCommentAgentRun,
+            issueTracker.retryCommentAgentRun(input, issueActor),
+            { "rpc.aggregate": "issues" },
+          ),
         [ISSUES_WS_METHODS.commentsList]: (input) =>
           observeRpcEffect(ISSUES_WS_METHODS.commentsList, issueTracker.commentsList(input), {
             "rpc.aggregate": "issues",

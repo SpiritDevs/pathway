@@ -74,6 +74,7 @@ import Migration0058 from "./Migrations/058_EmailTriggers.ts";
 import Migration0059 from "./Migrations/059_SlackChannelReleaseCycles.ts";
 import Migration0060 from "./Migrations/060_IssueReviewStatusCategory.ts";
 import Migration0061 from "./Migrations/061_IssueMilestoneStartDate.ts";
+import Migration0062 from "./Migrations/062_IssueCommentAgentRuns.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -147,6 +148,7 @@ export const migrationEntries = [
   [59, "SlackChannelReleaseCycles", Migration0059],
   [60, "IssueReviewStatusCategory", Migration0060],
   [61, "IssueMilestoneStartDate", Migration0061],
+  [62, "IssueCommentAgentRuns", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

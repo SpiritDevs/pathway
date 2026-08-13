@@ -1,6 +1,7 @@
 import {
   ChatAttachmentId,
   ISSUE_ENRICHMENT_TRANSCRIPT_MAX_CHARS,
+  IssueCommentAgentRunId,
   IssueCommentId,
   IssueEnrichmentRunId,
   IssueCycleId,
@@ -17,6 +18,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  type IssueCommentAgentRun,
   type IssueEnrichmentRun,
   type ModelSelection,
 } from "@t3tools/contracts";
@@ -551,6 +553,78 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
     }),
   );
 
+  it.effect("round-trips a comment's agent run and lists only the comments that carry one", () =>
+    Effect.gen(function* () {
+      const comments = yield* IssueCommentRepository;
+      const issueId = IssueId.make("issue-mentioned");
+      const askId = IssueCommentId.make("comment-ask");
+      const replyId = IssueCommentId.make("comment-reply");
+      const agentRun = {
+        id: IssueCommentAgentRunId.make("comment-run-1"),
+        state: "running",
+        mention: {
+          kind: "agent",
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claude"),
+            model: "claude-sonnet-4-5",
+          },
+        },
+        phase: "researching",
+        transcript: "reading files\n",
+        error: null,
+        replyCommentId: null,
+        createdAt: "2026-08-12T00:00:00.000Z",
+        startedAt: "2026-08-12T00:00:01.000Z",
+        finishedAt: null,
+      } as const satisfies IssueCommentAgentRun;
+
+      yield* comments.upsert({
+        id: askId,
+        issueId,
+        author: { kind: "user" },
+        body: "[@Claude](mention:agent:claudeAgent) what broke?",
+        attachmentIds: [],
+        agentRun,
+        createdAt: "2026-08-12T00:00:00.000Z",
+        editedAt: null,
+      });
+      // The ordinary comment beside it: the column is null, and the field reads back as null.
+      yield* comments.upsert({
+        id: replyId,
+        issueId,
+        author: { kind: "agent", provider: ProviderDriverKind.make("claudeAgent") },
+        body: "It is the decoder.",
+        attachmentIds: [],
+        createdAt: "2026-08-12T00:00:02.000Z",
+        editedAt: null,
+      });
+
+      const stored = yield* comments.listByIssue({ issueId });
+      assert.deepStrictEqual(stored[0]?.agentRun, agentRun);
+      assert.isNull(stored[1]?.agentRun ?? null);
+
+      // What the startup sweep reads: every live run on the whole tracker, whatever its issue.
+      const carrying = yield* comments.listWithAgentRuns();
+      assert.deepStrictEqual(
+        carrying.map((comment) => comment.id),
+        [askId],
+      );
+
+      // A terminal run is still a run on the comment, and the column is rewritten in place.
+      yield* comments.upsert({
+        ...stored[0]!,
+        agentRun: { ...agentRun, state: "completed", phase: null, replyCommentId: replyId },
+      });
+      const finished = yield* comments.getById({ commentId: askId });
+      assert.strictEqual(
+        Option.isSome(finished) ? (finished.value.agentRun?.replyCommentId ?? null) : null,
+        replyId,
+      );
+      assert.strictEqual((yield* comments.listWithAgentRuns()).length, 1);
+    }),
+  );
+
   it.effect("round-trips a view's chip bar through its JSON column", () =>
     Effect.gen(function* () {
       const views = yield* IssueViewRepository;
@@ -811,6 +885,38 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
       assert.deepStrictEqual(
         (yield* links.listByThread({ threadId })).map((link) => link.issueId),
         ["issue-other"],
+      );
+    }),
+  );
+
+  // Precedence between origins is the tracker's business, not this table's: the row takes whatever
+  // it is handed, including the weakest origin, so a mention persists like any other link.
+  it.effect("stores a mention origin and lets a later write replace it", () =>
+    Effect.gen(function* () {
+      const links = yield* IssueThreadLinkRepository;
+      const issueId = IssueId.make("issue-mentioned");
+      const threadId = ThreadId.make("thread-9");
+
+      yield* links.link({
+        issueId,
+        threadId,
+        origin: "mention",
+        createdAt: "2026-08-12T00:00:00.000Z",
+      });
+      assert.deepStrictEqual(
+        (yield* links.listByIssue({ issueId })).map((link) => [link.origin, link.createdAt]),
+        [["mention", "2026-08-12T00:00:00.000Z"]],
+      );
+
+      yield* links.link({
+        issueId,
+        threadId,
+        origin: "start-work",
+        createdAt: "2026-08-13T00:00:00.000Z",
+      });
+      assert.deepStrictEqual(
+        (yield* links.listByIssue({ issueId })).map((link) => [link.origin, link.createdAt]),
+        [["start-work", "2026-08-12T00:00:00.000Z"]],
       );
     }),
   );

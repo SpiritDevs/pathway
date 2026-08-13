@@ -19,29 +19,48 @@ import type {
   ChatAttachmentId,
   EnvironmentId,
   IssueComment,
+  IssueCommentAgentMentionInput,
+  IssueCommentAgentRun,
   IssueCommentId,
   IssueId,
+  ModelSelection,
+  ProviderInstanceId,
 } from "@t3tools/contracts";
-import { ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import type { ProviderInstanceEntry } from "~/providerInstances";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestampFormat";
 import ChatMarkdown from "../ChatMarkdown";
+import type { ModelEsque } from "../chat/providerIconUtils";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
+import {
+  issueCommentAgentRunPresentation,
+  hasIssueCommentAgentRunDetails,
+  type IssueCommentAgentRunTone,
+} from "./issueCommentAgentRun.logic";
 import {
   isIssueVideoAttachmentUrl,
   issueCommentAttachmentIds,
   issueCommentComposerState,
 } from "./issueCommentAttachments";
+import {
+  issueCommentMentionAgents,
+  IssueCommentMentionChip,
+  IssueCommentMentionPicker,
+} from "./IssueCommentMentionControls";
+import { issueCommentMentionBody, resolveIssueCommentMention } from "./issueCommentMention.logic";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
+import { resolveIssueStartWorkModelSelection } from "./issueStartWork.logic";
 import {
   PendingIssueImageAttachment,
   useIssueImageAttachmentDrafts,
@@ -52,6 +71,81 @@ const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
 );
 
 const COMMENT_NAMING: IssueEventNaming = { providerLabels: PROVIDER_LABELS };
+
+const EMPTY_INSTANCE_ENTRIES: ReadonlyArray<ProviderInstanceEntry> = [];
+const EMPTY_MODEL_OPTIONS: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>> = new Map();
+
+const RUN_TONE_CLASS: Readonly<Record<IssueCommentAgentRunTone, string>> = {
+  pending: "text-muted-foreground",
+  active: "text-primary",
+  done: "text-muted-foreground",
+  failed: "text-destructive-foreground",
+  canceled: "text-muted-foreground",
+};
+
+/**
+ * The mention run under the comment that started it. Everything here is republished state: cancel
+ * and retry send and wait, because the run's next state arrives on the stream like its first did.
+ */
+function CommentAgentRun({
+  run,
+  onCancel,
+  onRetry,
+}: {
+  run: IssueCommentAgentRun;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
+  const presentation = issueCommentAgentRunPresentation(run);
+
+  return (
+    <div className="mt-1.5 flex flex-col gap-1 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5">
+      <div className="flex items-center gap-1.5 text-[11px]">
+        <span className={cn("flex items-center gap-1.5", RUN_TONE_CLASS[presentation.tone])}>
+          {presentation.isActive ? (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 animate-pulse rounded-full bg-current motion-reduce:animate-none"
+            />
+          ) : null}
+          {presentation.label}
+        </span>
+        {presentation.durationLabel === null ? null : (
+          <span className="text-muted-foreground/70">· {presentation.durationLabel}</span>
+        )}
+        {presentation.canCancel ? (
+          <Button className="ms-auto" onClick={onCancel} size="xs" variant="ghost">
+            Cancel
+          </Button>
+        ) : presentation.canRetry ? (
+          <Button className="ms-auto" onClick={onRetry} size="xs" variant="ghost">
+            Retry
+          </Button>
+        ) : null}
+      </div>
+
+      {presentation.errorText === null ? null : (
+        <p className="text-[11px] text-destructive-foreground">{presentation.errorText}</p>
+      )}
+
+      {/* Collapsed by default: the log is evidence, not the answer — the answer arrives as its
+          own comment. */}
+      {hasIssueCommentAgentRunDetails(run) ? (
+        <Collapsible>
+          <CollapsibleTrigger className="group flex items-center gap-1 text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+            <ChevronRightIcon className="size-3 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none" />
+            Execution details
+          </CollapsibleTrigger>
+          <CollapsiblePanel>
+            <pre className="mt-1 max-h-56 overflow-auto rounded-md border border-border/60 bg-muted/24 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words text-foreground/80">
+              {run.transcript}
+            </pre>
+          </CollapsiblePanel>
+        </Collapsible>
+      ) : null}
+    </div>
+  );
+}
 
 /** A signed URL is minted per attachment, so this mounts only when there is something to fetch. */
 function CommentAttachments({
@@ -100,11 +194,15 @@ function CommentRow({
   environmentId,
   onEdit,
   onDelete,
+  onCancelAgentRun,
+  onRetryAgentRun,
 }: {
   comment: IssueComment;
   environmentId: EnvironmentId | null;
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
+  onCancelAgentRun: (commentId: IssueCommentId) => void;
+  onRetryAgentRun: (commentId: IssueCommentId) => void;
 }) {
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const [editing, setEditing] = useState(false);
@@ -214,6 +312,13 @@ function CommentRow({
                 environmentId={environmentId}
               />
             )}
+            {comment.agentRun == null ? null : (
+              <CommentAgentRun
+                onCancel={() => onCancelAgentRun(comment.id)}
+                onRetry={() => onRetryAgentRun(comment.id)}
+                run={comment.agentRun}
+              />
+            )}
           </>
         )}
       </div>
@@ -228,15 +333,29 @@ export function IssueComments({
   onCreate,
   onEdit,
   onDelete,
+  onCancelAgentRun,
+  onRetryAgentRun,
+  instanceEntries = EMPTY_INSTANCE_ENTRIES,
+  modelOptionsByInstance = EMPTY_MODEL_OPTIONS,
 }: {
   /** Already chronological — the state layer sorts the read and its live patches together. */
   comments: ReadonlyArray<IssueComment>;
   isPending: boolean;
   /** The owner of anything uploaded here: its id is baked into the attachment id. */
   issueId: IssueId;
-  onCreate: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
+  onCreate: (
+    body: string,
+    attachmentIds: ReadonlyArray<ChatAttachmentId>,
+    /** Present only when the composer is submitting a mention: one comment, one run. */
+    agentMention?: IssueCommentAgentMentionInput,
+  ) => void;
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
+  onCancelAgentRun: (commentId: IssueCommentId) => void;
+  onRetryAgentRun: (commentId: IssueCommentId) => void;
+  /** Every configured instance, not just the assignee's: a mention may name anybody. */
+  instanceEntries?: ReadonlyArray<ProviderInstanceEntry>;
+  modelOptionsByInstance?: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   // No draft persistence: the sheet's body is keyed on the issue id, so walking the list with `j`
@@ -244,21 +363,83 @@ export function IssueComments({
   // with it — they are already in the store, and an orphan there costs a file, not a row.
   const [draft, setDraft] = useState("");
   const [isDropTarget, setIsDropTarget] = useState(false);
+  // The picker's choice, and the token a dismissed chip came from. Neither touches the draft: the
+  // words stay as written, and the rewrite happens once, on the body, at submit.
+  const [pickedInstanceId, setPickedInstanceId] = useState<ProviderInstanceId | null>(null);
+  const [dismissedRaw, setDismissedRaw] = useState<string | null>(null);
+  const [mentionSelection, setMentionSelection] = useState<ModelSelection | null>(null);
   const { attachments, addFiles, removeAttachment, clearAttachments } =
     useIssueImageAttachmentDrafts(issueId);
   const composer = issueCommentComposerState({ draft, attachments });
 
+  const mentionAgents = useMemo(
+    () => issueCommentMentionAgents(instanceEntries),
+    [instanceEntries],
+  );
+  const mention = resolveIssueCommentMention({
+    text: draft,
+    agents: mentionAgents,
+    pickedInstanceId,
+    dismissedRaw,
+  });
+  const mentionInstanceId = mention?.agent.instanceId ?? null;
+  const defaultSelectionFor = useCallback(
+    (instanceId: ProviderInstanceId): ModelSelection | null => {
+      const entry = instanceEntries.find((candidate) => candidate.instanceId === instanceId);
+      if (entry === undefined) return null;
+      return resolveIssueStartWorkModelSelection({
+        provider: entry.driverKind,
+        projectDefault: null,
+        instanceEntries: [entry],
+        modelOptionsByInstance,
+      });
+    },
+    [instanceEntries, modelOptionsByInstance],
+  );
+  // The configuration follows the agent: naming somebody else starts from *their* defaults rather
+  // than carrying the last one's effort onto a model that may not have the option at all.
+  useEffect(() => {
+    if (mentionInstanceId === null) {
+      setMentionSelection(null);
+      return;
+    }
+    setMentionSelection((current) =>
+      current !== null && current.instanceId === mentionInstanceId
+        ? current
+        : defaultSelectionFor(mentionInstanceId),
+    );
+  }, [defaultSelectionFor, mentionInstanceId]);
+
   const clearComposer = () => {
     clearAttachments();
     setDraft("");
+    setPickedInstanceId(null);
+    setDismissedRaw(null);
+    setMentionSelection(null);
   };
 
   const submit = () => {
     if (!composer.canSubmit || composer.body === null) return;
     const attachmentIds = issueCommentAttachmentIds(attachments);
-    const body = composer.body;
+    // Resolved against the *body*, not the draft: the body is trimmed on its way here and the
+    // offsets that drive the rewrite have to belong to the string being rewritten.
+    const submitted = resolveIssueCommentMention({
+      text: composer.body,
+      agents: mentionAgents,
+      pickedInstanceId,
+      dismissedRaw,
+    });
+    const selection = mentionSelection;
+    const body =
+      submitted === null || selection === null
+        ? composer.body
+        : issueCommentMentionBody(composer.body, submitted);
     clearComposer();
-    onCreate(body, attachmentIds);
+    if (submitted === null || selection === null) {
+      onCreate(body, attachmentIds);
+      return;
+    }
+    onCreate(body, attachmentIds, { modelSelection: selection });
   };
 
   return (
@@ -276,8 +457,10 @@ export function IssueComments({
               comment={comment}
               environmentId={environmentId}
               key={comment.id}
+              onCancelAgentRun={onCancelAgentRun}
               onDelete={onDelete}
               onEdit={onEdit}
+              onRetryAgentRun={onRetryAgentRun}
             />
           ))}
         </ol>
@@ -337,6 +520,41 @@ export function IssueComments({
           placeholder="Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
           value={draft}
         />
+        {/* The mention row sits between the text and the actions, and is always here when there is
+            anybody to mention: adding the agent first and writing afterwards is the common order. */}
+        {mentionAgents.length === 0 ? null : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <IssueCommentMentionPicker
+              agents={mentionAgents}
+              entries={instanceEntries}
+              onPick={(instanceId) => {
+                setDismissedRaw(null);
+                setPickedInstanceId(instanceId);
+              }}
+            />
+            {mention === null ? (
+              <span className="text-[11px] text-muted-foreground/70">
+                Mention an agent to have it reply to this comment.
+              </span>
+            ) : (
+              <IssueCommentMentionChip
+                agent={mention.agent}
+                entries={instanceEntries}
+                modelOptionsByInstance={modelOptionsByInstance}
+                modelSelection={mentionSelection}
+                onModelSelectionChange={(selection) => {
+                  setMentionSelection(selection);
+                  setPickedInstanceId(selection.instanceId);
+                }}
+                onRemove={() => {
+                  // Both halves, or the typed token would put the chip straight back.
+                  setPickedInstanceId(null);
+                  setDismissedRaw(mention.typed?.raw ?? null);
+                }}
+              />
+            )}
+          </div>
+        )}
         {composer.showActions ? (
           <div className="flex items-center gap-2">
             <Button disabled={!composer.canSubmit} onClick={submit} size="xs">

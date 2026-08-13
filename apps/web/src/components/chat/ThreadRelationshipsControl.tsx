@@ -65,8 +65,13 @@ export function resolveThreadLineageWindow<Row>(
 export function ThreadLineageRowList(props: {
   readonly hiddenCount: number;
   readonly onShowMore: () => void;
+  /** What the list is of, for the sections that reuse this window for something other than threads. */
+  readonly ariaLabel?: string;
+  /** How many rows `onShowMore` adds. The button says the number, so it has to be given the number. */
+  readonly pageCount?: number;
   readonly children: ReactNode;
 }) {
+  const pageCount = props.pageCount ?? THREAD_LINEAGE_PAGE_COUNT;
   return (
     <>
       {/*
@@ -78,7 +83,7 @@ export function ThreadLineageRowList(props: {
         themselves and the container needs no extra tab stop of its own.
       */}
       <ul
-        aria-label="Related threads"
+        aria-label={props.ariaLabel ?? "Related threads"}
         className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
       >
         {props.children}
@@ -90,7 +95,7 @@ export function ThreadLineageRowList(props: {
           className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]"
         >
           <PlusIcon aria-hidden className="-mx-0.5 size-4 shrink-0" />
-          Show {Math.min(props.hiddenCount, THREAD_LINEAGE_PAGE_COUNT)} more
+          Show {Math.min(props.hiddenCount, pageCount)} more
         </button>
       ) : null}
     </>

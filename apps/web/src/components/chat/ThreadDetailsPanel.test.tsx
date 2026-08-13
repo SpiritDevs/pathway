@@ -32,7 +32,7 @@ vi.mock("../ProjectScriptsControl", () => ({
 vi.mock("../EnvironmentRuntimeControls", () => ({
   EnvironmentRuntimeControls: (props: unknown) => {
     testState.runtimeControls(props);
-    return null;
+    return <div>runtime-controls-sentinel</div>;
   },
 }));
 vi.mock("../usage/ProviderUsage", () => ({
@@ -53,7 +53,7 @@ vi.mock("./ThreadAutomationsPanel", () => ({
 vi.mock("./ThreadIssuePanel", () => ({
   ThreadIssuePanel: (props: unknown) => {
     testState.threadIssuePanel(props);
-    return null;
+    return <div>issues-panel-sentinel</div>;
   },
 }));
 vi.mock("./ThreadRelationshipsControl", () => ({
@@ -136,6 +136,53 @@ describe("ThreadDetailsPanel", () => {
       threadId: props.threadId,
       enabled: true,
     });
+  });
+
+  it("places the issues section between the runtime controls and version control", () => {
+    const environmentId = "environment:thread-details" as EnvironmentId;
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+
+    const props: ThreadDetailsPanelProps = {
+      mode: "popover",
+      environmentId,
+      environmentConnection: null,
+      threadId: "thread:thread-details" as ThreadId,
+      activeProjectName: undefined,
+      activeProjectScripts: undefined,
+      activeProvider: null,
+      resourcesEnabled: true,
+      preferredScriptId: null,
+      keybindings: [],
+      availableEditors: [],
+      showOpenInPicker: false,
+      gitCwd: "/tmp/thread-details-project",
+      isGitRepo: true,
+      envLocked: false,
+      availableEnvironments: [],
+      onEnvironmentChange: vi.fn(),
+      onEnvModeChange: vi.fn(),
+      startFromOrigin: false,
+      onStartFromOriginChange: vi.fn(),
+      onComposerFocusRequest: vi.fn(),
+      onReconnectEnvironment: vi.fn(),
+      onOpenConnectionSettings: vi.fn(),
+      versionMismatch: null,
+      onDismissVersionMismatch: vi.fn(),
+      onRunProjectScript: vi.fn(),
+      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+    };
+
+    const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+    const runtimeIndex = html.indexOf("runtime-controls-sentinel");
+    const issuesIndex = html.indexOf("issues-panel-sentinel");
+    const versionControlIndex = html.indexOf("Version Control");
+
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(versionControlIndex).toBeGreaterThan(-1);
+    expect(issuesIndex).toBeGreaterThan(runtimeIndex);
+    expect(issuesIndex).toBeLessThan(versionControlIndex);
   });
 
   it("restores provider usage for the active environment", () => {

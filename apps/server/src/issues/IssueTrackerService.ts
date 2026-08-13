@@ -12,6 +12,7 @@
  * @module issues/IssueTrackerService
  */
 import {
+  ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS,
   ISSUE_DESCRIPTION_MAX_CHARS,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES,
@@ -23,6 +24,9 @@ import {
   type IssueActor,
   type IssueBulkUpdateInput,
   type IssueComment,
+  type IssueCommentAgentRun,
+  IssueCommentAgentRunId,
+  type IssueCommentAgentRunRefInput,
   type IssueCommentAttachmentUploadInput,
   type IssueCommentAttachmentUploadResult,
   type IssueCommentCreateInput,
@@ -182,6 +186,11 @@ import { IssueViewRepository } from "../persistence/Services/IssueViews.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import { SlackChannelWatchRepository } from "../persistence/Services/SlackChannelWatches.ts";
 import { SlackIntakeLedgerRepository } from "../persistence/Services/SlackIntakeLedger.ts";
+import {
+  IssueCommentAgentEngine,
+  type IssueCommentAgentIssueUpdate,
+  type IssueCommentAgentRunRecorder,
+} from "./IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentRunRecorder } from "./IssueEnrichmentEngine.ts";
 import { SlackIntakeEngine } from "./slack/SlackIntakeEngine.ts";
 // The poller reads the same file at the top of every cycle; one name, so they cannot drift.
@@ -211,6 +220,12 @@ const EVENT_VALUE_MAX_CHARS = 512;
 const ENRICHMENT_CANCELED_REASON = "Canceled.";
 /** A run is a live process: nothing that was in flight when this server stopped is still alive. */
 const ENRICHMENT_SERVER_RESTARTED_REASON = "The server restarted while this run was in flight.";
+/** The same fact, for a mentioned agent's run. Read by a person under the pill, so it is a sentence. */
+const COMMENT_AGENT_SERVER_RESTARTED_REASON =
+  "The server restarted while this run was in flight, so it was interrupted.";
+/** No project directory means no repository to read, which is the one dispatch that cannot start. */
+const COMMENT_AGENT_NO_WORKSPACE_REASON =
+  "This issue has no project directory, so there is nothing for an agent to read.";
 
 const CATEGORY_ORDER: ReadonlyArray<IssueStatusCategory> = [
   "backlog",
@@ -481,6 +496,28 @@ export interface IssueTrackerServiceShape {
     input: IssueRefInput,
   ) => Effect.Effect<IssueCommentsResult, IssueTrackerError>;
   /**
+   * Stop the agent run a comment's mention started, and leave it `canceled`.
+   *
+   * Named by the comment, because a comment carries at most one run. Refused as `conflict` once
+   * the run has finished: there is nothing to stop, and "canceled" would erase the answer. The
+   * record is written before the process is interrupted, mirroring `cancelEnrichment`.
+   */
+  readonly cancelCommentAgentRun: (
+    input: IssueCommentAgentRunRefInput,
+    actor: IssueActor,
+  ) => Effect.Effect<IssueCommentResult, IssueTrackerError>;
+  /**
+   * Dispatch the same comment again, as a fresh run.
+   *
+   * Only from a terminal-but-empty run — `failed` or `canceled` — and never a resume: the new run
+   * gets a new id and an empty transcript, pinned to the mention the comment was submitted with,
+   * so a settings change between the two cannot relabel what the pill says.
+   */
+  readonly retryCommentAgentRun: (
+    input: IssueCommentAgentRunRefInput,
+    actor: IssueActor,
+  ) => Effect.Effect<IssueCommentResult, IssueTrackerError>;
+  /**
    * Decode one base64 image data URL into the attachment store under the issue's own namespace,
    * and answer with the id a comment can then carry. The bytes are served by the assets route, so
    * this is the only time an image crosses the socket.
@@ -708,6 +745,27 @@ export function strongerThreadLinkOrigin(
 ): IssueThreadLinkOrigin {
   if (already === undefined) return incoming;
   return THREAD_LINK_ORIGIN_RANK[already] >= THREAD_LINK_ORIGIN_RANK[incoming] ? already : incoming;
+}
+
+/**
+ * Whether a comment's run is still worth stopping. Absent, null, and terminal all answer no, which
+ * is what makes every writer on this path first-writer-wins: a cancel that lands while the engine
+ * is winding down leaves the cancellation standing.
+ */
+function isLiveCommentAgentRun(
+  run: IssueCommentAgentRun | null | undefined,
+): run is IssueCommentAgentRun {
+  return run != null && (run.state === "queued" || run.state === "running");
+}
+
+/**
+ * Keep the tail. A transcript at the ceiling is a run that has been talking for a very long time,
+ * and what it said most recently is what a person watching it is reading.
+ */
+function boundCommentAgentTranscript(transcript: string): string {
+  return transcript.length <= ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS
+    ? transcript
+    : transcript.slice(transcript.length - ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS);
 }
 
 /** Trim to null, so "" and "   " off a Slack payload mean absent rather than a blank field. */
@@ -1089,6 +1147,9 @@ export const make = Effect.gen(function* () {
   // needs the project's directory, and a rootless project is the case that has none.
   const projectRepository = yield* ProjectionProjectRepository;
   const enrichmentEngine = yield* IssueEnrichmentEngine;
+  // The other process half: the agent a comment's mention pill names. Same seam, same reason —
+  // the record and the stream are this service's, the CLI is the engine's.
+  const commentAgentEngine = yield* IssueCommentAgentEngine;
   const slackEngine = yield* SlackIntakeEngine;
   // The bot token is a secret like any other on this server, so it goes through the same store:
   // `<secretsDir>/slack-bot-token.bin`, 0600, written through a temp file and a rename.
@@ -2775,19 +2836,52 @@ export const make = Effect.gen(function* () {
     const attachmentIds = input.attachmentIds ?? [];
     yield* validateCommentAttachments(input.issueId, attachmentIds);
 
+    // Only the composer dispatches. A mention on a comment written by an agent, by MCP, or by
+    // intake is left as ordinary text: an agent that could dispatch by writing a pill into its own
+    // reply is a loop with a provider bill attached, and no caller outside the composer has a
+    // person waiting on the answer. Resolved before the row is written, so an unknown instance
+    // refuses the whole comment rather than leaving a run nobody can attribute.
+    const mention =
+      input.agentMention === undefined || actor.kind !== "user"
+        ? null
+        : yield* commentAgentEngine.resolveMention({
+            modelSelection: input.agentMention.modelSelection,
+          });
+
+    const createdAt = yield* nowIso;
+    const agentRun: IssueCommentAgentRun | null =
+      mention === null
+        ? null
+        : {
+            id: IssueCommentAgentRunId.make(yield* newId),
+            state: "queued",
+            mention,
+            phase: null,
+            transcript: "",
+            error: null,
+            replyCommentId: null,
+            createdAt,
+            startedAt: null,
+            finishedAt: null,
+          };
+
     const comment: IssueComment = {
       id: IssueCommentId.make(yield* newId),
       issueId: input.issueId,
       author: actor,
       body: input.body,
       attachmentIds,
-      createdAt: yield* nowIso,
+      // Absent rather than null on an ordinary comment, so the field stays invisible to every
+      // client that predates it and every row that predates the column.
+      ...(agentRun === null ? {} : { agentRun }),
+      createdAt,
       editedAt: null,
     };
     yield* commentRepository
       .upsert(comment)
       .pipe(Effect.mapError(storage("Failed to write the issue comment")));
     yield* publish({ _tag: "IssueCommentUpserted", comment });
+    if (agentRun !== null) yield* dispatchCommentAgentRun(comment, agentRun);
     return { comment };
   });
 
@@ -2830,6 +2924,12 @@ export const make = Effect.gen(function* () {
       return yield* invalid("Only the author can delete a comment.", current.id);
     }
 
+    // A run outlives the socket that started it but not the comment it hangs off: deleting the ask
+    // takes the record the answer would be written onto with it, so the process is stopped first.
+    if (isLiveCommentAgentRun(current.agentRun)) {
+      yield* cancelCommentAgentRunRecord(current, current.agentRun);
+    }
+
     yield* commentRepository
       .deleteById({ commentId: current.id })
       .pipe(Effect.mapError(storage("Failed to delete the issue comment")));
@@ -2846,6 +2946,271 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     yield* requireIssueRecord(input.issueId);
     return { issueId: input.issueId, comments: yield* listComments(input.issueId) };
+  });
+
+  /**
+   * The one write that moves a mention-dispatched run, and the reason it reads first.
+   *
+   * Three things make a write a no-op rather than an error, and all three are ordinary: the comment
+   * was deleted while its run was working, a retry replaced the run this recorder is bound to, or
+   * the run is already terminal — a cancel writes the record before it interrupts the process, so
+   * whatever the engine reports on its way down has to find a finished run and leave it alone.
+   *
+   * `patch` returning null is "nothing changed", which keeps a repeated phase off the stream.
+   */
+  const patchCommentAgentRun = (
+    commentId: IssueCommentId,
+    runId: IssueCommentAgentRun["id"],
+    patch: (run: IssueCommentAgentRun) => IssueCommentAgentRun | null,
+  ): Effect.Effect<IssueComment | null, IssueTrackerError> =>
+    Effect.gen(function* () {
+      const found = yield* commentRepository
+        .getById({ commentId })
+        .pipe(Effect.mapError(storage("Failed to read the issue comment")));
+      if (Option.isNone(found)) return null;
+      const current = found.value;
+      if (!isLiveCommentAgentRun(current.agentRun) || current.agentRun.id !== runId) return null;
+      const agentRun = patch(current.agentRun);
+      if (agentRun === null) return null;
+
+      const comment: IssueComment = { ...current, agentRun };
+      yield* commentRepository
+        .upsert(comment)
+        .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+      // The run rides its comment: `IssuesStreamEvent` is a closed union that older remote clients
+      // decode exhaustively, so every transition is an ordinary comment upsert rather than a new
+      // variant those clients would fail to decode at all.
+      yield* publish({ _tag: "IssueCommentUpserted", comment });
+      return comment;
+    });
+
+  /**
+   * Apply what a run proposed, as the agent that proposed it, so the feed says who changed what.
+   *
+   * Title and description are guarded because a run answers a question about an issue rather than
+   * owning it: an issue somebody titled is theirs, and a description somebody wrote is not the
+   * agent's to overwrite. Priority is not guarded — it is one word, reversible in a click, and
+   * "this is actually urgent" is the correction most worth acting on.
+   */
+  const applyCommentAgentUpdate = (
+    issueId: IssueId,
+    proposal: IssueCommentAgentIssueUpdate,
+    actor: IssueActor,
+  ) =>
+    Effect.gen(function* () {
+      const record = yield* requireIssueRecord(issueId);
+      const patch: IssuePatch = {
+        ...(proposal.title !== undefined && isPlaceholderIssueTitle(record.title)
+          ? { title: proposal.title }
+          : {}),
+        ...(proposal.description !== undefined && record.description.trim().length === 0
+          ? { description: proposal.description }
+          : {}),
+        ...(proposal.priority === undefined ? {} : { priority: proposal.priority }),
+      };
+      if (Object.keys(patch).length === 0) return;
+      yield* update({ issueId, patch }, actor);
+    });
+
+  /**
+   * What the comment agent engine reports through. Every method rewrites the run on its origin
+   * comment and republishes that comment, so the engine never touches this service's tag and the
+   * two layers stay acyclic.
+   */
+  const makeCommentAgentRecorder = (
+    commentId: IssueCommentId,
+    runId: IssueCommentAgentRun["id"],
+  ): IssueCommentAgentRunRecorder => ({
+    markRunning: Effect.flatMap(nowIso, (startedAt) =>
+      patchCommentAgentRun(commentId, runId, (run) =>
+        run.state === "running" ? null : { ...run, state: "running", startedAt },
+      ),
+    ).pipe(Effect.asVoid),
+    setPhase: (phase) =>
+      patchCommentAgentRun(commentId, runId, (run) =>
+        run.phase === phase ? null : { ...run, phase },
+      ).pipe(Effect.asVoid),
+    appendTranscript: (chunk) =>
+      chunk.length === 0
+        ? Effect.void
+        : patchCommentAgentRun(commentId, runId, (run) => ({
+            ...run,
+            transcript: boundCommentAgentTranscript(run.transcript + chunk),
+          })).pipe(Effect.asVoid),
+    succeed: (result) =>
+      Effect.gen(function* () {
+        // Read before anything is written: a run cancelled while the model was talking must not
+        // post a reply to a thread its author already walked away from.
+        const found = yield* commentRepository
+          .getById({ commentId })
+          .pipe(Effect.mapError(storage("Failed to read the issue comment")));
+        if (Option.isNone(found)) return;
+        const origin = found.value;
+        if (!isLiveCommentAgentRun(origin.agentRun) || origin.agentRun.id !== runId) return;
+
+        // The answer is an ordinary comment by an ordinary author. Nothing about it says "agent
+        // run" except who wrote it, which is the point: the thread reads as a conversation.
+        const author: IssueActor = { kind: "agent", provider: origin.agentRun.mention.provider };
+        const { comment: reply } = yield* commentCreate(
+          { issueId: origin.issueId, body: result.reply },
+          author,
+        );
+        if (result.update !== undefined) {
+          yield* applyCommentAgentUpdate(origin.issueId, result.update, author);
+        }
+
+        const finishedAt = yield* nowIso;
+        yield* patchCommentAgentRun(commentId, runId, (run) => ({
+          ...run,
+          state: "completed",
+          phase: null,
+          error: null,
+          replyCommentId: reply.id,
+          finishedAt,
+        }));
+      }),
+    fail: (reason) =>
+      Effect.flatMap(nowIso, (finishedAt) =>
+        patchCommentAgentRun(commentId, runId, (run) => ({
+          ...run,
+          state: "failed",
+          phase: null,
+          error: reason,
+          finishedAt,
+        })),
+      ).pipe(Effect.asVoid),
+  });
+
+  /** The directory a run reads, or null when the issue's project has none — or has no project. */
+  const commentAgentWorkspaceRoot = (record: IssueRecord) =>
+    Effect.gen(function* () {
+      if (record.projectId === null) return null;
+      const project = yield* projectRepository
+        .getById({ projectId: record.projectId })
+        .pipe(Effect.mapError(storage("Failed to read the project")));
+      return Option.isSome(project) && project.value.deletedAt === null
+        ? project.value.workspaceRoot
+        : null;
+    });
+
+  /**
+   * Hand one queued run to the engine.
+   *
+   * Detached from the request fiber: a run takes minutes, the composer that asked for it answers
+   * now, and the run must outlive the socket that started it. Anything escaping — a failure or a
+   * defect — lands the run in `failed` rather than leaving it queued forever.
+   */
+  const dispatchCommentAgentRun = (comment: IssueComment, run: IssueCommentAgentRun) =>
+    Effect.gen(function* () {
+      const recorder = makeCommentAgentRecorder(comment.id, run.id);
+      const record = yield* requireIssueRecord(comment.issueId);
+      const workspaceRoot = yield* commentAgentWorkspaceRoot(record);
+      // Failed rather than refused: the person's comment is already written and already on screen,
+      // and taking it back because their agent has nothing to read would be the wrong half to undo.
+      if (workspaceRoot === null) return yield* recorder.fail(COMMENT_AGENT_NO_WORKSPACE_REASON);
+
+      const labelIds = yield* labelsOf(record.id);
+      yield* Effect.forkDetach(
+        commentAgentEngine
+          .start({ run, comment, issue: { ...record, labelIds }, workspaceRoot, recorder })
+          .pipe(
+            Effect.catchCause((cause) =>
+              recorder.fail(`The agent run stopped unexpectedly: ${Cause.pretty(cause)}`),
+            ),
+            Effect.ignoreCause({ log: true }),
+          ),
+      );
+    });
+
+  /**
+   * Land a live run in `canceled` and then stop its process, in that order.
+   *
+   * A cancel leaves `error` null: the thread renders "you stopped this" apart from "this broke",
+   * and retry is offered from both.
+   */
+  const cancelCommentAgentRunRecord = (comment: IssueComment, run: IssueCommentAgentRun) =>
+    Effect.gen(function* () {
+      const finishedAt = yield* nowIso;
+      yield* patchCommentAgentRun(comment.id, run.id, (current) => ({
+        ...current,
+        state: "canceled",
+        phase: null,
+        error: null,
+        finishedAt,
+      }));
+      yield* commentAgentEngine.cancel({ runId: run.id });
+    });
+
+  /** The run named by a comment, or a `not-found` naming the comment rather than the run. */
+  const requireCommentAgentRun = (commentId: IssueCommentId) =>
+    Effect.gen(function* () {
+      const comment = yield* requireComment(commentId);
+      const run = comment.agentRun;
+      if (run == null) {
+        return yield* notFound(commentId, `No agent run was started by comment ${commentId}.`);
+      }
+      return { comment, run };
+    });
+
+  const cancelCommentAgentRun: IssueTrackerServiceShape["cancelCommentAgentRun"] = Effect.fn(
+    "IssueTrackerService.cancelCommentAgentRun",
+  )(function* (input, actor) {
+    const { comment, run } = yield* requireCommentAgentRun(input.commentId);
+    // The same rule a delete follows: the sole human on this environment may stop anybody's run.
+    if (actor.kind !== "user" && !isSameActor(actor, comment.author)) {
+      return yield* invalid("Only the author can stop this run.", comment.id);
+    }
+    if (run.state !== "queued" && run.state !== "running") {
+      return yield* conflict(
+        run.state === "completed"
+          ? "This run has already answered."
+          : "This run has already stopped.",
+        comment.id,
+      );
+    }
+    yield* cancelCommentAgentRunRecord(comment, run);
+    return { comment: yield* requireComment(comment.id) };
+  });
+
+  const retryCommentAgentRun: IssueTrackerServiceShape["retryCommentAgentRun"] = Effect.fn(
+    "IssueTrackerService.retryCommentAgentRun",
+  )(function* (input, actor) {
+    const { comment: current, run } = yield* requireCommentAgentRun(input.commentId);
+    if (actor.kind !== "user" && !isSameActor(actor, current.author)) {
+      return yield* invalid("Only the author can retry this run.", current.id);
+    }
+    if (run.state !== "failed" && run.state !== "canceled") {
+      return yield* conflict(
+        run.state === "completed"
+          ? "This run already answered; comment again to ask something else."
+          : "This run has not finished yet.",
+        current.id,
+      );
+    }
+
+    // A new run, never a resumed one: the transcript starts empty and the id is new, so a client
+    // watching the old one sees it replaced rather than rewritten. The mention is carried over
+    // unchanged — it was pinned when the comment was submitted, and a settings change since then
+    // must not relabel the pill the person clicked.
+    const agentRun: IssueCommentAgentRun = {
+      id: IssueCommentAgentRunId.make(yield* newId),
+      state: "queued",
+      mention: run.mention,
+      phase: null,
+      transcript: "",
+      error: null,
+      replyCommentId: null,
+      createdAt: yield* nowIso,
+      startedAt: null,
+      finishedAt: null,
+    };
+    const comment: IssueComment = { ...current, agentRun };
+    yield* commentRepository
+      .upsert(comment)
+      .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+    yield* publish({ _tag: "IssueCommentUpserted", comment });
+    yield* dispatchCommentAgentRun(comment, agentRun);
+    return { comment };
   });
 
   /**
@@ -4035,6 +4400,37 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  // The same sweep for the runs a mention started. Nothing is published: this runs before anybody
+  // can subscribe, and the stream opens with a snapshot that already has these rows in it.
+  yield* commentRepository.listWithAgentRuns().pipe(
+    Effect.flatMap((comments) =>
+      Effect.forEach(
+        comments.flatMap((comment) =>
+          isLiveCommentAgentRun(comment.agentRun) ? [{ comment, run: comment.agentRun }] : [],
+        ),
+        ({ comment, run }) =>
+          Effect.flatMap(nowIso, (finishedAt) =>
+            commentRepository.upsert({
+              ...comment,
+              agentRun: {
+                ...run,
+                state: "failed",
+                phase: null,
+                error: COMMENT_AGENT_SERVER_RESTARTED_REASON,
+                finishedAt,
+              },
+            }),
+          ),
+        { discard: true },
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Failed to fail the comment agent runs left over by a previous server.", {
+        cause,
+      }),
+    ),
+  );
+
   // Once at startup, so a cycle that ended while this laptop was shut does not wait for somebody
   // to open the tracker. A failure here is logged rather than fatal: the tracker still reads, and
   // the next snapshot tries again.
@@ -4078,6 +4474,8 @@ export const make = Effect.gen(function* () {
     commentUpdate,
     commentDelete,
     commentsList,
+    cancelCommentAgentRun,
+    retryCommentAgentRun,
     uploadCommentAttachment,
     storeCommentEvidence,
     viewCreate,

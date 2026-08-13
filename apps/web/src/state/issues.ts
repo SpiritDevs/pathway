@@ -1959,6 +1959,21 @@ export const issueCommands = {
     tag: ISSUES_WS_METHODS.commentDelete,
     ...writeCommandOptions,
   }),
+  /**
+   * The two mention-run controls. Both answer with the origin comment, and both republish it on
+   * the stream as an `IssueCommentUpserted` — so neither needs an overlay here: the run's new
+   * state arrives the same way its first one did.
+   */
+  cancelCommentAgentRun: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:cancel-comment-agent-run",
+    tag: ISSUES_WS_METHODS.cancelCommentAgentRun,
+    ...writeCommandOptions,
+  }),
+  retryCommentAgentRun: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issues:retry-comment-agent-run",
+    tag: ISSUES_WS_METHODS.retryCommentAgentRun,
+    ...writeCommandOptions,
+  }),
   /** Writes bytes rather than rows, so it appends to no change log and publishes no diff. */
   uploadCommentAttachment: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "environment-data:issues:upload-comment-attachment",
@@ -2143,6 +2158,11 @@ export const useDeleteIssueRelation = () => usePrimaryIssueCommand(issueCommands
 export const useCreateIssueComment = () => usePrimaryIssueCommand(issueCommands.commentCreate);
 export const useUpdateIssueComment = () => usePrimaryIssueCommand(issueCommands.commentUpdate);
 export const useDeleteIssueComment = () => usePrimaryIssueCommand(issueCommands.commentDelete);
+/** Both name the origin comment: a comment carries at most one run, so there is no run id to send. */
+export const useCancelIssueCommentAgentRun = () =>
+  usePrimaryIssueCommand(issueCommands.cancelCommentAgentRun);
+export const useRetryIssueCommentAgentRun = () =>
+  usePrimaryIssueCommand(issueCommands.retryCommentAgentRun);
 export const useUploadIssueCommentAttachment = () =>
   usePrimaryIssueCommand(issueCommands.uploadCommentAttachment);
 export const useCreateIssueView = () => usePrimaryIssueCommand(issueCommands.viewCreate);

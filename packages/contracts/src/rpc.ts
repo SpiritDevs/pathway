@@ -97,6 +97,7 @@ import {
 import {
   ISSUES_WS_METHODS,
   IssueBulkUpdateInput,
+  IssueCommentAgentRunRefInput,
   IssueCommentAttachmentUploadInput,
   IssueCommentAttachmentUploadResult,
   IssueCommentCreateInput,
@@ -1402,6 +1403,18 @@ export const WsIssuesCommentsListRpc = Rpc.make(ISSUES_WS_METHODS.commentsList, 
   error: IssuesRpcError,
 });
 
+export const WsIssuesCancelCommentAgentRunRpc = Rpc.make(ISSUES_WS_METHODS.cancelCommentAgentRun, {
+  payload: IssueCommentAgentRunRefInput,
+  success: IssueCommentResult,
+  error: IssuesRpcError,
+});
+
+export const WsIssuesRetryCommentAgentRunRpc = Rpc.make(ISSUES_WS_METHODS.retryCommentAgentRun, {
+  payload: IssueCommentAgentRunRefInput,
+  success: IssueCommentResult,
+  error: IssuesRpcError,
+});
+
 export const WsIssuesUploadCommentAttachmentRpc = Rpc.make(
   ISSUES_WS_METHODS.uploadCommentAttachment,
   {
@@ -1587,6 +1600,8 @@ export const IssuesRpcs = RpcGroup.make(
   WsIssuesCommentUpdateRpc,
   WsIssuesCommentDeleteRpc,
   WsIssuesCommentsListRpc,
+  WsIssuesCancelCommentAgentRunRpc,
+  WsIssuesRetryCommentAgentRunRpc,
   WsIssuesUploadCommentAttachmentRpc,
   WsIssuesViewCreateRpc,
   WsIssuesViewUpdateRpc,

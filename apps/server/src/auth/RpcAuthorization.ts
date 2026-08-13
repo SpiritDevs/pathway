@@ -178,6 +178,10 @@ export const RPC_REQUIRED_SCOPES = {
   [ISSUES_WS_METHODS.commentCreate]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.commentUpdate]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.commentDelete]: AuthOrchestrationOperateScope,
+  // Stopping and re-running a mentioned agent both spend provider tokens or stop a process that
+  // is spending them, so both are writes.
+  [ISSUES_WS_METHODS.cancelCommentAgentRun]: AuthOrchestrationOperateScope,
+  [ISSUES_WS_METHODS.retryCommentAgentRun]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.uploadCommentAttachment]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.viewCreate]: AuthOrchestrationOperateScope,
   [ISSUES_WS_METHODS.viewUpdate]: AuthOrchestrationOperateScope,

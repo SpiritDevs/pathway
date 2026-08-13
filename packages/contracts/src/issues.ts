@@ -20,7 +20,7 @@ import {
 } from "./baseSchemas.ts";
 import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
-import { ProviderDriverKind } from "./providerInstance.ts";
+import { isProviderDriverKind, ProviderDriverKind } from "./providerInstance.ts";
 
 export const ISSUES_WS_METHODS = {
   getSnapshot: "issues.getSnapshot",
@@ -60,6 +60,10 @@ export const ISSUES_WS_METHODS = {
   commentsList: "issues.commentsList",
   /** Writes one image into the issue attachment namespace and answers with its id. */
   uploadCommentAttachment: "issues.uploadCommentAttachment",
+  /** Stops a mention-dispatched run. The run lands `canceled`; a cancel is not a failure. */
+  cancelCommentAgentRun: "issues.cancelCommentAgentRun",
+  /** Re-dispatches a `failed` or `canceled` mention run with the configuration it was pinned to. */
+  retryCommentAgentRun: "issues.retryCommentAgentRun",
   viewCreate: "issues.viewCreate",
   viewUpdate: "issues.viewUpdate",
   viewDelete: "issues.viewDelete",
@@ -112,6 +116,8 @@ export const IssueRelationId = makeIssueEntityId("IssueRelationId");
 export type IssueRelationId = typeof IssueRelationId.Type;
 export const IssueCommentId = makeIssueEntityId("IssueCommentId");
 export type IssueCommentId = typeof IssueCommentId.Type;
+export const IssueCommentAgentRunId = makeIssueEntityId("IssueCommentAgentRunId");
+export type IssueCommentAgentRunId = typeof IssueCommentAgentRunId.Type;
 export const IssueViewId = makeIssueEntityId("IssueViewId");
 export type IssueViewId = typeof IssueViewId.Type;
 export const IssueEnrichmentRunId = makeIssueEntityId("IssueEnrichmentRunId");
@@ -138,6 +144,13 @@ export function isPlaceholderIssueTitle(title: string): boolean {
 export const ISSUE_COMMENT_MAX_CHARS = 100_000;
 /** Mirrors the composer's own limit: a comment is written in the same editor a turn is. */
 export const ISSUE_COMMENT_MAX_ATTACHMENTS = 8;
+/**
+ * Same ceiling as an enrichment transcript, named separately so tuning one never silently moves
+ * the other: a mention run's log is the same kind of thing but rides a comment, not a run table.
+ */
+export const ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS = 2_000_000;
+/** Transcript growth republishes the comment at most this often — a model outruns a thread. */
+export const ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_PUBLISH_INTERVAL_MS = 250;
 /**
  * How deep sub-issues nest, counted in ancestors: a root issue sits at depth 0, so a parent three
  * levels up is the last one accepted. Deeper than this stops reading as a tree in a list row.
@@ -216,6 +229,88 @@ export type IssueKey = typeof IssueKey.Type;
 
 export const IssueKeyPrefix = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Z][A-Z0-9]{0,9}$/));
 export type IssueKeyPrefix = typeof IssueKeyPrefix.Type;
+
+/**
+ * A token that looks like an issue key inside prose. Deliberately looser than reality — "UTF-8"
+ * matches too — because a candidate only becomes a mention once it resolves to a real issue, so
+ * the tracker, not the regex, is the filter for false positives. The boundaries insist the token
+ * stands alone: an adjacent letter, digit, `_`, `-`, or `/` disqualifies it (`ISS-31-fix`,
+ * `docs/ISS-31`), and a trailing `.` only counts as sentence punctuation when nothing word-like
+ * follows it, so `ISS-31.md` stays plain while "Fixed ISS-31." still mentions ISS-31.
+ */
+const ISSUE_KEY_MENTION_SOURCE = String.raw`(?<![A-Za-z0-9_/-])[A-Z][A-Z0-9]*-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])`;
+
+/** One candidate key and where it starts, so a renderer can splice links into the original text. */
+export interface IssueKeyMention {
+  readonly key: string;
+  readonly index: number;
+}
+
+/**
+ * Every issue-key-shaped token in one piece of plain text, in order. Returns candidates, not
+ * facts: callers must resolve each key against the tracker before treating it as a mention.
+ */
+export function findIssueKeyMentions(text: string): ReadonlyArray<IssueKeyMention> {
+  const mentions: Array<IssueKeyMention> = [];
+  for (const match of text.matchAll(new RegExp(ISSUE_KEY_MENTION_SOURCE, "g"))) {
+    mentions.push({ key: match[0], index: match.index });
+  }
+  return mentions;
+}
+
+const FENCE_DELIMITER = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+/** Inline spans never span lines, so this is applied per line: a stray backtick stays prose. */
+const INLINE_CODE_SPAN = /(`+)[^\n]*?\1/g;
+/** A complete `[text](dest)` construct: the renderer shows the text as an anchor, not as prose. */
+const MARKDOWN_LINK = /\[[^\]\n]*\]\([^)\n]*\)/g;
+const BARE_URL = /https?:\/\/\S+/g;
+const INDENTED_CODE_LINE = /^(?: {4}|\t)/;
+
+/**
+ * The distinct candidate keys in a markdown message, in first-appearance order.
+ *
+ * Code is not prose and a link is not prose: fenced blocks, indented blocks, inline spans, bare
+ * URLs, and `[text](dest)` constructs are dropped before scanning. The rule this keeps is one
+ * direction only — it never links what the renderer shows as code or as part of a link — rather
+ * than an exact mirror of the renderer's block grammar, so a key quoted in a stack trace can
+ * never create a relation the rendered message does not show.
+ */
+export function extractIssueKeyMentions(markdown: string): ReadonlyArray<string> {
+  const prose: Array<string> = [];
+  // CommonMark closes a fence only on the same character at the same or greater run length, so a
+  // ```` block quoting ``` stays one block, and an unterminated fence swallows the rest.
+  let fence: { readonly char: string; readonly length: number } | null = null;
+  // Indented code cannot interrupt a paragraph. Approximating "the previous retained line was
+  // blank" is what keeps a pasted log out while a wrapped list item stays in; the rare miss is a
+  // deeply nested list whose continuation reaches four spaces, which stays prose here.
+  let afterBlank = true;
+  for (const line of markdown.split("\n")) {
+    const delimiter = FENCE_DELIMITER.exec(line);
+    const run = delimiter?.[1] ?? "";
+    const info = delimiter?.[2] ?? "";
+    if (fence !== null) {
+      if (run.startsWith(fence.char) && run.length >= fence.length && info.trim() === "") {
+        fence = null;
+        afterBlank = true;
+      }
+      continue;
+    }
+    if (run !== "") {
+      fence = { char: run.slice(0, 1), length: run.length };
+      continue;
+    }
+    if (afterBlank && INDENTED_CODE_LINE.test(line)) continue;
+    prose.push(
+      line.replace(INLINE_CODE_SPAN, " ").replace(MARKDOWN_LINK, " ").replace(BARE_URL, " "),
+    );
+    afterBlank = line.trim() === "";
+  }
+  const keys: Array<string> = [];
+  for (const mention of findIssueKeyMentions(prose.join("\n"))) {
+    if (!keys.includes(mention.key)) keys.push(mention.key);
+  }
+  return keys;
+}
 
 /**
  * A due date is a calendar day, not an instant: "due Friday" means the same thing in every time
@@ -579,6 +674,63 @@ export const IssueRelationsForIssue = Schema.Struct({
 });
 export type IssueRelationsForIssue = typeof IssueRelationsForIssue.Type;
 
+/**
+ * Who a comment's mention pill names, pinned at submit so a later settings change never relabels
+ * a finished run. Agents only for now; a human-user variant joins this union later without
+ * migrating comments, because the mention is data riding the comment rather than a body rewrite.
+ */
+export const IssueCommentAgentMention = Schema.Struct({
+  kind: Schema.Literal("agent"),
+  /** Resolved by the server from the selection's instance — a client never asserts attribution. */
+  provider: ProviderDriverKind,
+  modelSelection: ModelSelection,
+});
+export type IssueCommentAgentMention = typeof IssueCommentAgentMention.Type;
+export const IssueCommentMention = Schema.Union([IssueCommentAgentMention]);
+export type IssueCommentMention = typeof IssueCommentMention.Type;
+
+/**
+ * `queued` → `running` → one terminal state. Unlike enrichment there *is* a `canceled`: the
+ * thread renders "you stopped this" apart from "this broke", and retry is offered from both.
+ * Terminal states are final — retry re-dispatches the same comment, it never resumes a run.
+ */
+export const IssueCommentAgentRunState = Schema.Literals([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "canceled",
+]);
+export type IssueCommentAgentRunState = typeof IssueCommentAgentRunState.Type;
+
+/** Coarse progress the thread prints while `running`. Null until the engine has said anything. */
+export const IssueCommentAgentRunPhase = Schema.Literals(["thinking", "researching", "replying"]);
+export type IssueCommentAgentRunPhase = typeof IssueCommentAgentRunPhase.Type;
+
+/**
+ * One mention-dispatched agent run, riding its origin comment as an optional field rather than
+ * owning a stream event: `IssuesStreamEvent` is a closed union older remote clients decode
+ * exhaustively, so a new tag would hard-break them while a new optional field passes them by.
+ * Every state change republishes the comment through `IssueCommentUpserted`.
+ */
+export const IssueCommentAgentRun = Schema.Struct({
+  id: IssueCommentAgentRunId,
+  state: IssueCommentAgentRunState,
+  mention: IssueCommentMention,
+  phase: Schema.NullOr(IssueCommentAgentRunPhase),
+  /** The process output so far, whole on every republish, same shape as an enrichment log. */
+  transcript: Schema.String.check(Schema.isMaxLength(ISSUE_COMMENT_AGENT_RUN_TRANSCRIPT_MAX_CHARS)),
+  /** Only ever set on `failed`: the refusal or the crash. A cancel is not an error. */
+  error: Schema.NullOr(Schema.String),
+  /** The attributed reply, once `completed`. An ordinary comment in the same thread. */
+  replyCommentId: Schema.NullOr(IssueCommentId),
+  createdAt: IsoDateTime,
+  /** Null while queued. `finishedAt - startedAt` is the duration the thread prints. */
+  startedAt: Schema.NullOr(IsoDateTime),
+  finishedAt: Schema.NullOr(IsoDateTime),
+});
+export type IssueCommentAgentRun = typeof IssueCommentAgentRun.Type;
+
 export const IssueComment = Schema.Struct({
   id: IssueCommentId,
   issueId: IssueId,
@@ -588,11 +740,27 @@ export const IssueComment = Schema.Struct({
   body: Schema.String,
   /** The existing chat attachment store, with an issue segment in the id namespace. */
   attachmentIds: Schema.Array(ChatAttachmentId),
+  /** The mention-dispatched run this comment started, absent on every ordinary comment. */
+  agentRun: Schema.optionalKey(Schema.NullOr(IssueCommentAgentRun)),
   createdAt: IsoDateTime,
   /** Null until edited; an edit does not move `createdAt`, so the feed keeps its order. */
   editedAt: Schema.NullOr(IsoDateTime),
 });
 export type IssueComment = typeof IssueComment.Type;
+
+/**
+ * The persisted mention syntax: a plain markdown link, `[@Claude](mention:agent:claudeAgent)`,
+ * so a comment body stays ordinary markdown that any renderer degrades gracefully on. The web
+ * renderer recognises the href scheme and draws a pill; nothing else needs to know.
+ */
+export const ISSUE_AGENT_MENTION_HREF_PREFIX = "mention:agent:";
+export const issueAgentMentionHref = (provider: ProviderDriverKind): string =>
+  `${ISSUE_AGENT_MENTION_HREF_PREFIX}${provider}`;
+export const parseIssueAgentMentionHref = (href: string): ProviderDriverKind | null => {
+  if (!href.startsWith(ISSUE_AGENT_MENTION_HREF_PREFIX)) return null;
+  const slug = href.slice(ISSUE_AGENT_MENTION_HREF_PREFIX.length);
+  return isProviderDriverKind(slug) ? slug : null;
+};
 
 export const IssueEventKind = Schema.Literals([
   "created",
@@ -713,10 +881,12 @@ export type IssueEnrichmentRun = typeof IssueEnrichmentRun.Type;
 
 /**
  * Where a link came from. `start-work` is the button on an agent-assigned issue; `manual` is a
- * thread somebody attached afterwards. Assignment records intent and this records the thread that
- * followed — neither one spawns anything.
+ * thread somebody attached afterwards; `mention` is a validated issue key noticed in the thread's
+ * conversation. Assignment records intent and this records the thread that followed — neither one
+ * spawns anything, and a mention never outranks the other two: one row per pair keeps the
+ * strongest origin it has seen.
  */
-export const IssueThreadLinkOrigin = Schema.Literals(["start-work", "manual"]);
+export const IssueThreadLinkOrigin = Schema.Literals(["start-work", "manual", "mention"]);
 export type IssueThreadLinkOrigin = typeof IssueThreadLinkOrigin.Type;
 
 /**
@@ -1333,12 +1503,32 @@ const IssueCommentAttachmentIdsInput = Schema.Array(ChatAttachmentId).check(
   Schema.isMaxLength(ISSUE_COMMENT_MAX_ATTACHMENTS),
 );
 
+/**
+ * The mention the composer is submitting. Only the selection travels: the server resolves the
+ * instance to its driver kind for attribution, because a client-asserted provider could disagree
+ * with the instance actually run (the wart `recordInvestigation` has and this path must not).
+ */
+export const IssueCommentAgentMentionInput = Schema.Struct({
+  modelSelection: ModelSelection,
+});
+export type IssueCommentAgentMentionInput = typeof IssueCommentAgentMentionInput.Type;
+
 export const IssueCommentCreateInput = Schema.Struct({
   issueId: IssueId,
   body: IssueCommentBodyInput,
   attachmentIds: Schema.optional(IssueCommentAttachmentIdsInput),
+  /**
+   * Present when the body carries a mention pill: writes the comment and its `queued` run in one
+   * transaction, then dispatches exactly one agent run. Absent, the comment is inert — an edit
+   * never re-dispatches, and comments written by agents or MCP never carry this.
+   */
+  agentMention: Schema.optional(IssueCommentAgentMentionInput),
 });
 export type IssueCommentCreateInput = typeof IssueCommentCreateInput.Type;
+
+/** Cancel and retry name the origin comment: a comment carries at most one run. */
+export const IssueCommentAgentRunRefInput = Schema.Struct({ commentId: IssueCommentId });
+export type IssueCommentAgentRunRefInput = typeof IssueCommentAgentRunRefInput.Type;
 
 export const IssueCommentPatch = Schema.Struct({
   body: Schema.optional(IssueCommentBodyInput),
@@ -1450,7 +1640,11 @@ export const IssueEnrichmentRunsResult = Schema.Struct({
 });
 export type IssueEnrichmentRunsResult = typeof IssueEnrichmentRunsResult.Type;
 
-/** Linking the same thread twice restates the origin rather than adding a row. */
+/**
+ * Linking the same thread twice restates the origin rather than adding a row, and restating never
+ * weakens it: `start-work` outranks `manual` outranks `mention`, so an automatic mention cannot
+ * demote the link that says where a thread came from.
+ */
 export const IssueThreadLinkInput = Schema.Struct({
   issueId: IssueId,
   threadId: ThreadId,

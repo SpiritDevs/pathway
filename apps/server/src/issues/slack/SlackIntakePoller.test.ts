@@ -31,6 +31,7 @@ import { SlackChannelWatchRepositoryLive } from "../../persistence/Layers/SlackC
 import { SlackIntakeLedgerRepositoryLive } from "../../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { layerStub as IssueCommentAgentEngineStub } from "../IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine } from "../IssueEnrichmentEngine.ts";
 import { IssueTrackerService, layer as issueTrackerLayer } from "../IssueTrackerService.ts";
 import {
@@ -206,6 +207,7 @@ const makeTestLayer = (client: SlackApiClientShape) => {
   );
 
   const tracker = issueTrackerLayer.pipe(
+    Layer.provide(IssueCommentAgentEngineStub),
     Layer.provide(
       Layer.succeed(IssueEnrichmentEngine, {
         resolveModelSelection: Effect.succeed({

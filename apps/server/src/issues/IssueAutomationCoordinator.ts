@@ -11,6 +11,7 @@ import {
   type IssueAutomationSettings,
   type IssuesStreamEvent,
   type IssueStatusId,
+  type IssueThreadLink,
   MessageId,
   type ModelSelection,
   type SlackChannelWatch,
@@ -53,7 +54,12 @@ const modelLabel = (selection: ModelSelection) => `${selection.instanceId} / ${s
 const withLoggedFailure = <E, R>(label: string, effect: Effect.Effect<void, E, R>) =>
   effect.pipe(Effect.catchCause((cause) => Effect.logWarning(label, { cause })));
 
-export const make = Effect.gen(function* () {
+/**
+ * Everything the coordinator is except the loop that feeds it: the state, the boot seeding, and
+ * the handler for one tracker event. {@link make} forks the loop over this; a test drives the
+ * returned handler directly, so an assertion about what an event caused never has to race a fiber.
+ */
+export const makeHandler = Effect.gen(function* () {
   const tracker = yield* IssueTrackerService;
   const settingsService = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
@@ -70,6 +76,28 @@ export const make = Effect.gen(function* () {
   const watches = yield* Ref.make(new Map<string, SlackChannelWatch>());
   const routing = yield* Ref.make(new Set<string>());
   const auditing = yield* Ref.make(new Set<string>());
+
+  /**
+   * The start-work link this coordinator has already acted on, per issue. The tracker republishes
+   * an issue's whole thread list whenever any link on it changes, so reacting to a list that
+   * *contains* a start-work link reapplies the work status and the assignee every time something
+   * else touches the issue — a chat message naming the key is enough to drag a card the user moved
+   * to In Review back to In Progress. Seeded from what is stored so a restart's replay is not an
+   * appearance either.
+   */
+  const startWorkLinks = yield* Ref.make(new Map<string, string>());
+  const startWorkMark = (link: IssueThreadLink) => `${link.threadId}\u0000${link.createdAt}`;
+  yield* threadLinks.listAll().pipe(
+    Effect.flatMap((links) => {
+      // `listAll` is ordered by issue then creation, so the last start-work row per issue is the
+      // same one the handler's `findLast` picks off a published list.
+      const seeded = new Map<string, string>();
+      for (const link of links) {
+        if (link.origin === "start-work") seeded.set(link.issueId, startWorkMark(link));
+      }
+      return Ref.set(startWorkLinks, seeded);
+    }),
+  );
 
   const currentSettings = settingsService.getSettings.pipe(
     Effect.map((settings) => settings.issueAutomation),
@@ -491,7 +519,20 @@ export const make = Effect.gen(function* () {
       }
       case "IssueThreadLinksChanged": {
         const workLink = event.links.findLast((link) => link.origin === "start-work");
-        if (workLink === undefined) return;
+        // Work starts when a start-work link *appears*, not while one exists. Anything else here
+        // re-runs the status move and the assignment over a card that has since moved on.
+        const mark = workLink === undefined ? null : startWorkMark(workLink);
+        const appeared = yield* Ref.modify(startWorkLinks, (current) => {
+          if (mark === null) {
+            if (!current.has(event.issueId)) return [false, current] as const;
+            const next = new Map(current);
+            next.delete(event.issueId);
+            return [false, next] as const;
+          }
+          if (current.get(event.issueId) === mark) return [false, current] as const;
+          return [true, new Map(current).set(event.issueId, mark)] as const;
+        });
+        if (!appeared || workLink === undefined) return;
         const issue = (yield* Ref.get(issues)).get(event.issueId);
         if (issue === undefined) return;
         const automation = yield* currentSettings;
@@ -527,6 +568,12 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  return handleIssueEvent;
+});
+
+export const make = Effect.gen(function* () {
+  const tracker = yield* IssueTrackerService;
+  const handleIssueEvent = yield* makeHandler;
   const issueLoop = Stream.runForEach(tracker.stream, (event) =>
     withLoggedFailure("issue.automation.event-failed", handleIssueEvent(event)),
   );

@@ -18,6 +18,7 @@ import type {
   Issue,
   IssueAssignee,
   IssueComment,
+  IssueCommentAgentMentionInput,
   IssueCommentId,
   IssueCycleId,
   IssueDate,
@@ -87,6 +88,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerProvidersAtom } from "~/state/server";
 import {
   issueRelationDisplays,
+  useCancelIssueCommentAgentRun,
   useCancelIssueEnrichment,
   useCreateIssueComment,
   useCreateIssueLabel,
@@ -112,6 +114,7 @@ import {
   useIssuesStoreStatus,
   useReorderIssueTodos,
   useRestoreIssue,
+  useRetryIssueCommentAgentRun,
   useStartIssueEnrichment,
   useTriageAccept,
   useUnlinkIssueThread,
@@ -464,6 +467,8 @@ function IssueDetailBody({
   const createComment = useCreateIssueComment();
   const updateComment = useUpdateIssueComment();
   const deleteComment = useDeleteIssueComment();
+  const cancelCommentAgentRun = useCancelIssueCommentAgentRun();
+  const retryCommentAgentRun = useRetryIssueCommentAgentRun();
   const startEnrichment = useStartIssueEnrichment();
   const cancelEnrichment = useCancelIssueEnrichment();
   const acceptTriage = useTriageAccept();
@@ -703,12 +708,18 @@ function IssueDetailBody({
           : startWorkBranches.error;
 
   const startWorkProvider = issue.assignee?.kind === "agent" ? issue.assignee.provider : null;
+  /** Every configured instance. Start work narrows this to the assignee; a mention does not. */
+  const providerInstanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+      ),
+    [serverProviders, settings],
+  );
   const startWorkInstanceEntries = useMemo(() => {
     if (startWorkProvider === null) return [];
-    return sortProviderInstanceEntries(
-      applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
-    ).filter((entry) => entry.driverKind === startWorkProvider);
-  }, [serverProviders, settings, startWorkProvider]);
+    return providerInstanceEntries.filter((entry) => entry.driverKind === startWorkProvider);
+  }, [providerInstanceEntries, startWorkProvider]);
   const startWorkModelOptionsByInstance = useMemo(
     () => getCustomModelOptionsByInstance(settings, serverProviders),
     [serverProviders, settings],
@@ -769,15 +780,39 @@ function IssueDetailBody({
   }, []);
 
   const handleCreateComment = useCallback(
-    (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) =>
+    (
+      body: string,
+      attachmentIds: ReadonlyArray<ChatAttachmentId>,
+      agentMention?: IssueCommentAgentMentionInput,
+    ) =>
       runWrite("Failed to post the comment", () =>
         createComment({
           issueId: issue.id,
           body,
           ...(attachmentIds.length === 0 ? {} : { attachmentIds }),
+          ...(agentMention === undefined ? {} : { agentMention }),
         }),
       ),
     [createComment, issue.id, runWrite],
+  );
+
+  /** No overlay on either: the server republishes the comment and the run rides it back. */
+  const handleCancelCommentAgentRun = useCallback(
+    (commentId: IssueCommentId) => {
+      void (async () => {
+        reportFailure("Failed to cancel the agent run", await cancelCommentAgentRun({ commentId }));
+      })();
+    },
+    [cancelCommentAgentRun],
+  );
+
+  const handleRetryCommentAgentRun = useCallback(
+    (commentId: IssueCommentId) => {
+      void (async () => {
+        reportFailure("Failed to retry the agent run", await retryCommentAgentRun({ commentId }));
+      })();
+    },
+    [retryCommentAgentRun],
   );
 
   const handleCancelRun = useCallback(
@@ -1343,9 +1378,13 @@ function IssueDetailBody({
                 <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
                     comments={comments}
+                    instanceEntries={providerInstanceEntries}
                     isPending={detailPending}
                     issueId={issue.id}
+                    modelOptionsByInstance={startWorkModelOptionsByInstance}
+                    onCancelAgentRun={handleCancelCommentAgentRun}
                     onCreate={handleCreateComment}
+                    onRetryAgentRun={handleRetryCommentAgentRun}
                     onDelete={(commentId: IssueCommentId) =>
                       runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
                     }

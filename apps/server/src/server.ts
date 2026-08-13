@@ -48,6 +48,7 @@ import { IssueViewRepositoryLive } from "./persistence/Layers/IssueViews.ts";
 import { ProjectionProjectRepositoryLive } from "./persistence/Layers/ProjectionProjects.ts";
 import { SlackChannelWatchRepositoryLive } from "./persistence/Layers/SlackChannelWatches.ts";
 import { SlackIntakeLedgerRepositoryLive } from "./persistence/Layers/SlackIntakeLedger.ts";
+import * as IssueCommentAgentEngineLive from "./issues/IssueCommentAgentEngineLive.ts";
 import * as IssueEnrichmentEngineLive from "./issues/IssueEnrichmentEngineLive.ts";
 import * as SlackApiClient from "./issues/slack/SlackApiClient.ts";
 import * as SlackIntakeEngineLive from "./issues/slack/SlackIntakeEngineLive.ts";
@@ -55,6 +56,7 @@ import * as SlackIntakePoller from "./issues/slack/SlackIntakePoller.ts";
 import * as SlackIntakeSignal from "./issues/slack/SlackIntakeSignal.ts";
 import * as IssueTrackerService from "./issues/IssueTrackerService.ts";
 import * as IssueAutomationCoordinator from "./issues/IssueAutomationCoordinator.ts";
+import * as IssueMentionLinker from "./issues/IssueMentionLinker.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
@@ -301,6 +303,14 @@ const IssueEnrichmentEngineLayerLive = IssueEnrichmentEngineLive.layer.pipe(
   Layer.provide(ServerSettingsLayerLive),
 );
 
+// The process half of a mentioned agent, wired the same way and for the same reason: it reads the
+// repositories the tracker writes and reports back through the recorder the tracker hands it,
+// never through the tracker's tag.
+const IssueCommentAgentEngineLayerLive = IssueCommentAgentEngineLive.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(TextGeneration.layer),
+);
+
 // Intake's transport. The HTTP client and the poke latch are merged out rather than swallowed:
 // the poller below needs both, and building it a second client would give it a second rate-limit
 // queue, which is the one thing a rate-limit queue must not have.
@@ -312,6 +322,7 @@ const SlackIntakeEngineLayerLive = SlackIntakeEngineLive.layer.pipe(
 const IssueTrackerLayerLive = IssueTrackerService.layer.pipe(
   Layer.provide(IssueRepositoriesLive),
   Layer.provide(IssueEnrichmentEngineLayerLive),
+  Layer.provide(IssueCommentAgentEngineLayerLive),
   Layer.provideMerge(SlackIntakeEngineLayerLive),
   Layer.provide(ServerSecretStore.layer),
   Layer.provideMerge(PersistenceLayerLive),
@@ -460,8 +471,14 @@ const IssueAutomationCoordinatorLayerLive = IssueAutomationCoordinator.layer.pip
   Layer.provide(RuntimeCoreDependenciesBaseLive),
 );
 
+const IssueMentionLinkerLayerLive = IssueMentionLinker.layer.pipe(
+  Layer.provide(IssueRepositoriesLive),
+  Layer.provide(RuntimeCoreDependenciesBaseLive),
+);
+
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   Layer.provideMerge(IssueAutomationCoordinatorLayerLive),
+  Layer.provideMerge(IssueMentionLinkerLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // V2 drivers and the orchestration runtime. Provide resource attribution so
   // the rewritten telemetry pipeline can account for logical NDJSON writes.

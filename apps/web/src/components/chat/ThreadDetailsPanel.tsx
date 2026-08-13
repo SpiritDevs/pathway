@@ -223,10 +223,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </div>
         </section>
 
-        {!props.draftId ? (
-          <ThreadIssuePanel threadId={props.threadId} enabled={props.resourcesEnabled} />
-        ) : null}
-
         {props.activeProjectScripts ? (
           <section
             aria-labelledby="thread-details-actions-heading"
@@ -275,6 +271,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           enabled={props.resourcesEnabled}
           displayMode="panel"
         />
+
+        {!props.draftId ? (
+          <ThreadIssuePanel threadId={props.threadId} enabled={props.resourcesEnabled} />
+        ) : null}
 
         {props.gitCwd ? (
           <section

@@ -37,6 +37,17 @@ export interface IssueCommentRepositoryShape {
   ) => Effect.Effect<ReadonlyArray<IssueComment>, IssueTrackerRepositoryError>;
 
   /**
+   * Every comment that carries a mention-dispatched agent run, across every issue.
+   *
+   * For the tracker's startup sweep: a run is a live process, so anything still `queued` or
+   * `running` when this server stopped is dead and has to be failed before anybody subscribes.
+   */
+  readonly listWithAgentRuns: () => Effect.Effect<
+    ReadonlyArray<IssueComment>,
+    IssueTrackerRepositoryError
+  >;
+
+  /**
    * Read one comment by id.
    */
   readonly getById: (

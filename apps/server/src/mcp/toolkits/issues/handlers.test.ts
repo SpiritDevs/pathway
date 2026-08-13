@@ -21,6 +21,7 @@ import * as Stream from "effect/Stream";
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import { resolveAttachmentPathById } from "../../../attachmentStore.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as IssueCommentAgentEngine from "../../../issues/IssueCommentAgentEngine.ts";
 import * as IssueEnrichmentEngine from "../../../issues/IssueEnrichmentEngine.ts";
 import * as SlackIntakeEngine from "../../../issues/slack/SlackIntakeEngine.ts";
 import {
@@ -82,6 +83,7 @@ const invocation: McpInvocationContext.McpInvocationScope = {
  */
 const TestLayer = Layer.mergeAll(
   issueTrackerLayer.pipe(
+    Layer.provide(IssueCommentAgentEngine.layerStub),
     Layer.provide(IssueEnrichmentEngine.layerStub),
     Layer.provide(SlackIntakeEngine.layerStub),
   ),
