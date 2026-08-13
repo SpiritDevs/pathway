@@ -12,6 +12,7 @@ import {
   emailProjectCountLabel,
   emailVolumeAxis,
   emailVolumeTotal,
+  emailWindowAdvanceDelayMs,
   EMAIL_ANALYTICS_RANGES,
   fillEmailVolumeBuckets,
   formatEmailBucketLabel,
@@ -85,6 +86,30 @@ describe("deriveEmailAnalyticsWindow", () => {
     const exact = deriveEmailAnalyticsWindow("7d", new Date("2026-08-13T00:00:00.000Z"));
     expect(exact.to).toBe("2026-08-14T00:00:00.000Z");
     expect(exact.bucketStarts.at(-1)).toBe("2026-08-13T00:00:00.000Z");
+  });
+});
+
+describe("emailWindowAdvanceDelayMs", () => {
+  it("counts down to the window's exclusive `to`", () => {
+    // NOON is 12:34:56.789; the hour window ends at 13:00, the day window at the next UTC midnight.
+    expect(emailWindowAdvanceDelayMs(deriveEmailAnalyticsWindow("24h", NOON), NOON)).toBe(
+      1_503_211,
+    );
+    expect(emailWindowAdvanceDelayMs(deriveEmailAnalyticsWindow("7d", NOON), NOON)).toBe(
+      41_103_211,
+    );
+  });
+
+  it("asks for an immediate advance once the boundary has passed", () => {
+    const window = deriveEmailAnalyticsWindow("24h", NOON);
+    expect(emailWindowAdvanceDelayMs(window, new Date("2026-08-13T13:00:00.000Z"))).toBe(0);
+    expect(emailWindowAdvanceDelayMs(window, new Date("2026-08-14T05:00:00.000Z"))).toBe(0);
+  });
+
+  it("does not schedule off an unparsable instant", () => {
+    expect(
+      emailWindowAdvanceDelayMs(deriveEmailAnalyticsWindow("24h", NOON), new Date(Number.NaN)),
+    ).toBe(0);
   });
 });
 

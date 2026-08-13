@@ -112,6 +112,20 @@ export function deriveEmailAnalyticsWindow(
   };
 }
 
+/**
+ * How long the window derived as of `now` stays truthful: the ms until its exclusive `to` passes.
+ *
+ * The panel arms one timeout on this — a boundary alarm, not a ticking clock — so a view left open
+ * across an hour or UTC-day boundary re-derives its window instead of requesting the original `to`
+ * forever and silently excluding everything captured after it.
+ */
+export function emailWindowAdvanceDelayMs(window: EmailAnalyticsWindow, now: Date): number {
+  const nowMs = now.getTime();
+  const toMs = Date.parse(window.to);
+  if (Number.isNaN(nowMs) || Number.isNaN(toMs)) return 0;
+  return Math.max(0, toMs - nowMs);
+}
+
 /** The request for one scope over one window. Scope comes from the URL; the window from the range. */
 export function emailAnalyticsInput(
   scope: EmailInboxScope,

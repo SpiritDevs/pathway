@@ -28,7 +28,7 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import { BarChart3Icon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEmailAnalytics } from "~/state/email";
@@ -46,6 +46,7 @@ import {
   deriveEmailAnalyticsWindow,
   emailAnalyticsInput,
   emailAxisLabelStride,
+  emailWindowAdvanceDelayMs,
   emailBarPercent,
   emailPeakBucketIndex,
   emailProjectCountLabel,
@@ -79,14 +80,25 @@ export function EmailAnalyticsPanel({
   projectTitles: ReadonlyMap<ProjectId, string>;
 }) {
   const [rangeId, setRangeId] = useState<EmailAnalyticsRangeId>(DEFAULT_EMAIL_ANALYTICS_RANGE.id);
-  // Read once rather than tracked, the same trade the message list makes for its `now`: a window
-  // that slid under the reader would repaint the chart on a timer for no new information, and a
-  // route change or a reconnect re-reads it anyway.
-  const openedAt = useMemo(() => new Date(), []);
+  // Anchored, not ticking: a window that slid under the reader would repaint the chart on a timer
+  // for no new information. But a mount-time anchor alone goes stale — a panel left open across an
+  // hour or UTC-day boundary keeps requesting its original exclusive `to`, and every
+  // stream-triggered refresh after the boundary silently excludes the very mail that caused it.
+  const [windowAnchor, setWindowAnchor] = useState(() => new Date());
   const analyticsWindow = useMemo(
-    () => deriveEmailAnalyticsWindow(rangeId, openedAt),
-    [openedAt, rangeId],
+    () => deriveEmailAnalyticsWindow(rangeId, windowAnchor),
+    [rangeId, windowAnchor],
   );
+  // One timeout per bucket boundary — it fires when `to` passes, advancing the anchor so the next
+  // window can contain what arrives after it. Re-armed off the new window it causes; an early
+  // firing just re-derives the same window and re-arms for the remainder.
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setWindowAnchor(new Date()),
+      emailWindowAdvanceDelayMs(analyticsWindow, new Date()),
+    );
+    return () => clearTimeout(timer);
+  }, [analyticsWindow]);
   const { analytics, isPending, error, refresh } = useEmailAnalytics(
     emailAnalyticsInput(scope, analyticsWindow),
   );
