@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
 import {
+  IssueDate,
   IssueStatusId,
   ProjectId,
   ProviderDriverKind,
@@ -357,11 +358,17 @@ describe("SlackIntakePoller", () => {
         const tracker = yield* IssueTrackerService;
         yield* seedProject(PROJECT, "QuoteCloud");
         yield* seedProject(VE_PROJECT, "VE");
+        const { cycle } = yield* tracker.cycleCreate({
+          name: "Release 1",
+          startDate: IssueDate.make("2099-01-01"),
+          endDate: IssueDate.make("2099-01-14"),
+        });
         yield* storeToken("xoxb-1");
         yield* tracker.slackWatchCreate({
           channelId: "C1",
           channelName: "intake",
           projectId: PROJECT,
+          cycleId: cycle.id,
           autoInvestigate: true,
           trigger: {
             reactionRoutes: [
@@ -390,6 +397,10 @@ describe("SlackIntakePoller", () => {
         assert.strictEqual(byTitle.get("QuoteCloud bug")?.projectId, PROJECT);
         assert.strictEqual(byTitle.get("VE bug")?.projectId, VE_PROJECT);
         assert.strictEqual(byTitle.get("Unrouted bug")?.projectId, PROJECT);
+        assert.deepStrictEqual(
+          [...byTitle.values()].map((issue) => issue.cycleId),
+          [cycle.id, cycle.id, cycle.id],
+        );
 
         const quoteCloud = byTitle.get("QuoteCloud bug");
         const ve = byTitle.get("VE bug");

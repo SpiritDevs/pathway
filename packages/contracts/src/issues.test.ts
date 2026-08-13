@@ -163,6 +163,7 @@ const SLACK_WATCH_JSON = {
   channelId: "C0123ABCD",
   channelName: "triage",
   projectId: "project-1",
+  cycleId: "cycle-1",
   autoInvestigate: true,
   autoAssign: true,
   trigger: {
@@ -902,8 +903,11 @@ describe("Slack intake", () => {
       watch,
     );
     expect(watch.autoAssign).toBe(true);
+    expect(watch.cycleId).toBe("cycle-1");
     const { autoAssign: _, ...legacyWatch } = SLACK_WATCH_JSON;
     expect(decodeWatch(legacyWatch).autoAssign).toBeUndefined();
+    const { cycleId: __, ...watchWithoutCycle } = SLACK_WATCH_JSON;
+    expect(decodeWatch(watchWithoutCycle).cycleId).toBeUndefined();
   });
 
   // A channel can file on a reaction *and* on a mention, and all triggers off is a paused watch

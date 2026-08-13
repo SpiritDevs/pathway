@@ -22,6 +22,7 @@ directly, not derived from orchestration events. Migrations 041–046 and 056 ow
 | 046       | `slack_channel_watches`, `slack_cursors`, `slack_outbound_posts`, `slack_processed_messages`                  |
 | 056       | ordered Slack reaction routes and the channel-level automatic-investigation default                           |
 | 057       | pinned work-model choices, channel auto-assignment, and durable multi-model audit claims                      |
+| 059       | the release-cycle default for watched Slack channels                                                          |
 
 [`IssueTrackerService.ts`][tracker] is the single writer. It is a write model _and_ the change feed:
 every mutation writes an `issue_events` row and publishes a diff on the same path, which is what

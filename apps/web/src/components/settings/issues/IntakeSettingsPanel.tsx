@@ -22,7 +22,7 @@ import type {
 } from "@t3tools/contracts";
 import { SLACK_MAX_REACTION_ROUTES } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { FolderIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
+import { CalendarRangeIcon, FolderIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -31,6 +31,7 @@ import { useProjects } from "~/state/entities";
 import {
   useCreateSlackWatch,
   useDeleteSlackWatch,
+  useIssueCycles,
   useIssuesStoreStatus,
   useSlackListChannels,
   useSlackSetToken,
@@ -40,6 +41,7 @@ import {
 } from "~/state/issues";
 import { IssueSlackGlyph } from "../../issues/IssueGlyphs";
 import { IssueProjectMenu } from "../../issues/IssuePropertyMenus";
+import { IssueCyclePicker } from "../../issues/IssueSelectors";
 import { reportIssueWriteFailure as reportFailure } from "../../issues/issueWriteFeedback";
 import { QuickCreateProjectDialog } from "../../projects/QuickCreateProjectDialog";
 import {
@@ -537,6 +539,7 @@ export function IntakeSettingsPanel() {
   const status = useSlackStatus();
   const watches = useSlackWatches();
   const projects = useProjects();
+  const cycles = useIssueCycles();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const setToken = useSlackSetToken();
   const createWatch = useCreateSlackWatch();
@@ -556,6 +559,10 @@ export function IntakeSettingsPanel() {
   const projectTitles = useMemo(
     () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
     [projects],
+  );
+  const cycleTitles = useMemo(
+    () => new Map(cycles.map((cycle) => [cycle.id, cycle.name])),
+    [cycles],
   );
 
   const run = useCallback(
@@ -596,6 +603,7 @@ export function IntakeSettingsPanel() {
         channelId: channel.id,
         channelName: normalizeSlackChannelName(channel.name),
         projectId: null,
+        cycleId: null,
         autoInvestigate: false,
         autoAssign: false,
         // Watched and filing nothing: a channel starts paused so nobody's backlog fills up
@@ -785,7 +793,41 @@ export function IntakeSettingsPanel() {
                     />
                   </div>
 
-                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1 sm:self-end">
+                  <div className="min-w-0 space-y-1">
+                    <span className="block text-[11px] font-medium text-muted-foreground">
+                      Release cycle
+                    </span>
+                    <IssueCyclePicker
+                      cycles={cycles}
+                      onSelect={(cycleId) =>
+                        void run("Failed to set the release cycle", () =>
+                          updateWatch({ watchId: watch.id, patch: { cycleId } }),
+                        )
+                      }
+                      trigger={
+                        <button
+                          className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md border border-input bg-background/50 px-2 text-xs text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring"
+                          disabled={busy}
+                          type="button"
+                        >
+                          <CalendarRangeIcon className="size-3 shrink-0 text-muted-foreground" />
+                          <span
+                            className={cn(
+                              "truncate",
+                              watch.cycleId == null && "text-muted-foreground",
+                            )}
+                          >
+                            {watch.cycleId == null
+                              ? "No release cycle"
+                              : (cycleTitles.get(watch.cycleId) ?? "Unknown cycle")}
+                          </span>
+                        </button>
+                      }
+                      value={watch.cycleId ?? null}
+                    />
+                  </div>
+
+                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1">
                     <span className="min-w-0">
                       <span className="block text-xs font-medium text-foreground">
                         Investigate automatically
@@ -809,7 +851,7 @@ export function IntakeSettingsPanel() {
                     />
                   </label>
 
-                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1 sm:col-start-2">
+                  <label className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-transparent px-1 py-1">
                     <span className="min-w-0">
                       <span className="block text-xs font-medium text-foreground">
                         Auto-assign worker

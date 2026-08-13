@@ -186,6 +186,7 @@ function isReadableMessage(message: SlackMessage): boolean {
  */
 export interface SlackResolvedIntakeRoute {
   readonly projectId: SlackChannelWatch["projectId"];
+  readonly cycleId: SlackChannelWatch["cycleId"];
   readonly autoInvestigate: boolean;
 }
 
@@ -198,18 +199,27 @@ export function resolveMessageRoute(
     if (!messageHasReaction(message, route.emoji)) continue;
     return {
       projectId: route.projectId ?? watch.projectId,
+      cycleId: watch.cycleId ?? null,
       autoInvestigate: route.autoInvestigate ?? watch.autoInvestigate,
     };
   }
   if (watch.trigger.everyMessage) {
-    return { projectId: watch.projectId, autoInvestigate: watch.autoInvestigate };
+    return {
+      projectId: watch.projectId,
+      cycleId: watch.cycleId ?? null,
+      autoInvestigate: watch.autoInvestigate,
+    };
   }
   if (
     watch.trigger.botMention &&
     identity.botUserId !== null &&
     (message.text ?? "").includes(`<@${identity.botUserId}>`)
   ) {
-    return { projectId: watch.projectId, autoInvestigate: watch.autoInvestigate };
+    return {
+      projectId: watch.projectId,
+      cycleId: watch.cycleId ?? null,
+      autoInvestigate: watch.autoInvestigate,
+    };
   }
   return null;
 }
@@ -222,6 +232,7 @@ function resolveReactionRoute(watch: SlackChannelWatch, message: SlackMessage) {
     ? null
     : {
         projectId: route.projectId ?? watch.projectId,
+        cycleId: watch.cycleId ?? null,
         autoInvestigate: route.autoInvestigate ?? watch.autoInvestigate,
       };
 }
@@ -541,6 +552,7 @@ export const make = Effect.gen(function* () {
         title: slackTitleFromText(description),
         description,
         projectId: input.route.projectId,
+        cycleId: input.route.cycleId,
         permalink,
         authorName,
       });

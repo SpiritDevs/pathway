@@ -187,8 +187,9 @@ the field stays empty afterwards.
 
 ### Watched channels and triggers
 
-Add the channels you want watched, then set its **default project** and whether matching messages
-should be investigated automatically. Automatic investigation starts while the issue is still in
+Add the channels you want watched, then set its **default project**, optional **release cycle**, and
+whether matching messages should be investigated automatically. Every issue filed from the
+channel takes that release cycle. Automatic investigation starts while the issue is still in
 Triage; it does not accept the issue or move it onto a board.
 
 Choose what files an issue from each channel. Any combination of these triggers works:

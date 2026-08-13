@@ -823,6 +823,7 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         channelId: "C1",
         channelName: "triage",
         projectId: ProjectId.make("project-1"),
+        cycleId: IssueCycleId.make("cycle-1"),
         autoInvestigate: true,
         autoAssign: true,
         trigger: {
@@ -850,6 +851,10 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
       });
       assert.isTrue(Option.isSome(byChannel) && byChannel.value.autoInvestigate);
       assert.isTrue(Option.isSome(byChannel) && byChannel.value.autoAssign);
+      assert.strictEqual(
+        Option.isSome(byChannel) ? byChannel.value.cycleId : null,
+        IssueCycleId.make("cycle-1"),
+      );
 
       // All three off is a paused watch, and a paused watch has to round-trip like any other.
       yield* watches.upsert({
@@ -857,6 +862,7 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         channelId: "C1",
         channelName: "triage",
         projectId: null,
+        cycleId: null,
         autoInvestigate: false,
         autoAssign: false,
         trigger: { reactionRoutes: [], everyMessage: false, botMention: false },

@@ -141,10 +141,11 @@ stored cursor, roughly every 30s. Not Socket Mode and not a relay webhook: this 
 polling from a cursor is the only transport that catches up on what it missed.
 
 Trigger is configurable per channel, any combination of: ordered reaction routes, every message in
-the channel, or a bot mention. Each reaction route can inherit or override the channel's default
-project and automatic-investigation policy; the first matching reaction wins. Slack thread replies
-attach as comments via the stored source message ts. Automatic investigation files the issue into
-Triage first and never accepts it.
+the channel, or a bot mention. Each channel can also assign a release cycle to every filed issue.
+Each reaction route can inherit or override the channel's default project and
+automatic-investigation policy; the first matching reaction wins. Slack thread replies attach as
+comments via the stored source message ts. Automatic investigation files the issue into Triage
+first and never accepts it.
 
 Sync is **two-way**. The bot posts to the source thread, attributed ("Corey: …", "Claude moved
 PAT-12 to In Review"), on comments and status changes only. Outbound posts are recorded by message

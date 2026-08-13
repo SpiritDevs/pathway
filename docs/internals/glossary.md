@@ -197,9 +197,10 @@ then continues the original action. Enrichment is the one feature that simply re
 
 One row of `slack_channel_watches`: a Slack channel the poller reads, its trigger combination
 (emoji, every message, bot mention — any combination, all off meaning paused), and the project
-filed issues are tagged with. Distinct from the **cursor** (`slack_cursors`), which is where reading
-resumed from, and from the **outbound registry** (`slack_outbound_posts`), which is how the poller
-recognises the bot's own messages. See [issue-tracker.md][25].
+and release cycle filed issues are tagged with. Distinct from the **cursor** (`slack_cursors`),
+which is where reading resumed from, and from the **outbound registry**
+(`slack_outbound_posts`), which is how the poller recognises the bot's own messages. See
+[issue-tracker.md][25].
 
 ## Practical Shortcuts
 

@@ -751,6 +751,8 @@ export const SlackChannelWatch = Schema.Struct({
   channelName: TrimmedNonEmptyString,
   /** Fallback route for channel-wide triggers and reaction routes that inherit their project. */
   projectId: Schema.NullOr(ProjectId),
+  /** Release cycle assigned to every issue filed from this channel. */
+  cycleId: Schema.optionalKey(Schema.NullOr(IssueCycleId)),
   /** Fallback investigation policy. A matching reaction route may override it. */
   autoInvestigate: Schema.Boolean,
   /** Whether matching messages should be assigned by the global model-routing rules. */
@@ -1424,6 +1426,7 @@ export const SlackWatchCreateInput = Schema.Struct({
   channelId: SlackChannelId,
   channelName: TrimmedNonEmptyString,
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  cycleId: Schema.optional(Schema.NullOr(IssueCycleId)),
   /** Whether matching messages investigate immediately. Defaults off for a new watch. */
   autoInvestigate: Schema.optional(Schema.Boolean),
   autoAssign: Schema.optional(Schema.Boolean),
@@ -1439,6 +1442,7 @@ export type SlackWatchCreateInput = typeof SlackWatchCreateInput.Type;
 export const SlackWatchPatch = Schema.Struct({
   channelName: Schema.optional(TrimmedNonEmptyString),
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
+  cycleId: Schema.optional(Schema.NullOr(IssueCycleId)),
   autoInvestigate: Schema.optional(Schema.Boolean),
   autoAssign: Schema.optional(Schema.Boolean),
   trigger: Schema.optional(SlackIntakeTrigger),

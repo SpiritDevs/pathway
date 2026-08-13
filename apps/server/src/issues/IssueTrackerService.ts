@@ -285,6 +285,8 @@ export interface IssueIntakeCreateInput {
   readonly description?: string | undefined;
   /** The channel's auto-tag target. Null files the issue under no project, which is allowed. */
   readonly projectId?: ProjectId | null | undefined;
+  /** The channel's release-planning default. Null leaves the issue outside a cycle. */
+  readonly cycleId?: IssueCycleId | null | undefined;
   readonly permalink?: string | null | undefined;
   readonly authorName?: string | null | undefined;
 }
@@ -1147,6 +1149,13 @@ export const make = Effect.gen(function* () {
     slackWatchRepository
       .listAll()
       .pipe(Effect.mapError(storage("Failed to read the Slack channel watches")));
+
+  /** Publish the complete watch set and wake intake so configuration changes apply immediately. */
+  const publishSlackWatches = () =>
+    listSlackWatches().pipe(
+      Effect.tap((watches) => publish({ _tag: "SlackWatchesChanged", watches })),
+      Effect.tap(() => slackEngine.notifyWatchesChanged),
+    );
 
   const readSnapshot = () =>
     Effect.all([
@@ -2257,10 +2266,11 @@ export const make = Effect.gen(function* () {
   const cycleDelete: IssueTrackerServiceShape["cycleDelete"] = Effect.fn(
     "IssueTrackerService.cycleDelete",
   )(function* (input, actor) {
-    const [cycles, records, byIssue] = yield* Effect.all([
+    const [cycles, records, byIssue, watches] = yield* Effect.all([
       listCycles(),
       listRecords(),
       groupLabelAssignments(),
+      listSlackWatches(),
     ]);
     const cycle = cycles.find((candidate) => candidate.id === input.cycleId);
     if (cycle === undefined) {
@@ -2274,6 +2284,15 @@ export const make = Effect.gen(function* () {
         .setCycle({ issueIds: cleared.map((record) => record.id), cycleId: null, updatedAt })
         .pipe(Effect.mapError(storage("Failed to clear the cycle on its issues")));
     }
+    const clearedWatches = watches.filter((watch) => watch.cycleId === cycle.id);
+    yield* Effect.forEach(
+      clearedWatches,
+      (watch) =>
+        slackWatchRepository
+          .upsert({ ...watch, cycleId: null, updatedAt })
+          .pipe(Effect.mapError(storage("Failed to clear the cycle on Slack channel watches"))),
+      { discard: true },
+    );
     yield* cycleRepository
       .deleteById({ cycleId: cycle.id })
       .pipe(Effect.mapError(storage("Failed to delete the issue cycle")));
@@ -2292,6 +2311,7 @@ export const make = Effect.gen(function* () {
     );
 
     const result = yield* publishCycles();
+    if (clearedWatches.length > 0) yield* publishSlackWatches();
     yield* publishAll(
       cleared.map((record) => ({
         _tag: "IssueUpserted" as const,
@@ -3227,18 +3247,6 @@ export const make = Effect.gen(function* () {
       Effect.tap((status) => publish({ _tag: "SlackStatusChanged", status })),
     );
 
-  /**
-   * The whole set after any watch write, and a poke at the poller.
-   *
-   * The poke is fire-and-forget on purpose: the next pass reads the new configuration either way,
-   * so a poller that is mid-sleep must not make a settings write fail.
-   */
-  const publishSlackWatches = () =>
-    listSlackWatches().pipe(
-      Effect.tap((watches) => publish({ _tag: "SlackWatchesChanged", watches })),
-      Effect.tap(() => slackEngine.notifyWatchesChanged),
-    );
-
   const slackGetStatus: IssueTrackerServiceShape["slackGetStatus"] = () =>
     Effect.map(Ref.get(slackStatus), (status) => ({ status }));
 
@@ -3309,6 +3317,13 @@ export const make = Effect.gen(function* () {
         `At most ${SLACK_MAX_CHANNEL_WATCHES} Slack channels can be watched at once.`,
       );
     }
+    if (
+      input.cycleId !== undefined &&
+      input.cycleId !== null &&
+      !(yield* listCycles()).some((cycle) => cycle.id === input.cycleId)
+    ) {
+      return yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`);
+    }
 
     const createdAt = yield* nowIso;
     const watch: SlackChannelWatch = {
@@ -3316,6 +3331,7 @@ export const make = Effect.gen(function* () {
       channelId: input.channelId,
       channelName: input.channelName,
       projectId: input.projectId ?? null,
+      cycleId: input.cycleId ?? null,
       autoInvestigate: input.autoInvestigate ?? false,
       autoAssign: input.autoAssign ?? false,
       trigger: input.trigger ?? PAUSED_SLACK_TRIGGER,
@@ -3334,10 +3350,18 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const existing = yield* requireSlackWatch(input.watchId);
     const { patch } = input;
+    if (
+      patch.cycleId !== undefined &&
+      patch.cycleId !== null &&
+      !(yield* listCycles()).some((cycle) => cycle.id === patch.cycleId)
+    ) {
+      return yield* notFound(patch.cycleId, `No issue cycle with id ${patch.cycleId}.`);
+    }
     const next: SlackChannelWatch = {
       ...existing,
       ...(patch.channelName === undefined ? {} : { channelName: patch.channelName }),
       ...(patch.projectId === undefined ? {} : { projectId: patch.projectId }),
+      ...(patch.cycleId === undefined ? {} : { cycleId: patch.cycleId }),
       ...(patch.autoInvestigate === undefined ? {} : { autoInvestigate: patch.autoInvestigate }),
       ...(patch.autoAssign === undefined ? {} : { autoAssign: patch.autoAssign }),
       // Replaced wholesale rather than merged: the trigger is one set of switches, and a partial
@@ -3347,6 +3371,7 @@ export const make = Effect.gen(function* () {
     if (
       next.channelName === existing.channelName &&
       next.projectId === existing.projectId &&
+      next.cycleId === existing.cycleId &&
       next.autoInvestigate === existing.autoInvestigate &&
       next.autoAssign === existing.autoAssign &&
       slackTriggersEqual(next.trigger, existing.trigger)
@@ -3438,6 +3463,9 @@ export const make = Effect.gen(function* () {
         ...(input.projectId === undefined || input.projectId === null
           ? {}
           : { projectId: input.projectId }),
+        ...(input.cycleId === undefined || input.cycleId === null
+          ? {}
+          : { cycleId: input.cycleId }),
       },
       SLACK_ACTOR,
       {

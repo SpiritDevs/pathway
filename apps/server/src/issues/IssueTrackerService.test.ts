@@ -754,6 +754,11 @@ describe("IssueTrackerService", () => {
       const endDate = yield* dateDaysFromToday(14);
       const { cycle } = yield* tracker.cycleCreate({ name: "Cycle 1", startDate, endDate });
       const { issue } = yield* tracker.create({ title: "Scheduled", cycleId: cycle.id }, ACTOR);
+      yield* tracker.slackWatchCreate({
+        channelId: "C1",
+        channelName: "releases",
+        cycleId: cycle.id,
+      });
 
       const backwards = yield* tracker
         .cycleCreate({ name: "Backwards", startDate: endDate, endDate: startDate })
@@ -764,6 +769,7 @@ describe("IssueTrackerService", () => {
       assert.deepStrictEqual(cycles, []);
       const snapshot = yield* tracker.getSnapshot();
       assert.strictEqual(snapshot.issues[0]?.cycleId, null);
+      assert.strictEqual(snapshot.slackWatches[0]?.cycleId, null);
       const { events } = yield* tracker.getEvents({ issueId: issue.id });
       assert.deepStrictEqual(
         [events.at(-1)?.field, events.at(-1)?.before, events.at(-1)?.after],
@@ -1755,6 +1761,9 @@ describe("IssueTrackerService", () => {
   it.effect("creates, edits, and deletes a channel watch, publishing the whole set each time", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
+      const startDate = yield* dateDaysFromToday(1);
+      const endDate = yield* dateDaysFromToday(14);
+      const { cycle } = yield* tracker.cycleCreate({ name: "Release 1", startDate, endDate });
 
       const created = yield* tracker.slackWatchCreate({
         channelId: "C1",
@@ -1773,6 +1782,7 @@ describe("IssueTrackerService", () => {
         watchId: created.watch.id,
         patch: {
           projectId: null,
+          cycleId: cycle.id,
           autoInvestigate: true,
           trigger: {
             reactionRoutes: [{ emoji: "ticket", projectId: PROJECT, autoInvestigate: false }],
@@ -1782,6 +1792,7 @@ describe("IssueTrackerService", () => {
         },
       });
       assert.isNull(updated.watch.projectId);
+      assert.strictEqual(updated.watch.cycleId, cycle.id);
       assert.isTrue(updated.watch.autoInvestigate);
       assert.deepStrictEqual(updated.watch.trigger, {
         reactionRoutes: [{ emoji: "ticket", projectId: PROJECT, autoInvestigate: false }],
