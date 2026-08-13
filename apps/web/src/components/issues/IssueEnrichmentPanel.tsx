@@ -19,7 +19,15 @@ import type {
   IssueLabelId,
   IssuePriority,
 } from "@t3tools/contracts";
-import { ArrowDownIcon, CheckIcon, CircleAlertIcon, FileIcon, PlusIcon } from "lucide-react";
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CircleAlertIcon,
+  FileIcon,
+  PlusIcon,
+} from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -420,10 +428,13 @@ export function IssueEnrichmentPanel({
   // Null follows the newest run, which is what a panel opened mid-investigation should show. A
   // press on a history row pins that one until the reader presses another.
   const [pinnedRunId, setPinnedRunId] = useState<IssueEnrichmentRunId | null>(null);
+  const [expandedTranscriptRunId, setExpandedTranscriptRunId] =
+    useState<IssueEnrichmentRunId | null>(null);
   const selected = runs.find((run) => run.id === pinnedRunId) ?? latestIssueEnrichmentRun(runs);
   const presentation =
     selected === null ? null : issueEnrichmentRunPresentation(selected, Date.now());
   const isActive = presentation?.isActive ?? false;
+  const transcriptExpanded = selected !== null && expandedTranscriptRunId === selected.id;
 
   // Only while something is running: a finished run's duration is a fixed subtraction, and a
   // timer left running behind a closed panel is the kind of thing this codebase audits for.
@@ -471,6 +482,22 @@ export function IssueEnrichmentPanel({
                 >
                   Cancel
                 </Button>
+              ) : selected.state === "done" ? (
+                <Button
+                  aria-controls={`issue-investigation-transcript-${selected.id}`}
+                  aria-expanded={transcriptExpanded}
+                  className="ms-auto"
+                  onClick={() =>
+                    setExpandedTranscriptRunId((current) =>
+                      current === selected.id ? null : selected.id,
+                    )
+                  }
+                  size="xs"
+                  variant="ghost"
+                >
+                  {transcriptExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
+                  {transcriptExpanded ? "Hide output" : "Show output"}
+                </Button>
               ) : null}
             </div>
 
@@ -479,8 +506,12 @@ export function IssueEnrichmentPanel({
                 <Spinner className="size-3.5" />
                 Waiting for a slot. One investigation runs at a time.
               </p>
+            ) : selected.state !== "done" || transcriptExpanded ? (
+              <div id={`issue-investigation-transcript-${selected.id}`}>
+                <TranscriptScroller transcript={selected.transcript} />
+              </div>
             ) : (
-              <TranscriptScroller transcript={selected.transcript} />
+              <div hidden id={`issue-investigation-transcript-${selected.id}`} />
             )}
 
             {selected.state === "failed" && selected.error !== null ? (
