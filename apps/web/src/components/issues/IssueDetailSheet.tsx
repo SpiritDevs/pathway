@@ -48,6 +48,7 @@ import {
   useMemo,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 
@@ -176,6 +177,13 @@ import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 export const ISSUE_DETAIL_SHEET_WIDTH_STORAGE_KEY = "pathway:issue-detail-sheet-width";
 /** Wide enough that the properties rail sits beside the body at the width it first opens. */
 export const ISSUE_DETAIL_SHEET_DEFAULT_WIDTH = 640;
+const ISSUE_DETAIL_PROPERTIES_WIDTH_STORAGE_KEY = "pathway:issue-detail-properties-width";
+const ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH = 224;
+const ISSUE_DETAIL_PROPERTIES_MIN_WIDTH = 192;
+const ISSUE_DETAIL_PROPERTIES_MAX_WIDTH = 480;
+const ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP = 16;
+/** Main-column width plus the sheet padding and split-column gap. */
+const ISSUE_DETAIL_MAIN_COLUMN_RESERVE = 372;
 
 /**
  * How long a `?issue=` that has not resolved is given before it is called a bad link. The stream
@@ -209,11 +217,22 @@ export function IssueDetailSheet({
   onStartWorkRequestHandled?: () => void;
 }) {
   const maxWidth = useRightPanelSheetMaxWidth();
-  const { width, handlers } = useResizableWidth({
+  const sheetSize = useResizableWidth({
     storageKey: ISSUE_DETAIL_SHEET_WIDTH_STORAGE_KEY,
     defaultWidth: ISSUE_DETAIL_SHEET_DEFAULT_WIDTH,
     minWidth: PREVIEW_PANEL_MIN_WIDTH,
     maxWidth,
+    edge: "left",
+  });
+  const propertiesMaxWidth = Math.max(
+    ISSUE_DETAIL_PROPERTIES_MIN_WIDTH,
+    Math.min(ISSUE_DETAIL_PROPERTIES_MAX_WIDTH, sheetSize.width - ISSUE_DETAIL_MAIN_COLUMN_RESERVE),
+  );
+  const propertiesSize = useResizableWidth({
+    storageKey: ISSUE_DETAIL_PROPERTIES_WIDTH_STORAGE_KEY,
+    defaultWidth: ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH,
+    minWidth: ISSUE_DETAIL_PROPERTIES_MIN_WIDTH,
+    maxWidth: propertiesMaxWidth,
     edge: "left",
   });
 
@@ -232,7 +251,8 @@ export function IssueDetailSheet({
   const state = resolveIssueDetailState({ storeStatus, issue, settled });
 
   const sheetStyle = {
-    "--right-panel-sheet-width": `${width}px`,
+    "--issue-detail-properties-width": `${propertiesSize.width}px`,
+    "--right-panel-sheet-width": `${sheetSize.width}px`,
     "--right-panel-sheet-max-width": `${maxWidth}px`,
   } as CSSProperties;
 
@@ -257,7 +277,7 @@ export function IssueDetailSheet({
         style={sheetStyle}
         viewportClassName={cn(RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME, "pointer-events-none")}
       >
-        <RightPanelResizeHandle className="max-sm:hidden" handlers={handlers} />
+        <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
         <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Issue"}</SheetTitle>
         {issue === null ? (
           <IssueDetailPlaceholder issueKey={issueKey} state={state} />
@@ -268,6 +288,8 @@ export function IssueDetailSheet({
             onClose={onClose}
             onOpenIssueKey={onOpenIssueKey}
             onStartWorkRequestHandled={onStartWorkRequestHandled}
+            propertiesMaxWidth={propertiesMaxWidth}
+            propertiesSize={propertiesSize}
             startWorkRequestProvider={startWorkRequestProvider}
             startWorkRequestProjectId={startWorkRequestProjectId}
           />
@@ -334,6 +356,8 @@ function IssueDetailBody({
   issue,
   onClose,
   onOpenIssueKey,
+  propertiesMaxWidth,
+  propertiesSize,
   startWorkRequestProvider,
   startWorkRequestProjectId,
   onStartWorkRequestHandled,
@@ -341,6 +365,8 @@ function IssueDetailBody({
   issue: Issue;
   onClose: () => void;
   onOpenIssueKey: (key: string) => void;
+  propertiesMaxWidth: number;
+  propertiesSize: ReturnType<typeof useResizableWidth>;
   startWorkRequestProvider: ProviderDriverKind | null;
   startWorkRequestProjectId: ProjectId | null;
   onStartWorkRequestHandled: (() => void) | undefined;
@@ -1166,7 +1192,8 @@ function IssueDetailBody({
               )}
             </div>
 
-            <aside className="flex shrink-0 flex-col gap-3 border-t border-border/50 pt-3 @xl/issue-detail:w-56 @xl/issue-detail:border-t-0 @xl/issue-detail:border-s @xl/issue-detail:pt-0 @xl/issue-detail:ps-4">
+            <aside className="relative flex shrink-0 flex-col gap-3 border-t border-border/50 pt-3 @xl/issue-detail:w-[var(--issue-detail-properties-width)] @xl/issue-detail:border-t-0 @xl/issue-detail:border-s @xl/issue-detail:pt-0 @xl/issue-detail:ps-4">
+              <IssuePropertiesResizeHandle maxWidth={propertiesMaxWidth} size={propertiesSize} />
               <IssueDetailProperties
                 cycles={cycles}
                 issue={issue}
@@ -1252,6 +1279,52 @@ function IssueDetailBody({
           </div>
         </ScrollArea>
       </div>
+    </div>
+  );
+}
+
+function IssuePropertiesResizeHandle({
+  maxWidth,
+  size,
+}: {
+  maxWidth: number;
+  size: ReturnType<typeof useResizableWidth>;
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const nextWidth =
+      event.key === "ArrowLeft"
+        ? size.width + ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP
+        : event.key === "ArrowRight"
+          ? size.width - ISSUE_DETAIL_PROPERTIES_KEYBOARD_STEP
+          : event.key === "Home"
+            ? ISSUE_DETAIL_PROPERTIES_MIN_WIDTH
+            : event.key === "End"
+              ? maxWidth
+              : null;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    size.resizeTo(nextWidth);
+  };
+
+  return (
+    <div
+      aria-label="Resize issue properties"
+      aria-orientation="vertical"
+      aria-valuemax={maxWidth}
+      aria-valuemin={ISSUE_DETAIL_PROPERTIES_MIN_WIDTH}
+      aria-valuenow={size.width}
+      className="group absolute inset-y-0 -left-2 z-20 hidden w-4 cursor-col-resize touch-none select-none outline-none @xl/issue-detail:block focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      onDoubleClick={() => size.resizeTo(ISSUE_DETAIL_PROPERTIES_DEFAULT_WIDTH)}
+      onKeyDown={onKeyDown}
+      role="separator"
+      tabIndex={0}
+      title="Drag to resize issue properties"
+      {...size.handlers}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 start-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
+      />
     </div>
   );
 }

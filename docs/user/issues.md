@@ -61,7 +61,8 @@ work down a queue without losing your place. Click outside the sheet or press `E
 
 The sheet holds the description, the properties rail, todos, sub-issues, relations, comments, the
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with
-who made it and what it was before.
+who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
+resize it; Pathway remembers the width for the next issue you open.
 
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
