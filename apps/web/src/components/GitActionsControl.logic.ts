@@ -57,6 +57,24 @@ export type DefaultBranchConfirmableAction =
 
 export const GIT_ACTION_SUCCESS_VISIBLE_MS = 10_000;
 
+export function isPushCommandFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { readonly _tag?: unknown; readonly operation?: unknown };
+  return (
+    candidate._tag === "GitCommandError" &&
+    typeof candidate.operation === "string" &&
+    candidate.operation.startsWith("GitVcsDriver.pushCurrentBranch.")
+  );
+}
+
+export function buildPushRecoveryPrompt(): string {
+  return [
+    "The source-control action reached its push step, but Git rejected the push.",
+    "Inspect the current branch, its upstream, the working tree, and the remote state. Safely bring the branch up to date using this repository's conventions, preserving unrelated local work. Resolve any conflicts while preserving the intent of both sides, run the relevant focused checks, and retry the push.",
+    "Do not force-push or discard unrelated changes. If authentication, permissions, or branch policy prevents recovery, stop and explain the blocker instead of bypassing it.",
+  ].join("\n");
+}
+
 export function resolveGitActionResultToastTiming(
   type: "error" | "success",
 ): GitActionResultToastTiming {

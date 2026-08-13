@@ -40,12 +40,14 @@ import { cn } from "~/lib/utils";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
 import {
   actionIncludesCommitStep,
+  buildPushRecoveryPrompt,
   buildMenuItems,
   canScopeCommitToThread,
   collectThreadTouchedPaths,
   type CommitFileScope,
   formatGitActionElapsed,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
+  isPushCommandFailure,
   type GitActionProgressPresentation,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -125,6 +127,7 @@ interface GitActionsControlProps {
   displayMode?: "toolbar" | "panel";
   onOpenChanges?: () => void;
   onHandoff?: () => void;
+  onRecoverPushFailure?: (prompt: string) => Promise<boolean>;
 }
 
 interface PendingDefaultBranchAction {
@@ -1103,6 +1106,7 @@ export default function GitActionsControl({
   displayMode = "toolbar",
   onOpenChanges,
   onHandoff,
+  onRecoverPushFailure,
 }: GitActionsControlProps) {
   const isPanel = displayMode === "panel";
   const ActionGroup = isPanel ? "div" : Group;
@@ -1139,6 +1143,8 @@ export default function GitActionsControl({
   const [inlineSuccess, setInlineSuccess] = useState<InlineGitActionSuccess | null>(null);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
+  const [pushRecoveryFailure, setPushRecoveryFailure] = useState<string | null>(null);
+  const [pushRecoveryPending, setPushRecoveryPending] = useState(false);
   const sourceControlScope = useMemo(
     () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
     [activeEnvironmentId, gitCwd],
@@ -1458,6 +1464,10 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
+        if (onRecoverPushFailure && isPushCommandFailure(error)) {
+          setPushRecoveryFailure(error instanceof Error ? error.message : "Git rejected the push.");
+          return;
+        }
         const errorToastTiming = resolveGitActionResultToastTiming("error");
         toastManager.add(
           stackedThreadToast({
@@ -1694,6 +1704,28 @@ export default function GitActionsControl({
       ...(commitMessage ? { commitMessage } : {}),
       ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
     });
+  };
+
+  const startPushRecovery = async () => {
+    if (!onRecoverPushFailure || pushRecoveryPending) return;
+    setPushRecoveryPending(true);
+    try {
+      const started = await onRecoverPushFailure(buildPushRecoveryPrompt());
+      if (started) {
+        setPushRecoveryFailure(null);
+      }
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not start push recovery",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+        }),
+      );
+    } finally {
+      setPushRecoveryPending(false);
+    }
   };
 
   const openChangedFileInEditor = useCallback(
@@ -2288,6 +2320,57 @@ export default function GitActionsControl({
               onClick={checkoutFeatureBranchAndContinuePendingAction}
             >
               Checkout feature branch & continue
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
+      <Dialog
+        open={pushRecoveryFailure !== null}
+        onOpenChange={(open) => {
+          if (!open && !pushRecoveryPending) {
+            setPushRecoveryFailure(null);
+          }
+        }}
+      >
+        <DialogPopup className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Let the agent recover this push?</DialogTitle>
+            <DialogDescription>
+              Git rejected the push. The agent will inspect and synchronize the branch, preserve
+              unrelated work, resolve conflicts if needed, run focused checks, and retry without
+              force-pushing.
+            </DialogDescription>
+          </DialogHeader>
+          {pushRecoveryFailure ? (
+            <DialogPanel>
+              <p className="rounded-lg bg-muted/72 px-3 py-2 font-mono text-xs text-muted-foreground">
+                {pushRecoveryFailure}
+              </p>
+            </DialogPanel>
+          ) : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={pushRecoveryPending}
+              onClick={() => setPushRecoveryFailure(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={pushRecoveryPending}
+              onClick={() => void startPushRecovery()}
+            >
+              {pushRecoveryPending ? (
+                <>
+                  <Spinner className="size-3.5" aria-hidden />
+                  Starting agent...
+                </>
+              ) : (
+                "Ask agent to recover"
+              )}
             </Button>
           </DialogFooter>
         </DialogPopup>

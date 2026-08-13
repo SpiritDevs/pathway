@@ -69,6 +69,7 @@ export interface ThreadDetailsPanelProps {
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
   onHandoff?: () => void;
+  onRecoverPushFailure?: (prompt: string) => Promise<boolean>;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
   versionMismatch: VersionMismatchIssue | null;
@@ -300,6 +301,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   {...(props.draftId ? { draftId: props.draftId } : {})}
                   {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
                   {...(props.onHandoff ? { onHandoff: props.onHandoff } : {})}
+                  {...(props.onRecoverPushFailure
+                    ? { onRecoverPushFailure: props.onRecoverPushFailure }
+                    : {})}
                 />
               ) : null}
             </div>

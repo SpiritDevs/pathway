@@ -5750,6 +5750,137 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  const onRecoverPushFailure = useCallback(
+    async (prompt: string): Promise<boolean> => {
+      if (
+        !activeThread ||
+        !isServerThread ||
+        isSendBusy ||
+        isConnecting ||
+        activeEnvironmentUnavailable ||
+        isWorking ||
+        !latestRunSettled ||
+        activePendingApproval !== null ||
+        activePendingUserInput !== null ||
+        sendInFlightRef.current
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "The agent is unavailable",
+            description: "Finish the current thread action, then try the push recovery again.",
+          }),
+        );
+        return false;
+      }
+
+      const sendCtx = composerRef.current?.getSendContext();
+      if (!sendCtx?.providerAvailable) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "The agent is unavailable",
+            description: "Reconnect the thread's provider, then try the push recovery again.",
+          }),
+        );
+        return false;
+      }
+
+      const recoveryPrompt = prompt.trim();
+      if (!recoveryPrompt) return false;
+      const createdAt = new Date().toISOString();
+      const messageId = newMessageId();
+      const outgoingPrompt = formatOutgoingPrompt({
+        provider: sendCtx.selectedProvider,
+        model: sendCtx.selectedModel,
+        models: sendCtx.selectedProviderModels,
+        effort: sendCtx.selectedPromptEffort,
+        text: recoveryPrompt,
+      });
+
+      sendInFlightRef.current = true;
+      beginLocalDispatch({ preparingWorktree: false });
+      setThreadError(activeThread.id, null);
+      try {
+        const settingsResult = await persistThreadSettingsForNextTurn({
+          threadId: activeThread.id,
+          createdAt,
+          modelSelection: sendCtx.selectedModelSelection,
+          runtimeMode,
+          interactionMode: "default",
+        });
+        let failure: AtomCommandResult<unknown, unknown> | null =
+          settingsResult._tag === "Failure" ? settingsResult : null;
+
+        if (failure === null) {
+          const startResult = await startThreadTurn({
+            environmentId,
+            input: {
+              threadId: activeThread.id,
+              message: {
+                messageId,
+                role: "user",
+                text: outgoingPrompt,
+                attachments: [],
+              },
+              modelSelection: sendCtx.selectedModelSelection,
+              titleSeed: activeThread.title,
+              runtimeMode,
+              interactionMode: "default",
+              createdAt,
+            },
+          });
+          failure = startResult._tag === "Failure" ? startResult : null;
+        }
+
+        if (failure !== null) {
+          if (!isAtomCommandInterrupted(failure)) {
+            const error = squashAtomCommandFailure(failure);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not start push recovery",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return false;
+        }
+
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: "Agent is recovering the push",
+            description: "The recovery instructions were sent as a new turn in this thread.",
+          }),
+        );
+        return true;
+      } finally {
+        sendInFlightRef.current = false;
+        resetLocalDispatch();
+      }
+    },
+    [
+      activeEnvironmentUnavailable,
+      activePendingApproval,
+      activePendingUserInput,
+      activeThread,
+      beginLocalDispatch,
+      composerRef,
+      environmentId,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      isWorking,
+      latestRunSettled,
+      persistThreadSettingsForNextTurn,
+      resetLocalDispatch,
+      runtimeMode,
+      setThreadError,
+      startThreadTurn,
+    ],
+  );
+
   const onInterrupt = async () => {
     if (!activeThread) return;
     const result = await interruptThreadTurn({
@@ -6640,6 +6771,7 @@ function ChatViewContent(props: ChatViewProps) {
     !activeEnvironmentUnavailable
       ? { onHandoff: onOpenHandoff }
       : {}),
+    ...(isServerThread ? { onRecoverPushFailure } : {}),
     onReconnectEnvironment: reconnectActiveEnvironment,
     onOpenConnectionSettings: openConnectionSettings,
     versionMismatch:
