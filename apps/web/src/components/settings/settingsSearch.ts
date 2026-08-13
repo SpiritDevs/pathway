@@ -9,6 +9,7 @@ export type SettingsPath =
   | "/settings/usage"
   | "/settings/issues-statuses"
   | "/settings/issues-labels"
+  | "/settings/issues-milestones"
   | "/settings/issues-intake"
   | "/settings/issues-import"
   | "/settings/issues-enrichment"
@@ -40,6 +41,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/usage": "Usage",
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
+  "/settings/issues-milestones": "Milestones",
   "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
@@ -82,6 +84,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     paths: [
       "/settings/issues-statuses",
       "/settings/issues-labels",
+      "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",
@@ -310,6 +313,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "issue-labels",
     title: "Issue labels",
     to: "/settings/issues-labels",
+  },
+  {
+    id: "issue-milestones",
+    title: "Issue milestones",
+    to: "/settings/issues-milestones",
   },
   {
     id: "issue-import",

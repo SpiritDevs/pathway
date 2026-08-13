@@ -51,6 +51,7 @@ import {
   issueChildRollup,
   issueCyclesByStatus,
   issueIdsNamedByCommandInput,
+  issueMilestoneCategoryCounts,
   issueMilestoneProgress,
   issueMilestonesForProject,
   issueRelationDisplays,
@@ -152,6 +153,7 @@ function milestone(
     projectId: ProjectId.make(projectId),
     name: `Milestone ${id}`,
     description: null,
+    startDate: null,
     targetDate: null,
     position,
     createdAt: NOW,
@@ -749,6 +751,68 @@ describe("issueMilestoneProgress", () => {
       done: 0,
       total: 0,
     });
+  });
+});
+
+describe("issueMilestoneCategoryCounts", () => {
+  const M1 = IssueMilestoneId.make("m1");
+  const M2 = IssueMilestoneId.make("m2");
+  const store: IssuesStore = {
+    ...storeOf([
+      issue("1", { milestoneId: M1, statusId: BACKLOG.id }),
+      issue("2", { milestoneId: M1, statusId: TODO.id }),
+      issue("3", { milestoneId: M1, statusId: DOING.id }),
+      issue("4", { milestoneId: M1, statusId: REVIEW.id }),
+      issue("5", { milestoneId: M1, statusId: REVIEW.id }),
+      issue("6", { milestoneId: M1, statusId: DONE.id }),
+      issue("7", { milestoneId: M1, statusId: CANCELED.id }),
+      issue("8", { milestoneId: M1, statusId: DONE.id, deletedAt: NOW }),
+      issue("9", { milestoneId: M1, statusId: DONE.id, triage: true }),
+      issue("10", { milestoneId: M2, statusId: DONE.id }),
+      issue("11", { statusId: DONE.id }),
+    ]),
+    milestones: [milestone("m1", "alpha", 0), milestone("m2", "alpha", 1)],
+  };
+
+  it("counts every category the tracker has, review and canceled included", () => {
+    expect(issueMilestoneCategoryCounts(store).get(M1)).toEqual(
+      new Map([
+        ["backlog", 1],
+        ["unstarted", 1],
+        ["started", 1],
+        ["review", 2],
+        ["completed", 1],
+        ["canceled", 1],
+      ]),
+    );
+  });
+
+  it("leaves the sidebar's rollup alone", () => {
+    expect(issueMilestoneProgress(store, M1)).toEqual({ done: 1, total: 6 });
+  });
+
+  it("keeps each milestone's issues to itself and gives an empty milestone an empty map", () => {
+    const counts = issueMilestoneCategoryCounts({
+      ...store,
+      milestones: [...store.milestones, milestone("m3", "alpha", 2)],
+    });
+
+    expect(counts.get(M2)).toEqual(new Map([["completed", 1]]));
+    expect(counts.get(IssueMilestoneId.make("m3"))).toEqual(new Map());
+  });
+
+  it("has nothing to say about a milestone the store has not seen", () => {
+    expect(issueMilestoneCategoryCounts(store).has(IssueMilestoneId.make("gone"))).toBe(false);
+  });
+
+  it("skips an issue whose status is no longer in the tracker", () => {
+    const counts = issueMilestoneCategoryCounts({
+      ...store,
+      statuses: ALL_STATUSES.filter((value) => value.category !== "review"),
+    });
+
+    expect(counts.get(M1)?.get("review")).toBeUndefined();
+    expect(counts.get(M1)?.get("completed")).toBe(1);
   });
 });
 

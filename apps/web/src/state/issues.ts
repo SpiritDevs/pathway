@@ -43,6 +43,7 @@ import {
   type IssueId,
   type IssueLabel,
   type IssueMilestone,
+  type IssueMilestoneHistoryPoint,
   type IssueMilestoneId,
   type IssueRelationDirection,
   type IssueRelationEdge,
@@ -1067,6 +1068,31 @@ export function issueMilestoneProgress(
   return issueMilestoneProgressByMilestone(store).get(milestoneId) ?? EMPTY_ISSUE_PROGRESS;
 }
 
+const EMPTY_ISSUE_CATEGORY_COUNTS: ReadonlyMap<IssueStatusCategory, number> = new Map();
+
+/**
+ * The same rollup broken out by status category, for a breakdown that has to say how much work is
+ * in review rather than only how much is done. Every category the tracker has is counted — nothing
+ * here names one — and `canceled` is included, unlike {@link issueMilestoneProgressByMilestone},
+ * whose `total` deliberately excludes it. Categories with no issues are absent; read through `?? 0`.
+ */
+export function issueMilestoneCategoryCounts(
+  store: IssuesStore,
+): ReadonlyMap<IssueMilestoneId, ReadonlyMap<IssueStatusCategory, number>> {
+  const categories = issueStatusCategories(store);
+  const counts = new Map<IssueMilestoneId, Map<IssueStatusCategory, number>>();
+  for (const milestone of store.milestones) counts.set(milestone.id, new Map());
+
+  for (const issue of store.issuesById.values()) {
+    if (issue.milestoneId === null || !isRollupIssue(issue)) continue;
+    const bucket = counts.get(issue.milestoneId);
+    const category = categories.get(issue.statusId);
+    if (bucket === undefined || category === undefined) continue;
+    bucket.set(category, (bucket.get(category) ?? 0) + 1);
+  }
+  return counts;
+}
+
 // ── Relations ──────────────────────────────────────────────────────────
 
 /**
@@ -1157,6 +1183,11 @@ export const issueMilestoneProgressAtom = Atom.make(
   (get): ReadonlyMap<IssueMilestoneId, IssueProgress> =>
     issueMilestoneProgressByMilestone(get(issuesStoreAtom)),
 ).pipe(Atom.withLabel("web-issue-milestone-progress"));
+
+export const issueMilestoneCategoryCountsAtom = Atom.make(
+  (get): ReadonlyMap<IssueMilestoneId, ReadonlyMap<IssueStatusCategory, number>> =>
+    issueMilestoneCategoryCounts(get(issuesStoreAtom)),
+).pipe(Atom.withLabel("web-issue-milestone-category-counts"));
 
 /**
  * Today is read when the cycles change rather than tracked: a laptop that sits open past midnight
@@ -1259,6 +1290,23 @@ export function useIssueChildRollup(issueId: IssueId | null): IssueChildRollup {
 
 export function useIssueMilestoneProgress(): ReadonlyMap<IssueMilestoneId, IssueProgress> {
   return useAtomValue(issueMilestoneProgressAtom);
+}
+
+/** The whole breakdown per milestone. Missing categories mean zero, so read through `?? 0`. */
+export function useIssueMilestoneCategoryCounts(): ReadonlyMap<
+  IssueMilestoneId,
+  ReadonlyMap<IssueStatusCategory, number>
+> {
+  return useAtomValue(issueMilestoneCategoryCountsAtom);
+}
+
+/** One milestone's breakdown, empty until the tracker has both the milestone and its issues. */
+export function useIssueMilestoneCategoryCount(
+  milestoneId: IssueMilestoneId | null,
+): ReadonlyMap<IssueStatusCategory, number> {
+  const counts = useAtomValue(issueMilestoneCategoryCountsAtom);
+  if (milestoneId === null) return EMPTY_ISSUE_CATEGORY_COUNTS;
+  return counts.get(milestoneId) ?? EMPTY_ISSUE_CATEGORY_COUNTS;
 }
 
 // ── Change log and detail ──────────────────────────────────────────────
@@ -1463,6 +1511,50 @@ export function useInvestigatingIssueIds(): ReadonlySet<IssueId> {
 /** Runs observed on this connection, used to avoid offering a duplicate investigation by default. */
 export function useInvestigatedIssueIds(): ReadonlySet<IssueId> {
   return useAtomValue(investigatedIssueIdsAtom);
+}
+
+// ── Milestone history ──────────────────────────────────────────────────
+
+/**
+ * The burn-up, reconstructed on the server from the change log and returned as one point per day.
+ * A read rather than a stream: it only opens on the milestone detail page, and the store's own
+ * diffs already move the live counts beside it.
+ */
+const issueMilestoneHistoryQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:issues:milestone-history",
+  tag: ISSUES_WS_METHODS.milestoneHistory,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
+const EMPTY_MILESTONE_HISTORY_POINTS: ReadonlyArray<IssueMilestoneHistoryPoint> = Object.freeze([]);
+
+export interface IssueMilestoneHistoryView {
+  /** Ascending by date, one per day. Empty for a milestone with no members and no start date. */
+  readonly points: ReadonlyArray<IssueMilestoneHistoryPoint>;
+  /** A rename left the reconstruction partial. Say so under the chart rather than hiding it. */
+  readonly approximate: boolean;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+export function useIssueMilestoneHistory(
+  milestoneId: IssueMilestoneId | null,
+): IssueMilestoneHistoryView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const query = useEnvironmentQuery(
+    environmentId === null || milestoneId === null
+      ? null
+      : issueMilestoneHistoryQuery({ environmentId, input: { milestoneId } }),
+  );
+  return {
+    points: query.data?.points ?? EMPTY_MILESTONE_HISTORY_POINTS,
+    approximate: query.data?.approximate ?? false,
+    isPending: query.isPending,
+    error: query.error,
+    refresh: query.refresh,
+  };
 }
 
 // ── Mutations ──────────────────────────────────────────────────────────
