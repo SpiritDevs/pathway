@@ -5,7 +5,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 describe("hosted static onboarding header", () => {
   it("uses the shared workspace topbar geometry", () => {
-    const routeSource = NodeFS.readFileSync(new URL("./_chat.index.tsx", import.meta.url), "utf8");
+    const routeSource = NodeFS.readFileSync(
+      new URL("./_chat.threads.tsx", import.meta.url),
+      "utf8",
+    );
     const onboardingStart = routeSource.indexOf("function HostedStaticOnboardingState()");
     const onboardingEnd = routeSource.indexOf('<Empty className="flex-1">', onboardingStart);
 
