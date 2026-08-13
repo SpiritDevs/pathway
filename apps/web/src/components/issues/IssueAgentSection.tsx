@@ -39,7 +39,10 @@ import { ButtonGroup } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
-import type { IssueStartWorkWorkspaceMode } from "./issueStartWork.logic";
+import {
+  issueStartWorkWorkspaceModeLabel,
+  type IssueStartWorkWorkspaceMode,
+} from "./issueStartWork.logic";
 
 const ignorePromptChange = (_prompt: string): void => undefined;
 
@@ -183,9 +186,7 @@ function IssueStartWorkLauncher({
               className="w-full min-w-0 text-foreground/90"
               size="sm"
             >
-              <SelectValue>
-                {workspaceMode === "new_worktree" ? "New branch" : "Current checkout"}
-              </SelectValue>
+              <SelectValue>{issueStartWorkWorkspaceModeLabel(workspaceMode)}</SelectValue>
             </SelectTrigger>
             <SelectPopup className="w-72">
               <SelectItem value="current_checkout">
@@ -209,7 +210,7 @@ function IssueStartWorkLauncher({
                 <span className="flex items-start gap-2">
                   <GitBranchIcon className="mt-0.5 size-4" />
                   <span className="flex min-w-0 flex-col">
-                    <span>New worktree</span>
+                    <span>{issueStartWorkWorkspaceModeLabel("new_worktree")}</span>
                     <span className="text-xs text-muted-foreground">
                       Branch from a ref you choose and run its setup tasks.
                     </span>

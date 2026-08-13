@@ -29,6 +29,16 @@ import { issueAttachmentIds } from "./issueCommentAttachments";
 
 export type IssueStartWorkWorkspaceMode = "current_checkout" | "new_worktree";
 
+const ISSUE_START_WORK_WORKSPACE_MODE_LABELS = {
+  current_checkout: "Current checkout",
+  new_worktree: "New worktree",
+} as const satisfies Record<IssueStartWorkWorkspaceMode, string>;
+
+/** Shared by the workspace option and its closed trigger so their visible labels stay aligned. */
+export function issueStartWorkWorkspaceModeLabel(mode: IssueStartWorkWorkspaceMode): string {
+  return ISSUE_START_WORK_WORKSPACE_MODE_LABELS[mode];
+}
+
 export interface IssueStartWorkWorkspacePlan {
   readonly envMode: "local" | "worktree";
   /** The base branch shown on the draft before a new worktree is provisioned. */

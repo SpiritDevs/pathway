@@ -20,6 +20,7 @@ import {
   issueDetailPath,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
+  issueStartWorkWorkspaceModeLabel,
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
@@ -172,6 +173,10 @@ describe("issueDetailUrl", () => {
 });
 
 describe("resolveIssueStartWorkWorkspacePlan", () => {
+  it("uses the New worktree option label for the selected workspace trigger", () => {
+    expect(issueStartWorkWorkspaceModeLabel("new_worktree")).toBe("New worktree");
+  });
+
   it("starts current-checkout work in a distinct local thread without worktree preparation", () => {
     expect(resolveIssueStartWorkWorkspacePlan("current_checkout", "main")).toEqual({
       envMode: "local",
