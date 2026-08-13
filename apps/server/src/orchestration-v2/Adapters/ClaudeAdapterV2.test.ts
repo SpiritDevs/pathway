@@ -23,7 +23,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -35,11 +34,10 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { Tool } from "effect/unstable/ai";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { OrchestratorToolkit } from "../../mcp/toolkits/orchestrator/tools.ts";
+import { PATHWAY_READ_ONLY_MCP_TOOL_NAMES } from "../../mcp/PathwayMcpToolCatalog.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
@@ -52,8 +50,8 @@ import {
   CLAUDE_DEFAULT_INSTANCE_ID,
   CLAUDE_PROVIDER,
   CLAUDE_READ_ONLY_ALLOWED_TOOLS,
-  CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
-  CLAUDE_T3_MCP_TOOL_WILDCARD,
+  CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS,
+  CLAUDE_PATHWAY_MCP_TOOL_WILDCARD,
   ClaudeProviderCapabilitiesV2,
   ClaudeAgentSdkQueryRunnerError,
   claudeEffectiveQueryPolicyKey,
@@ -327,8 +325,8 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
 });
 
 describe("ClaudeAdapterV2 MCP query overrides", () => {
-  const T3_MCP_SERVERS = {
-    "t3-code": {
+  const PATHWAY_MCP_SERVERS = {
+    pathway: {
       type: "http",
       url: "http://127.0.0.1:43123/mcp",
       headers: {
@@ -372,35 +370,35 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(overrides, { allowedTools: ["Read"] });
   });
 
-  it("pre-approves all t3-code tools when attaching an MCP session without an allowlist", () => {
+  it("pre-approves all pathway tools when attaching an MCP session without an allowlist", () => {
     const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
     withMcpSession(threadId, () => {
       const overrides = claudeMcpQueryOverrides({ threadId, readOnlySandbox: false });
 
       assert.deepEqual(overrides, {
-        allowedTools: [CLAUDE_T3_MCP_TOOL_WILDCARD],
-        mcpServers: T3_MCP_SERVERS,
+        allowedTools: [CLAUDE_PATHWAY_MCP_TOOL_WILDCARD],
+        mcpServers: PATHWAY_MCP_SERVERS,
       });
     });
   });
 
-  it("extends an explicit allowlist with the t3-code wildcard", () => {
+  it("extends an explicit allowlist with the pathway wildcard", () => {
     const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
     withMcpSession(threadId, () => {
       const overrides = claudeMcpQueryOverrides({
         threadId,
         readOnlySandbox: false,
-        allowedTools: ["Read", "mcp__t3-code__*"],
+        allowedTools: ["Read", "mcp__pathway__*"],
       });
 
       assert.deepEqual(overrides, {
-        allowedTools: ["Read", "mcp__t3-code__*"],
-        mcpServers: T3_MCP_SERVERS,
+        allowedTools: ["Read", "mcp__pathway__*"],
+        mcpServers: PATHWAY_MCP_SERVERS,
       });
     });
   });
 
-  it("pre-approves only read-only t3-code tools in a read-only sandbox", () => {
+  it("pre-approves only read-only pathway tools in a read-only sandbox", () => {
     const threadId = ThreadId.make("thread-claude-mcp-read-only");
     withMcpSession(threadId, () => {
       const overrides = claudeMcpQueryOverrides({
@@ -410,19 +408,22 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       });
 
       assert.deepEqual(overrides, {
-        allowedTools: [...CLAUDE_READ_ONLY_ALLOWED_TOOLS, ...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS],
-        mcpServers: T3_MCP_SERVERS,
+        allowedTools: [
+          ...CLAUDE_READ_ONLY_ALLOWED_TOOLS,
+          ...CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS,
+        ],
+        mcpServers: PATHWAY_MCP_SERVERS,
       });
-      assert.isFalse(overrides.allowedTools?.includes(CLAUDE_T3_MCP_TOOL_WILDCARD));
+      assert.isFalse(overrides.allowedTools?.includes(CLAUDE_PATHWAY_MCP_TOOL_WILDCARD));
     });
   });
 
-  it("pre-approves only read-only t3-code tools in a read-only sandbox without an allowlist", () => {
+  it("pre-approves only read-only pathway tools in a read-only sandbox without an allowlist", () => {
     const threadId = ThreadId.make("thread-claude-mcp-read-only-no-allowlist");
     withMcpSession(threadId, () => {
       const overrides = claudeMcpQueryOverrides({ threadId, readOnlySandbox: true });
 
-      assert.deepEqual(overrides.allowedTools, [...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS]);
+      assert.deepEqual(overrides.allowedTools, [...CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS]);
     });
   });
 
@@ -490,13 +491,15 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
-  it("matches the read-only allowlist to the orchestrator toolkit annotations", () => {
-    const readOnlyToolNames = Object.values(OrchestratorToolkit.tools)
-      .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
-      .map((tool) => `mcp__t3-code__${tool.name}`)
-      .sort();
+  it("matches the read-only allowlist to every production toolkit annotation", () => {
+    const readOnlyToolNames = PATHWAY_READ_ONLY_MCP_TOOL_NAMES.map(
+      McpProviderSession.pathwayMcpToolName,
+    ).sort();
 
-    assert.deepEqual([...CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS].sort(), readOnlyToolNames);
+    assert.deepEqual([...CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS].sort(), readOnlyToolNames);
+    assert.include(readOnlyToolNames, "mcp__pathway__issues_get");
+    assert.include(readOnlyToolNames, "mcp__pathway__email_get");
+    assert.include(readOnlyToolNames, "mcp__pathway__preview_snapshot");
   });
 });
 
@@ -519,9 +522,9 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
         allowedTools: ["Read"],
       });
       assert.deepEqual(overrides, {
-        allowedTools: ["Read", "mcp__t3-code__*"],
+        allowedTools: ["Read", "mcp__pathway__*"],
         mcpServers: {
-          "t3-code": {
+          pathway: {
             type: "http",
             url: "http://127.0.0.1:43123/mcp",
             headers: {

@@ -75,6 +75,25 @@ describe("buildInvestigationPrompt", () => {
     assert.include(prompt, "Do not invent an issue key or a label name");
   });
 
+  it("asks for a title and a description only where the issue has none worth keeping", () => {
+    const prompt = buildInvestigationPrompt(PROMPT_INPUT);
+
+    assert.include(prompt, '"suggestedTitle": string — optional');
+    assert.include(prompt, '"suggestedDescription": string — optional');
+    // The gate is the whole point: an issue a person wrote a title for is not up for renaming.
+    assert.include(prompt, 'Include "suggestedTitle" only when the title above is a placeholder');
+    assert.include(prompt, '"Slack message", "Untitled"');
+    assert.include(prompt, "no trailing punctuation");
+    assert.include(
+      prompt,
+      'Include "suggestedDescription" only when the description above is empty or near-empty.',
+    );
+    assert.include(prompt, "Never");
+    assert.include(prompt, "invent a detail");
+    // And the rule the whole feature rests on survives the additions.
+    assert.include(prompt, "Nothing you suggest is applied automatically; a person reviews it.");
+  });
+
   it("says so rather than going quiet when an issue has no body", () => {
     const prompt = buildInvestigationPrompt({ ...PROMPT_INPUT, description: "   " });
 
@@ -92,6 +111,33 @@ describe("buildInvestigationPrompt", () => {
     assert.notInclude(prompt, "Checklist:");
     assert.notInclude(prompt, "Relations:");
     assert.notInclude(prompt, "Comments");
+  });
+
+  it("counts the images sent with the request, and the ones that were not", () => {
+    const prompt = buildInvestigationPrompt({
+      ...PROMPT_INPUT,
+      images: { provided: 4, omitted: 2 },
+    });
+
+    // The model is handed pictures out of band and cannot count them; being told is what makes
+    // "look at the screenshot" an instruction rather than a hope.
+    assert.include(prompt, "Attachments:");
+    assert.include(
+      prompt,
+      "- 4 image attachment(s) from this issue are provided with this request.",
+    );
+    assert.include(
+      prompt,
+      "- 2 further image attachment(s) exist on this issue but were not sent.",
+    );
+  });
+
+  it("says nothing about attachments when none were sent", () => {
+    assert.notInclude(buildInvestigationPrompt(PROMPT_INPUT), "Attachments:");
+    assert.notInclude(
+      buildInvestigationPrompt({ ...PROMPT_INPUT, images: { provided: 0, omitted: 0 } }),
+      "Attachments:",
+    );
   });
 
   it("truncates a description rather than shipping a novel to the model", () => {
@@ -229,6 +275,73 @@ describe("normalizeInvestigationResult", () => {
     assert.isNull(result?.suggestedPriority ?? null);
   });
 
+  it("takes a proposed title and description, one line and trimmed", () => {
+    const result = normalizeInvestigationResult(
+      {
+        summary: "s",
+        suggestedTitle: "  Reconnect\n  drops the queued turn  ",
+        suggestedDescription: "  A relay reconnect loses the queued turn.\n\nSeen on wifi.  ",
+      },
+      vocabulary,
+    );
+
+    assert.isTrue(isEnrichmentResult(result));
+    // A title is a row in a list, whatever the model wrapped.
+    assert.strictEqual(result?.suggestedTitle, "Reconnect drops the queued turn");
+    assert.strictEqual(
+      result?.suggestedDescription,
+      "A relay reconnect loses the queued turn.\n\nSeen on wifi.",
+    );
+  });
+
+  it("leaves the keys out when the model had nothing to propose", () => {
+    const result = normalizeInvestigationResult(
+      { summary: "s", suggestedTitle: "   ", suggestedDescription: "\n\n", suggestedLabels: [] },
+      vocabulary,
+    );
+
+    // Absent rather than empty: the result is stored as JSON, and a suggestion nobody made must
+    // not read as one.
+    assert.isFalse("suggestedTitle" in (result ?? {}));
+    assert.isFalse("suggestedDescription" in (result ?? {}));
+
+    const wrongTypes = normalizeInvestigationResult(
+      { summary: "s", suggestedTitle: 12, suggestedDescription: { text: "x" } },
+      vocabulary,
+    );
+    assert.isFalse("suggestedTitle" in (wrongTypes ?? {}));
+    assert.isFalse("suggestedDescription" in (wrongTypes ?? {}));
+  });
+
+  it("clamps a title and a description the model ran long on", () => {
+    const result = normalizeInvestigationResult(
+      { summary: "s", suggestedTitle: "t".repeat(2_000), suggestedDescription: "d".repeat(20_000) },
+      vocabulary,
+    );
+
+    assert.isTrue(isEnrichmentResult(result));
+    assert.strictEqual(result?.suggestedTitle?.length, 512);
+    assert.strictEqual(result?.suggestedDescription?.length, 8_000);
+  });
+
+  it("drops a suggestion that proposes what the issue already says", () => {
+    const result = normalizeInvestigationResult(
+      {
+        summary: "s",
+        suggestedTitle: "Reconnect  drops the queued turn",
+        suggestedDescription: "Already written.",
+      },
+      {
+        ...vocabulary,
+        currentTitle: "Reconnect drops the queued turn",
+        currentDescription: "  Already written.  ",
+      },
+    );
+
+    assert.isFalse("suggestedTitle" in (result ?? {}));
+    assert.isFalse("suggestedDescription" in (result ?? {}));
+  });
+
   it("keeps a bare-string likely file, and skips the entries with no path at all", () => {
     const result = normalizeInvestigationResult(
       { summary: "s", likelyFiles: ["apps/web/src/App.tsx", { reason: "no path" }, { path: " " }] },
@@ -284,6 +397,32 @@ describe("buildInvestigationComment", () => {
 
   it("says out loud that nothing was applied", () => {
     assert.include(comment, "**Suggested** (not applied)");
+  });
+
+  it("renders a proposed title on one line and a proposed description as a quote", () => {
+    const named = buildInvestigationComment({
+      result: {
+        summary: "s",
+        likelyFiles: [],
+        relatedIssueKeys: [],
+        suggestedLabels: [],
+        suggestedPriority: null,
+        suggestedTitle: "Reconnect drops the queued turn",
+        suggestedDescription: "A relay reconnect loses the queued turn.\n\nSeen on wifi.",
+      },
+      model: "codex / gpt-5.4-codex",
+      finishedAt: "2026-08-12T14:31:02.000Z",
+    });
+
+    assert.include(named, "- Title: Reconnect drops the queued turn\n");
+    // Quoted, so a proposed body cannot merge into the comment around it.
+    assert.include(named, "- Description:\n\n> A relay reconnect loses the queued turn.\n>\n");
+    assert.include(named, "> Seen on wifi.");
+  });
+
+  it("leaves the title and description lines out when the run proposed neither", () => {
+    assert.notInclude(comment, "- Title:");
+    assert.notInclude(comment, "- Description:");
   });
 
   it("omits the suggestion section when there is nothing to suggest", () => {

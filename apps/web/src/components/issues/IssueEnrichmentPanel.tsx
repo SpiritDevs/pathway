@@ -33,7 +33,9 @@ import {
   hasIssueEnrichmentSuggestions,
   issueEnrichmentRunPresentation,
   latestIssueEnrichmentRun,
+  resolveIssueSuggestedDescription,
   resolveIssueSuggestedLabels,
+  resolveIssueSuggestedTitle,
   shouldFollowIssueTranscript,
   type IssueEnrichmentTone,
 } from "./issueEnrichment.logic";
@@ -122,18 +124,22 @@ function TranscriptScroller({ transcript }: { transcript: string }) {
   );
 }
 
-function SuggestionChips({
+function Suggestions({
   issue,
   labels,
   run,
+  onApplyDescription,
   onApplyLabel,
   onApplyPriority,
+  onApplyTitle,
 }: {
   issue: Issue;
   labels: ReadonlyArray<IssueLabel>;
   run: IssueEnrichmentRun;
+  onApplyDescription: (description: string) => void;
   onApplyLabel: (labelId: IssueLabelId) => void;
   onApplyPriority: (priority: IssuePriority) => void;
+  onApplyTitle: (title: string) => void;
 }) {
   const result = run.result;
   if (result === null) return null;
@@ -147,64 +153,119 @@ function SuggestionChips({
   );
   const priority = result.suggestedPriority;
   const priorityApplied = priority !== null && priority === issue.priority;
+  // Only offered for an issue that arrived without one — a Slack message with a placeholder title
+  // and no body — so both are usually absent.
+  const suggestedTitle = resolveIssueSuggestedTitle(result, issue);
+  const suggestedDescription = resolveIssueSuggestedDescription(result, issue);
 
   return (
     <section className="flex flex-col gap-1.5">
       <h4 className="text-[11px] font-medium text-muted-foreground">Suggestions</h4>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {priority === null ? null : (
-          <button
-            className={cn(
-              "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              priorityApplied
-                ? "border-border/60 text-muted-foreground"
-                : "border-border hover:bg-accent/60",
-            )}
-            disabled={priorityApplied}
-            onClick={() => onApplyPriority(priority)}
-            type="button"
+      {suggestedTitle === null ? null : (
+        <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/24 p-2">
+          <div className="min-w-0 flex-1">
+            <h5 className="text-[11px] font-medium text-muted-foreground">Title</h5>
+            <p className="mt-0.5 break-words text-[13px] text-foreground">{suggestedTitle.text}</p>
+          </div>
+          <Button
+            className="shrink-0"
+            disabled={!suggestedTitle.canApply}
+            onClick={() => onApplyTitle(suggestedTitle.text)}
+            size="xs"
+            variant="outline"
           >
-            <IssuePriorityIcon priority={priority} />
-            {ISSUE_PRIORITY_LABELS[priority]}
-            {priorityApplied ? (
-              <CheckIcon className="size-3 text-primary" />
-            ) : (
-              <PlusIcon className="size-3" />
-            )}
-          </button>
-        )}
-        {suggestedLabels.map((suggestion) => {
-          const label = suggestion.label;
-          // A name with no row behind it is shown, greyed: the tracker filtered the run's
-          // vocabulary before storing it, so this only happens when the label was since deleted.
-          const disabled = label === null || suggestion.applied;
-          return (
+            {suggestedTitle.canApply ? <PlusIcon /> : <CheckIcon />}
+            {suggestedTitle.canApply ? "Apply" : "Applied"}
+          </Button>
+        </div>
+      )}
+      {suggestedDescription === null ? null : (
+        <div className="flex flex-col gap-1 rounded-md border border-border/60 bg-muted/24 p-2">
+          <div className="flex items-center gap-2">
+            <h5 className="text-[11px] font-medium text-muted-foreground">Description</h5>
+            <Button
+              className="ms-auto shrink-0"
+              disabled={!suggestedDescription.canApply}
+              onClick={() => onApplyDescription(suggestedDescription.text)}
+              size="xs"
+              title={
+                suggestedDescription.canApply
+                  ? undefined
+                  : "This issue already has a description. Applying would overwrite it."
+              }
+              variant="outline"
+            >
+              <PlusIcon />
+              Apply
+            </Button>
+          </div>
+          {/* Markdown, up to 8000 characters of it: clamped and scrolled rather than let loose
+              down the panel, the same way the transcript is. */}
+          <div className="max-h-56 overflow-y-auto">
+            <ChatMarkdown
+              className="text-[13px]"
+              cwd={undefined}
+              text={suggestedDescription.text}
+            />
+          </div>
+        </div>
+      )}
+      {priority === null && suggestedLabels.length === 0 ? null : (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {priority === null ? null : (
             <button
               className={cn(
                 "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                disabled
+                priorityApplied
                   ? "border-border/60 text-muted-foreground"
                   : "border-border hover:bg-accent/60",
               )}
-              disabled={disabled}
-              key={suggestion.name}
-              onClick={() => {
-                if (label !== null) onApplyLabel(label.id);
-              }}
-              title={label === null ? "That label no longer exists." : undefined}
+              disabled={priorityApplied}
+              onClick={() => onApplyPriority(priority)}
               type="button"
             >
-              {label === null ? null : <IssueLabelDot className="size-1.5" color={label.color} />}
-              {suggestion.name}
-              {suggestion.applied ? (
+              <IssuePriorityIcon priority={priority} />
+              {ISSUE_PRIORITY_LABELS[priority]}
+              {priorityApplied ? (
                 <CheckIcon className="size-3 text-primary" />
-              ) : label === null ? null : (
+              ) : (
                 <PlusIcon className="size-3" />
               )}
             </button>
-          );
-        })}
-      </div>
+          )}
+          {suggestedLabels.map((suggestion) => {
+            const label = suggestion.label;
+            // A name with no row behind it is shown, greyed: the tracker filtered the run's
+            // vocabulary before storing it, so this only happens when the label was since deleted.
+            const disabled = label === null || suggestion.applied;
+            return (
+              <button
+                className={cn(
+                  "flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  disabled
+                    ? "border-border/60 text-muted-foreground"
+                    : "border-border hover:bg-accent/60",
+                )}
+                disabled={disabled}
+                key={suggestion.name}
+                onClick={() => {
+                  if (label !== null) onApplyLabel(label.id);
+                }}
+                title={label === null ? "That label no longer exists." : undefined}
+                type="button"
+              >
+                {label === null ? null : <IssueLabelDot className="size-1.5" color={label.color} />}
+                {suggestion.name}
+                {suggestion.applied ? (
+                  <CheckIcon className="size-3 text-primary" />
+                ) : label === null ? null : (
+                  <PlusIcon className="size-3" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -214,16 +275,20 @@ function RunResult({
   issuesByKey,
   labels,
   run,
+  onApplyDescription,
   onApplyLabel,
   onApplyPriority,
+  onApplyTitle,
   onOpenIssueKey,
 }: {
   issue: Issue;
   issuesByKey: ReadonlyMap<string, Issue>;
   labels: ReadonlyArray<IssueLabel>;
   run: IssueEnrichmentRun;
+  onApplyDescription: (description: string) => void;
   onApplyLabel: (labelId: IssueLabelId) => void;
   onApplyPriority: (priority: IssuePriority) => void;
+  onApplyTitle: (title: string) => void;
   onOpenIssueKey: (issueKey: string) => void;
 }) {
   const result = run.result;
@@ -285,11 +350,13 @@ function RunResult({
         </section>
       )}
 
-      <SuggestionChips
+      <Suggestions
         issue={issue}
         labels={labels}
+        onApplyDescription={onApplyDescription}
         onApplyLabel={onApplyLabel}
         onApplyPriority={onApplyPriority}
+        onApplyTitle={onApplyTitle}
         run={run}
       />
     </div>
@@ -308,6 +375,10 @@ export interface IssueEnrichmentPanelProps {
   readonly onCancel: (runId: IssueEnrichmentRunId) => void;
   readonly onApplyLabel: (labelId: IssueLabelId) => void;
   readonly onApplyPriority: (priority: IssuePriority) => void;
+  /** Only reachable for an issue that arrived without a title of its own. */
+  readonly onApplyTitle: (title: string) => void;
+  /** Only reachable while the issue's description is still empty. */
+  readonly onApplyDescription: (description: string) => void;
   readonly onOpenIssueKey: (issueKey: string) => void;
 }
 
@@ -321,6 +392,8 @@ export function IssueEnrichmentPanel({
   onCancel,
   onApplyLabel,
   onApplyPriority,
+  onApplyTitle,
+  onApplyDescription,
   onOpenIssueKey,
 }: IssueEnrichmentPanelProps) {
   // Null follows the newest run, which is what a panel opened mid-investigation should show. A
@@ -401,8 +474,10 @@ export function IssueEnrichmentPanel({
                 issue={issue}
                 issuesByKey={issuesByKey}
                 labels={labels}
+                onApplyDescription={onApplyDescription}
                 onApplyLabel={onApplyLabel}
                 onApplyPriority={onApplyPriority}
+                onApplyTitle={onApplyTitle}
                 onOpenIssueKey={onOpenIssueKey}
                 run={selected}
               />

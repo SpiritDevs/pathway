@@ -60,7 +60,7 @@ import type {
   AcpSessionRuntimeStartResult,
 } from "../../provider/acp/AcpSessionRuntime.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
-import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
+import { pathwayOrchestrationPromptForFirstRun } from "../../provider/PathwayOrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { type ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
@@ -512,7 +512,7 @@ function acpMcpServers(threadId: ThreadId | null): ReadonlyArray<EffectAcpSchema
   return [
     {
       type: "http",
-      name: "t3-code",
+      name: McpProviderSession.PATHWAY_MCP_SERVER_NAME,
       url: session.endpoint,
       headers: [
         {
@@ -1739,7 +1739,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             terminal: false,
             elicitation: { form: {} },
           },
-          clientInfo: { name: "t3-code", version: "0.0.0" },
+          clientInfo: { name: "pathway", version: "0.0.0" },
           onIncomingRequest: (requestId, method, payload) =>
             runRuntimeCallbackAtGeneration(
               runtimeGeneration,
@@ -4950,10 +4950,10 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           turnInput: ProviderAdapterV2TurnInput,
         ) {
           const prompt: Array<EffectAcpSchema.ContentBlock> = [];
-          const text = t3OrchestrationPromptForFirstRun({
+          const text = pathwayOrchestrationPromptForFirstRun({
             prompt: turnInput.message.text,
             runOrdinal: turnInput.runOrdinal,
-            hasT3Mcp: acpMcpServers(turnInput.threadId).length > 0,
+            hasPathwayMcp: acpMcpServers(turnInput.threadId).length > 0,
           });
           if (text.length > 0) {
             prompt.push({ type: "text", text });

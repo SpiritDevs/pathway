@@ -221,6 +221,62 @@ export function issueApplyPriorityPatch(
 }
 
 /**
+ * Null when the run named no title — the key is absent unless the issue arrived without one — or
+ * when it names the title the issue already reads. Trimmed on both sides: the suggestion arrives
+ * trimmed from the contract, and the comparison should not turn trailing space into a write.
+ */
+export function issueApplyTitlePatch(issue: Issue, title: string | undefined): IssuePatch | null {
+  if (title === undefined) return null;
+  const next = title.trim();
+  if (next.length === 0 || next === issue.title.trim()) return null;
+  return { title: next };
+}
+
+/**
+ * Null when the run named no description, or when the issue now carries one. A run finishes
+ * minutes after it started and the issue is editable throughout, so the live issue decides:
+ * a suggestion never overwrites a body someone wrote while the model was reading the repository.
+ */
+export function issueApplyDescriptionPatch(
+  issue: Issue,
+  description: string | undefined,
+): IssuePatch | null {
+  if (description === undefined || description.trim().length === 0) return null;
+  if (issue.description.trim().length > 0) return null;
+  return { description };
+}
+
+/**
+ * A title or description the run wrote for an issue that arrived without one. Both read the same
+ * way in the panel — a block of text with one Apply — so both resolve to the same shape.
+ */
+export interface IssueSuggestedRewrite {
+  readonly text: string;
+  /** False when Apply would write nothing: the title already reads this, the body is no longer empty. */
+  readonly canApply: boolean;
+}
+
+/** Null when the run offered no title, which is the usual case. */
+export function resolveIssueSuggestedTitle(
+  result: IssueEnrichmentResult,
+  issue: Issue,
+): IssueSuggestedRewrite | null {
+  const text = result.suggestedTitle;
+  if (text === undefined) return null;
+  return { text, canApply: issueApplyTitlePatch(issue, text) !== null };
+}
+
+/** Null when the run offered no description. Present but not applicable once the issue has one. */
+export function resolveIssueSuggestedDescription(
+  result: IssueEnrichmentResult,
+  issue: Issue,
+): IssueSuggestedRewrite | null {
+  const text = result.suggestedDescription;
+  if (text === undefined) return null;
+  return { text, canApply: issueApplyDescriptionPatch(issue, text) !== null };
+}
+
+/**
  * Whether a finished result has anything to offer, which is what decides between rendering the
  * suggestion row and rendering nothing at all.
  */
@@ -230,6 +286,8 @@ export function hasIssueEnrichmentSuggestions(
   labels: ReadonlyArray<IssueLabel>,
 ): boolean {
   if (issueApplyPriorityPatch(issue, result.suggestedPriority) !== null) return true;
+  if (issueApplyTitlePatch(issue, result.suggestedTitle) !== null) return true;
+  if (issueApplyDescriptionPatch(issue, result.suggestedDescription) !== null) return true;
   return resolveIssueSuggestedLabels(result.suggestedLabels, labels, issue.labelIds).some(
     (suggestion) => suggestion.label !== null && !suggestion.applied,
   );

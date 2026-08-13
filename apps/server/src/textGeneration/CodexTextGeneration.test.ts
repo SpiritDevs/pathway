@@ -34,6 +34,7 @@ function makeFakeCodexBinary(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    requireImageCount?: number;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
@@ -56,14 +57,14 @@ function makeFakeCodexBinary(
         "#!/bin/sh",
         'original_args="$*"',
         'output_path=""',
-        'seen_image="0"',
+        "image_count=0",
         'seen_service_tier=""',
         'seen_reasoning_effort=""',
         "while [ $# -gt 0 ]; do",
         '  if [ "$1" = "--image" ]; then',
         "    shift",
         '    if [ -n "$1" ]; then',
-        '      seen_image="1"',
+        "      image_count=$((image_count + 1))",
         "    fi",
         "    shift",
         "    continue",
@@ -110,9 +111,17 @@ function makeFakeCodexBinary(
           : []),
         ...(input.requireImage
           ? [
-              'if [ "$seen_image" != "1" ]; then',
+              'if [ "$image_count" -lt 1 ]; then',
               '  printf "%s\\n" "missing --image input" >&2',
               `  exit 2`,
+              "fi",
+            ]
+          : []),
+        ...(input.requireImageCount !== undefined
+          ? [
+              `if [ "$image_count" != "${input.requireImageCount}" ]; then`,
+              '  printf "%s\\n" "unexpected --image count: $image_count" >&2',
+              `  exit 10`,
               "fi",
             ]
           : []),
@@ -184,6 +193,7 @@ function withFakeCodexEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    requireImageCount?: number;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
@@ -669,6 +679,55 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             }
           }),
       ),
+  );
+
+  it.effect("attaches an investigation's images, and drops the ones that are not there", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"summary":"The reconnect path drops the queued turn."}',
+        // Exactly one: the second path names no file, and an image that is gone is not worth
+        // failing an investigation over — codex refuses to start when pointed at one.
+        requireImageCount: 1,
+        stdinMustContain: "1 image attachment(s)",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          const imagePath = path.join(attachmentsDir, "iss_pat-12-screenshot.png");
+          const missingPath = path.join(attachmentsDir, "iss_pat-12-gone.png");
+          yield* fs.writeFile(imagePath, Buffer.from("hello"));
+          yield* fs.remove(missingPath).pipe(Effect.catch(() => Effect.void));
+
+          const generated = yield* textGeneration
+            .investigate({
+              cwd: process.cwd(),
+              prompt: "Investigate PAT-12. 1 image attachment(s) are provided with this request.",
+              imagePaths: [imagePath, missingPath],
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            })
+            .pipe(Effect.ensuring(fs.remove(imagePath).pipe(Effect.catch(() => Effect.void))));
+
+          expect(generated.text).toContain("The reconnect path drops the queued turn.");
+        }),
+    ),
+  );
+
+  it.effect("investigates without images when the issue has none", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"summary":"Nothing to look at."}',
+        requireImageCount: 0,
+      },
+      (textGeneration) =>
+        textGeneration.investigate({
+          cwd: process.cwd(),
+          prompt: "Investigate PAT-13.",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
   );
 
   it.effect("returns typed TextGenerationError when codex exits non-zero", () =>

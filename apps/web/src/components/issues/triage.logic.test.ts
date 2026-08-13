@@ -1,9 +1,12 @@
 import {
+  IssueEnrichmentRunId,
   IssueId,
   IssueStatusId,
   ProjectId,
   ProviderDriverKind,
+  ProviderInstanceId,
   type Issue,
+  type IssueEnrichmentRun,
   type IssueSlackSource,
   type IssueStatus,
   type IssueStatusCategory,
@@ -14,6 +17,8 @@ import {
   firstUnstartedStatusId,
   formatIssueAge,
   formatSlackMrkdwn,
+  isCompletedInvestigationRun,
+  issueAlreadyInvestigated,
   issueHasCompletedInvestigation,
   sharedTriageProjectId,
   slackSourceChip,
@@ -65,6 +70,39 @@ function issue(id: string, overrides: Partial<Omit<Issue, "id">> = {}): Issue {
     createdAt: NOW,
     updatedAt: NOW,
     deletedAt: null,
+    ...overrides,
+  };
+}
+
+function enrichmentRun(
+  id: string,
+  issueId: string,
+  state: IssueEnrichmentRun["state"],
+  overrides: Partial<IssueEnrichmentRun> = {},
+): IssueEnrichmentRun {
+  return {
+    id: IssueEnrichmentRunId.make(id),
+    issueId: IssueId.make(issueId),
+    state,
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4-codex",
+    },
+    transcript: "",
+    result:
+      state === "done"
+        ? {
+            summary: "Found it.",
+            likelyFiles: [],
+            relatedIssueKeys: [],
+            suggestedLabels: [],
+            suggestedPriority: null,
+          }
+        : null,
+    error: state === "failed" ? "refused" : null,
+    createdAt: NOW,
+    startedAt: state === "queued" ? null : NOW,
+    finishedAt: state === "done" || state === "failed" ? NOW : null,
     ...overrides,
   };
 }
@@ -259,6 +297,79 @@ describe("triageInvestigateBlock", () => {
   });
 });
 
+describe("issueHasCompletedInvestigation", () => {
+  const plain = issue("1");
+
+  it("reads a completed run rather than the description the block no longer lives in", () => {
+    expect(issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "1", "done")])).toBe(true);
+    expect(issueHasCompletedInvestigation(plain, [])).toBe(false);
+    expect(issueHasCompletedInvestigation(plain)).toBe(false);
+  });
+
+  it("does not count a run that has not produced a result", () => {
+    expect(issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "1", "queued")])).toBe(false);
+    expect(issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "1", "running")])).toBe(
+      false,
+    );
+    expect(issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "1", "failed")])).toBe(false);
+    // `done` with no result cannot happen on the wire, but nothing here should assume it.
+    expect(
+      issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "1", "done", { result: null })]),
+    ).toBe(false);
+  });
+
+  it("ignores runs belonging to another issue", () => {
+    expect(issueHasCompletedInvestigation(plain, [enrichmentRun("r1", "99", "done")])).toBe(false);
+  });
+
+  it("still recognises the legacy block appended to an old issue's description", () => {
+    const legacy = issue("1", {
+      description: "Original report\n\n---\n\n## Investigation (codex, 2026-08-13)\nFound it.",
+    });
+    expect(issueHasCompletedInvestigation(legacy)).toBe(true);
+    // The heading only counts at the start of a line, not quoted inside prose.
+    expect(
+      issueHasCompletedInvestigation(issue("1", { description: "see ## Investigation (x)" })),
+    ).toBe(false);
+  });
+});
+
+describe("isCompletedInvestigationRun", () => {
+  it("is done with a result and nothing else", () => {
+    expect(isCompletedInvestigationRun(enrichmentRun("r1", "1", "done"))).toBe(true);
+    expect(isCompletedInvestigationRun(enrichmentRun("r1", "1", "running"))).toBe(false);
+    expect(isCompletedInvestigationRun(enrichmentRun("r1", "1", "failed"))).toBe(false);
+  });
+});
+
+describe("issueAlreadyInvestigated", () => {
+  const plain = issue("1");
+
+  it("counts a run still in flight, which a completed investigation does not", () => {
+    expect(issueAlreadyInvestigated(plain, undefined, [enrichmentRun("r1", "1", "queued")])).toBe(
+      true,
+    );
+    expect(issueAlreadyInvestigated(plain, undefined, [enrichmentRun("r1", "1", "running")])).toBe(
+      true,
+    );
+    expect(issueAlreadyInvestigated(plain, undefined, [enrichmentRun("r1", "1", "done")])).toBe(
+      true,
+    );
+  });
+
+  it("leaves a failed run open to a retry on acceptance", () => {
+    expect(issueAlreadyInvestigated(plain, undefined, [enrichmentRun("r1", "1", "failed")])).toBe(
+      false,
+    );
+  });
+
+  it("takes the live id set when no runs have been loaded", () => {
+    expect(issueAlreadyInvestigated(plain, new Set([plain.id]))).toBe(true);
+    expect(issueAlreadyInvestigated(plain, new Set())).toBe(false);
+    expect(issueAlreadyInvestigated(plain)).toBe(false);
+  });
+});
+
 describe("triageAcceptDefaults", () => {
   const roots = new Map<string, string | null>([
     ["rooted", "/src/pathway"],
@@ -289,16 +400,28 @@ describe("triageAcceptDefaults", () => {
 
   it("does not default to a second run after Slack routing already investigated", () => {
     const projectId = ProjectId.make("rooted");
-    const completed = issue("1", {
+
+    // The investigation now lands as an agent comment, so the run row is what says it happened.
+    const investigated = issue("1", { projectId });
+    expect(
+      triageAcceptDefaults({
+        issues: [investigated],
+        statuses,
+        workspaceRoots: roots,
+        enrichmentRuns: [enrichmentRun("r1", "1", "done")],
+      }).runEnrichment,
+    ).toBe(false);
+
+    // A legacy issue, investigated back when the block was appended to the description.
+    const legacy = issue("2", {
       projectId,
       description: "Original report\n\n---\n\n## Investigation (codex, 2026-08-13)\nFound it.",
     });
     expect(
-      triageAcceptDefaults({ issues: [completed], statuses, workspaceRoots: roots }).runEnrichment,
+      triageAcceptDefaults({ issues: [legacy], statuses, workspaceRoots: roots }).runEnrichment,
     ).toBe(false);
-    expect(issueHasCompletedInvestigation(completed)).toBe(true);
 
-    const running = issue("2", { projectId });
+    const running = issue("3", { projectId });
     expect(
       triageAcceptDefaults({
         issues: [running],
@@ -307,7 +430,17 @@ describe("triageAcceptDefaults", () => {
         investigatedIssueIds: new Set([running.id]),
       }).runEnrichment,
     ).toBe(false);
-    expect(issueHasCompletedInvestigation(running)).toBe(false);
+  });
+
+  it("still offers a run when the only run for the issue failed", () => {
+    expect(
+      triageAcceptDefaults({
+        issues: [issue("1", { projectId: ProjectId.make("rooted") })],
+        statuses,
+        workspaceRoots: roots,
+        enrichmentRuns: [enrichmentRun("r1", "1", "failed")],
+      }).runEnrichment,
+    ).toBe(true);
   });
 
   it("turns investigation off when there is no project to run in", () => {

@@ -2886,7 +2886,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     >
       <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
         <span className={iconWrapperClass}>
-          {toolPresentation?.logo === "t3-code" ? (
+          {toolPresentation?.logo === "pathway" ? (
             <PathwayToolLogo />
           ) : (
             <WorkEntryIconSvg

@@ -22,6 +22,7 @@ import { HttpServerResponse } from "effect/unstable/http";
 
 import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { PATHWAY_MCP_TOOL_NAMES } from "./PathwayMcpToolCatalog.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
@@ -190,6 +191,7 @@ it.effect("serves discover and all preview tools through the v2 client", () =>
       );
       const discover = yield* Effect.promise(() => connected.client.discover());
       expect(discover.supportedVersions).toEqual([McpHttpServer.MCP_PROTOCOL_VERSION]);
+      expect(McpHttpServer.PATHWAY_MCP_SERVER_INFO.name).toBe("Pathway");
       expect(discover.instructions).toContain("authenticated coding-agent thread");
       expect(discover.capabilities.tools).toBeDefined();
 
@@ -247,6 +249,28 @@ it.effect("serves discover and all preview tools through the v2 client", () =>
       expect(press.content).toEqual([{ type: "text", text: "null" }]);
     }),
   ).pipe(Effect.provide(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("serves every production Pathway toolkit through one endpoint", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* McpHttpServer.makeAllToolkitsTestHandler;
+      const connected = yield* Effect.acquireRelease(
+        Effect.promise(() => connectClient(handler)),
+        ({ close }) => Effect.promise(close).pipe(Effect.orDie),
+      );
+      const listed = yield* Effect.promise(() => connected.client.listTools());
+      const actual = listed.tools.map(({ name }) => name).sort();
+      const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
+
+      expect(expected).toHaveLength(43);
+      expect(new Set(expected).size).toBe(expected.length);
+      expect(actual).toEqual(expected);
+      expect(actual).toContain("issues_get");
+      expect(actual).toContain("issues_update");
+      expect(actual).toContain("issues_comment");
+    }),
+  ),
 );
 
 it.effect("returns bounded structural preview snapshot failures", () =>

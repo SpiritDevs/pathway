@@ -1478,7 +1478,7 @@ describe("MessagesTimeline", () => {
       completedAt: null,
       updatedAt: {},
       type: "dynamic_tool",
-      toolName: "mcp__t3-code__t3_thread_read",
+      toolName: "mcp__pathway__t3_thread_read",
       input: { threadId: "thread-child" },
       output: { messages: [] },
     } as const;
@@ -1517,10 +1517,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('data-tool-logo="t3-code"');
+    expect(markup).toContain('data-tool-logo="pathway"');
     expect(markup).toContain('src="/apple-touch-icon.png"');
     expect(markup).toContain("Read a Pathway thread");
-    expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
+    expect(markup).not.toContain("mcp__pathway__t3_thread_read");
   });
 
   it("formats changed file paths from the workspace root", async () => {

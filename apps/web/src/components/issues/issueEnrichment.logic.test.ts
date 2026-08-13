@@ -17,13 +17,17 @@ import {
   activeIssueEnrichmentRun,
   formatIssueEnrichmentDuration,
   hasIssueEnrichmentSuggestions,
+  issueApplyDescriptionPatch,
   issueApplyLabelPatch,
   issueApplyPriorityPatch,
+  issueApplyTitlePatch,
   issueEnrichmentRunDurationMs,
   issueEnrichmentRunPresentation,
   issueInvestigateBlock,
   latestIssueEnrichmentRun,
+  resolveIssueSuggestedDescription,
   resolveIssueSuggestedLabels,
+  resolveIssueSuggestedTitle,
   shouldFollowIssueTranscript,
 } from "./issueEnrichment.logic";
 
@@ -222,6 +226,53 @@ describe("suggestions", () => {
     expect(issueApplyPriorityPatch(issue(), null)).toBe(null);
   });
 
+  it("writes a title only when the run named one that moves it", () => {
+    expect(issueApplyTitlePatch(issue({ title: "Slack message" }), "Login test flakes")).toEqual({
+      title: "Login test flakes",
+    });
+    expect(issueApplyTitlePatch(issue(), undefined)).toBe(null);
+    expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), "Login test flakes")).toBe(
+      null,
+    );
+    expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), " Login test flakes ")).toBe(
+      null,
+    );
+    expect(issueApplyTitlePatch(issue(), "   ")).toBe(null);
+  });
+
+  it("never writes a description over one someone typed", () => {
+    expect(issueApplyDescriptionPatch(issue(), "## Steps\n\n1. Log in")).toEqual({
+      description: "## Steps\n\n1. Log in",
+    });
+    expect(issueApplyDescriptionPatch(issue(), undefined)).toBe(null);
+    // The issue is editable for as long as the run takes, so the live issue decides, not the run.
+    expect(issueApplyDescriptionPatch(issue({ description: "Mine." }), "Theirs.")).toBe(null);
+    expect(issueApplyDescriptionPatch(issue({ description: "  \n " }), "Theirs.")).toEqual({
+      description: "Theirs.",
+    });
+    expect(issueApplyDescriptionPatch(issue(), "  \n ")).toBe(null);
+  });
+
+  it("resolves the rewrites the panel renders, and says which can still be taken", () => {
+    expect(resolveIssueSuggestedTitle(RESULT, issue())).toBe(null);
+    expect(resolveIssueSuggestedDescription(RESULT, issue())).toBe(null);
+    expect(
+      resolveIssueSuggestedTitle({ ...RESULT, suggestedTitle: "Login test flakes" }, issue()),
+    ).toEqual({ text: "Login test flakes", canApply: true });
+    expect(
+      resolveIssueSuggestedTitle(
+        { ...RESULT, suggestedTitle: "Login test flakes" },
+        issue({ title: "Login test flakes" }),
+      ),
+    ).toEqual({ text: "Login test flakes", canApply: false });
+    expect(
+      resolveIssueSuggestedDescription(
+        { ...RESULT, suggestedDescription: "Theirs." },
+        issue({ description: "Mine." }),
+      ),
+    ).toEqual({ text: "Theirs.", canApply: false });
+  });
+
   it("renders no suggestion row when everything is already applied or unresolvable", () => {
     const applied = issue({ priority: "high", labelIds: [IssueLabelId.make("l1")] });
     expect(
@@ -237,5 +288,29 @@ describe("suggestions", () => {
     expect(
       hasIssueEnrichmentSuggestions({ ...RESULT, suggestedLabels: ["Chore"] }, applied, labels),
     ).toBe(true);
+  });
+
+  it("keeps the suggestion row for a rewrite the issue has not taken", () => {
+    expect(
+      hasIssueEnrichmentSuggestions(
+        { ...RESULT, suggestedTitle: "Login test flakes" },
+        issue({ title: "Slack message" }),
+        labels,
+      ),
+    ).toBe(true);
+    expect(
+      hasIssueEnrichmentSuggestions(
+        { ...RESULT, suggestedDescription: "Theirs." },
+        issue(),
+        labels,
+      ),
+    ).toBe(true);
+    expect(
+      hasIssueEnrichmentSuggestions(
+        { ...RESULT, suggestedTitle: "Slack message", suggestedDescription: "Theirs." },
+        issue({ title: "Slack message", description: "Mine." }),
+        labels,
+      ),
+    ).toBe(false);
   });
 });

@@ -343,7 +343,7 @@ describe("CodexAdapterV2 runtime policy", () => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5.4",
           },
-          hasT3Mcp: true,
+          hasPathwayMcp: true,
         });
 
         assert.equal(params.collaborationMode?.mode, "default");
@@ -372,7 +372,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: false,
+        hasPathwayMcp: false,
       });
 
       assert.isUndefined(params.collaborationMode);
@@ -395,7 +395,7 @@ describe("CodexAdapterV2 runtime policy", () => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5.4",
           },
-          hasT3Mcp: true,
+          hasPathwayMcp: true,
         });
 
         assert.equal(params.collaborationMode?.mode, "plan");
@@ -424,7 +424,7 @@ describe("CodexAdapterV2 runtime policy", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5.4",
         },
-        hasT3Mcp: false,
+        hasPathwayMcp: false,
       });
 
       assert.equal(params.collaborationMode?.mode, "plan");
@@ -491,7 +491,7 @@ describe("CodexAdapterV2 process spawning", () => {
           model: "gpt-5.4",
           config: {
             mcp_servers: {
-              "t3-code": {
+              pathway: {
                 url: "http://127.0.0.1:43123/mcp",
                 http_headers: {
                   Authorization: "Bearer secret-codex-token",
@@ -566,7 +566,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
     const projection = projectCodexDynamicToolItem({
       type: "mcpToolCall",
       id: "call-create-threads",
-      server: "t3-code",
+      server: "pathway",
       tool: "create_threads",
       status: "completed",
       arguments: {
@@ -581,7 +581,7 @@ describe("CodexAdapterV2 dynamic tool projection", () => {
     });
 
     assert.deepEqual(projection, {
-      toolName: "t3-code.create_threads",
+      toolName: "pathway.create_threads",
       input: {
         threads: [{ title: "Fixture child", prompt: "fixture child prompt" }],
       },

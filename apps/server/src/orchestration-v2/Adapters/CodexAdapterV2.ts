@@ -577,7 +577,7 @@ export function buildCodexTurnStartParams(input: {
   readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
-  readonly hasT3Mcp?: boolean;
+  readonly hasPathwayMcp?: boolean;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -597,7 +597,7 @@ export function buildCodexTurnStartParams(input: {
       selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
     const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
     const developerInstructions =
-      input.hasT3Mcp !== true
+      input.hasPathwayMcp !== true
         ? undefined
         : input.runtimePolicy.interactionMode === "plan"
           ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
@@ -1116,7 +1116,7 @@ export function codexThreadRuntimeParams(input: {
       : {
           config: {
             mcp_servers: {
-              "t3-code": {
+              [McpProviderSession.PATHWAY_MCP_SERVER_NAME]: {
                 url: mcpSession.endpoint,
                 http_headers: {
                   Authorization: mcpSession.authorizationHeader,
@@ -4398,7 +4398,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 codexInput,
                 runtimePolicy: turnInput.runtimePolicy,
                 modelSelection: turnInput.modelSelection,
-                hasT3Mcp:
+                hasPathwayMcp:
                   McpProviderSession.readMcpProviderSession(turnInput.threadId) !== undefined,
               });
               yield* Ref.update(pendingRootTurns, (current) => {

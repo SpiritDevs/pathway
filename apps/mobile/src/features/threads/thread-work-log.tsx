@@ -84,7 +84,7 @@ function WorkRowIcon(props: {
   readonly iconSubtleColor: import("react-native").ColorValue;
 }) {
   const iconIsDestructive = props.row.icon === "alert" || props.row.icon === "warning";
-  if (props.row.logo === "t3-code") {
+  if (props.row.logo === "pathway") {
     return (
       <Image
         source={PATHWAY_BRAND_MARK_SOURCE}

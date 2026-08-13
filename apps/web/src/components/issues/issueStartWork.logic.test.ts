@@ -227,14 +227,16 @@ describe("buildIssueStartWorkPrompt", () => {
     );
   });
 
-  it("carries a description verbatim and closes with the one instruction", () => {
+  it("carries a description verbatim and names only the Pathway issue tools", () => {
     const prompt = buildIssueStartWorkPrompt({
       ...base,
       issue: issue({ description: "  It fails one run in ten.  " }),
     });
 
     expect(prompt).toContain("## Description\nIt fails one run in ten.");
-    expect(prompt.trimEnd().endsWith("comment on it.")).toBe(true);
+    expect(prompt).toContain("Pathway MCP's `issues_get` tool");
+    expect(prompt).toContain("`issues_update` and `issues_comment`");
+    expect(prompt).toContain("do not use Linear or another external issue tracker");
   });
 
   it("adds a due date to the metadata line when the issue has one", () => {

@@ -65,6 +65,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 export const MCP_TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
+export const PATHWAY_MCP_SERVER_INFO = { name: "Pathway", version: packageJson.version } as const;
 const TASK_NOTIFICATION_FILTER = MCP_TASKS_EXTENSION;
 const REQUIRED_TASKS_CAPABILITIES = {
   extensions: { [MCP_TASKS_EXTENSION]: {} },
@@ -123,7 +124,7 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
         const invocation = yield* registry.resolve(token);
         if (!invocation) {
           // Without this the only symptom of a dead credential is the agent
-          // quietly losing the whole `t3-code` toolkit for the rest of its
+          // quietly losing the whole `pathway` toolkit for the rest of its
           // session, with nothing on the server to explain why.
           yield* Effect.logWarning("rejected MCP request with an unusable credential", {
             reason: token.length === 0 ? "missing_bearer_token" : "unknown_or_expired_token",
@@ -293,7 +294,7 @@ const jsonRpcResult = (id: JSONRPCRequest["id"], result: object): Response =>
     result: {
       ...result,
       resultType: "complete",
-      _meta: { [SERVER_INFO_META_KEY]: { name: "Pathway", version: packageJson.version } },
+      _meta: { [SERVER_INFO_META_KEY]: PATHWAY_MCP_SERVER_INFO },
     },
   });
 
@@ -405,19 +406,16 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
         | McpInvocationContext.McpInvocationScope
         | undefined;
       if (invocation === undefined) throw new Error("Missing authenticated MCP invocation.");
-      const server = new SdkMcpServer(
-        { name: "Pathway", version: packageJson.version },
-        {
-          capabilities: {
-            tools: {},
-            ...(options.email === undefined ? {} : { resources: { subscribe: true } }),
-            ...(options.email === undefined ? {} : { extensions: { [MCP_TASKS_EXTENSION]: {} } }),
-          },
-          instructions:
-            "Pathway tools act on the authenticated coding-agent thread and its environment.",
-          supportedProtocolVersions: [MCP_PROTOCOL_VERSION],
+      const server = new SdkMcpServer(PATHWAY_MCP_SERVER_INFO, {
+        capabilities: {
+          tools: {},
+          ...(options.email === undefined ? {} : { resources: { subscribe: true } }),
+          ...(options.email === undefined ? {} : { extensions: { [MCP_TASKS_EXTENSION]: {} } }),
         },
-      );
+        instructions:
+          "Pathway tools act on the authenticated coding-agent thread and its environment.",
+        supportedProtocolVersions: [MCP_PROTOCOL_VERSION],
+      });
       for (const registration of registeredTools) {
         const { annotations, built, description, inputSchema, tool } = registration;
         server.registerTool<typeof inputSchema, typeof inputSchema>(
@@ -631,7 +629,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
         result: {
           resultType: "task",
           ...created,
-          _meta: { [SERVER_INFO_META_KEY]: { name: "Pathway", version: packageJson.version } },
+          _meta: { [SERVER_INFO_META_KEY]: PATHWAY_MCP_SERVER_INFO },
         },
       });
     }
@@ -748,6 +746,23 @@ const McpToolkitServicesLive = Layer.mergeAll(
   EmailMcpServiceLive,
 );
 
+/**
+ * Build the exact tool surface served by the production Pathway MCP endpoint.
+ * Test handlers use this same effect so a toolkit cannot disappear from production unnoticed.
+ */
+const buildPathwayMcpToolkits = Effect.gen(function* () {
+  const standardPreview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
+  const snapshot = (yield* PreviewSnapshotToolkit) as unknown as BuiltToolkit;
+  const issues = (yield* IssuesToolkit) as unknown as BuiltToolkit;
+  const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
+  const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
+  const email = (yield* EmailToolkit) as unknown as BuiltToolkit;
+  return {
+    toolkits: [standardPreview, issues, orchestrator, worktree, email],
+    snapshot,
+  };
+});
+
 export const makePreviewTestHandler = Effect.gen(function* () {
   yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const standard = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
@@ -797,6 +812,12 @@ export const makeCoreToolkitsTestHandler = Effect.gen(function* () {
   ),
 );
 
+export const makeAllToolkitsTestHandler = Effect.gen(function* () {
+  const { snapshot, toolkits } = yield* buildPathwayMcpToolkits;
+  const runtimeContext = yield* Effect.context<never>();
+  return yield* makeScopedPathwayMcpHandler({ toolkits, snapshot, runtimeContext });
+}).pipe(Effect.provide(ToolkitHandlersLive));
+
 export const makeEmailTestHandler = (projects: ReadonlyArray<EmailProjectSettings> = []) =>
   Effect.gen(function* () {
     const emailService = yield* EmailMcpService.EmailMcpService;
@@ -832,19 +853,14 @@ const McpV2HttpHandlerLive = Layer.effect(
     yield* WorktreeMcpService.WorktreeMcpService;
     yield* IssueTrackerService;
     yield* ProjectionProjectRepository;
-    const standardPreview = (yield* PreviewStandardToolkit) as unknown as BuiltToolkit;
-    const snapshot = (yield* PreviewSnapshotToolkit) as unknown as BuiltToolkit;
-    const issues = (yield* IssuesToolkit) as unknown as BuiltToolkit;
-    const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
-    const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
-    const email = (yield* EmailToolkit) as unknown as BuiltToolkit;
+    const { snapshot, toolkits } = yield* buildPathwayMcpToolkits;
     const emailService = yield* EmailMcpService.EmailMcpService;
     const emailStore = yield* EmailStoreLive.EmailStore;
     const settingsService = yield* ServerSettingsService;
     const settings = yield* settingsService.getSettings;
     const runtimeContext = yield* Effect.context<never>();
     const handler = makePathwayMcpHandler({
-      toolkits: [standardPreview, issues, orchestrator, worktree, email],
+      toolkits,
       snapshot,
       email: emailService,
       projects: settings.emailCapture.projects,

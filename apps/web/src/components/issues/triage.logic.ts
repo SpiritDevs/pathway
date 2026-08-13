@@ -16,6 +16,7 @@
 import type {
   Issue,
   IssueAssignee,
+  IssueEnrichmentRun,
   IssueId,
   IssuePriority,
   IssueSlackSource,
@@ -204,20 +205,61 @@ export interface TriageAcceptDraft {
   readonly runEnrichment: boolean;
 }
 
-const INVESTIGATION_BLOCK_PATTERN = /^## Investigation \(/mu;
+/**
+ * Where a finished investigation used to land. The server appended it to the issue description
+ * under this heading until investigations moved to an agent comment, so issues investigated before
+ * that still carry the block in their description and nothing else. Read as a last resort: an
+ * issue investigated since is recognised by its run row, which is the fact rather than a rendering
+ * of it.
+ */
+const LEGACY_INVESTIGATION_BLOCK_PATTERN = /^## Investigation \(/mu;
 const EMPTY_INVESTIGATED_ISSUE_IDS: ReadonlySet<IssueId> = new Set();
+const EMPTY_ENRICHMENT_RUNS: ReadonlyArray<IssueEnrichmentRun> = [];
 
-/** A completed investigation is appended to the durable issue description under this heading. */
-export function issueHasCompletedInvestigation(issue: Issue): boolean {
-  return INVESTIGATION_BLOCK_PATTERN.test(issue.description);
+/**
+ * A run that produced an investigation. `done` with a result is exactly the condition the server
+ * writes the investigation comment under, so this is the same fact the comment is — and it is
+ * readable without loading the thread.
+ */
+export function isCompletedInvestigationRun(run: IssueEnrichmentRun): boolean {
+  return run.state === "done" && run.result !== null;
 }
 
-/** Whether accepting would duplicate an investigation already started by Slack routing. */
+/**
+ * Whether this issue has an investigation somebody could read.
+ *
+ * `enrichmentRuns` is what the surface has loaded — `issues.getEnrichmentRuns` answers with every
+ * run the tracker has kept for the issue, which is what makes this survive a reload, unlike the
+ * live set of ids the stream builds. Runs for other issues are ignored rather than trusted, so a
+ * caller may pass a list it did not filter.
+ */
+export function issueHasCompletedInvestigation(
+  issue: Issue,
+  enrichmentRuns: ReadonlyArray<IssueEnrichmentRun> = EMPTY_ENRICHMENT_RUNS,
+): boolean {
+  return (
+    enrichmentRuns.some((run) => run.issueId === issue.id && isCompletedInvestigationRun(run)) ||
+    LEGACY_INVESTIGATION_BLOCK_PATTERN.test(issue.description)
+  );
+}
+
+/**
+ * Whether accepting would duplicate an investigation already started by Slack routing.
+ *
+ * Broader than {@link issueHasCompletedInvestigation}: a run still queued or running counts, since
+ * a second one offered by default would race it. A failed run does not — retrying on acceptance is
+ * the point of offering it.
+ */
 export function issueAlreadyInvestigated(
   issue: Issue,
   investigatedIssueIds: ReadonlySet<IssueId> = EMPTY_INVESTIGATED_ISSUE_IDS,
+  enrichmentRuns: ReadonlyArray<IssueEnrichmentRun> = EMPTY_ENRICHMENT_RUNS,
 ): boolean {
-  return investigatedIssueIds.has(issue.id) || issueHasCompletedInvestigation(issue);
+  return (
+    investigatedIssueIds.has(issue.id) ||
+    enrichmentRuns.some((run) => run.issueId === issue.id && run.state !== "failed") ||
+    issueHasCompletedInvestigation(issue, enrichmentRuns)
+  );
 }
 
 /**
@@ -230,6 +272,8 @@ export function triageAcceptDefaults(input: {
   readonly statuses: ReadonlyArray<IssueStatus>;
   readonly workspaceRoots: ReadonlyMap<string, string | null>;
   readonly investigatedIssueIds?: ReadonlySet<IssueId> | undefined;
+  /** Runs the dialog has loaded, which is the durable half of "already investigated". */
+  readonly enrichmentRuns?: ReadonlyArray<IssueEnrichmentRun> | undefined;
 }): TriageAcceptDraft {
   const projectId = sharedTriageProjectId(input.issues);
   const first = input.issues[0];
@@ -255,7 +299,9 @@ export function triageAcceptDefaults(input: {
     assignee: sharedAssignee ?? null,
     runEnrichment:
       triageInvestigateBlock({ projectId, workspaceRoots: input.workspaceRoots }) === null &&
-      !input.issues.some((issue) => issueAlreadyInvestigated(issue, input.investigatedIssueIds)),
+      !input.issues.some((issue) =>
+        issueAlreadyInvestigated(issue, input.investigatedIssueIds, input.enrichmentRuns),
+      ),
   };
 }
 

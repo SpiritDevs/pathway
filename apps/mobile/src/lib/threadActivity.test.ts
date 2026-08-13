@@ -400,7 +400,7 @@ describe("buildThreadFeed", () => {
     const toolItem: OrchestrationV2TurnItem = {
       ...base("item-t3-tool", "2026-06-20T00:00:04.000Z", 3),
       type: "dynamic_tool",
-      toolName: "mcp__t3-code__t3_thread_read",
+      toolName: "mcp__pathway__t3_thread_read",
       input: { threadId: "thread-child" },
       output: { messages: [] },
     };
@@ -409,7 +409,7 @@ describe("buildThreadFeed", () => {
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
     expect(activity?.summary).toBe("Read a Pathway thread");
-    expect(activity?.logo).toBe("t3-code");
+    expect(activity?.logo).toBe("pathway");
     expect(activity?.getCopyText().split("\n")[0]).toBe("Read a Pathway thread");
   });
 });

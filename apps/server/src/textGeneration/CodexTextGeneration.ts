@@ -156,6 +156,29 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       ),
     );
 
+  /**
+   * The subset of `candidates` the CLI can actually be pointed at.
+   *
+   * `--image` on a path that is not there fails the whole run, and an image is never the reason a
+   * run was worth starting — so a missing file is dropped rather than raised.
+   */
+  const usableImagePaths = Effect.fn("usableImagePaths")(function* (
+    candidates: ReadonlyArray<string>,
+  ): Effect.fn.Return<ReadonlyArray<string>> {
+    const imagePaths: string[] = [];
+    for (const candidate of candidates) {
+      if (!path.isAbsolute(candidate)) {
+        continue;
+      }
+      const fileInfo = yield* fileSystem.stat(candidate).pipe(Effect.orElseSucceed(() => null));
+      if (!fileInfo || fileInfo.type !== "File") {
+        continue;
+      }
+      imagePaths.push(candidate);
+    }
+    return imagePaths;
+  });
+
   const materializeImageAttachments = Effect.fn("materializeImageAttachments")(function* (
     _operation: CodexTextGenerationOperation,
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
@@ -164,7 +187,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       return { imagePaths: [] };
     }
 
-    const imagePaths: string[] = [];
+    const candidates: string[] = [];
     for (const attachment of attachments) {
       if (attachment.type !== "image") {
         continue;
@@ -174,16 +197,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         attachmentsDir: serverConfig.attachmentsDir,
         attachment,
       });
-      if (!resolvedPath || !path.isAbsolute(resolvedPath)) {
-        continue;
+      if (resolvedPath) {
+        candidates.push(resolvedPath);
       }
-      const fileInfo = yield* fileSystem.stat(resolvedPath).pipe(Effect.orElseSucceed(() => null));
-      if (!fileInfo || fileInfo.type !== "File") {
-        continue;
-      }
-      imagePaths.push(resolvedPath);
     }
-    return { imagePaths };
+    return { imagePaths: yield* usableImagePaths(candidates) };
   });
 
   const runCodexJson = Effect.fn("runCodexJson")(function* <S extends Schema.Top>({
@@ -352,9 +370,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     cwd: string;
     prompt: string;
     onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
+    imagePaths: ReadonlyArray<string>;
     modelSelection: ModelSelection;
   }): Effect.fn.Return<string, TextGenerationError, Scope.Scope> {
     const operation = "investigate" as const;
+    const imagePaths = yield* usableImagePaths(input.imagePaths);
     const outputPath = yield* writeTempFile(operation, "codex-investigation", "");
 
     const runCodexCommand = Effect.fn("runCodexInvestigation.runCodexCommand")(function* () {
@@ -379,6 +399,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
           "--output-last-message",
           outputPath,
+          ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
           "-",
         ],
         { env: resolvedEnvironment },
@@ -572,6 +593,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       cwd: input.cwd,
       prompt: input.prompt,
       onOutput: input.onOutput,
+      imagePaths: input.imagePaths ?? [],
       modelSelection: input.modelSelection,
     }).pipe(Effect.scoped);
     // `--output-last-message` is the model's answer with the run log stripped off; empty means the

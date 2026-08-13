@@ -26,7 +26,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { useInvestigatedIssueIds, useTriageAccept } from "~/state/issues";
+import { useInvestigatedIssueIds, useIssueEnrichmentRuns, useTriageAccept } from "~/state/issues";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
 import { PROVIDER_CLIENT_DEFINITION_BY_VALUE } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
@@ -58,6 +58,7 @@ import {
   triageAcceptInput,
   triageAcceptLabel,
   triageInvestigateBlock,
+  issueAlreadyInvestigated,
   issueHasCompletedInvestigation,
   type TriageAcceptDraft,
 } from "./triage.logic";
@@ -106,11 +107,28 @@ export function TriageAcceptDialog({
     [projects],
   );
 
+  const singleIssue = issues.length === 1 ? (issues[0] ?? null) : null;
+  // The durable half of "already investigated": the live id set only knows runs this connection
+  // saw, so an issue Slack routing investigated yesterday is invisible to it after a reload. The
+  // run rows outlive the connection. Only read for a single selection — a bulk accept has no one
+  // issue to read, and its per-issue reads would be a round trip each.
+  const { runs: enrichmentRuns } = useIssueEnrichmentRuns(
+    open && singleIssue !== null ? singleIssue.id : null,
+  );
+
   // The page above rebuilds `issues` on every render, so the ids are what identify the selection
   // this dialog was opened on.
   const selectionKey = issues.map((issue) => issue.id).join(",");
   const resetDraft = useEffectEvent(() => {
-    setDraft(triageAcceptDefaults({ issues, statuses, workspaceRoots, investigatedIssueIds }));
+    setDraft(
+      triageAcceptDefaults({
+        issues,
+        statuses,
+        workspaceRoots,
+        investigatedIssueIds,
+        enrichmentRuns,
+      }),
+    );
     setSubmittingAction(null);
   });
 
@@ -120,6 +138,21 @@ export function TriageAcceptDialog({
     if (!open) return;
     resetDraft();
   }, [open, selectionKey]);
+
+  const anyAlreadyInvestigated = issues.some((issue) =>
+    issueAlreadyInvestigated(issue, investigatedIssueIds, enrichmentRuns),
+  );
+
+  // The runs read lands a beat after the dialog opens, so the defaults above were computed without
+  // it. Withdraw the offer when it arrives, and only ever withdraw: by the time this fires the
+  // checkbox may be a choice somebody made, and re-ticking it would overrule them.
+  const withdrawEnrichment = useEffectEvent(() => {
+    setDraft((current) => (current.runEnrichment ? { ...current, runEnrichment: false } : current));
+  });
+  useEffect(() => {
+    if (!open || !anyAlreadyInvestigated) return;
+    withdrawEnrichment();
+  }, [open, anyAlreadyInvestigated]);
 
   const investigateBlock = triageInvestigateBlock({
     projectId: draft.projectId,
@@ -134,8 +167,8 @@ export function TriageAcceptDialog({
         ? "You"
         : (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
           draft.assignee.provider);
-  const singleIssue = issues.length === 1 ? (issues[0] ?? null) : null;
-  const alreadyInvestigated = singleIssue !== null && issueHasCompletedInvestigation(singleIssue);
+  const alreadyInvestigated =
+    singleIssue !== null && issueHasCompletedInvestigation(singleIssue, enrichmentRuns);
   const submitting = submittingAction !== null;
   const canSubmit = draft.statusId !== null && issues.length > 0 && !submitting;
   const startTaskBlockReason =

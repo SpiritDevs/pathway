@@ -15,9 +15,9 @@ import {
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
 import { formatPendingBackgroundWorkLabel } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
-  resolveT3McpToolPresentation,
-  type T3McpToolPresentation,
-} from "@t3tools/shared/t3McpToolPresentation";
+  resolvePathwayMcpToolPresentation,
+  type PathwayMcpToolPresentation,
+} from "@t3tools/shared/pathwayMcpToolPresentation";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -277,8 +277,8 @@ export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
-export type TimelineToolPresentation = T3McpToolPresentation;
-export const resolveTimelineToolPresentation = resolveT3McpToolPresentation;
+export type TimelineToolPresentation = PathwayMcpToolPresentation;
+export const resolveTimelineToolPresentation = resolvePathwayMcpToolPresentation;
 
 export function resolveAssistantMessageCopyState({
   text,

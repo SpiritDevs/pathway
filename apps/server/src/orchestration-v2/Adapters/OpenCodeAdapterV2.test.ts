@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   NodeId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -19,6 +20,7 @@ import {
   openCodeChildPermissionRules,
   openCodePermissionRules,
   openCodePermissionRequestKind,
+  openCodeMcpRegistration,
   openCodeToolProjectionKind,
   makeOpenCodeProtocolLogger,
   OPENCODE_PROVIDER,
@@ -67,6 +69,29 @@ function providerTurn(input: {
 }
 
 describe("OpenCodeAdapterV2", () => {
+  it("registers the local MCP as pathway and skips external OpenCode servers", () => {
+    const session = {
+      environmentId: EnvironmentId.make("environment-opencode"),
+      threadId: ThreadId.make("thread-opencode-mcp"),
+      providerSessionId: "mcp-session-opencode",
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-opencode-token",
+    };
+
+    assert.deepEqual(openCodeMcpRegistration({ session, external: false }), {
+      name: "pathway",
+      config: {
+        type: "remote",
+        url: session.endpoint,
+        headers: { Authorization: session.authorizationHeader },
+        oauth: false,
+      },
+    });
+    assert.equal(openCodeMcpRegistration({ session, external: true }), undefined);
+    assert.equal(openCodeMcpRegistration({ session: undefined, external: false }), undefined);
+  });
+
   it.effect("logs bounded structural protocol diagnostics without native payload values", () =>
     Effect.gen(function* () {
       const idAllocator = yield* IdAllocatorV2;

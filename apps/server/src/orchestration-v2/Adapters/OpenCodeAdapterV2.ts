@@ -59,7 +59,7 @@ import {
   summarizeNativeProtocolPayload,
 } from "../../provider/NativeProtocolLogging.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import { t3OrchestrationSystemPrompt } from "../../provider/T3OrchestrationInstructions.ts";
+import { pathwayOrchestrationSystemPrompt } from "../../provider/PathwayOrchestrationInstructions.ts";
 import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
@@ -479,6 +479,22 @@ export function openCodeToolProjectionKind(
   return "dynamic_tool";
 }
 
+export function openCodeMcpRegistration(input: {
+  readonly session: McpProviderSession.McpProviderSessionConfig | undefined;
+  readonly external: boolean;
+}) {
+  if (input.session === undefined || input.external) return undefined;
+  return {
+    name: McpProviderSession.PATHWAY_MCP_SERVER_NAME,
+    config: {
+      type: "remote" as const,
+      url: input.session.endpoint,
+      headers: { Authorization: input.session.authorizationHeader },
+      oauth: false as const,
+    },
+  };
+}
+
 const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
   "question",
   "read",
@@ -808,21 +824,14 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             : {}),
         });
 
-        const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const hasT3Mcp = mcpSession !== undefined && !connection.external;
-        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
-        if (hasT3Mcp) {
-          yield* runOpenCodeSdk("mcp.add", () =>
-            client.mcp.add({
-              name: "t3-code",
-              config: {
-                type: "remote",
-                url: mcpSession.endpoint,
-                headers: { Authorization: mcpSession.authorizationHeader },
-                oauth: false,
-              },
-            }),
-          );
+        const mcpRegistration = openCodeMcpRegistration({
+          session: McpProviderSession.readMcpProviderSession(input.threadId),
+          external: connection.external,
+        });
+        const hasPathwayMcp = mcpRegistration !== undefined;
+        const orchestrationSystemPrompt = pathwayOrchestrationSystemPrompt(hasPathwayMcp);
+        if (mcpRegistration !== undefined) {
+          yield* runOpenCodeSdk("mcp.add", () => client.mcp.add(mcpRegistration));
         }
 
         const now = yield* DateTime.now;

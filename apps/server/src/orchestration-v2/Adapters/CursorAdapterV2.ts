@@ -43,7 +43,7 @@ import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { cursorSdkModelSelection } from "../../provider/cursorSdkModel.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import { t3OrchestrationPromptForFirstRun } from "../../provider/T3OrchestrationInstructions.ts";
+import { pathwayOrchestrationPromptForFirstRun } from "../../provider/PathwayOrchestrationInstructions.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
@@ -218,7 +218,7 @@ export function cursorMcpServers(threadId: ThreadId): Record<string, McpServerCo
     return undefined;
   }
   return {
-    "t3-code": {
+    [McpProviderSession.PATHWAY_MCP_SERVER_NAME]: {
       type: "http",
       url: session.endpoint,
       headers: {
@@ -2006,10 +2006,10 @@ export function makeCursorAdapterV2(
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapterV2TurnInput,
         ) {
-          const text = t3OrchestrationPromptForFirstRun({
+          const text = pathwayOrchestrationPromptForFirstRun({
             prompt: turnInput.message.text,
             runOrdinal: turnInput.runOrdinal,
-            hasT3Mcp: cursorMcpServers(turnInput.threadId) !== undefined,
+            hasPathwayMcp: cursorMcpServers(turnInput.threadId) !== undefined,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments,

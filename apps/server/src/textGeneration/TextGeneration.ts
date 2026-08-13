@@ -96,6 +96,15 @@ export interface InvestigationGenerationInput {
    * a database row that republishes on every write, in enrichment's case.
    */
   onOutput?: ((chunk: string) => Effect.Effect<void>) | undefined;
+  /**
+   * Images to hand the model with the prompt, as absolute paths to files on this machine.
+   *
+   * Paths rather than bytes: an issue's images are already files in the server's attachment store,
+   * and the providers here are CLIs on the same host that take an image by name. A provider with
+   * no way to attach one ignores these rather than failing; the prompt is built before the run's
+   * provider is known, so the count it states is what was offered, not what was read.
+   */
+  imagePaths?: ReadonlyArray<string> | undefined;
   /** What model and provider to use for the investigation. */
   modelSelection: ModelSelection;
 }

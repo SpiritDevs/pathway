@@ -1,5 +1,13 @@
 import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
+/** Provider-visible name for Pathway's authenticated, app-owned MCP server. */
+export const PATHWAY_MCP_SERVER_NAME = "pathway";
+
+export const pathwayMcpToolName = (toolName: string): string =>
+  `mcp__${PATHWAY_MCP_SERVER_NAME}__${toolName}`;
+
+export const PATHWAY_MCP_TOOL_WILDCARD = pathwayMcpToolName("*");
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

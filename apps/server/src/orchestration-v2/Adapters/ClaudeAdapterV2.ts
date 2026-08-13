@@ -68,7 +68,7 @@ import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "../../provider/T3OrchestrationInstructions.ts";
+import { PATHWAY_ORCHESTRATION_INSTRUCTIONS } from "../../provider/PathwayOrchestrationInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
@@ -706,7 +706,7 @@ export function makeClaudeQueryOptions(input: {
           systemPrompt: {
             type: "preset" as const,
             preset: "claude_code" as const,
-            append: T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+            append: PATHWAY_ORCHESTRATION_INSTRUCTIONS,
           },
         }),
     ...(Object.keys(extraArgs).length === 0 ? {} : { extraArgs }),
@@ -720,23 +720,32 @@ export function makeClaudeQueryOptions(input: {
   return input.cwd === null ? withDirectories : { ...withDirectories, cwd: input.cwd };
 }
 
-export const CLAUDE_T3_MCP_TOOL_WILDCARD = "mcp__t3-code__*";
+export const CLAUDE_PATHWAY_MCP_TOOL_WILDCARD = McpProviderSession.PATHWAY_MCP_TOOL_WILDCARD;
 
-// Must stay in sync with the Tool.Readonly annotations on OrchestratorToolkit;
-// ClaudeAdapterV2.test.ts cross-checks this list against the toolkit.
-export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
-  "mcp__t3-code__orchestrator_capabilities",
-  "mcp__t3-code__list_scheduled_tasks",
-  "mcp__t3-code__t3_thread_list",
-  "mcp__t3-code__t3_thread_wait",
-];
+// Mirrors every Tool.Readonly annotation in the production Pathway MCP catalog so headless
+// read-only sessions can use every safe tool. The adapter test cross-checks the full catalog.
+export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
+  "preview_status",
+  "preview_snapshot",
+  "preview_wait_for",
+  "issues_list",
+  "issues_get",
+  "orchestrator_capabilities",
+  "list_scheduled_tasks",
+  "t3_thread_list",
+  "t3_thread_wait",
+  "t3_worktree_status",
+  "email_wait_for",
+  "email_latest_code",
+  "email_list",
+  "email_get",
+].map(McpProviderSession.pathwayMcpToolName);
 
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
-// separate `tools` option. Attaching the t3-code MCP server therefore always
+// separate `tools` option. Attaching the Pathway MCP server therefore always
 // pre-approves its tools (headless modes like `dontAsk` deny anything that is
 // not pre-approved), but read-only sandboxes pre-approve only the annotated
-// read-only orchestrator tools so a read-only session cannot silently spawn
-// threads or scheduled tasks.
+// read-only Pathway tools so a read-only session cannot silently mutate app state.
 export function claudeMcpQueryOverrides(input: {
   readonly threadId: ThreadId;
   readonly readOnlySandbox: boolean;
@@ -750,12 +759,12 @@ export function claudeMcpQueryOverrides(input: {
     return input.allowedTools === undefined ? {} : { allowedTools: input.allowedTools };
   }
   const mcpAllowedTools = input.readOnlySandbox
-    ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    ? CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS
+    : [CLAUDE_PATHWAY_MCP_TOOL_WILDCARD];
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
-      "t3-code": {
+      [McpProviderSession.PATHWAY_MCP_SERVER_NAME]: {
         type: "http",
         url: session.endpoint,
         headers: {

@@ -37,9 +37,13 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
+import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import * as ServerConfig from "../config.ts";
+import { SAFE_IMAGE_FILE_EXTENSIONS } from "../imageMime.ts";
 import { IssueCommentRepository } from "../persistence/Services/IssueComments.ts";
 import { IssueLabelRepository } from "../persistence/Services/IssueLabels.ts";
 import { IssueRelationRepository } from "../persistence/Services/IssueRelations.ts";
@@ -70,6 +74,16 @@ const OPEN_STATUS_CATEGORIES: ReadonlySet<IssueStatus["category"]> = new Set([
   "started",
 ]);
 
+/**
+ * How many of an issue's images the investigation is handed.
+ *
+ * A ceiling rather than the lot: every image is another few thousand tokens of context on a
+ * request that already carries the repository, and an issue with a dozen screenshots said what it
+ * had to say in the first few. The oldest are kept — a report's own screenshot arrives with it,
+ * and what follows is usually somebody else's aside.
+ */
+const MAX_INVESTIGATION_IMAGES = 4;
+
 const invalid = (message: string) => new IssueTrackerError({ reason: "invalid", message });
 const storage = (message: string) => new IssueTrackerError({ reason: "storage", message });
 
@@ -87,6 +101,8 @@ function describeActor(actor: IssueActor): string {
 
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const issueRepository = yield* IssueRepository;
   const statusRepository = yield* IssueStatusRepository;
@@ -104,6 +120,30 @@ export const make = Effect.gen(function* () {
     message: string,
     effect: Effect.Effect<A, { readonly message: string }>,
   ): Effect.Effect<A, IssueTrackerError> => effect.pipe(Effect.mapError(() => storage(message)));
+
+  /**
+   * The image files behind a set of comment attachment ids, in the order they were given.
+   *
+   * A comment stores ids, not paths: the bytes are in the attachment store that threads share,
+   * under a name the store derives from the media type it was uploaded with. Only an image can be
+   * uploaded to an issue in the first place, and anything that resolves to something else on disk
+   * is dropped here anyway — this feeds `--image`, which is for pictures.
+   */
+  const resolveCommentImagePaths = (
+    attachmentIds: ReadonlyArray<string>,
+  ): ReadonlyArray<string> => {
+    const imagePaths: Array<string> = [];
+    for (const attachmentId of attachmentIds) {
+      const resolved = resolveAttachmentPathById({
+        attachmentsDir: serverConfig.attachmentsDir,
+        attachmentId,
+      });
+      if (resolved === null) continue;
+      if (!SAFE_IMAGE_FILE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) continue;
+      imagePaths.push(resolved);
+    }
+    return imagePaths;
+  };
 
   /**
    * Everything the model is told, read in one pass.
@@ -169,7 +209,22 @@ export const make = Effect.gen(function* () {
       body: comment.body,
     }));
 
+    // A Slack report that is nothing but a screenshot puts its one useful fact on a comment
+    // attachment, so an investigation that never sees those is reading around the bug.
+    const attachmentIds: Array<string> = [];
+    const seenAttachmentIds = new Set<string>();
+    for (const comment of comments) {
+      for (const attachmentId of comment.attachmentIds) {
+        if (seenAttachmentIds.has(attachmentId)) continue;
+        seenAttachmentIds.add(attachmentId);
+        attachmentIds.push(attachmentId);
+      }
+    }
+    const resolvedImagePaths = resolveCommentImagePaths(attachmentIds);
+    const imagePaths = resolvedImagePaths.slice(0, MAX_INVESTIGATION_IMAGES);
+
     return {
+      imagePaths,
       prompt: buildInvestigationPrompt({
         key: issue.key,
         title: issue.title,
@@ -183,6 +238,10 @@ export const make = Effect.gen(function* () {
         todos: todos.map((todo) => ({ text: todo.text, done: todo.done })),
         relations: investigationRelations,
         comments: investigationComments,
+        images: {
+          provided: imagePaths.length,
+          omitted: resolvedImagePaths.length - imagePaths.length,
+        },
         availableLabels: labels.map((label) => label.name as string),
         openIssues,
       }),
@@ -244,6 +303,7 @@ export const make = Effect.gen(function* () {
               cwd: request.workspaceRoot,
               prompt: context.prompt,
               onOutput,
+              imagePaths: context.imagePaths,
               modelSelection: run.modelSelection,
             })
             .pipe(
@@ -261,6 +321,8 @@ export const make = Effect.gen(function* () {
             : normalizeInvestigationResult(parsed, {
                 knownIssueKeys: context.knownIssueKeys,
                 knownLabels: context.knownLabels,
+                currentTitle: request.issue.title,
+                currentDescription: request.issue.description,
               });
 
         if (result === null) {

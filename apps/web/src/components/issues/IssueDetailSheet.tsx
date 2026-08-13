@@ -115,7 +115,7 @@ import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { ScrollArea } from "../ui/scroll-area";
-import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
+import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
@@ -152,8 +152,10 @@ import {
 import {
   ISSUE_INVESTIGATE_BLOCK_REASONS,
   activeIssueEnrichmentRun,
+  issueApplyDescriptionPatch,
   issueApplyLabelPatch,
   issueApplyPriorityPatch,
+  issueApplyTitlePatch,
   issueInvestigateBlock,
 } from "./issueEnrichment.logic";
 import {
@@ -255,7 +257,7 @@ export function IssueDetailSheet({
         <RightPanelResizeHandle className="max-sm:hidden" handlers={handlers} />
         <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Issue"}</SheetTitle>
         {issue === null ? (
-          <IssueDetailPlaceholder issueKey={issueKey} onClose={onClose} state={state} />
+          <IssueDetailPlaceholder issueKey={issueKey} state={state} />
         ) : (
           <IssueDetailBody
             issue={issue}
@@ -272,24 +274,20 @@ export function IssueDetailSheet({
   );
 }
 
-function SheetHeaderBar({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children?: ReactNode;
-}) {
+function SheetHeaderBar({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3">
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
         {title}
       </span>
       {children}
-      <Button aria-label="Close issue" onClick={onClose} size="icon-xs" variant="ghost">
+      <SheetClose
+        aria-label="Close issue"
+        className="[-webkit-app-region:no-drag]"
+        render={<Button size="icon-xs" variant="ghost" />}
+      >
         <XIcon />
-      </Button>
+      </SheetClose>
     </div>
   );
 }
@@ -297,15 +295,13 @@ function SheetHeaderBar({
 function IssueDetailPlaceholder({
   issueKey,
   state,
-  onClose,
 }: {
   issueKey: string | null;
   state: ReturnType<typeof resolveIssueDetailState>;
-  onClose: () => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar onClose={onClose} title={issueKey ?? ""} />
+      <SheetHeaderBar title={issueKey ?? ""} />
       {state === "loading" ? (
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-4 text-muted-foreground" />
@@ -916,7 +912,7 @@ function IssueDetailBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar onClose={onClose} title={issue.key}>
+      <SheetHeaderBar title={issue.key}>
         <IssueDeleteMenu
           count={1}
           onConfirm={handleDelete}
@@ -1099,8 +1095,12 @@ function IssueDetailBody({
                     issue={issue}
                     issuesByKey={issuesByKey}
                     labels={labels}
+                    onApplyDescription={(description) =>
+                      write(issueApplyDescriptionPatch(issue, description))
+                    }
                     onApplyLabel={(labelId) => write(issueApplyLabelPatch(issue, labelId))}
                     onApplyPriority={(priority) => write(issueApplyPriorityPatch(issue, priority))}
+                    onApplyTitle={(title) => write(issueApplyTitlePatch(issue, title))}
                     onCancel={handleCancelRun}
                     onOpenIssueKey={onOpenIssueKey}
                     runs={enrichmentRuns}

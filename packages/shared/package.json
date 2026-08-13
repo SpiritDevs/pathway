@@ -79,6 +79,10 @@
       "types": "./src/t3McpToolPresentation.ts",
       "import": "./src/t3McpToolPresentation.ts"
     },
+    "./pathwayMcpToolPresentation": {
+      "types": "./src/pathwayMcpToolPresentation.ts",
+      "import": "./src/pathwayMcpToolPresentation.ts"
+    },
     "./Struct": {
       "types": "./src/Struct.ts",
       "import": "./src/Struct.ts"

@@ -33,8 +33,8 @@ The orchestration tools share the existing authenticated HTTP MCP endpoint:
 http://127.0.0.1:<server-port>/mcp
 ```
 
-The provider-visible server key is `t3-code`. The endpoint registers both the
-preview toolkit and the orchestration toolkit.
+The provider-visible server key is `pathway`. The endpoint registers the complete
+Pathway tool surface: preview, issues, orchestration, worktree, and captured email.
 
 Before `ProviderSessionManager` opens a new V2 provider session, it asks
 `McpSessionRegistry` for a credential scoped to:
@@ -44,10 +44,9 @@ Before `ProviderSessionManager` opens a new V2 provider session, it asks
 - the concrete provider instance; and
 - the provider session.
 
-The credential grants `preview` and `orchestration` capabilities. Credentials
-expire after a maximum lifetime, expire when idle, and are revoked when the
-provider session is released. The raw token is not persisted in orchestration
-state.
+The credential grants every current MCP capability. Credentials remain live while
+the provider session is active and are revoked when that session, thread, or server
+stops. The raw token is not persisted in orchestration state.
 
 The MCP HTTP server resolves the bearer token and supplies the resulting
 `McpInvocationScope` to tool handlers. Orchestration handlers additionally
@@ -57,17 +56,15 @@ check the `orchestration` capability before reading or mutating state.
 
 ### Codex V2
 
-Codex app-server receives the remote MCP server through command-line config
-overrides:
+Codex app-server receives the remote MCP server through thread runtime config:
 
 ```text
--c mcp_servers.t3-code.url=http://127.0.0.1:<port>/mcp
--c mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"
+mcp_servers.pathway.url=http://127.0.0.1:<port>/mcp
+mcp_servers.pathway.http_headers.Authorization="Bearer <provider-session-token>"
 ```
 
-The provider-session token is placed in `T3_MCP_BEARER_TOKEN`. Both the
-production Codex launcher and the injectable test launcher use the same
-projection helper.
+The production Codex launcher and the injectable test launcher use the same
+projection helper. The authorization header is passed in memory and never logged.
 
 ### Claude Agent SDK V2
 
@@ -76,7 +73,7 @@ Claude receives an HTTP MCP server in its query options:
 ```ts
 {
   mcpServers: {
-    "t3-code": {
+    pathway: {
       type: "http",
       url: "http://127.0.0.1:<port>/mcp",
       headers: {
@@ -86,7 +83,7 @@ Claude receives an HTTP MCP server in its query options:
   },
   allowedTools: [
     // existing allowed tools
-    "mcp__t3-code__*",
+    "mcp__pathway__*",
   ],
 }
 ```

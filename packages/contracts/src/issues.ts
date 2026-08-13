@@ -612,6 +612,18 @@ export const IssueEnrichmentResult = Schema.Struct({
     Schema.isMaxLength(ISSUE_ENRICHMENT_MAX_SUGGESTED_LABELS),
   ),
   suggestedPriority: Schema.NullOr(IssuePriority),
+  /**
+   * A title for an issue that arrived without one — a Slack message ingested with no user-entered
+   * text. Absent whenever the issue already says what it is: renaming a title a person wrote is
+   * not the run's business.
+   */
+  suggestedTitle: Schema.optionalKey(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)),
+  ),
+  /** A body for an issue that has none. Markdown, so it is not trimmed. Absent means leave it. */
+  suggestedDescription: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(ISSUE_DESCRIPTION_MAX_CHARS)),
+  ),
 });
 export type IssueEnrichmentResult = typeof IssueEnrichmentResult.Type;
 

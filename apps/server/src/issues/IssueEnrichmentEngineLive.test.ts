@@ -11,6 +11,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -22,6 +23,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   TextGenerationError,
+  type ChatAttachmentId,
   type IssueActor,
   type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
@@ -59,6 +61,9 @@ import { IssueTrackerService, layer as issueTrackerLayer } from "./IssueTrackerS
 const ACTOR: IssueActor = { kind: "user" };
 const PROJECT = ProjectId.make("project-alpha");
 const WORKSPACE_ROOT = "/tmp/pathway";
+/** A 1x1 transparent PNG — the smallest thing that is genuinely an image. */
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 type Investigate = TextGeneration.TextGeneration["Service"]["investigate"];
 
@@ -361,6 +366,88 @@ describe("IssueEnrichmentEngineLive", () => {
       const { run: nextRun } = yield* tracker.startEnrichment({ issueId: second.id });
       yield* Effect.sleep(50);
       assert.strictEqual(yield* runState(tracker, second.id, nextRun.id), "running");
+    }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
+  );
+
+  it.effect("hands the model the images on an issue's comments, newest last, capped", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<{
+        readonly imagePaths: ReadonlyArray<string>;
+        readonly prompt: string;
+      }>({ imagePaths: [], prompt: "" });
+      const tracker = yield* buildTracker(({ imagePaths, prompt }) =>
+        Ref.set(seen, { imagePaths: imagePaths ?? [], prompt }).pipe(
+          Effect.as({ text: encodeAnswer(ANSWER) }),
+        ),
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create(
+        { title: "Only a screenshot", projectId: PROJECT },
+        ACTOR,
+      );
+
+      // Six images over two comments: one past the cap, and enough to show the order.
+      const attachmentIds: Array<ChatAttachmentId> = [];
+      for (let index = 0; index < 6; index += 1) {
+        const { attachmentId } = yield* tracker.uploadCommentAttachment({
+          issueId: issue.id,
+          dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+        });
+        attachmentIds.push(attachmentId);
+      }
+      yield* tracker.commentCreate(
+        {
+          issueId: issue.id,
+          body: "attached an image in Slack.",
+          attachmentIds: attachmentIds.slice(0, 5),
+        },
+        ACTOR,
+      );
+      yield* tracker.commentCreate(
+        { issueId: issue.id, body: "and one more", attachmentIds: attachmentIds.slice(5) },
+        ACTOR,
+      );
+
+      const { run } = yield* tracker.startEnrichment({ issueId: issue.id });
+      assert.strictEqual((yield* awaitFinished(tracker, issue.id, run.id)).state, "done");
+
+      const { imagePaths, prompt } = yield* Ref.get(seen);
+      // The oldest four, in the order the comments were written: a report's own screenshot comes
+      // in with it, and the cap must not be the reason it is the one dropped.
+      assert.deepStrictEqual(
+        imagePaths.map((imagePath) => imagePath.split("/").at(-1)),
+        attachmentIds.slice(0, 4).map((attachmentId) => `${attachmentId}.png`),
+      );
+      // Real files, in the attachment store rather than copies of it.
+      for (const imagePath of imagePaths) {
+        assert.isTrue(yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(imagePath)));
+      }
+      assert.include(prompt, "- 4 image attachment(s) from this issue are provided");
+      assert.include(prompt, "- 2 further image attachment(s)");
+    }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
+  );
+
+  it.effect("sends no images, and says nothing about them, for an issue that has none", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<{
+        readonly imagePaths: ReadonlyArray<string>;
+        readonly prompt: string;
+      }>({ imagePaths: ["unset"], prompt: "" });
+      const tracker = yield* buildTracker(({ imagePaths, prompt }) =>
+        Ref.set(seen, { imagePaths: imagePaths ?? [], prompt }).pipe(
+          Effect.as({ text: encodeAnswer(ANSWER) }),
+        ),
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create({ title: "No pictures", projectId: PROJECT }, ACTOR);
+      yield* tracker.commentCreate({ issueId: issue.id, body: "Words only." }, ACTOR);
+
+      const { run } = yield* tracker.startEnrichment({ issueId: issue.id });
+      assert.strictEqual((yield* awaitFinished(tracker, issue.id, run.id)).state, "done");
+
+      const { imagePaths, prompt } = yield* Ref.get(seen);
+      assert.deepStrictEqual(imagePaths, []);
+      assert.notInclude(prompt, "Attachments:");
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 
