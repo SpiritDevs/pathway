@@ -3,6 +3,7 @@ import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   IssueEnrichmentRunId,
   IssueId,
+  IssueMilestoneId,
   IssueStatusId,
   ProjectId,
   ProviderDriverKind,
@@ -709,6 +710,147 @@ describe("IssueTrackerService", () => {
         ACTOR,
       );
       assert.isNull(moved.milestoneId);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("carries a milestone's two dates and refuses a backwards range", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { milestone } = yield* tracker.milestoneCreate({
+        projectId: PROJECT,
+        name: "Structure",
+        startDate: "2026-08-15",
+        targetDate: "2026-09-01",
+      });
+      assert.deepStrictEqual(
+        [milestone.startDate, milestone.targetDate],
+        ["2026-08-15", "2026-09-01"],
+      );
+
+      const backwards = yield* tracker
+        .milestoneCreate({
+          projectId: PROJECT,
+          name: "Backwards",
+          startDate: "2026-09-02",
+          targetDate: "2026-09-01",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(backwards.reason, "invalid");
+
+      // A patch is judged on the pair it merges into, not the half it carries.
+      const halfPatch = yield* tracker
+        .milestoneUpdate({ milestoneId: milestone.id, patch: { startDate: "2026-09-05" } }, ACTOR)
+        .pipe(Effect.flip);
+      assert.strictEqual(halfPatch.reason, "invalid");
+
+      // Clearing the target date makes that same start date fine again.
+      const { milestone: cleared } = yield* tracker.milestoneUpdate(
+        { milestoneId: milestone.id, patch: { startDate: "2026-09-05", targetDate: null } },
+        ACTOR,
+      );
+      assert.deepStrictEqual([cleared.startDate, cleared.targetDate], ["2026-09-05", null]);
+
+      const { milestone: undated } = yield* tracker.milestoneUpdate(
+        { milestoneId: milestone.id, patch: { startDate: null } },
+        ACTOR,
+      );
+      assert.isNull(undated.startDate);
+
+      // A milestone created before dates existed reads back as a point, not a bar.
+      const { milestone: point } = yield* tracker.milestoneCreate({
+        projectId: PROJECT,
+        name: "Point",
+      });
+      assert.deepStrictEqual([point.startDate, point.targetDate], [null, null]);
+
+      const snapshot = yield* tracker.getSnapshot();
+      assert.deepStrictEqual(
+        snapshot.milestones.map((candidate) => [candidate.name, candidate.startDate]),
+        [
+          ["Structure", null],
+          ["Point", null],
+        ],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("reconstructs a milestone's burn-up from the change log", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const startDate = yield* dateDaysFromToday(-3);
+      const today = yield* dateDaysFromToday(0);
+      const { milestone } = yield* tracker.milestoneCreate({
+        projectId: PROJECT,
+        name: "Beta",
+        startDate,
+        targetDate: yield* dateDaysFromToday(3),
+      });
+
+      // Created straight into the milestone, which writes no `milestone` event at all — the case
+      // a forward replay over the change log would miss entirely.
+      const { issue: planned } = yield* tracker.create(
+        { title: "Planned", projectId: PROJECT, milestoneId: milestone.id },
+        ACTOR,
+      );
+      yield* tracker.update(
+        { issueId: planned.id, patch: { statusId: IssueStatusId.make("in-review") } },
+        ACTOR,
+      );
+      const { issue: shipped } = yield* tracker.create(
+        {
+          title: "Shipped",
+          projectId: PROJECT,
+          milestoneId: milestone.id,
+          statusId: IssueStatusId.make("done"),
+        },
+        ACTOR,
+      );
+      // Neither of these is work anybody is tracking, so neither belongs in the counts.
+      yield* tracker.create(
+        { title: "Intake", projectId: PROJECT, milestoneId: milestone.id, triage: true },
+        ACTOR,
+      );
+      const { issue: dropped } = yield* tracker.create(
+        { title: "Dropped", projectId: PROJECT, milestoneId: milestone.id },
+        ACTOR,
+      );
+      yield* tracker.remove({ issueId: dropped.id }, ACTOR);
+
+      const history = yield* tracker.milestoneHistory({ milestoneId: milestone.id });
+
+      assert.isFalse(history.approximate);
+      assert.strictEqual(history.points[0]?.date, startDate);
+      assert.strictEqual(history.points.length, 4);
+      // Everything happened today, so only the last point has anything in it. `review` counts as
+      // started without counting as done, which is the whole reason the tally is by category.
+      assert.deepStrictEqual(history.points.at(-1), {
+        date: today,
+        scope: 2,
+        started: 2,
+        completed: 1,
+      });
+      assert.deepStrictEqual(history.points.at(-2), {
+        date: yield* dateDaysFromToday(-1),
+        scope: 0,
+        started: 0,
+        completed: 0,
+      });
+
+      // Moving an issue out takes it out of the current member set, and the log cannot bring it
+      // back — the documented limitation, pinned so a change to it is a deliberate one.
+      yield* tracker.update({ issueId: shipped.id, patch: { milestoneId: null } }, ACTOR);
+      const after = yield* tracker.milestoneHistory({ milestoneId: milestone.id });
+      assert.deepStrictEqual(after.points.at(-1), {
+        date: today,
+        scope: 1,
+        started: 1,
+        completed: 0,
+      });
+
+      const missing = yield* tracker
+        .milestoneHistory({ milestoneId: IssueMilestoneId.make("nonexistent") })
+        .pipe(Effect.flip);
+      assert.strictEqual(missing.reason, "not-found");
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

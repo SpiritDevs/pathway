@@ -1,8 +1,11 @@
 import {
   IssueId,
   IssueLabelId,
+  IssueMilestoneId,
   IssueStatusId,
+  ProjectId,
   type Issue,
+  type IssueMilestone,
   type IssueStatus,
   type IssueStatusCategory,
 } from "@t3tools/contracts";
@@ -15,9 +18,14 @@ import {
   countIssuesByStatus,
   duplicateNameError,
   issueKeyPrefixError,
+  issueMilestoneCreateInput,
+  issueMilestoneDateEdit,
+  issueMilestoneDatesError,
+  issueMilestoneDraftError,
   issueStatusDeletability,
   issueStatusReassignmentOptions,
   normalizeIssueKeyPrefix,
+  reorderedIssueMilestoneIds,
   reorderedIssueStatusIds,
 } from "./issuesSettings.logic";
 
@@ -191,6 +199,166 @@ describe("counts", () => {
   it("counts a triage issue, which still wears its labels", () => {
     const store = storeOf([issue("1", { triage: true, labelIds: [BUG] })]);
     expect(countIssuesByLabel(store).get(BUG)).toBe(1);
+  });
+});
+
+const ALPHA = ProjectId.make("alpha");
+
+function milestone(id: string, dates: Partial<IssueMilestone> = {}): IssueMilestone {
+  return {
+    id: IssueMilestoneId.make(id),
+    projectId: ALPHA,
+    name: id,
+    description: null,
+    startDate: null,
+    targetDate: null,
+    position: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...dates,
+  };
+}
+
+describe("reorderedIssueMilestoneIds", () => {
+  const milestones = [milestone("beta"), milestone("v1"), milestone("v2")];
+
+  it("moves the dragged milestone to the slot it was dropped on", () => {
+    expect(reorderedIssueMilestoneIds({ milestones, activeId: "v2", overId: "beta" })).toEqual([
+      "v2",
+      "beta",
+      "v1",
+    ]);
+  });
+
+  it("returns null when the drop changed nothing", () => {
+    expect(reorderedIssueMilestoneIds({ milestones, activeId: "v1", overId: "v1" })).toBe(null);
+    // A milestone from another project's group is not in this list, so its drop is not an order.
+    expect(reorderedIssueMilestoneIds({ milestones, activeId: "v1", overId: "elsewhere" })).toBe(
+      null,
+    );
+  });
+});
+
+describe("issueMilestoneDatesError", () => {
+  it("refuses a milestone that ends before it starts", () => {
+    expect(issueMilestoneDatesError("2026-09-01", "2026-08-01")).toBe(
+      "A milestone cannot start after its target date.",
+    );
+  });
+
+  it("accepts a single day, a forward range, and a half-dated milestone", () => {
+    expect(issueMilestoneDatesError("2026-08-01", "2026-08-01")).toBe(null);
+    expect(issueMilestoneDatesError("2026-08-01", "2026-09-01")).toBe(null);
+    expect(issueMilestoneDatesError(null, "2026-08-01")).toBe(null);
+    expect(issueMilestoneDatesError("2026-08-01", null)).toBe(null);
+  });
+});
+
+describe("issueMilestoneDateEdit", () => {
+  const dated = milestone("v1", { startDate: "2026-08-01", targetDate: "2026-09-01" });
+
+  it("patches one end of the range", () => {
+    expect(issueMilestoneDateEdit(dated, "targetDate", "2026-10-01")).toEqual({
+      kind: "patch",
+      patch: { targetDate: "2026-10-01" },
+    });
+    expect(issueMilestoneDateEdit(dated, "startDate", "2026-07-01")).toEqual({
+      kind: "patch",
+      patch: { startDate: "2026-07-01" },
+    });
+  });
+
+  it("clears a date when the field is emptied", () => {
+    expect(issueMilestoneDateEdit(dated, "startDate", "")).toEqual({
+      kind: "patch",
+      patch: { startDate: null },
+    });
+    expect(issueMilestoneDateEdit(milestone("v2"), "startDate", "")).toEqual({ kind: "unchanged" });
+  });
+
+  it("leaves a half-typed day and an unmoved one alone", () => {
+    expect(issueMilestoneDateEdit(dated, "startDate", "0002-08")).toEqual({ kind: "unchanged" });
+    expect(issueMilestoneDateEdit(dated, "startDate", "2026-08-01")).toEqual({ kind: "unchanged" });
+  });
+
+  it("refuses an edit that would invert the range, against the other end as it stands", () => {
+    expect(issueMilestoneDateEdit(dated, "startDate", "2026-10-01")).toEqual({
+      kind: "invalid",
+      error: "A milestone cannot start after its target date.",
+    });
+    expect(issueMilestoneDateEdit(dated, "targetDate", "2026-07-01")).toEqual({
+      kind: "invalid",
+      error: "A milestone cannot start after its target date.",
+    });
+    // Clearing the other end first makes the same edit fine.
+    expect(issueMilestoneDateEdit(milestone("v2"), "startDate", "2026-10-01")).toEqual({
+      kind: "patch",
+      patch: { startDate: "2026-10-01" },
+    });
+  });
+});
+
+describe("issueMilestoneDraftError", () => {
+  const existing = [{ id: "v1", name: "v1" }];
+
+  it("accepts a named milestone with no dates, one date, or a forward range", () => {
+    expect(issueMilestoneDraftError({ name: "v2", startDate: "", targetDate: "" }, existing)).toBe(
+      null,
+    );
+    expect(
+      issueMilestoneDraftError({ name: "v2", startDate: "", targetDate: "2026-09-01" }, existing),
+    ).toBe(null);
+    expect(
+      issueMilestoneDraftError(
+        { name: "v2", startDate: "2026-08-01", targetDate: "2026-09-01" },
+        existing,
+      ),
+    ).toBe(null);
+  });
+
+  it("rejects a name the project already uses, but not one another project uses", () => {
+    expect(issueMilestoneDraftError({ name: "V1", startDate: "", targetDate: "" }, existing)).toBe(
+      "V1 already exists.",
+    );
+    expect(issueMilestoneDraftError({ name: "V1", startDate: "", targetDate: "" }, [])).toBe(null);
+    expect(issueMilestoneDraftError({ name: "  ", startDate: "", targetDate: "" }, existing)).toBe(
+      "Enter a name.",
+    );
+  });
+
+  it("rejects a half-typed day and a backwards range", () => {
+    expect(
+      issueMilestoneDraftError({ name: "v2", startDate: "0002-0", targetDate: "" }, existing),
+    ).toBe("Pick a whole start date.");
+    expect(
+      issueMilestoneDraftError({ name: "v2", startDate: "", targetDate: "0002-0" }, existing),
+    ).toBe("Pick a whole target date.");
+    expect(
+      issueMilestoneDraftError(
+        { name: "v2", startDate: "2026-09-01", targetDate: "2026-08-01" },
+        existing,
+      ),
+    ).toBe("A milestone cannot start after its target date.");
+  });
+});
+
+describe("issueMilestoneCreateInput", () => {
+  it("trims the name and sends only the dates that were filled in", () => {
+    expect(
+      issueMilestoneCreateInput(ALPHA, { name: "  v2  ", startDate: "", targetDate: "" }),
+    ).toEqual({ projectId: ALPHA, name: "v2" });
+    expect(
+      issueMilestoneCreateInput(ALPHA, {
+        name: "v2",
+        startDate: "2026-08-01",
+        targetDate: "2026-09-01",
+      }),
+    ).toEqual({
+      projectId: ALPHA,
+      name: "v2",
+      startDate: "2026-08-01",
+      targetDate: "2026-09-01",
+    });
   });
 });
 

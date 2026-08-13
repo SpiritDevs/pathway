@@ -11,6 +11,7 @@ import {
   IssueDetail,
   IssueEvent,
   IssueMilestone,
+  IssueMilestoneHistoryResult,
   IssueMilestonePatch,
   IssuePatch,
   IssueRelation,
@@ -37,6 +38,7 @@ import {
   SlackIntakeTrigger,
   SlackSetTokenInput,
   issueCycleStatusOn,
+  issueMilestoneStatusOn,
   isPlaceholderIssueTitle,
   isSlackIntakeTriggerActive,
   ISSUES_IMPORT_CSV_MAX_CHARS,
@@ -187,6 +189,7 @@ const MILESTONE_JSON = {
   projectId: "project-1",
   name: "Structure",
   description: "Milestones, cycles, todos, relations.",
+  startDate: "2026-08-15",
   targetDate: "2026-09-01",
   position: 1,
   createdAt: "2026-08-12T00:00:00Z",
@@ -481,9 +484,109 @@ describe("IssueMilestone", () => {
     expect(() => decodeMilestone({ ...MILESTONE_JSON, targetDate: "next friday" })).toThrow();
   });
 
-  it("tells clearing a target date from leaving it alone", () => {
+  // Every milestone created before dates existed is a point, so both ends have to be droppable.
+  it("takes a start date on the same terms", () => {
+    expect(decodeMilestone({ ...MILESTONE_JSON, startDate: null }).startDate).toBeNull();
+    expect(() => decodeMilestone({ ...MILESTONE_JSON, startDate: "next friday" })).toThrow();
+  });
+
+  it("tells clearing a date from leaving it alone", () => {
     expect(decodeMilestonePatch({ targetDate: null }).targetDate).toBeNull();
     expect(decodeMilestonePatch({ name: "Renamed" }).targetDate).toBeUndefined();
+    expect(decodeMilestonePatch({ startDate: null }).startDate).toBeNull();
+    expect(decodeMilestonePatch({ name: "Renamed" }).startDate).toBeUndefined();
+  });
+
+  // Storing the status would make it stale the moment this server went to sleep.
+  it("stores dates and no status", () => {
+    expect(Object.keys(IssueMilestone.fields)).not.toContain("status");
+  });
+
+  it("derives completion before lateness, so a finished milestone is never overdue", () => {
+    const milestone = decodeMilestone(MILESTONE_JSON);
+    const on = (done: number, total: number, started: number, today: string) =>
+      issueMilestoneStatusOn(milestone, { done, total, started }, decodeDate(today));
+
+    expect(on(3, 3, 0, "2026-09-30")).toBe("completed");
+    expect(on(2, 3, 0, "2026-09-30")).toBe("overdue");
+    expect(on(0, 0, 0, "2026-09-30")).toBe("overdue");
+  });
+
+  it("starts once anything is in flight or the start date has arrived", () => {
+    const milestone = decodeMilestone(MILESTONE_JSON);
+    const on = (started: number, today: string) =>
+      issueMilestoneStatusOn(milestone, { done: 0, total: 3, started }, decodeDate(today));
+
+    expect(on(0, "2026-08-14")).toBe("upcoming");
+    // The day itself counts, the same way a cycle's start day does.
+    expect(on(0, "2026-08-15")).toBe("in-progress");
+    // A `review` issue is started-but-not-done work, so it moves the milestone off "upcoming".
+    expect(on(1, "2026-08-01")).toBe("in-progress");
+  });
+
+  // `started` counts what is in flight, so finished work only shows up in `done` — a milestone
+  // that has completed something has plainly started, whatever its dates say.
+  it("starts on completed work alone, without a start date and with nothing in flight", () => {
+    const undated = decodeMilestone({ ...MILESTONE_JSON, startDate: null });
+
+    expect(
+      issueMilestoneStatusOn(undated, { done: 3, total: 5, started: 0 }, decodeDate("2026-08-01")),
+    ).toBe("in-progress");
+  });
+
+  it("leaves an undated milestone upcoming until its issues move", () => {
+    const undated = decodeMilestone({ ...MILESTONE_JSON, startDate: null, targetDate: null });
+    const on = (done: number, total: number, started: number) =>
+      issueMilestoneStatusOn(undated, { done, total, started }, decodeDate("2026-12-25"));
+
+    expect(on(0, 0, 0)).toBe("upcoming");
+    expect(on(0, 3, 0)).toBe("upcoming");
+    expect(on(1, 3, 1)).toBe("in-progress");
+    expect(on(3, 3, 0)).toBe("completed");
+  });
+});
+
+describe("IssueMilestoneHistoryResult", () => {
+  const codec = Schema.toCodecJson(IssueMilestoneHistoryResult);
+  const RESULT_JSON = {
+    points: [
+      { date: "2026-08-15", scope: 3, started: 1, completed: 0 },
+      { date: "2026-08-16", scope: 3, started: 2, completed: 1 },
+    ],
+    approximate: false,
+  };
+
+  it("round-trips through the JSON codec the RPC serializes with", () => {
+    const result = Schema.decodeUnknownSync(codec)(RESULT_JSON);
+
+    expect(Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(result))).toStrictEqual(
+      result,
+    );
+  });
+
+  // The series is a count of issues, so a fraction or a negative is a bug on the wire.
+  it("refuses a count that is not a whole number of issues", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(codec)({
+        ...RESULT_JSON,
+        points: [{ date: "2026-08-15", scope: -1, started: 0, completed: 0 }],
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(codec)({
+        ...RESULT_JSON,
+        points: [{ date: "2026-08-15", scope: 1.5, started: 0, completed: 0 }],
+      }),
+    ).toThrow();
+  });
+
+  it("dates each point to a calendar day, matching the milestone's own dates", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(codec)({
+        ...RESULT_JSON,
+        points: [{ date: "2026-08-15T00:00:00Z", scope: 0, started: 0, completed: 0 }],
+      }),
+    ).toThrow();
   });
 });
 

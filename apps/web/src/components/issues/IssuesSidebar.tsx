@@ -7,6 +7,9 @@
  * same idea with a name on it: applying one writes the params its config spells out, and the row
  * lights up again whenever the params say what it says.
  *
+ * Milestones are the exception: they have pages of their own, so those rows are links, and what
+ * lights one up is the path rather than the params.
+ *
  * @module components/issues/IssuesSidebar
  */
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -21,6 +24,7 @@ import {
   FlagIcon,
   FolderIcon,
   InboxIcon,
+  MilestoneIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
@@ -106,6 +110,7 @@ import {
   moveIssueViewOrder,
   summarizeIssueViewConfig,
 } from "./issuesViews.logic";
+import { isMilestonesPathname, milestoneIdInPathname } from "./milestonesOverview.logic";
 
 /** A stable empty array: the milestone rows are memo-free, but a fresh `[]` per render is noise. */
 const NO_MILESTONE_IDS: ReadonlyArray<string> = [];
@@ -154,6 +159,21 @@ export function IssuesSidebar() {
       search: { ...search, triage: undefined, ...patch },
     });
   };
+
+  /** A milestone page is its own route, so leaving the list is a navigation rather than a patch. */
+  const navigateToMilestone = (milestoneId: IssueMilestoneId | null) => {
+    if (isMobile) setOpenMobile(false);
+    void (milestoneId === null
+      ? navigate({ to: "/issues/milestones" })
+      : navigate({ to: "/issues/milestones/$milestoneId", params: { milestoneId } }));
+  };
+
+  const onMilestones = isMilestonesPathname(pathname);
+  const openMilestoneId = milestoneIdInPathname(pathname);
+  const openMilestoneIds = useMemo(
+    () => (openMilestoneId === null ? NO_MILESTONE_IDS : [openMilestoneId]),
+    [openMilestoneId],
+  );
 
   const onTriage = onIssues && search.triage === true;
 
@@ -253,6 +273,14 @@ export function IssuesSidebar() {
                 {triageCount > 0 ? <SidebarMenuBadge>{triageCount}</SidebarMenuBadge> : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {/* A page rather than a filter: milestones are planning, and the thing you do with a
+                plan is look at all of it at once. */}
+            <SidebarMenuItem>
+              <SidebarMenuButton isActive={onMilestones} onClick={() => navigateToMilestone(null)}>
+                <MilestoneIcon />
+                <span>Milestones</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
 
@@ -324,9 +352,9 @@ export function IssuesSidebar() {
                   key={project.id}
                   milestones={milestones.filter((milestone) => milestone.projectId === project.id)}
                   milestoneProgress={milestoneProgress}
-                  onSelectMilestone={(milestoneId) => applyFilter("milestone", milestoneId)}
+                  onSelectMilestone={navigateToMilestone}
                   onSelectProject={() => applyFilter("project", project.id)}
-                  selectedMilestoneIds={onIssues ? filter.milestoneIds : NO_MILESTONE_IDS}
+                  selectedMilestoneIds={openMilestoneIds}
                   title={project.title}
                 />
               ))
@@ -579,7 +607,9 @@ function RenameIssueViewDialog({
 
 /**
  * A project row that expands into its milestones. Expansion is local: a project with no milestones
- * shows no chevron, and one whose milestone is the active filter opens with it.
+ * shows no chevron, and one holding the open milestone starts expanded.
+ *
+ * The row itself filters the list by project; a milestone under it opens that milestone's page.
  */
 function ProjectRow({
   title,

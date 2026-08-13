@@ -43,6 +43,8 @@ export const ISSUES_WS_METHODS = {
   milestoneUpdate: "issues.milestoneUpdate",
   milestoneDelete: "issues.milestoneDelete",
   milestonesReorder: "issues.milestonesReorder",
+  /** One point per day, aggregated on the server: the raw change log is far too big to ship. */
+  milestoneHistory: "issues.milestoneHistory",
   cycleCreate: "issues.cycleCreate",
   cycleUpdate: "issues.cycleUpdate",
   cycleDelete: "issues.cycleDelete",
@@ -378,6 +380,11 @@ export const IssueMilestone = Schema.Struct({
   name: TrimmedNonEmptyString,
   /** Markdown, like an issue body. Null rather than empty, so "cleared" is a state a patch can set. */
   description: Schema.NullOr(Schema.String),
+  /**
+   * A calendar day for the same reason a due date is one. Null keeps a milestone a point on the
+   * timeline rather than a bar, which is what every milestone created before dates existed is.
+   */
+  startDate: Schema.NullOr(IssueDate),
   /** A calendar day for the same reason a due date is one. */
   targetDate: Schema.NullOr(IssueDate),
   /** Ascending within the project; ties are broken by `id` so an order is always total. */
@@ -420,6 +427,36 @@ export const issueCycleStatusOn = (
   today: IssueDate,
 ): IssueCycleStatus =>
   today < cycle.startDate ? "upcoming" : today > cycle.endDate ? "ended" : "active";
+
+export const IssueMilestoneStatus = Schema.Literals([
+  "upcoming",
+  "in-progress",
+  "completed",
+  "overdue",
+]);
+export type IssueMilestoneStatus = typeof IssueMilestoneStatus.Type;
+
+/**
+ * Derived, never stored, for the reason {@link IssueCycle} gives: a milestone that went overdue
+ * overnight would still read "in progress" from a stored copy. `tally` is the category rollup its
+ * issues make — `started` counts everything past the backlog and short of done, so a `review` issue
+ * moves a milestone off "upcoming" without completing it, and `done` counts the same way, because
+ * work that is finished is work that was started.
+ */
+export const issueMilestoneStatusOn = (
+  milestone: Pick<IssueMilestone, "startDate" | "targetDate">,
+  tally: { readonly done: number; readonly total: number; readonly started: number },
+  today: IssueDate,
+): IssueMilestoneStatus =>
+  tally.total > 0 && tally.done === tally.total
+    ? "completed"
+    : milestone.targetDate !== null && today > milestone.targetDate
+      ? "overdue"
+      : tally.started > 0 ||
+          tally.done > 0 ||
+          (milestone.startDate !== null && today >= milestone.startDate)
+        ? "in-progress"
+        : "upcoming";
 
 /** Which of the three category-driven tabs a view opens on. */
 export const IssueViewTab = Schema.Literals(["active", "backlog", "all"]);
@@ -1062,6 +1099,7 @@ export const IssueMilestoneCreateInput = Schema.Struct({
   projectId: ProjectId,
   name: IssueNameInput,
   description: Schema.optional(IssueDescriptionInput),
+  startDate: Schema.optional(IssueDate),
   targetDate: Schema.optional(IssueDate),
   /** Absent appends after the last milestone in the same project. */
   position: Schema.optional(Schema.Number),
@@ -1071,6 +1109,7 @@ export type IssueMilestoneCreateInput = typeof IssueMilestoneCreateInput.Type;
 export const IssueMilestonePatch = Schema.Struct({
   name: Schema.optional(IssueNameInput),
   description: Schema.optional(Schema.NullOr(IssueDescriptionInput)),
+  startDate: Schema.optional(Schema.NullOr(IssueDate)),
   targetDate: Schema.optional(Schema.NullOr(IssueDate)),
   position: Schema.optional(Schema.Number),
   /**
@@ -1112,6 +1151,34 @@ export const IssueMilestoneResult = Schema.Struct({
   milestones: Schema.Array(IssueMilestone),
 });
 export type IssueMilestoneResult = typeof IssueMilestoneResult.Type;
+
+export const IssueMilestoneHistoryInput = Schema.Struct({ milestoneId: IssueMilestoneId });
+export type IssueMilestoneHistoryInput = typeof IssueMilestoneHistoryInput.Type;
+
+/**
+ * The milestone as it stood at the end of one calendar day. `started` includes everything already
+ * completed, so the three numbers stack: `completed <= started <= scope`.
+ */
+export const IssueMilestoneHistoryPoint = Schema.Struct({
+  date: IssueDate,
+  /** Issues assigned to the milestone that day — the burn-up's moving ceiling. */
+  scope: NonNegativeInt,
+  started: NonNegativeInt,
+  completed: NonNegativeInt,
+});
+export type IssueMilestoneHistoryPoint = typeof IssueMilestoneHistoryPoint.Type;
+
+export const IssueMilestoneHistoryResult = Schema.Struct({
+  /** Ascending by date, one per day. Empty when the milestone has no members and no start date. */
+  points: Schema.Array(IssueMilestoneHistoryPoint),
+  /**
+   * True when the reconstruction met a name the change log records but nothing live carries — a
+   * status renamed or deleted since, or the milestone itself renamed — so the counts are a best
+   * guess. The chart says so rather than presenting a number it cannot stand behind.
+   */
+  approximate: Schema.Boolean,
+});
+export type IssueMilestoneHistoryResult = typeof IssueMilestoneHistoryResult.Type;
 
 export const IssueCycleCreateInput = Schema.Struct({
   name: IssueNameInput,

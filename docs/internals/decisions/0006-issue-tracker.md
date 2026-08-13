@@ -211,3 +211,72 @@ Each stage is independently useful. The tracker earns agent access by being good
 - Two views, a filter builder, and a settings restructure land in a codebase that audits for
   performance regressions. The list must stay virtualized and the stream must send diffs, not
   snapshots.
+
+## Amendment — planning with milestones (2026-08-13)
+
+Milestones shipped above as "named checkpoints with optional target dates". That is enough to tag an
+issue with one and enough to roll progress up, but not enough to plan: the only way to see a
+milestone was to expand a project in the sidebar, which applied a filter. Giving them a settings
+page, an overview with a timeline, and a detail page forced two choices the record above did not
+make. Everything else stays as decided — milestones remain **project-scoped**, `projectId` stays
+required, and there is no second entity beside them.
+
+### A start date on the milestone, not a date-range entity
+
+`issue_milestones` gains a nullable `start_date` (migration 061). A milestone with both dates is a
+bar you can drag by either end; one with neither is a point, which is what every milestone created
+before this was.
+
+The alternative was to leave milestones as single-date checkpoints and express ranges with cycles,
+which already have `startDate` / `endDate`. Rejected: cycles span everything and are time-boxed by
+definition, milestones live inside one project and are scope-boxed, and a timeline of checkpoints
+with no width cannot be dragged into shape.
+
+Trade-offs taken knowingly:
+
+- **Nullable, so every existing row is still valid** — but every consumer now has to decide what an
+  undated milestone means. The timeline's answer is the "Unscheduled" tray, which doubles as the way
+  back out: dragging a bar into it clears both dates.
+- **`start_date` is a bare `TEXT` column with no `CHECK`**, exactly like `target_date`. The
+  `YYYY-MM-DD` shape is enforced by `IssueDate` at the schema boundary on read and write, so a
+  hand-written row can still fail decode later. Same risk as the column beside it, not a new one.
+- **No `issue_events` row for a milestone's own dates.** The change log is keyed per issue and no
+  milestone field change has ever been logged; adding one would need a milestone-scoped event
+  concept that does not exist. The cost is that a milestone has no activity feed.
+
+### Burn-up by backward replay, not a snapshot table
+
+The chart is reconstructed on demand from `issue_events`, walking backwards from today's known-true
+state, and served as one aggregated point per day.
+
+The two alternatives both lose:
+
+- **A nightly snapshot table** would be exact, but this server sleeps. There is no scheduler here —
+  it is the same argument that made cycle carry-over lazy — so a laptop that was closed for a week
+  writes a week of holes into the very series it exists to draw.
+- **Shipping raw events to the client** and folding them there keeps the server simple and makes the
+  payload unbounded, which AGENTS.md calls out directly.
+
+Backwards rather than forwards is not a style preference: an issue created already assigned to a
+milestone writes a `created` row with no milestone field, so a forward replay never sees it join and
+would silently under-count the milestones people plan up front.
+
+Trade-offs taken knowingly:
+
+- **The log stores display names, not ids.** A status — or the milestone itself — renamed since is
+  unmappable, so the reconstruction returns `approximate: true` and the chart says the history is
+  partly a guess. Correctness here would mean logging ids as well as names, which is a change to
+  every write path and to the activity feed's rendering, for a chart.
+- **Issues moved off a milestone vanish from its history**, because the replay starts from the
+  current member set. Catching them needs a second, unindexed scan of `issue_events.before`. The
+  consequence is that scope churn reads smaller than it was; documented in
+  [issue-tracker.md](../issue-tracker.md) rather than papered over.
+- **The series is capped at 366 days.** Each day is computed from the present rather than from the
+  day before it, so the cap costs only the days it removes — but a milestone older than a year has
+  no visible beginning.
+
+### Surfaces, unchanged
+
+Still web and desktop. Mobile has no issue-tracker UI at all, so it has no milestone settings page,
+overview, timeline, or detail page either; the RPC layer is shared, and read plus triage is still
+the intended first slice there.

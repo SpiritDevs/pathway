@@ -128,6 +128,10 @@ describe("searchSettings", () => {
       id: "issue-labels",
       to: "/settings/issues-labels",
     });
+    expect(searchSettings("issue milestones")[0]).toMatchObject({
+      id: "issue-milestones",
+      to: "/settings/issues-milestones",
+    });
     expect(searchSettings("import issues")[0]).toMatchObject({
       id: "issue-import",
       to: "/settings/issues-import",
@@ -157,6 +161,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
       "/settings/issues-statuses",
       "/settings/issues-labels",
+      "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",

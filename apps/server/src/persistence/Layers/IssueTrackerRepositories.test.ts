@@ -344,6 +344,7 @@ issueTrackerLayer("Issue tracker repositories", (it) => {
         projectId,
         name,
         description: null,
+        startDate: null,
         targetDate: null,
         position,
         createdAt: "2026-08-12T00:00:00.000Z",

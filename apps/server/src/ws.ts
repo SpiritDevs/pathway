@@ -2224,6 +2224,12 @@ const makeWsRpcLayer = (
             issueTracker.milestonesReorder(input),
             { "rpc.aggregate": "issues" },
           ),
+        [ISSUES_WS_METHODS.milestoneHistory]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.milestoneHistory,
+            issueTracker.milestoneHistory(input),
+            { "rpc.aggregate": "issues" },
+          ),
         [ISSUES_WS_METHODS.cycleCreate]: (input) =>
           observeRpcEffect(ISSUES_WS_METHODS.cycleCreate, issueTracker.cycleCreate(input), {
             "rpc.aggregate": "issues",

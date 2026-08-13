@@ -10,6 +10,7 @@ import { toPersistenceSqlOrDecodeError } from "../Errors.ts";
 import {
   IssueEventRepository,
   type IssueEventRepositoryShape,
+  ListIssueEventsByFieldInput,
   ListIssueEventsInput,
 } from "../Services/IssueEvents.ts";
 
@@ -72,6 +73,27 @@ const makeIssueEventRepository = Effect.gen(function* () {
       `,
   });
 
+  const listIssueEventRowsByIssuesAndFields = SqlSchema.findAll({
+    Request: ListIssueEventsByFieldInput,
+    Result: IssueEventDbRow,
+    execute: ({ issueIds, fields }) =>
+      sql`
+        SELECT
+          id,
+          issue_id AS "issueId",
+          actor_json AS "actor",
+          kind,
+          field,
+          before,
+          after,
+          created_at AS "createdAt"
+        FROM issue_events
+        WHERE issue_id IN ${sql.in(issueIds)}
+          AND field IN ${sql.in(fields)}
+        ORDER BY created_at ASC, rowid ASC
+      `,
+  });
+
   const append: IssueEventRepositoryShape["append"] = (row) =>
     appendIssueEventRow(row).pipe(
       Effect.mapError(
@@ -104,10 +126,23 @@ const makeIssueEventRepository = Effect.gen(function* () {
       ),
     );
 
+  const listByIssuesAndFields: IssueEventRepositoryShape["listByIssuesAndFields"] = (input) =>
+    input.issueIds.length === 0
+      ? Effect.succeed([])
+      : listIssueEventRowsByIssuesAndFields(input).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "IssueEventRepository.listByIssuesAndFields:query",
+              "IssueEventRepository.listByIssuesAndFields:decodeRows",
+            ),
+          ),
+        );
+
   return {
     append,
     appendMany,
     listByIssue,
+    listByIssuesAndFields,
   } satisfies IssueEventRepositoryShape;
 });
 

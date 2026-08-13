@@ -124,6 +124,8 @@ import {
   IssueKeyPrefixInput,
   IssueMilestoneCreateInput,
   IssueMilestoneDeleteInput,
+  IssueMilestoneHistoryInput,
+  IssueMilestoneHistoryResult,
   IssueMilestoneResult,
   IssueMilestoneUpdateInput,
   IssueMilestonesReorderInput,
@@ -1316,6 +1318,12 @@ export const WsIssuesMilestonesReorderRpc = Rpc.make(ISSUES_WS_METHODS.milestone
   error: IssuesRpcError,
 });
 
+export const WsIssuesMilestoneHistoryRpc = Rpc.make(ISSUES_WS_METHODS.milestoneHistory, {
+  payload: IssueMilestoneHistoryInput,
+  success: IssueMilestoneHistoryResult,
+  error: IssuesRpcError,
+});
+
 export const WsIssuesCycleCreateRpc = Rpc.make(ISSUES_WS_METHODS.cycleCreate, {
   payload: IssueCycleCreateInput,
   success: IssueCycleResult,
@@ -1565,6 +1573,7 @@ export const IssuesRpcs = RpcGroup.make(
   WsIssuesMilestoneUpdateRpc,
   WsIssuesMilestoneDeleteRpc,
   WsIssuesMilestonesReorderRpc,
+  WsIssuesMilestoneHistoryRpc,
   WsIssuesCycleCreateRpc,
   WsIssuesCycleUpdateRpc,
   WsIssuesCycleDeleteRpc,

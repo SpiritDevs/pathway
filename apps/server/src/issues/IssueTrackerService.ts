@@ -60,6 +60,8 @@ import {
   type IssueMilestone,
   type IssueMilestoneCreateInput,
   type IssueMilestoneDeleteInput,
+  type IssueMilestoneHistoryInput,
+  type IssueMilestoneHistoryResult,
   IssueMilestoneId,
   type IssueMilestoneResult,
   type IssueMilestoneUpdateInput,
@@ -163,7 +165,10 @@ import type { IssueTrackerRepositoryError } from "../persistence/Errors.ts";
 import { IssueCommentRepository } from "../persistence/Services/IssueComments.ts";
 import { IssueCycleRepository } from "../persistence/Services/IssueCycles.ts";
 import { IssueEnrichmentRunRepository } from "../persistence/Services/IssueEnrichmentRuns.ts";
-import { IssueEventRepository } from "../persistence/Services/IssueEvents.ts";
+import {
+  ISSUE_EVENT_ASSIGNMENT_FIELDS,
+  IssueEventRepository,
+} from "../persistence/Services/IssueEvents.ts";
 import { IssueLabelRepository } from "../persistence/Services/IssueLabels.ts";
 import { IssueMilestoneRepository } from "../persistence/Services/IssueMilestones.ts";
 import { IssueRelationRepository } from "../persistence/Services/IssueRelations.ts";
@@ -188,6 +193,7 @@ import {
   planIssueCsvImport,
   type PlannedIssueImportRow,
 } from "./csvImport.ts";
+import { milestoneHistory } from "./milestoneHistory.ts";
 import { issueSortOrderAfter } from "./sortOrder.ts";
 
 /** Seeded by migration 041. Only a tracker still wearing it adopts a prefix from an import. */
@@ -406,6 +412,15 @@ export interface IssueTrackerServiceShape {
   readonly milestonesReorder: (
     input: IssueMilestonesReorderInput,
   ) => Effect.Effect<IssueMilestonesResult, IssueTrackerError>;
+  /**
+   * The milestone's burn-up as one point per calendar day, rebuilt from the change log.
+   *
+   * Aggregated here rather than shipping the raw log: a busy milestone has thousands of rows and
+   * a chart has a few hundred pixels.
+   */
+  readonly milestoneHistory: (
+    input: IssueMilestoneHistoryInput,
+  ) => Effect.Effect<IssueMilestoneHistoryResult, IssueTrackerError>;
   readonly cycleCreate: (
     input: IssueCycleCreateInput,
   ) => Effect.Effect<IssueCycleResult, IssueTrackerError>;
@@ -1091,8 +1106,9 @@ export const make = Effect.gen(function* () {
    * The calendar day where this server is, not in UTC. A cycle ends on a day, and "Friday" is a
    * local word: finalising against UTC would end a Friday cycle on Thursday evening in Auckland.
    */
+  const localZone = DateTime.zoneMakeLocal();
   const todayLocal = Effect.map(DateTime.now, (instant) =>
-    DateTime.formatIsoDate(DateTime.setZone(instant, DateTime.zoneMakeLocal())),
+    DateTime.formatIsoDate(DateTime.setZone(instant, localZone)),
   );
   const newId = crypto.randomUUIDv4.pipe(
     Effect.mapError(
@@ -2040,6 +2056,11 @@ export const make = Effect.gen(function* () {
         input.name,
       );
     }
+    const startDate = input.startDate ?? null;
+    const targetDate = input.targetDate ?? null;
+    if (startDate !== null && targetDate !== null && startDate > targetDate) {
+      return yield* invalid("A milestone cannot start after its target date.", input.name);
+    }
 
     const createdAt = yield* nowIso;
     const milestone: IssueMilestone = {
@@ -2047,7 +2068,8 @@ export const make = Effect.gen(function* () {
       projectId: input.projectId,
       name: input.name,
       description: input.description ?? null,
-      targetDate: input.targetDate ?? null,
+      startDate,
+      targetDate,
       // Appended after the last milestone in its own project, not the last one anywhere.
       position: input.position ?? (inProject.at(-1)?.position ?? 0) + 1,
       createdAt,
@@ -2086,14 +2108,21 @@ export const make = Effect.gen(function* () {
         renamedTo,
       );
     }
+    // The merged pair is what has to make sense, not the half the patch happens to carry.
+    const startDate = patch.startDate === undefined ? current.startDate : patch.startDate;
+    const targetDate = patch.targetDate === undefined ? current.targetDate : patch.targetDate;
+    if (startDate !== null && targetDate !== null && startDate > targetDate) {
+      return yield* invalid("A milestone cannot start after its target date.", current.name);
+    }
 
     const updatedAt = yield* nowIso;
     const milestone: IssueMilestone = {
       ...current,
       ...(patch.name === undefined ? {} : { name: patch.name }),
       ...(patch.description === undefined ? {} : { description: patch.description }),
-      ...(patch.targetDate === undefined ? {} : { targetDate: patch.targetDate }),
       ...(patch.position === undefined ? {} : { position: patch.position }),
+      startDate,
+      targetDate,
       projectId,
       updatedAt,
     };
@@ -2236,6 +2265,41 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.mapError(storage("Failed to reorder the issue milestones")));
 
     return yield* publishMilestones();
+  });
+
+  /**
+   * The milestone's burn-up, one point per day.
+   *
+   * Gathering only: the reconstruction itself is {@link milestoneHistory}, which also documents
+   * what the change log cannot tell it. The members are the rollup set — assigned to this
+   * milestone, not soft-deleted, not in triage — matching what the progress ring counts.
+   */
+  const milestoneHistoryRead: IssueTrackerServiceShape["milestoneHistory"] = Effect.fn(
+    "IssueTrackerService.milestoneHistory",
+  )(function* (input) {
+    const [milestones, statuses, records, today] = yield* Effect.all([
+      listMilestones(),
+      listStatuses(),
+      listRecords(),
+      todayLocal,
+    ]);
+    const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
+    if (milestone === undefined) {
+      return yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`);
+    }
+
+    const members = records.filter(
+      (record) =>
+        record.milestoneId === milestone.id && record.deletedAt === null && !record.triage,
+    );
+    const events = yield* eventRepository
+      .listByIssuesAndFields({
+        issueIds: members.map((record) => record.id),
+        fields: ISSUE_EVENT_ASSIGNMENT_FIELDS,
+      })
+      .pipe(Effect.mapError(storage("Failed to read the issue change log")));
+
+    return milestoneHistory({ milestone, members, events, statuses, today, zone: localZone });
   });
 
   const publishCycles = () =>
@@ -3961,6 +4025,7 @@ export const make = Effect.gen(function* () {
     milestoneUpdate,
     milestoneDelete,
     milestonesReorder,
+    milestoneHistory: milestoneHistoryRead,
     cycleCreate,
     cycleUpdate,
     cycleDelete,

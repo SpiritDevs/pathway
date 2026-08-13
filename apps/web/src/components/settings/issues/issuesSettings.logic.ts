@@ -6,10 +6,21 @@
  *
  * @module components/settings/issues/issuesSettings.logic
  */
-import type { IssueLabelId, IssueStatus, IssueStatusCategory } from "@t3tools/contracts";
+import type {
+  IssueDate,
+  IssueLabelId,
+  IssueMilestone,
+  IssueMilestoneCreateInput,
+  IssueMilestoneId,
+  IssueMilestonePatch,
+  IssueStatus,
+  IssueStatusCategory,
+  ProjectId,
+} from "@t3tools/contracts";
 import type { IssueCsvColumnName } from "@t3tools/shared/issuesCsv";
 
 import type { IssuesStore } from "../../../state/issues";
+import { isCompleteIssueDate } from "../../issues/issueDetail.logic";
 
 /**
  * The six workflow categories, in workflow order. The description is one line because it sits
@@ -173,6 +184,133 @@ export function reorderedIssueStatusIds(input: {
   if (moved === undefined) return null;
   next.splice(to, 0, moved);
   return next;
+}
+
+// ── Milestones ─────────────────────────────────────────────────────────
+
+/**
+ * The order a drag produces inside one project, as the complete list the reorder RPC wants.
+ * Milestones are positioned per project, so `milestones` is that project's alone. Null when the
+ * drop changed nothing, which is the common case of picking a row up and putting it back.
+ */
+export function reorderedIssueMilestoneIds(input: {
+  readonly milestones: ReadonlyArray<IssueMilestone>;
+  readonly activeId: string;
+  readonly overId: string;
+}): ReadonlyArray<IssueMilestoneId> | null {
+  const ids: ReadonlyArray<IssueMilestoneId> = input.milestones.map((milestone) => milestone.id);
+  const from = ids.findIndex((id) => id === input.activeId);
+  const to = ids.findIndex((id) => id === input.overId);
+  if (from === -1 || to === -1 || from === to) return null;
+  const next = [...ids];
+  const [moved] = next.splice(from, 1);
+  if (moved === undefined) return null;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/** The sentence the server refuses with, so the field and the round trip say the same thing. */
+const BACKWARDS_MILESTONE_DATES = "A milestone cannot start after its target date.";
+
+/** Null when the pair is orderable. `YYYY-MM-DD` compares as text, so no date parsing is needed. */
+export function issueMilestoneDatesError(
+  startDate: IssueDate | null,
+  targetDate: IssueDate | null,
+): string | null {
+  if (startDate === null || targetDate === null) return null;
+  return targetDate < startDate ? BACKWARDS_MILESTONE_DATES : null;
+}
+
+export type IssueMilestoneDateEdit =
+  | { readonly kind: "unchanged" }
+  | { readonly kind: "invalid"; readonly error: string }
+  | { readonly kind: "patch"; readonly patch: IssueMilestonePatch };
+
+/** A patch touching one end of the range and nothing else. Null clears that end. */
+function milestoneDatePatch(
+  field: "startDate" | "targetDate",
+  date: IssueDate | null,
+): IssueMilestonePatch {
+  return field === "startDate" ? { startDate: date } : { targetDate: date };
+}
+
+/**
+ * What one of a milestone's two date fields should do when it is committed. An empty field clears
+ * the date, a half-typed one is left alone rather than sent, and a pair that runs backwards is
+ * caught here so the row can say so instead of waiting for the server to refuse it.
+ */
+export function issueMilestoneDateEdit(
+  milestone: Pick<IssueMilestone, "startDate" | "targetDate">,
+  field: "startDate" | "targetDate",
+  raw: string,
+): IssueMilestoneDateEdit {
+  const value = raw.trim();
+  const current = milestone[field];
+  if (value.length === 0) {
+    if (current === null) return { kind: "unchanged" };
+    return { kind: "patch", patch: milestoneDatePatch(field, null) };
+  }
+  if (!isCompleteIssueDate(value)) return { kind: "unchanged" };
+  const next = value as IssueDate;
+  if (next === current) return { kind: "unchanged" };
+  const error = issueMilestoneDatesError(
+    field === "startDate" ? next : milestone.startDate,
+    field === "targetDate" ? next : milestone.targetDate,
+  );
+  if (error !== null) return { kind: "invalid", error };
+  return { kind: "patch", patch: milestoneDatePatch(field, next) };
+}
+
+/** The add row's three fields, exactly as they are typed in. */
+export interface IssueMilestoneDraft {
+  readonly name: string;
+  readonly startDate: string;
+  readonly targetDate: string;
+}
+
+/**
+ * Null when the add row may be submitted. Milestone names collide within a project, not across the
+ * tracker, so `existing` is the one project's milestones.
+ */
+export function issueMilestoneDraftError(
+  draft: IssueMilestoneDraft,
+  existing: ReadonlyArray<{ readonly id: string; readonly name: string }>,
+): string | null {
+  const duplicate = duplicateNameError(existing, draft.name);
+  if (duplicate !== null) return duplicate;
+  if (draft.startDate.trim().length > 0 && !isCompleteIssueDate(draft.startDate)) {
+    return "Pick a whole start date.";
+  }
+  if (draft.targetDate.trim().length > 0 && !isCompleteIssueDate(draft.targetDate)) {
+    return "Pick a whole target date.";
+  }
+  return issueMilestoneDatesError(
+    draftIssueDate(draft.startDate),
+    draftIssueDate(draft.targetDate),
+  );
+}
+
+function draftIssueDate(raw: string): IssueDate | null {
+  const value = raw.trim();
+  return isCompleteIssueDate(value) ? (value as IssueDate) : null;
+}
+
+/**
+ * The create input behind the add row. Dates are omitted rather than sent as null, because the
+ * create input has no cleared state — a milestone with no dates is simply one with neither field.
+ */
+export function issueMilestoneCreateInput(
+  projectId: ProjectId,
+  draft: IssueMilestoneDraft,
+): IssueMilestoneCreateInput {
+  const startDate = draftIssueDate(draft.startDate);
+  const targetDate = draftIssueDate(draft.targetDate);
+  return {
+    projectId,
+    name: draft.name.trim(),
+    ...(startDate === null ? {} : { startDate }),
+    ...(targetDate === null ? {} : { targetDate }),
+  };
 }
 
 /** What an import maps a recognised CSV column onto, for the preview's column chips. */

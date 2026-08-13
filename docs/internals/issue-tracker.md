@@ -10,7 +10,7 @@ which direction each one points.
 ## A plain-table domain beside the projections
 
 The tracker's tables live in the same `state.sqlite` as the projection tables and are written
-directly, not derived from orchestration events. Migrations 041–046 and 056 own them:
+directly, not derived from orchestration events. Migrations 041–046 and 056–061 own them:
 
 | Migration | Adds                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------- |
@@ -24,6 +24,7 @@ directly, not derived from orchestration events. Migrations 041–046 and 056 ow
 | 057       | pinned work-model choices, channel auto-assignment, and durable multi-model audit claims                      |
 | 059       | the release-cycle default for watched Slack channels                                                          |
 | 060       | the first-class `review` status category                                                                      |
+| 061       | nullable `issue_milestones.start_date` — a milestone becomes a bar, not a point                               |
 
 [`IssueTrackerService.ts`][tracker] is the single writer. It is a write model _and_ the change feed:
 every mutation writes an `issue_events` row and publishes a diff on the same path, which is what
@@ -56,6 +57,60 @@ should break the build in every one of them.
 
 Because the opening replay carries `SlackStatusChanged`, there is no client caller for the
 `slackGetStatus` RPC. That is deliberate, not an oversight.
+
+## Milestone burn-up, by backward replay
+
+`issues.milestoneHistory` is the one tracker read the stream cannot serve: the stream carries what is
+true now, and a burn-up is the past. Nothing stores that past, so [`milestoneHistory.ts`][history]
+reconstructs it. The calculation is pure and DOM-free, the house pattern (`issuesList.logic.ts`,
+`providerUsageDisplay.ts`); the service method only gathers rows — the milestone, the live statuses,
+today's rollup members, and those members' `field IN ('status','milestone')` rows through
+`IssueEvents.listByIssuesAndFields` — and calls it.
+
+The replay runs **backwards**, from today's known-true members and categories, undoing `issue_events`
+newest first. Forwards would be wrong: an issue created already assigned to a milestone writes a
+`created` row with no milestone field, so a forward replay would never see it join.
+
+The RPC returns **one point per day** (`{date, scope, started, completed}`), never raw events —
+AGENTS.md names oversized websocket payloads as a known source of regressions. `started` is
+cumulative and defined by exclusion (anything outside `backlog` / `unstarted` / `canceled`), so
+`completed <= started <= scope`, `review` counts the day it lands, and a category added by a later
+migration counts rather than silently dropping out of the series. Length is capped at
+`MILESTONE_HISTORY_MAX_DAYS` (366): each day is computed from the present rather than from the day
+before it, so clamping the start costs only the days it cuts and never the accuracy of the rest.
+
+Two limitations, surfaced rather than papered over:
+
+- **The log stores display names, not ids** (`IssueTrackerService.ts`, the `field: "status"` and
+  `field: "milestone"` writes). A status renamed or deleted since is unmappable: it counts as
+  unstarted and sets `approximate: true`. A renamed _milestone_ trips the same flag, because
+  membership is reconstructed by comparing `before` / `after` against the milestone's current name.
+  The chart renders a one-line footnote whenever the flag is set.
+- **Only current members are visible.** An issue moved _out_ of the milestone is not in the member
+  set and so vanishes from its own history — the series shows the shape the milestone has today, not
+  the scope churn that got it there. Catching those needs a second, unindexed scan of
+  `issue_events.before` across the whole table; not worth it until somebody misses it.
+
+One asymmetry to know before trusting the two numbers side by side: the chart's `scope` counts every
+rollup member, canceled included, while the `{done, total}` rollup the meters use
+(`issueMilestoneProgressByMilestone`) leaves canceled out. A milestone with canceled work therefore
+has a burn-up ceiling above the meter's denominator, and its completed line never reaches it.
+
+Days are bucketed in the zone `today` was read in — the server's local one, threaded in as an input
+so the function stays deterministic. UTC bucketing would have pushed this evening's work onto
+tomorrow's point west of Greenwich, and tomorrow is off the end of the series, so the labelled last
+point would have disagreed with the KPI tile beside it.
+
+The series ends at today, never at the target date: an overdue milestone is what somebody opens the
+chart for, and stopping at the target would hide everything finished since — all of it, for a target
+that passed before the work was filed.
+
+Milestone status (`upcoming` / `in-progress` / `completed` / `overdue`) is **derived, never stored**,
+for the reason `issueCycleStatusOn` already gives: a stored copy would still read "in progress" the
+morning after the milestone went overdue. `issueMilestoneStatusOn` takes a generic
+`{done, total, started}` tally, so `review` counts as started-but-not-done without the contract
+naming a category at all. `startDate > targetDate` is refused by the service on both create and
+update, and the update check runs against the merged pair rather than the half a patch carries.
 
 ## Actor attribution
 
@@ -195,10 +250,16 @@ The registry uses `DO NOTHING` on conflict. The intake ledger's processed-messag
 - **Test composition.** `server.test.ts` still composes `SlackIntakeEngine.layerStub`; the real
   graph typechecks and is acyclic, but `SlackApiClient.layer` plus `forkParked` are never booted
   under test.
-- **Mobile.** No issues surface at all, deliberately. The RPC layer is shared, so the intended first
-  slice there is read plus triage.
+- **Milestone events.** Renames, date edits, and description edits on a milestone write no
+  `issue_events` row: the log is keyed per issue, and the only milestone rows in it are
+  `field: "milestone"` on an _issue_ whose assignment changed. So a milestone has no activity feed,
+  and the burn-up cannot see the dates moving under it.
+- **Mobile.** No issues surface at all, deliberately — the milestone settings page, overview,
+  timeline, and detail page are web and desktop only, like everything else here. The RPC layer is
+  shared, so the intended first slice there is read plus triage.
 
 [tracker]: ../../apps/server/src/issues/IssueTrackerService.ts
+[history]: ../../apps/server/src/issues/milestoneHistory.ts
 [enrichment]: ../../apps/server/src/issues/IssueEnrichmentEngine.ts
 [engine]: ../../apps/server/src/issues/slack/SlackIntakeEngine.ts
 [poller]: ../../apps/server/src/issues/slack/SlackIntakePoller.ts
