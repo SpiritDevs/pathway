@@ -51,8 +51,9 @@ When a filter, grouping, and order describe something you will want again, save 
 Saved views appear in the Issues sidebar; selecting one puts the filters back exactly as you left
 them. Drag to reorder them, and rename or delete from the row's menu.
 
-The sidebar also gives you **Triage** with its pending count, **My issues**, **Projects**
-(expanding to their milestones), **Cycles**, and **Labels**.
+The sidebar also gives you **Triage** with its pending count, **Milestones**, **My issues**,
+**Projects** (expanding to their milestones), **Cycles**, and **Labels**. A milestone under a
+project opens that milestone's own page rather than filtering the list.
 
 ### The detail sheet
 
@@ -94,8 +95,9 @@ inline while labelling an issue.
 
 ## Planning: milestones, cycles, sub-issues, todos, and relations
 
-- **Milestones** are named checkpoints inside a project, with an optional target date. Progress
-  rolls up from the statuses of the issues on them.
+- **Milestones** are named checkpoints inside a project, with an optional start date and target
+  date. Progress rolls up from the statuses of the issues on them, and they have pages of their
+  own — see below.
 - **Cycles** are named date ranges that span everything, and you create them yourself. When a cycle
   ends its completed set freezes; unfinished issues move to the next cycle if one exists, and
   otherwise end up in no cycle.
@@ -106,6 +108,61 @@ inline while labelling an issue.
 - **Relations** link two issues as **blocks**, **blocked by**, **related**, or **duplicate**. Add
   one from either end and the other end shows the matching side automatically.
 - **Comments** support the same rich composer as the chat, and you can attach images.
+
+### Managing milestones
+
+**Settings → Issues → Milestones** lists them grouped by project. Each row holds the name, a start
+date, a target date, how far it has got, and a handle for dragging it into order within its project;
+the last row of each group adds a new one, so a project with no milestones still has a way in. A
+start date after the target is refused and the field goes back to what it was.
+
+Deleting a milestone that holds no issues goes straight through. Deleting one that holds issues asks
+first: those issues stay exactly as they are, in the same project, with no milestone.
+
+### The milestones overview
+
+**Milestones** in the Issues sidebar shows every milestone grouped by project, with a project filter
+and a **List** / **Timeline** toggle. Both live in the address, so the view you are looking at is
+the view you can send someone.
+
+Each list row carries a status — **Upcoming**, **In progress**, **Completed**, or **Overdue** —
+worked out from the dates and the issues rather than set by hand, a progress meter with a done/total
+count, the date range, and a menu to rename, edit the dates, move it to another project, or delete
+it. Every project group ends with a **New milestone** row.
+
+Moving a milestone to another project asks first when it holds anything: an issue belongs to its
+project, so the milestone travels alone and the issues it leaves behind end up unassigned.
+
+The timeline draws one bar per milestone over a **week**, **month**, or **quarter** scale, grouped
+by collapsible project lanes with today marked. Drag a bar's left edge to move its start date, its
+right edge to move its target, or its body to move both — dates snap to whole days, and an end
+dragged past the other stops on it. Milestones with no dates wait in the **Unscheduled** tray above
+the grid: drag one onto a lane to schedule it, and drop a scheduled bar back into the tray to clear
+its dates again. Every bar and every tray chip is also a button that opens both dates as fields with
+a **Clear dates** next to them, so nothing on the timeline needs a mouse.
+
+### A milestone's page
+
+Clicking a milestone anywhere — the overview, the timeline, or under a project in the sidebar —
+opens its own page: the name and both dates editable in place, the derived status, a progress meter,
+a description, and every issue on the milestone in the usual list, opening into the usual detail
+sheet.
+
+Four readings sit above the issues: **Completed** as a count, **Days remaining** to the target,
+**Pace** in issues finished per day so far, and a **Projected finish** at that pace, badged **On
+track**, **At risk**, or **Behind** in words as well as colour. A milestone that has finished
+nothing yet reads **No pace yet** rather than guessing.
+
+The **burn-up** below the tiles plots completed work against the milestone's total scope over time,
+so work added mid-flight shows up as the ceiling rising instead of disappearing into a percentage.
+When both dates are set, a dashed **ideal pace** line runs from the start date to the target, and
+the gap between the two lines is the answer to "are we going to make it?". Hover any day for its
+numbers, or walk the days with the arrow keys.
+
+Pathway rebuilds that history from the issue activity log, so two things are worth knowing: it only
+sees the issues that are on the milestone now — one moved off it leaves no trace behind — and if a
+status or the milestone itself has been renamed since, the chart says the history is partly a guess
+instead of pretending otherwise.
 
 ## Importing from Linear
 
@@ -279,7 +336,7 @@ message.
 
 ## Notes and limits
 
-- **Mobile.** The Issues workspace is web and desktop only for now.
+- **Mobile.** The Issues workspace is web and desktop only for now, milestone planning included.
 - **Per machine.** There is no combined view across environments — each machine has its own
   tracker, its own key prefix, and its own Slack configuration.
 - **Polling costs a call.** Every watched channel costs one Slack API call every thirty seconds

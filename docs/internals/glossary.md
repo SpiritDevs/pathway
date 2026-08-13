@@ -169,6 +169,16 @@ counter, in `issue_tracker_config`. Project is a separate field, so a key surviv
 projects, and renaming the prefix does not rewrite keys already minted. Contrast **issue id**, the
 internal row identifier that never appears in the UI.
 
+#### Milestone
+
+A named checkpoint **inside one project** (`projectId` is required), with an optional start date and
+target date. Contrast a **cycle**, which spans everything and is a date range by definition: a
+milestone is scope-boxed, a cycle is time-boxed. Its progress and its status
+(`upcoming` / `in-progress` / `completed` / `overdue`, via `issueMilestoneStatusOn`) are always
+**derived from its issues' status categories and today**, never stored. Its past is not stored
+either — the burn-up is replayed backwards out of `issue_events` on demand. See
+[issue-tracker.md][25] and [decisions/0006][26].
+
 #### Triage
 
 State outside the workflow, not a status and not a seventh status category. A triage item is an issue
