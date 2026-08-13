@@ -135,6 +135,7 @@ export function IssueStatusIcon({
       {category === "started" ? (
         <path d="M8 8V3.5A4.5 4.5 0 0 1 8 12.5Z" fill="currentColor" />
       ) : null}
+      {category === "review" ? <circle cx="8" cy="8" fill="currentColor" r="2.25" /> : null}
       {category === "completed" ? (
         <path
           d="m4.9 8.2 2.1 2.2 4.1-4.6"

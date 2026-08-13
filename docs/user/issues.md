@@ -80,9 +80,10 @@ doing. Nothing is hidden from you until then.
 ## Statuses, labels, and issue keys
 
 **Settings → Issues → Statuses** is where the workflow lives. Each status has a name, a colour, a
-position you set by dragging, and one of five categories: Backlog, Unstarted, Started, Completed,
-Canceled. The category is what matters — it drives the Active and Backlog tabs, milestone and
-sub-issue progress, and what an agent understands "done" to mean.
+position you set by dragging, and one of six categories: Backlog, Unstarted, Started, Review,
+Completed, Canceled. Review is active pre-completion work: it stays in counts and rollups without
+being treated as done. The category is what matters — it drives the Active and Backlog tabs,
+milestone and sub-issue progress, and what an agent understands "done" to mean.
 
 The same page holds the **issue key prefix**: the letters in front of every issue number, like
 `PAT-12`. New issues take the current prefix. Keys already handed out keep the prefix they were
@@ -214,6 +215,7 @@ Turn on **Auto-assign worker** for the channels that should use automatic routin
 
 - the routing model, ordered worker rules, and an optional fallback worker;
 - audit rules, each with one or more independent auditor models;
+- ordered review workers that can fix blocking audit findings;
 - the statuses used when work starts, work enters review, every audit passes, or an audit requests
   changes; and
 - a remediation limit that stops repeated worker-reviewer disagreement from looping forever.
@@ -222,12 +224,16 @@ The routing model sees the issue and the rules, then saves the matched rule, exa
 audit policies, and its explanation on the issue. Assignment does not start a thread by itself.
 When work starts, the issue moves to the configured work status. The worker moves it to the
 configured review status when it is finished, which starts every selected audit independently.
+Leaving a transition on its automatic choice uses the first Started status, the first Review
+status, the previous Started status after a failed audit, and the next status after a passing audit.
 
 All auditors must pass. Their separately attributed results are comments on the issue so differing
 opinions remain visible. If any auditor finds a concrete blocking problem, the issue returns to the
 configured changes-requested status and the combined findings are sent to the linked worker thread.
-When that agent fixes the findings and moves the issue back to review, a new deduplicated audit
-cycle begins. Passing moves it to the configured completion status.
+Configured review workers run there in order; with none configured, the original worker handles
+the findings. The last review worker moves the issue back to review after fixing and verifying the
+work, which starts a new deduplicated audit cycle. Passing moves it to the explicitly selected
+status or, by default, the next status in workflow order — commonly Pending Human Review or Done.
 
 An automatic investigation needs the resolved project to have a directory attached. If it cannot
 start, the issue is still filed and remains available to investigate by hand.

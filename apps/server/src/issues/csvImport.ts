@@ -73,8 +73,15 @@ export function guessIssueStatusCategory(name: string): IssueStatusCategory {
     return "completed";
   }
   if (
-    normalized.includes("progress") ||
     normalized.includes("review") ||
+    normalized.includes("qa") ||
+    normalized.includes("verification") ||
+    normalized.includes("checking")
+  ) {
+    return "review";
+  }
+  if (
+    normalized.includes("progress") ||
     normalized.includes("started") ||
     normalized.includes("doing") ||
     normalized.includes("building")

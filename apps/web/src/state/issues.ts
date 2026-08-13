@@ -768,7 +768,7 @@ const EMPTY_THREAD_LINK_PATCH_ATOM = Atom.make<ReadonlyArray<IssueThreadLink> | 
  */
 export type IssuesTab = "active" | "backlog" | "all";
 
-const ACTIVE_CATEGORIES: ReadonlyArray<IssueStatusCategory> = ["unstarted", "started"];
+const ACTIVE_CATEGORIES: ReadonlyArray<IssueStatusCategory> = ["unstarted", "started", "review"];
 const BACKLOG_CATEGORIES: ReadonlyArray<IssueStatusCategory> = ["backlog"];
 
 export function issuesTabCategories(tab: IssuesTab): ReadonlyArray<IssueStatusCategory> | null {

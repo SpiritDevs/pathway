@@ -74,6 +74,7 @@ const ISSUE_STATUS_CATEGORIES: ReadonlyArray<IssueStatusCategory> = [
   "backlog",
   "unstarted",
   "started",
+  "review",
   "completed",
   "canceled",
 ];

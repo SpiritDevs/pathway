@@ -204,6 +204,7 @@ const CATEGORY_ORDER: ReadonlyArray<IssueStatusCategory> = [
   "backlog",
   "unstarted",
   "started",
+  "review",
   "completed",
   "canceled",
 ];
@@ -218,6 +219,7 @@ const CATEGORY_COLORS: Readonly<Record<IssueStatusCategory, string>> = {
   backlog: "#95a2b3",
   unstarted: "#e2e2e2",
   started: "#f2c94c",
+  review: "#26b5ce",
   completed: "#5e6ad2",
   canceled: "#95a2b3",
 };

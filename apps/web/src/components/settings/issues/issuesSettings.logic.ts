@@ -12,7 +12,7 @@ import type { IssueCsvColumnName } from "@t3tools/shared/issuesCsv";
 import type { IssuesStore } from "../../../state/issues";
 
 /**
- * The five workflow categories, in workflow order. The description is one line because it sits
+ * The six workflow categories, in workflow order. The description is one line because it sits
  * under a select in a table row: the category is what drives the Active/Backlog tabs and every
  * rollup, so picking the wrong one is worth a sentence and not worth a paragraph.
  */
@@ -32,6 +32,11 @@ export const ISSUE_STATUS_CATEGORY_OPTIONS: ReadonlyArray<{
     description: "Planned but not begun. New issues land in the first of these.",
   },
   { category: "started", label: "Started", description: "In flight. Counts as work in progress." },
+  {
+    category: "review",
+    label: "Review",
+    description: "Pre-completion checks. Active, but not counted as done.",
+  },
   {
     category: "completed",
     label: "Completed",

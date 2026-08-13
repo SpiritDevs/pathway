@@ -8,6 +8,7 @@ import type {
 import {
   ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE,
   ISSUE_AUTOMATION_MAX_AUDIT_RULES,
+  ISSUE_AUTOMATION_MAX_REVIEW_WORKERS,
   ISSUE_AUTOMATION_MAX_ROUTING_RULES,
   ProviderDriverKind,
 } from "@t3tools/contracts";
@@ -128,10 +129,12 @@ function AutomationModelPicker({
 
 function StatusTransitionSelect({
   label,
+  automaticLabel,
   value,
   onChange,
 }: {
   label: string;
+  automaticLabel: string;
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
@@ -145,10 +148,10 @@ function StatusTransitionSelect({
         value={value ?? NO_STATUS}
       >
         <SelectTrigger size="sm">
-          <SelectValue>{selected?.name ?? "Do not move"}</SelectValue>
+          <SelectValue>{selected?.name ?? automaticLabel}</SelectValue>
         </SelectTrigger>
         <SelectPopup alignItemWithTrigger={false}>
-          <SelectItem value={NO_STATUS}>Do not move</SelectItem>
+          <SelectItem value={NO_STATUS}>{automaticLabel}</SelectItem>
           {statuses.map((status) => (
             <SelectItem key={status.id} value={status.id}>
               {status.name}
@@ -489,8 +492,72 @@ export function IssueAutomationSettingsSection() {
         </Button>
       </div>
 
+      <div className="space-y-2 px-3 pt-2 sm:px-4">
+        <div>
+          <p className="text-xs font-medium text-foreground">Review workers</p>
+          <p className="text-[11px] text-muted-foreground">
+            When an audit requests changes, these workers run in order on the linked work thread.
+            The last worker returns the issue to review. With none configured, the original worker
+            handles remediation.
+          </p>
+        </div>
+        {automation.reviewWorkers.map((worker, index) => (
+          <div
+            className="flex min-w-0 items-center gap-1.5 rounded-md border border-border/60 bg-background/30 p-2.5"
+            key={worker.id}
+          >
+            <div className="min-w-0 flex-1">
+              <AutomationModelPicker
+                label={`Review worker ${index + 1}`}
+                onChange={(modelSelection) =>
+                  patch({
+                    reviewWorkers: automation.reviewWorkers.map((candidate, candidateIndex) =>
+                      candidateIndex === index ? { ...candidate, modelSelection } : candidate,
+                    ),
+                  })
+                }
+                selection={worker.modelSelection}
+              />
+            </div>
+            <Button
+              aria-label={`Remove review worker ${index + 1}`}
+              onClick={() =>
+                patch({
+                  reviewWorkers: automation.reviewWorkers.filter(
+                    (_, candidateIndex) => candidateIndex !== index,
+                  ),
+                })
+              }
+              size="icon-xs"
+              variant="ghost"
+            >
+              <Trash2Icon className="size-3.5" />
+            </Button>
+          </div>
+        ))}
+        <Button
+          disabled={automation.reviewWorkers.length >= ISSUE_AUTOMATION_MAX_REVIEW_WORKERS}
+          onClick={() =>
+            patch({
+              reviewWorkers: [
+                ...automation.reviewWorkers,
+                {
+                  id: `review-worker-${Date.now()}-${automation.reviewWorkers.length}`,
+                  modelSelection: automation.routingModelSelection,
+                },
+              ],
+            })
+          }
+          size="xs"
+          variant="outline"
+        >
+          <PlusIcon className="size-3.5" /> Add review worker
+        </Button>
+      </div>
+
       <div className="grid gap-2 px-3 pt-2 sm:grid-cols-2 sm:px-4">
         <StatusTransitionSelect
+          automaticLabel="First Started status"
           label="When work starts"
           onChange={(workStartedStatusId) =>
             patch({ statusTransitions: { ...automation.statusTransitions, workStartedStatusId } })
@@ -498,6 +565,7 @@ export function IssueAutomationSettingsSection() {
           value={automation.statusTransitions.workStartedStatusId}
         />
         <StatusTransitionSelect
+          automaticLabel="First Review status"
           label="When work finishes / review begins"
           onChange={(workFinishedStatusId) =>
             patch({ statusTransitions: { ...automation.statusTransitions, workFinishedStatusId } })
@@ -505,6 +573,7 @@ export function IssueAutomationSettingsSection() {
           value={automation.statusTransitions.workFinishedStatusId}
         />
         <StatusTransitionSelect
+          automaticLabel="Next status after review"
           label="When every audit passes"
           onChange={(auditPassedStatusId) =>
             patch({ statusTransitions: { ...automation.statusTransitions, auditPassedStatusId } })
@@ -512,6 +581,7 @@ export function IssueAutomationSettingsSection() {
           value={automation.statusTransitions.auditPassedStatusId}
         />
         <StatusTransitionSelect
+          automaticLabel="Previous Started status"
           label="When an audit requests changes"
           onChange={(auditChangesRequestedStatusId) =>
             patch({

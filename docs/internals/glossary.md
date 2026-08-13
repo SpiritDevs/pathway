@@ -171,7 +171,7 @@ internal row identifier that never appears in the UI.
 
 #### Triage
 
-State outside the workflow, not a status and not a sixth status category. A triage item is an issue
+State outside the workflow, not a status and not a seventh status category. A triage item is an issue
 with `triage` set and no meaningful status presence: it is excluded from every tab, board, and count
 (`countTriageIssues` and `groupIssuesForTab` in [state/issues.ts][29] both filter it). **Accepting**
 assigns status, project, and priority in one action and optionally fires enrichment; **rejecting**

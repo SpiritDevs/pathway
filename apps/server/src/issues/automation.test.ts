@@ -11,9 +11,12 @@ import type { Issue, IssueAutomationSettings } from "@t3tools/contracts";
 import {
   buildIssueAutomationAuditPrompt,
   buildIssueAutomationClassificationPrompt,
+  buildIssueAutomationRemediationPrompt,
   normalizeIssueAutomationAuditResult,
   normalizeIssueAutomationClassification,
   resolveIssueAutomationAuditOutcome,
+  resolveIssueAutomationReviewWorkers,
+  resolveIssueAutomationStatuses,
   shouldTriggerIssueAutomationAudit,
 } from "./automation.ts";
 
@@ -70,6 +73,7 @@ const settings: IssueAutomationSettings = {
       ],
     },
   ],
+  reviewWorkers: [],
   statusTransitions: {
     workStartedStatusId: "progress",
     workFinishedStatusId: "review",
@@ -170,5 +174,84 @@ describe("issue automation prompts", () => {
         { state: "done", verdict: "pass", findings: [] },
       ]),
     ).toEqual({ kind: "passed" });
+  });
+
+  it("resolves review transitions from categories and visible workflow order", () => {
+    const status = (
+      id: string,
+      category: "unstarted" | "started" | "review" | "completed",
+      position: number,
+    ) => ({
+      id: IssueStatusId.make(id),
+      name: id,
+      color: "#abcdef",
+      category,
+      position,
+      createdAt: "2026-08-13T00:00:00.000Z",
+      updatedAt: "2026-08-13T00:00:00.000Z",
+    });
+    expect(
+      resolveIssueAutomationStatuses({
+        statuses: [
+          status("todo", "unstarted", 1),
+          status("progress", "started", 2),
+          status("review", "review", 3),
+          status("human", "review", 4),
+          status("done", "completed", 5),
+        ],
+        transitions: {
+          workStartedStatusId: null,
+          workFinishedStatusId: null,
+          auditPassedStatusId: null,
+          auditChangesRequestedStatusId: null,
+        },
+      }),
+    ).toEqual({
+      workStartedStatusId: "progress",
+      reviewStatusId: "review",
+      auditPassedStatusId: "human",
+      auditChangesRequestedStatusId: "progress",
+    });
+  });
+
+  it("queues several review workers in order and only lets the last return to review", () => {
+    const first = buildIssueAutomationRemediationPrompt({
+      issue,
+      findings: ["Missing regression test"],
+      reviewStatusName: "In Review",
+      workerIndex: 0,
+      workerCount: 2,
+    });
+    const last = buildIssueAutomationRemediationPrompt({
+      issue,
+      findings: ["Missing regression test"],
+      reviewStatusName: "In Review",
+      workerIndex: 1,
+      workerCount: 2,
+    });
+    expect(first).toContain("do not move the issue back to review yet");
+    expect(last).toContain("move ISS-1 to In Review");
+  });
+
+  it("uses configured review workers in order and falls back to the original worker", () => {
+    const configured = {
+      ...settings,
+      reviewWorkers: [
+        { id: "first", modelSelection: selection("review-one") },
+        { id: "second", modelSelection: selection("review-two") },
+      ],
+    };
+    expect(
+      resolveIssueAutomationReviewWorkers({
+        settings: configured,
+        originalWorker: selection("original"),
+      }).map((worker) => worker.model),
+    ).toEqual(["review-one", "review-two"]);
+    expect(
+      resolveIssueAutomationReviewWorkers({
+        settings,
+        originalWorker: selection("original"),
+      }).map((worker) => worker.model),
+    ).toEqual(["original"]);
   });
 });

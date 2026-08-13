@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { EMPTY_ISSUES_STORE, type IssuesStore } from "../../../state/issues";
 import {
+  ISSUE_STATUS_CATEGORY_OPTIONS,
   countIssuesByLabel,
   countIssuesByStatus,
   duplicateNameError,
@@ -75,6 +76,19 @@ function storeOf(issues: ReadonlyArray<Issue>): IssuesStore {
 
 const BUG = IssueLabelId.make("bug");
 const CHORE = IssueLabelId.make("chore");
+
+describe("ISSUE_STATUS_CATEGORY_OPTIONS", () => {
+  it("keeps review between active implementation and completion", () => {
+    expect(ISSUE_STATUS_CATEGORY_OPTIONS.map((option) => option.category)).toEqual([
+      "backlog",
+      "unstarted",
+      "started",
+      "review",
+      "completed",
+      "canceled",
+    ]);
+  });
+});
 
 describe("issueKeyPrefixError", () => {
   it("accepts what the contract's pattern accepts", () => {

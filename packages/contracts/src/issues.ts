@@ -226,6 +226,7 @@ export const IssueStatusCategory = Schema.Literals([
   "backlog",
   "unstarted",
   "started",
+  "review",
   "completed",
   "canceled",
 ]);
@@ -336,7 +337,7 @@ export const Issue = Schema.Struct({
   labelIds: Schema.Array(IssueLabelId),
   dueDate: Schema.NullOr(IssueDate),
   /**
-   * Outside the workflow rather than a sixth status category: a triage item appears in no board
+   * Outside the workflow rather than a seventh status category: a triage item appears in no board
    * and no count, and accepting it assigns status, project, and priority in one action.
    */
   triage: Schema.Boolean,

@@ -617,6 +617,7 @@ const DEFAULT_TEXT_GENERATION_MODEL_SELECTION = {
 export const ISSUE_AUTOMATION_MAX_ROUTING_RULES = 25;
 export const ISSUE_AUTOMATION_MAX_AUDIT_RULES = 25;
 export const ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE = 5;
+export const ISSUE_AUTOMATION_MAX_REVIEW_WORKERS = 5;
 
 /** An ordered natural-language rule that selects the model which will do the issue's work. */
 export const IssueAutomationRoutingRule = Schema.Struct({
@@ -633,6 +634,12 @@ export const IssueAutomationAuditor = Schema.Struct({
 });
 export type IssueAutomationAuditor = typeof IssueAutomationAuditor.Type;
 
+export const IssueAutomationReviewWorker = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+});
+export type IssueAutomationReviewWorker = typeof IssueAutomationReviewWorker.Type;
+
 /** One audit policy. Every selected model runs independently so disagreements remain visible. */
 export const IssueAutomationAuditRule = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -645,8 +652,9 @@ export const IssueAutomationAuditRule = Schema.Struct({
 export type IssueAutomationAuditRule = typeof IssueAutomationAuditRule.Type;
 
 /**
- * Status ids rather than status names: teams rename and replace their workflow columns. Null
- * leaves that transition alone, making every automation independently reversible.
+ * Status ids rather than status names: teams rename and replace their workflow columns. Null uses
+ * the category/order default so a Started -> Review -> next-status workflow needs no duplicate
+ * configuration.
  */
 export const IssueAutomationStatusTransitions = Schema.Struct({
   workStartedStatusId: Schema.NullOr(TrimmedNonEmptyString),
@@ -668,6 +676,10 @@ export const IssueAutomationSettings = Schema.Struct({
   auditRules: Schema.Array(IssueAutomationAuditRule).check(
     Schema.isMaxLength(ISSUE_AUTOMATION_MAX_AUDIT_RULES),
   ),
+  /** Ordered write-capable workers which remediate blocking audit findings on the linked thread. */
+  reviewWorkers: Schema.Array(IssueAutomationReviewWorker)
+    .check(Schema.isMaxLength(ISSUE_AUTOMATION_MAX_REVIEW_WORKERS))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   statusTransitions: IssueAutomationStatusTransitions,
   /** Stops a reviewer/worker disagreement from spending forever. */
   maxRemediationCycles: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 10 })),
@@ -680,6 +692,7 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
   routingRules: [],
   fallbackModelSelection: null,
   auditRules: [],
+  reviewWorkers: [],
   statusTransitions: {
     workStartedStatusId: null,
     workFinishedStatusId: null,

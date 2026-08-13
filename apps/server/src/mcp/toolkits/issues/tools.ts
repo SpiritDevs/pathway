@@ -57,7 +57,7 @@ const ASSIGNEE_GRAMMAR =
   'Who owns the issue: "user" for the human on this environment, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
 
 const STATUS_GRAMMAR =
-  'Status name such as "In Progress" (case-insensitive), or one of the five categories — backlog, unstarted, started, completed, canceled — which resolves to the first status in that category. Use "completed" rather than guessing the name of the done column.';
+  'Status name such as "In Progress" (case-insensitive), or one of the six categories — backlog, unstarted, started, review, completed, canceled — which resolves to the first status in that category. Use "review" for pre-completion checks and "completed" rather than guessing the name of the done column.';
 
 const issueKeyField = (verb: string) =>
   Schema.String.annotate({

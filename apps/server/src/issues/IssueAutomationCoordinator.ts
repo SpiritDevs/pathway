@@ -36,10 +36,13 @@ import { IssueTrackerService } from "./IssueTrackerService.ts";
 import {
   buildIssueAutomationAuditPrompt,
   buildIssueAutomationClassificationPrompt,
+  buildIssueAutomationRemediationPrompt,
   issueAutomationAuditComment,
   normalizeIssueAutomationAuditResult,
   normalizeIssueAutomationClassification,
   resolveIssueAutomationAuditOutcome,
+  resolveIssueAutomationReviewWorkers,
+  resolveIssueAutomationStatuses,
   shouldTriggerIssueAutomationAudit,
 } from "./automation.ts";
 
@@ -302,27 +305,62 @@ export const make = Effect.gen(function* () {
       readonly threadId: ThreadId;
       readonly findings: ReadonlyArray<string>;
     }) {
-      if (input.issue.projectId === null) return;
+      const projectId = input.issue.projectId;
+      if (projectId === null) return;
       const automation = yield* currentSettings;
       const snapshot = yield* tracker.getSnapshot();
-      const reviewStatusName = snapshot.statuses.find(
-        (status) => status.id === automation.statusTransitions.workFinishedStatusId,
-      )?.name;
-      const messageId = MessageId.make(`message:issue-audit:${yield* crypto.randomUUIDv4}`);
-      yield* threads.sendToThread({
-        projectId: input.issue.projectId,
-        commandId: CommandId.make(`issue-audit-remediation:${messageId}`),
-        threadId: input.threadId,
-        messageId,
-        text: `The automated review requested changes for ${input.issue.key}. Address every finding and verify the work.${reviewStatusName === undefined ? "" : ` When it is genuinely complete, use the issues tools to move ${input.issue.key} to ${reviewStatusName}; that transition starts the next audit cycle.`}\n\n${input.findings.map((finding) => `- ${finding}`).join("\n")}`,
-        attachments: [],
-        ...(input.issue.workModelSelection == null
-          ? {}
-          : { modelSelection: input.issue.workModelSelection }),
-        mode: "queue",
-        createdBy: "agent",
-        creationSource: "server",
+      const transitions = resolveIssueAutomationStatuses({
+        statuses: snapshot.statuses,
+        transitions: automation.statusTransitions,
       });
+      const reviewStatusName = snapshot.statuses.find(
+        (status) => status.id === transitions.reviewStatusId,
+      )?.name;
+      const requestedWorkers = resolveIssueAutomationReviewWorkers({
+        settings: automation,
+        originalWorker: input.issue.workModelSelection,
+      });
+      const workers: Array<ModelSelection> = [];
+      for (const selection of requestedWorkers) {
+        const instance = yield* providers.getInstance(selection.instanceId);
+        if (instance !== undefined && instance.enabled) workers.push(selection);
+      }
+      if (workers.length === 0) {
+        yield* tracker.commentCreate(
+          {
+            issueId: input.issue.id,
+            body: "Automation found blocking review findings, but no configured review worker is currently available.",
+          },
+          AUTOMATION_ACTOR,
+        );
+        return;
+      }
+      yield* Effect.forEach(
+        workers,
+        (selection, workerIndex) =>
+          Effect.gen(function* () {
+            const messageId = MessageId.make(`message:issue-audit:${yield* crypto.randomUUIDv4}`);
+            yield* threads.sendToThread({
+              projectId,
+              commandId: CommandId.make(`issue-audit-remediation:${messageId}`),
+              threadId: input.threadId,
+              messageId,
+              text: buildIssueAutomationRemediationPrompt({
+                issue: input.issue,
+                findings: input.findings,
+                reviewStatusName: reviewStatusName ?? null,
+                workerIndex,
+                workerCount: workers.length,
+              }),
+              attachments: [],
+              modelSelection: selection,
+              mode: "queue",
+              createdBy: "agent",
+              creationSource: "server",
+            });
+          }),
+        { concurrency: 1, discard: true },
+      );
     },
   );
 
@@ -339,11 +377,17 @@ export const make = Effect.gen(function* () {
       if (!claimed) return;
       yield* Effect.gen(function* () {
         const automation = yield* currentSettings;
+        const snapshot = yield* tracker.getSnapshot();
+        const transitions = resolveIssueAutomationStatuses({
+          statuses: snapshot.statuses,
+          transitions: automation.statusTransitions,
+        });
         const workspace = yield* auditWorkspace(issue);
-        if (workspace.cwd === null) return;
+        const cwd = workspace.cwd;
+        if (cwd === null) return;
         let auditRuleIds = issue.automationAssignment?.auditRuleIds ?? [];
         if (auditRuleIds.length === 0 && automation.auditRules.length > 0) {
-          const classification = yield* classify(issue, automation, workspace.cwd).pipe(
+          const classification = yield* classify(issue, automation, cwd).pipe(
             Effect.orElseSucceed(() => null),
           );
           auditRuleIds = classification?.auditRuleIds ?? [];
@@ -367,7 +411,7 @@ export const make = Effect.gen(function* () {
               selection,
               triggerKey,
               remediationCycle,
-              cwd: workspace.cwd!,
+              cwd,
             }),
           { concurrency: 1, discard: true },
         );
@@ -375,10 +419,10 @@ export const make = Effect.gen(function* () {
         const outcome = resolveIssueAutomationAuditOutcome(runs);
         if (outcome.kind === "pending") return;
         if (outcome.kind === "passed") {
-          yield* updateStatus(issue, automation.statusTransitions.auditPassedStatusId);
+          yield* updateStatus(issue, transitions.auditPassedStatusId);
           return;
         }
-        yield* updateStatus(issue, automation.statusTransitions.auditChangesRequestedStatusId);
+        yield* updateStatus(issue, transitions.auditChangesRequestedStatusId);
         const nextCycle = remediationCycle + 1;
         const findings = outcome.findings;
         if (workspace.workLink === null || nextCycle > automation.maxRemediationCycles) {
@@ -424,11 +468,16 @@ export const make = Effect.gen(function* () {
           withLoggedFailure("issue.automation.route-failed", routeIssue(event.issue)),
         );
         const automation = yield* currentSettings;
+        const snapshot = yield* tracker.getSnapshot();
+        const transitions = resolveIssueAutomationStatuses({
+          statuses: snapshot.statuses,
+          transitions: automation.statusTransitions,
+        });
         if (
           shouldTriggerIssueAutomationAudit({
             issue: event.issue,
             previousStatusId: previous?.statusId,
-            reviewStatusId: automation.statusTransitions.workFinishedStatusId,
+            reviewStatusId: transitions.reviewStatusId,
           })
         ) {
           yield* Effect.forkChild(
@@ -446,6 +495,11 @@ export const make = Effect.gen(function* () {
         const issue = (yield* Ref.get(issues)).get(event.issueId);
         if (issue === undefined) return;
         const automation = yield* currentSettings;
+        const snapshot = yield* tracker.getSnapshot();
+        const transitions = resolveIssueAutomationStatuses({
+          statuses: snapshot.statuses,
+          transitions: automation.statusTransitions,
+        });
         const projection = yield* threads.getThreadProjection(workLink.threadId);
         const selection = projection.thread.modelSelection;
         const instance = yield* providers.getInstance(selection.instanceId);
@@ -457,10 +511,10 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { assignee: { kind: "agent" as const, provider: instance.driverKind } }),
               workModelSelection: selection,
-              ...(automation.statusTransitions.workStartedStatusId === null
+              ...(transitions.workStartedStatusId === null
                 ? {}
                 : {
-                    statusId: automation.statusTransitions.workStartedStatusId as IssueStatusId,
+                    statusId: transitions.workStartedStatusId as IssueStatusId,
                   }),
             },
           },

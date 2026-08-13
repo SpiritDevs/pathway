@@ -131,7 +131,8 @@ describe("guessIssueStatusCategory", () => {
     assert.strictEqual(guessIssueStatusCategory("Backlog"), "backlog");
     assert.strictEqual(guessIssueStatusCategory("Todo"), "unstarted");
     assert.strictEqual(guessIssueStatusCategory("In Progress"), "started");
-    assert.strictEqual(guessIssueStatusCategory("In Review"), "started");
+    assert.strictEqual(guessIssueStatusCategory("In Review"), "review");
+    assert.strictEqual(guessIssueStatusCategory("QA"), "review");
     assert.strictEqual(guessIssueStatusCategory("Done"), "completed");
     assert.strictEqual(guessIssueStatusCategory("Canceled"), "canceled");
     assert.strictEqual(guessIssueStatusCategory("Duplicate"), "canceled");

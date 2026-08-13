@@ -78,12 +78,12 @@ compiler enumerate them. The path-uniqueness invariant (`commandInvariants.ts:81
 
 ### Statuses
 
-Configured once per environment. Each status has name, colour, position, and one of five
-categories: `backlog`, `unstarted`, `started`, `completed`, `canceled`. The category — not a
+Configured once per environment. Each status has name, colour, position, and one of six
+categories: `backlog`, `unstarted`, `started`, `review`, `completed`, `canceled`. The category — not a
 hand-maintained list — is what drives the Active/Backlog/All tabs, milestone and sub-issue progress
 rollups, and what an agent means by "complete".
 
-**Triage** is deliberately _not_ a status or a sixth category. It is separate state outside the
+**Triage** is deliberately _not_ a status or a seventh category. It is separate state outside the
 workflow: a triage item has no status, appears in no board or count, and accepting it assigns
 status, project, and priority in one action.
 

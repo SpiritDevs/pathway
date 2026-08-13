@@ -804,7 +804,9 @@ function IssueDetailBody({
               statuses.find(
                 (candidate) =>
                   candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
-              )?.name ?? null,
+              )?.name ??
+              statuses.find((candidate) => candidate.category === "review")?.name ??
+              null,
             projectTitle,
             priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
             todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),

@@ -23,6 +23,7 @@ directly, not derived from orchestration events. Migrations 041–046 and 056 ow
 | 056       | ordered Slack reaction routes and the channel-level automatic-investigation default                           |
 | 057       | pinned work-model choices, channel auto-assignment, and durable multi-model audit claims                      |
 | 059       | the release-cycle default for watched Slack channels                                                          |
+| 060       | the first-class `review` status category                                                                      |
 
 [`IssueTrackerService.ts`][tracker] is the single writer. It is a write model _and_ the change feed:
 every mutation writes an `issue_events` row and publishes a diff on the same path, which is what
@@ -95,9 +96,10 @@ Every selected auditor is a read-only text-generation run over the worktree. Cla
 in `issue_automation_audits` under `(issue, review trigger, rule, auditor index)`, making stream
 replay idempotent. Completed claims survive a restart; running claims are released at startup so a
 process interruption cannot strand a card in review. Any changes-requested verdict moves the card
-to the configured status and queues the combined findings onto the linked worker thread. All passes
-move it to the configured success status. A bounded remediation count prevents reviewer
-disagreement from creating an unbounded worker/auditor loop.
+back to work and queues the combined findings onto the linked thread for each configured review
+worker, in order; the original worker is the fallback. The last worker returns the card to review.
+All passes move it to the explicit success status or the next status in workflow order. A bounded
+remediation count prevents reviewer disagreement from creating an unbounded worker/auditor loop.
 
 ## Enrichment seam
 

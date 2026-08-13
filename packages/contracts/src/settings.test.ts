@@ -404,6 +404,7 @@ describe("ServerSettingsPatch.issueAutomation", () => {
     const automation = decodeServerSettings({}).issueAutomation;
     expect(automation.routingRules).toEqual([]);
     expect(automation.auditRules).toEqual([]);
+    expect(automation.reviewWorkers).toEqual([]);
     expect(automation.fallbackModelSelection).toBeNull();
     expect(automation.statusTransitions).toEqual({
       workStartedStatusId: null,
@@ -438,6 +439,12 @@ describe("ServerSettingsPatch.issueAutomation", () => {
               modelSelection: { ...current.textGenerationModelSelection, model: "second-opinion" },
             },
           ],
+        },
+      ],
+      reviewWorkers: [
+        {
+          id: "review-fixer",
+          modelSelection: { ...current.textGenerationModelSelection, model: "review-fixer" },
         },
       ],
       statusTransitions: {

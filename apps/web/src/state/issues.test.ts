@@ -83,9 +83,10 @@ function status(id: string, category: IssueStatusCategory, position: number): Is
 const BACKLOG = status("backlog", "backlog", 0);
 const TODO = status("todo", "unstarted", 1);
 const DOING = status("doing", "started", 2);
-const DONE = status("done", "completed", 3);
-const CANCELED = status("canceled", "canceled", 4);
-const ALL_STATUSES = [BACKLOG, TODO, DOING, DONE, CANCELED];
+const REVIEW = status("review", "review", 3);
+const DONE = status("done", "completed", 4);
+const CANCELED = status("canceled", "canceled", 5);
+const ALL_STATUSES = [BACKLOG, TODO, DOING, REVIEW, DONE, CANCELED];
 
 function issue(id: string, overrides: Partial<Omit<Issue, "id">> = {}): Issue {
   return {
@@ -313,15 +314,16 @@ describe("groupIssuesForTab", () => {
     issue("1", { statusId: BACKLOG.id }),
     issue("2", { statusId: TODO.id }),
     issue("3", { statusId: DOING.id }),
-    issue("4", { statusId: DONE.id }),
-    issue("5", { statusId: CANCELED.id }),
+    issue("4", { statusId: REVIEW.id }),
+    issue("5", { statusId: DONE.id }),
+    issue("6", { statusId: CANCELED.id }),
   ];
 
-  it("puts unstarted and started in Active", () => {
+  it("puts unstarted, started, and review in Active", () => {
     const grouping = groupIssuesForTab(storeOf(issues), "active");
 
-    expect(grouping.groups.map((group) => group.status.id)).toEqual([TODO.id, DOING.id]);
-    expect(grouping.total).toBe(2);
+    expect(grouping.groups.map((group) => group.status.id)).toEqual([TODO.id, DOING.id, REVIEW.id]);
+    expect(grouping.total).toBe(3);
   });
 
   it("puts only the backlog category in Backlog", () => {
@@ -332,33 +334,33 @@ describe("groupIssuesForTab", () => {
   });
 
   it("keeps completed and canceled out of Active but shows them in All", () => {
-    expect(groupIssuesForTab(storeOf(issues), "all").total).toBe(5);
+    expect(groupIssuesForTab(storeOf(issues), "all").total).toBe(6);
     expect(
       groupIssuesForTab(storeOf(issues), "all").groups.map((group) => group.status.id),
-    ).toEqual([BACKLOG.id, TODO.id, DOING.id, DONE.id, CANCELED.id]);
+    ).toEqual([BACKLOG.id, TODO.id, DOING.id, REVIEW.id, DONE.id, CANCELED.id]);
   });
 
   it("excludes triage items from every tab", () => {
-    const withTriage = [...issues, issue("6", { statusId: TODO.id, triage: true })];
+    const withTriage = [...issues, issue("7", { statusId: TODO.id, triage: true })];
 
     for (const tab of ["active", "backlog", "all"] as const) {
       const grouping = groupIssuesForTab(storeOf(withTriage), tab);
       const ids = grouping.groups.flatMap((group) => group.issues.map((value) => value.id));
-      expect(ids).not.toContain(IssueId.make("6"));
+      expect(ids).not.toContain(IssueId.make("7"));
     }
-    expect(groupIssuesForTab(storeOf(withTriage), "all").total).toBe(5);
+    expect(groupIssuesForTab(storeOf(withTriage), "all").total).toBe(6);
   });
 
   it("excludes soft-deleted rows the snapshot still carries", () => {
-    const withDeleted = [...issues, issue("7", { statusId: TODO.id, deletedAt: NOW })];
+    const withDeleted = [...issues, issue("8", { statusId: TODO.id, deletedAt: NOW })];
 
-    expect(groupIssuesForTab(storeOf(withDeleted), "all").total).toBe(5);
+    expect(groupIssuesForTab(storeOf(withDeleted), "all").total).toBe(6);
   });
 
   it("emits an empty group for a status with nothing in it", () => {
     const grouping = groupIssuesForTab(storeOf([issue("1", { statusId: TODO.id })]), "active");
 
-    expect(grouping.groups.map((group) => group.issues.length)).toEqual([1, 0]);
+    expect(grouping.groups.map((group) => group.issues.length)).toEqual([1, 0, 0]);
   });
 
   it("orders a group by sortOrder with the id breaking ties", () => {
