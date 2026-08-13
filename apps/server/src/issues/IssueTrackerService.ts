@@ -248,8 +248,12 @@ const slackTriggersEqual = (left: SlackIntakeTrigger, right: SlackIntakeTrigger)
 /**
  * What a filed message is called when it had no text — an image, a file, a bare reaction target.
  * Refusing to file it would be worse: somebody reacted to it on purpose.
+ *
+ * Exported for the coupling rather than for use: this string has to stay inside
+ * `isPlaceholderIssueTitle`, or an image-only Slack report becomes the one issue an investigation
+ * is forbidden to name. A test asserts exactly that.
  */
-const SLACK_UNTITLED_ISSUE_TITLE = "Slack message";
+export const SLACK_UNTITLED_ISSUE_TITLE = "Slack message";
 
 const textEncoder = new TextEncoder();
 

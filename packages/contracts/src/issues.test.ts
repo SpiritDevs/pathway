@@ -37,6 +37,7 @@ import {
   SlackIntakeTrigger,
   SlackSetTokenInput,
   issueCycleStatusOn,
+  isPlaceholderIssueTitle,
   isSlackIntakeTriggerActive,
   ISSUES_IMPORT_CSV_MAX_CHARS,
   ISSUE_BULK_UPDATE_MAX_ISSUES,
@@ -657,6 +658,41 @@ describe("IssueDetail", () => {
 describe("ISSUE_MAX_PARENT_DEPTH", () => {
   it("caps sub-issue nesting at three, which is what a list row can still indent", () => {
     expect(ISSUE_MAX_PARENT_DEPTH).toBe(3);
+  });
+});
+
+describe("isPlaceholderIssueTitle", () => {
+  // The one list both sides consult: the server drops a model's proposed title for anything else,
+  // and the web hides the apply button for it. Disagreement between them is a suggestion a person
+  // can see and not take.
+  it("names the intake and editor defaults, however they were typed", () => {
+    for (const title of [
+      "Slack message",
+      "slack message",
+      "  SLACK MESSAGE  ",
+      "Untitled",
+      "untitled",
+      "New issue",
+      "new ISSUE",
+    ]) {
+      expect(isPlaceholderIssueTitle(title)).toBe(true);
+    }
+  });
+
+  it("counts a title that says nothing at all", () => {
+    expect(isPlaceholderIssueTitle("")).toBe(true);
+    expect(isPlaceholderIssueTitle("   \n\t ")).toBe(true);
+  });
+
+  it("leaves anything a person wrote alone", () => {
+    for (const title of [
+      "Reconnect drops the queued turn",
+      "Slack messages are dropped on reconnect",
+      "Untitled column renders blank",
+      "New issues do not appear in triage",
+    ]) {
+      expect(isPlaceholderIssueTitle(title)).toBe(false);
+    }
   });
 });
 

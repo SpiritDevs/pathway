@@ -11,15 +11,16 @@
  *
  * @module components/issues/issueEnrichment.logic
  */
-import type {
-  Issue,
-  IssueEnrichmentResult,
-  IssueEnrichmentRun,
-  IssueEnrichmentRunState,
-  IssueLabel,
-  IssueLabelId,
-  IssuePatch,
-  IssuePriority,
+import {
+  isPlaceholderIssueTitle,
+  type Issue,
+  type IssueEnrichmentResult,
+  type IssueEnrichmentRun,
+  type IssueEnrichmentRunState,
+  type IssueLabel,
+  type IssueLabelId,
+  type IssuePatch,
+  type IssuePriority,
 } from "@t3tools/contracts";
 
 import { isIssueEnrichmentRunActive } from "~/state/issues";
@@ -221,14 +222,18 @@ export function issueApplyPriorityPatch(
 }
 
 /**
- * Null when the run named no title — the key is absent unless the issue arrived without one — or
- * when it names the title the issue already reads. Trimmed on both sides: the suggestion arrives
- * trimmed from the contract, and the comparison should not turn trailing space into a write.
+ * Null when the run named no title, when it names the title the issue already reads, or — the
+ * rule that matters — when the issue's own title is not a placeholder. A run finishes minutes
+ * after it started and the issue is editable throughout, so the live title decides: a suggestion
+ * may fill in an intake default ("Slack message", "Untitled", an empty one), never rename
+ * something a person wrote. Trimmed on both sides: the suggestion arrives trimmed from the
+ * contract, and the comparison should not turn trailing space into a write.
  */
 export function issueApplyTitlePatch(issue: Issue, title: string | undefined): IssuePatch | null {
   if (title === undefined) return null;
   const next = title.trim();
   if (next.length === 0 || next === issue.title.trim()) return null;
+  if (!isPlaceholderIssueTitle(issue.title)) return null;
   return { title: next };
 }
 
@@ -247,33 +252,61 @@ export function issueApplyDescriptionPatch(
 }
 
 /**
- * A title or description the run wrote for an issue that arrived without one. Both read the same
- * way in the panel — a block of text with one Apply — so both resolve to the same shape.
+ * What a rewrite card can say. The two ways Apply writes nothing are not the same sentence, and
+ * the panel used to print the first one for both: `applied` is the issue already reading what the
+ * run suggested — a tick — and `blocked` is the field carrying something else the suggestion is
+ * not allowed to take, which is a greyed control with a reason on it, not a claim of success.
+ */
+export type IssueSuggestedRewriteState = "applicable" | "applied" | "blocked";
+
+/**
+ * A title or description the run wrote for an issue that arrived without a usable one. Both read
+ * the same way in the panel — a block of text with one Apply — so both resolve to the same shape.
  */
 export interface IssueSuggestedRewrite {
   readonly text: string;
-  /** False when Apply would write nothing: the title already reads this, the body is no longer empty. */
-  readonly canApply: boolean;
+  readonly state: IssueSuggestedRewriteState;
 }
 
-/** Null when the run offered no title, which is the usual case. */
+/** The suggestion the issue would already have to carry for a card to read as taken. */
+function rewriteState(
+  patch: IssuePatch | null,
+  text: string,
+  current: string,
+): IssueSuggestedRewriteState {
+  if (patch !== null) return "applicable";
+  return text.trim() === current.trim() ? "applied" : "blocked";
+}
+
+/**
+ * Null when the run offered no title, which is the usual case, and null for a blank one: a card
+ * with nothing in it is not a suggestion. `blocked` is the interesting state — the issue carries a
+ * title someone wrote, which no suggestion replaces.
+ */
 export function resolveIssueSuggestedTitle(
   result: IssueEnrichmentResult,
   issue: Issue,
 ): IssueSuggestedRewrite | null {
   const text = result.suggestedTitle;
-  if (text === undefined) return null;
-  return { text, canApply: issueApplyTitlePatch(issue, text) !== null };
+  if (text === undefined || text.trim().length === 0) return null;
+  return { text, state: rewriteState(issueApplyTitlePatch(issue, text), text, issue.title) };
 }
 
-/** Null when the run offered no description. Present but not applicable once the issue has one. */
+/**
+ * Null when the run offered no description, or a blank one. `blocked` is a body someone typed
+ * while the model was reading the repository — the suggestion stays readable, but it does not
+ * overwrite it.
+ */
 export function resolveIssueSuggestedDescription(
   result: IssueEnrichmentResult,
   issue: Issue,
 ): IssueSuggestedRewrite | null {
   const text = result.suggestedDescription;
-  if (text === undefined) return null;
-  return { text, canApply: issueApplyDescriptionPatch(issue, text) !== null };
+  if (text === undefined || text.trim().length === 0) return null;
+  return {
+    text,
+    state: rewriteState(issueApplyDescriptionPatch(issue, text), text, issue.description),
+  };
 }
 
 /**

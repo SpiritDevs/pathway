@@ -29,6 +29,7 @@ import {
   IssueTrackerError,
   type Issue,
   type IssueActor,
+  type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
   type IssueLabel,
   type IssueStatus,
@@ -43,13 +44,13 @@ import * as Semaphore from "effect/Semaphore";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { SAFE_IMAGE_FILE_EXTENSIONS } from "../imageMime.ts";
 import { IssueCommentRepository } from "../persistence/Services/IssueComments.ts";
 import { IssueLabelRepository } from "../persistence/Services/IssueLabels.ts";
 import { IssueRelationRepository } from "../persistence/Services/IssueRelations.ts";
 import { IssueRepository, type IssueRecord } from "../persistence/Services/Issues.ts";
 import { IssueStatusRepository } from "../persistence/Services/IssueStatuses.ts";
 import { IssueTodoRepository } from "../persistence/Services/IssueTodos.ts";
+import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import {
@@ -84,6 +85,50 @@ const OPEN_STATUS_CATEGORIES: ReadonlySet<IssueStatus["category"]> = new Set([
  */
 const MAX_INVESTIGATION_IMAGES = 4;
 
+/**
+ * The image formats an investigation may hand a provider.
+ *
+ * Narrower than `SAFE_IMAGE_FILE_EXTENSIONS` in `imageMime.ts`, which answers a different question
+ * — what is safe to serve a browser. This one answers what a CLI will actually decode:
+ * `codex exec --image` rejects a format it does not know rather than skipping the file, so one
+ * HEIC or SVG pasted into a comment would fail the whole investigation. These four formats are
+ * what a provider that takes an image at all takes.
+ */
+const INVESTIGATION_IMAGE_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".png",
+  ".jpeg",
+  ".jpg",
+  ".webp",
+  ".gif",
+]);
+
+/**
+ * Pick the images an investigation sends, and count what it leaves behind.
+ *
+ * Resolution stops at the cap rather than resolving everything and slicing: `resolveUsableImage`
+ * is a handful of `existsSync` probes per id, and an issue with forty screenshots would pay for
+ * all forty to send four. `omitted` is therefore counted, not resolved — every candidate that did
+ * not become one of the sent paths, whether it was over the cap, in a format no provider reads, or
+ * missing from the store entirely. A number the prompt can state honestly without knowing why.
+ *
+ * Pure, and exported, so the early stop is a test rather than a comment.
+ */
+export function selectInvestigationImages(input: {
+  /** Every image-candidate attachment id on the issue, oldest first. */
+  readonly attachmentIds: ReadonlyArray<string>;
+  /** The path this id's bytes are at, or null if there is nothing usable behind it. */
+  readonly resolveUsableImage: (attachmentId: string) => string | null;
+}): { readonly imagePaths: ReadonlyArray<string>; readonly omitted: number } {
+  const imagePaths: Array<string> = [];
+  for (const attachmentId of input.attachmentIds) {
+    if (imagePaths.length >= MAX_INVESTIGATION_IMAGES) break;
+    const resolved = input.resolveUsableImage(attachmentId);
+    if (resolved === null) continue;
+    imagePaths.push(resolved);
+  }
+  return { imagePaths, omitted: input.attachmentIds.length - imagePaths.length };
+}
+
 const invalid = (message: string) => new IssueTrackerError({ reason: "invalid", message });
 const storage = (message: string) => new IssueTrackerError({ reason: "storage", message });
 
@@ -104,6 +149,7 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const path = yield* Path.Path;
   const textGeneration = yield* TextGeneration.TextGeneration;
+  const providers = yield* ProviderInstanceRegistry;
   const issueRepository = yield* IssueRepository;
   const statusRepository = yield* IssueStatusRepository;
   const labelRepository = yield* IssueLabelRepository;
@@ -122,28 +168,42 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<A, IssueTrackerError> => effect.pipe(Effect.mapError(() => storage(message)));
 
   /**
-   * The image files behind a set of comment attachment ids, in the order they were given.
+   * The file one comment attachment id stands for, if an investigation can send it.
    *
    * A comment stores ids, not paths: the bytes are in the attachment store that threads share,
    * under a name the store derives from the media type it was uploaded with. Only an image can be
-   * uploaded to an issue in the first place, and anything that resolves to something else on disk
-   * is dropped here anyway — this feeds `--image`, which is for pictures.
+   * uploaded to an issue in the first place, and anything that resolves to a format the CLIs do
+   * not decode is dropped here — this feeds `--image`, which is for pictures of four kinds.
    */
-  const resolveCommentImagePaths = (
-    attachmentIds: ReadonlyArray<string>,
-  ): ReadonlyArray<string> => {
-    const imagePaths: Array<string> = [];
-    for (const attachmentId of attachmentIds) {
-      const resolved = resolveAttachmentPathById({
-        attachmentsDir: serverConfig.attachmentsDir,
-        attachmentId,
-      });
-      if (resolved === null) continue;
-      if (!SAFE_IMAGE_FILE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) continue;
-      imagePaths.push(resolved);
-    }
-    return imagePaths;
+  const resolveUsableImage = (attachmentId: string): string | null => {
+    const resolved = resolveAttachmentPathById({
+      attachmentsDir: serverConfig.attachmentsDir,
+      attachmentId,
+    });
+    if (resolved === null) return null;
+    return INVESTIGATION_IMAGE_FILE_EXTENSIONS.has(path.extname(resolved).toLowerCase())
+      ? resolved
+      : null;
   };
+
+  /**
+   * Whether the provider this run is pinned to can be handed an image at all.
+   *
+   * Asked of the instance rather than of the setting: a selection naming a disabled provider falls
+   * back to an enabled one (`resolveIssueEnrichmentProvider`), so the configured provider is not
+   * always the provider that runs. An unknown instance answers no — `investigate` is about to fail
+   * on it anyway, and "no" is the answer that cannot lie to the model.
+   */
+  const investigationImagesSupported = (modelSelection: IssueEnrichmentRun["modelSelection"]) =>
+    providers
+      .getInstance(modelSelection.instanceId)
+      .pipe(
+        Effect.map(
+          (instance) =>
+            instance !== undefined &&
+            TextGeneration.supportsInvestigationImages(instance.driverKind),
+        ),
+      );
 
   /**
    * Everything the model is told, read in one pass.
@@ -151,8 +211,15 @@ export const make = Effect.gen(function* () {
    * From the repositories directly rather than through `IssueTrackerService`, which this layer
    * cannot depend on without the two requiring each other. These are all reads of tables the
    * tracker owns; nothing here writes.
+   *
+   * `imagesSupported` decides whether the issue's pictures are read at all. A provider that cannot
+   * take an image must not be told it was given four, so the collection and the prompt's
+   * Attachments section are one decision, made here, before either happens.
    */
-  const gatherContext = Effect.fn("IssueEnrichmentEngine.gatherContext")(function* (issue: Issue) {
+  const gatherContext = Effect.fn("IssueEnrichmentEngine.gatherContext")(function* (
+    issue: Issue,
+    options: { readonly imagesSupported: boolean },
+  ) {
     const [statuses, labels, records, todos, relations, comments] = yield* Effect.all(
       [
         read("Failed to read the issue statuses", statusRepository.listAll()),
@@ -210,18 +277,24 @@ export const make = Effect.gen(function* () {
     }));
 
     // A Slack report that is nothing but a screenshot puts its one useful fact on a comment
-    // attachment, so an investigation that never sees those is reading around the bug.
+    // attachment, so an investigation that never sees those is reading around the bug. Skipped
+    // entirely for a provider with no way to accept one: unread bytes cost disk probes here and a
+    // sentence of untruth in the prompt.
     const attachmentIds: Array<string> = [];
-    const seenAttachmentIds = new Set<string>();
-    for (const comment of comments) {
-      for (const attachmentId of comment.attachmentIds) {
-        if (seenAttachmentIds.has(attachmentId)) continue;
-        seenAttachmentIds.add(attachmentId);
-        attachmentIds.push(attachmentId);
+    if (options.imagesSupported) {
+      const seenAttachmentIds = new Set<string>();
+      for (const comment of comments) {
+        for (const attachmentId of comment.attachmentIds) {
+          if (seenAttachmentIds.has(attachmentId)) continue;
+          seenAttachmentIds.add(attachmentId);
+          attachmentIds.push(attachmentId);
+        }
       }
     }
-    const resolvedImagePaths = resolveCommentImagePaths(attachmentIds);
-    const imagePaths = resolvedImagePaths.slice(0, MAX_INVESTIGATION_IMAGES);
+    const { imagePaths, omitted } = selectInvestigationImages({
+      attachmentIds,
+      resolveUsableImage,
+    });
 
     return {
       imagePaths,
@@ -238,10 +311,7 @@ export const make = Effect.gen(function* () {
         todos: todos.map((todo) => ({ text: todo.text, done: todo.done })),
         relations: investigationRelations,
         comments: investigationComments,
-        images: {
-          provided: imagePaths.length,
-          omitted: resolvedImagePaths.length - imagePaths.length,
-        },
+        images: { provided: imagePaths.length, omitted },
         availableLabels: labels.map((label) => label.name as string),
         openIssues,
       }),
@@ -289,7 +359,8 @@ export const make = Effect.gen(function* () {
     request: IssueEnrichmentStartRequest,
   ) {
     const { recorder, run } = request;
-    const context = yield* gatherContext(request.issue);
+    const imagesSupported = yield* investigationImagesSupported(run.modelSelection);
+    const context = yield* gatherContext(request.issue, { imagesSupported });
 
     // Everything above this line is cheap and local; the permit is taken only for the part that
     // spends money and CPU. Queued runs wait here, and the row stays `queued` while they do.

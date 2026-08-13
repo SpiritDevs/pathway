@@ -38,6 +38,7 @@ import {
   resolveIssueSuggestedTitle,
   shouldFollowIssueTranscript,
   type IssueEnrichmentTone,
+  type IssueSuggestedRewrite,
 } from "./issueEnrichment.logic";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 
@@ -124,6 +125,39 @@ function TranscriptScroller({ transcript }: { transcript: string }) {
   );
 }
 
+/**
+ * The one control a rewrite card carries. Three states, and only one of them is a press: a tick
+ * for a suggestion the issue already reads, and a greyed Apply carrying its reason for one the
+ * field is not open to — the same greyed-with-a-title treatment a deleted label chip gets. Saying
+ * "Applied" for that second case is the thing this is careful not to do.
+ */
+function RewriteApplyButton({
+  blockedReason,
+  className,
+  onApply,
+  rewrite,
+}: {
+  blockedReason: string;
+  className?: string;
+  onApply: (text: string) => void;
+  rewrite: IssueSuggestedRewrite;
+}) {
+  const applied = rewrite.state === "applied";
+  return (
+    <Button
+      className={cn("shrink-0", className)}
+      disabled={rewrite.state !== "applicable"}
+      onClick={() => onApply(rewrite.text)}
+      size="xs"
+      title={rewrite.state === "blocked" ? blockedReason : undefined}
+      variant="outline"
+    >
+      {applied ? <CheckIcon /> : <PlusIcon />}
+      {applied ? "Applied" : "Apply"}
+    </Button>
+  );
+}
+
 function Suggestions({
   issue,
   labels,
@@ -153,8 +187,9 @@ function Suggestions({
   );
   const priority = result.suggestedPriority;
   const priorityApplied = priority !== null && priority === issue.priority;
-  // Only offered for an issue that arrived without one — a Slack message with a placeholder title
-  // and no body — so both are usually absent.
+  // Only pressable for an issue that arrived without one of its own — a Slack message with a
+  // placeholder title and no body — so both are usually absent, and both can still be read while
+  // greyed once the issue has picked up a title or a body of its own.
   const suggestedTitle = resolveIssueSuggestedTitle(result, issue);
   const suggestedDescription = resolveIssueSuggestedDescription(result, issue);
 
@@ -167,37 +202,23 @@ function Suggestions({
             <h5 className="text-[11px] font-medium text-muted-foreground">Title</h5>
             <p className="mt-0.5 break-words text-[13px] text-foreground">{suggestedTitle.text}</p>
           </div>
-          <Button
-            className="shrink-0"
-            disabled={!suggestedTitle.canApply}
-            onClick={() => onApplyTitle(suggestedTitle.text)}
-            size="xs"
-            variant="outline"
-          >
-            {suggestedTitle.canApply ? <PlusIcon /> : <CheckIcon />}
-            {suggestedTitle.canApply ? "Apply" : "Applied"}
-          </Button>
+          <RewriteApplyButton
+            blockedReason="This issue already has a title of its own. A suggestion only fills in a placeholder."
+            onApply={onApplyTitle}
+            rewrite={suggestedTitle}
+          />
         </div>
       )}
       {suggestedDescription === null ? null : (
         <div className="flex flex-col gap-1 rounded-md border border-border/60 bg-muted/24 p-2">
           <div className="flex items-center gap-2">
             <h5 className="text-[11px] font-medium text-muted-foreground">Description</h5>
-            <Button
-              className="ms-auto shrink-0"
-              disabled={!suggestedDescription.canApply}
-              onClick={() => onApplyDescription(suggestedDescription.text)}
-              size="xs"
-              title={
-                suggestedDescription.canApply
-                  ? undefined
-                  : "This issue already has a description. Applying would overwrite it."
-              }
-              variant="outline"
-            >
-              <PlusIcon />
-              Apply
-            </Button>
+            <RewriteApplyButton
+              blockedReason="This issue already has a description. Applying would overwrite it."
+              className="ms-auto"
+              onApply={onApplyDescription}
+              rewrite={suggestedDescription}
+            />
           </div>
           {/* Markdown, up to 8000 characters of it: clamped and scrolled rather than let loose
               down the panel, the same way the transcript is. */}
@@ -375,7 +396,7 @@ export interface IssueEnrichmentPanelProps {
   readonly onCancel: (runId: IssueEnrichmentRunId) => void;
   readonly onApplyLabel: (labelId: IssueLabelId) => void;
   readonly onApplyPriority: (priority: IssuePriority) => void;
-  /** Only reachable for an issue that arrived without a title of its own. */
+  /** Only reachable while the issue's title is still a placeholder. */
   readonly onApplyTitle: (title: string) => void;
   /** Only reachable while the issue's description is still empty. */
   readonly onApplyDescription: (description: string) => void;

@@ -117,6 +117,20 @@ export type SlackChannelWatchId = typeof SlackChannelWatchId.Type;
 
 export const ISSUE_TITLE_MAX_CHARS = 512;
 export const ISSUE_DESCRIPTION_MAX_CHARS = 100_000;
+/**
+ * Titles that carry no information about the issue — intake defaults ("Slack message" is what an
+ * image-only Slack ingest gets) and editor defaults. An investigation may only propose a title
+ * for these; both the server normalizer and the web apply gate consult this one list.
+ */
+const ISSUE_PLACEHOLDER_TITLES: ReadonlySet<string> = new Set([
+  "slack message",
+  "untitled",
+  "new issue",
+]);
+export function isPlaceholderIssueTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized.length === 0 || ISSUE_PLACEHOLDER_TITLES.has(normalized);
+}
 export const ISSUE_COMMENT_MAX_CHARS = 100_000;
 /** Mirrors the composer's own limit: a comment is written in the same editor a turn is. */
 export const ISSUE_COMMENT_MAX_ATTACHMENTS = 8;

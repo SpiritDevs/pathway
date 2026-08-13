@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -22,6 +23,7 @@ import {
   IssueEnrichmentResult,
   ProjectId,
   ProviderDriverKind,
+  ProviderInstanceId,
   TextGenerationError,
   type ChatAttachmentId,
   type IssueActor,
@@ -52,6 +54,8 @@ import { SlackChannelWatchRepositoryLive } from "../persistence/Layers/SlackChan
 import { SlackIntakeLedgerRepositoryLive } from "../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as IssueEnrichmentEngineLive from "./IssueEnrichmentEngineLive.ts";
@@ -107,11 +111,54 @@ const DependenciesLive = Layer.mergeAll(
 );
 
 /**
+ * One instance per driver kind, keyed by its own kind — the shape the defaults produce, where the
+ * instance id and the driver kind are the same word.
+ *
+ * The engine reads exactly one field of this, `driverKind`, to decide whether the issue's images
+ * are worth reading at all; everything else is scaffolding the type demands.
+ */
+const providerRegistryLayer = (kinds: ReadonlyArray<string> = ["codex", "claudeAgent"]) => {
+  const instances = kinds.map(
+    (kind) =>
+      ({
+        instanceId: ProviderInstanceId.make(kind),
+        driverKind: ProviderDriverKind.make(kind),
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make(kind),
+          continuationKey: `${kind}:instance:${kind}`,
+        },
+        displayName: undefined,
+        enabled: true,
+        snapshot: {} as ProviderInstance["snapshot"],
+        orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+        textGeneration: {} as ProviderInstance["textGeneration"],
+      }) satisfies ProviderInstance,
+  );
+  const byId = new Map(instances.map((instance) => [instance.instanceId, instance] as const));
+
+  return Layer.succeed(ProviderInstanceRegistry, {
+    getInstance: (instanceId) => Effect.succeed(byId.get(instanceId)),
+    listInstances: Effect.succeed(instances),
+    listUnavailable: Effect.succeed([]),
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+      PubSub.subscribe(pubsub),
+    ),
+  });
+};
+
+/**
  * The real tracker over the real engine, built on the database already in context. Only the
  * provider is faked, and the settings are the defaults — which is what pins the run's model to
  * `codex` and makes the agent actor on the description edit predictable.
+ *
+ * `enrichmentInstanceId` moves the run to another provider, which is how the tests reach the
+ * capability gate: only the codex driver can be handed an image.
  */
-const buildTracker = (investigate: Investigate) =>
+const buildTracker = (
+  investigate: Investigate,
+  options: { readonly enrichmentInstanceId?: string } = {},
+) =>
   Effect.provide(
     IssueTrackerService,
     issueTrackerLayer.pipe(
@@ -120,7 +167,19 @@ const buildTracker = (investigate: Investigate) =>
           Layer.provide(
             Layer.succeed(TextGeneration.TextGeneration, makeFakeTextGeneration(investigate)),
           ),
-          Layer.provide(serverSettingsLayerTest()),
+          Layer.provide(providerRegistryLayer()),
+          Layer.provide(
+            serverSettingsLayerTest(
+              options.enrichmentInstanceId === undefined
+                ? {}
+                : {
+                    issueEnrichmentModelSelection: {
+                      instanceId: ProviderInstanceId.make(options.enrichmentInstanceId),
+                      model: "a-model",
+                    },
+                  },
+            ),
+          ),
         ),
       ),
       // Intake is not what these tests are about; the stub is enough to satisfy the tracker.
@@ -423,7 +482,94 @@ describe("IssueEnrichmentEngineLive", () => {
         assert.isTrue(yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(imagePath)));
       }
       assert.include(prompt, "- 4 image attachment(s) from this issue are provided");
-      assert.include(prompt, "- 2 further image attachment(s)");
+      assert.include(prompt, "- 2 more attachment(s) on this issue were not included.");
+    }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
+  );
+
+  it.effect("neither sends nor mentions images when the run's provider cannot read one", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<{
+        readonly imagePaths: ReadonlyArray<string>;
+        readonly prompt: string;
+      }>({ imagePaths: ["unset"], prompt: "" });
+      const tracker = yield* buildTracker(
+        ({ imagePaths, prompt }) =>
+          Ref.set(seen, { imagePaths: imagePaths ?? [], prompt }).pipe(
+            Effect.as({ text: encodeAnswer(ANSWER) }),
+          ),
+        // Only the codex driver turns `imagePaths` into anything. Claude drops them silently.
+        { enrichmentInstanceId: "claudeAgent" },
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create(
+        { title: "Only a screenshot", projectId: PROJECT },
+        ACTOR,
+      );
+      const { attachmentId } = yield* tracker.uploadCommentAttachment({
+        issueId: issue.id,
+        dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+      });
+      yield* tracker.commentCreate(
+        { issueId: issue.id, body: "screenshot", attachmentIds: [attachmentId] },
+        ACTOR,
+      );
+
+      const { run } = yield* tracker.startEnrichment({ issueId: issue.id });
+      assert.strictEqual((yield* awaitFinished(tracker, issue.id, run.id)).state, "done");
+
+      const { imagePaths, prompt } = yield* Ref.get(seen);
+      // Nothing sent, and — the part that was a lie before — nothing claimed either. A prompt that
+      // says "1 image is provided" to a provider that drops it invites reasoning about evidence
+      // the model never saw.
+      assert.deepStrictEqual(imagePaths, []);
+      assert.notInclude(prompt, "Attachments:");
+      assert.notInclude(prompt, "image attachment(s)");
+    }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
+  );
+
+  it.effect("skips an image in a format the CLI would refuse, and counts it as omitted", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<{
+        readonly imagePaths: ReadonlyArray<string>;
+        readonly prompt: string;
+      }>({ imagePaths: ["unset"], prompt: "" });
+      const tracker = yield* buildTracker(({ imagePaths, prompt }) =>
+        Ref.set(seen, { imagePaths: imagePaths ?? [], prompt }).pipe(
+          Effect.as({ text: encodeAnswer(ANSWER) }),
+        ),
+      );
+      yield* seedProject;
+      const { issue } = yield* tracker.create(
+        { title: "Mixed formats", projectId: PROJECT },
+        ACTOR,
+      );
+
+      // An SVG is safe to render in the panel and fatal to `codex exec --image`, which fails the
+      // run rather than skipping the file. One of these must not cost the whole investigation.
+      const { attachmentId: svg } = yield* tracker.uploadCommentAttachment({
+        issueId: issue.id,
+        dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString("base64")}`,
+      });
+      const { attachmentId: png } = yield* tracker.uploadCommentAttachment({
+        issueId: issue.id,
+        dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+      });
+      yield* tracker.commentCreate(
+        { issueId: issue.id, body: "two files", attachmentIds: [svg, png] },
+        ACTOR,
+      );
+
+      const { run } = yield* tracker.startEnrichment({ issueId: issue.id });
+      assert.strictEqual((yield* awaitFinished(tracker, issue.id, run.id)).state, "done");
+
+      const { imagePaths, prompt } = yield* Ref.get(seen);
+      assert.deepStrictEqual(
+        imagePaths.map((imagePath) => imagePath.split("/").at(-1)),
+        [`${png}.png`],
+      );
+      // Unsendable is still one the model does not have: counted, so "there is more" stays true.
+      assert.include(prompt, "- 1 image attachment(s) from this issue are provided");
+      assert.include(prompt, "- 1 more attachment(s) on this issue were not included.");
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 
@@ -495,4 +641,70 @@ describe("IssueEnrichmentEngineLive", () => {
       assert.deepStrictEqual(startedKeys, ["ISS-1", "ISS-2"]);
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
+});
+
+describe("selectInvestigationImages", () => {
+  const resolvesEverything = (attachmentId: string) => `/attachments/${attachmentId}.png`;
+
+  it("takes the oldest four and stops resolving there", () => {
+    const asked: Array<string> = [];
+    const attachmentIds = Array.from({ length: 40 }, (_unused, index) => `image-${index}`);
+
+    const { imagePaths, omitted } = IssueEnrichmentEngineLive.selectInvestigationImages({
+      attachmentIds,
+      resolveUsableImage: (attachmentId) => {
+        asked.push(attachmentId);
+        return resolvesEverything(attachmentId);
+      },
+    });
+
+    assert.deepStrictEqual(imagePaths, [
+      "/attachments/image-0.png",
+      "/attachments/image-1.png",
+      "/attachments/image-2.png",
+      "/attachments/image-3.png",
+    ]);
+    // The point: resolution is a fistful of `existsSync` probes per id, and forty screenshots
+    // must not cost forty of them to send four.
+    assert.deepStrictEqual(asked, ["image-0", "image-1", "image-2", "image-3"]);
+    assert.strictEqual(omitted, 36);
+  });
+
+  it("keeps reading past one it cannot use, and counts it as omitted anyway", () => {
+    const unusable = new Set(["image-1", "image-5"]);
+
+    const { imagePaths, omitted } = IssueEnrichmentEngineLive.selectInvestigationImages({
+      attachmentIds: ["image-0", "image-1", "image-2", "image-3", "image-4", "image-5"],
+      resolveUsableImage: (attachmentId) =>
+        unusable.has(attachmentId) ? null : resolvesEverything(attachmentId),
+    });
+
+    // `image-1` was skipped, not fatal: the cap is four *usable* images, so `image-4` rides along.
+    assert.deepStrictEqual(imagePaths, [
+      "/attachments/image-0.png",
+      "/attachments/image-2.png",
+      "/attachments/image-3.png",
+      "/attachments/image-4.png",
+    ]);
+    // Two left behind — one unresolvable, one never reached. Both are images the model does not
+    // have, which is the only distinction the prompt can honestly draw.
+    assert.strictEqual(omitted, 2);
+  });
+
+  it("omits nothing when the issue has nothing to omit", () => {
+    assert.deepStrictEqual(
+      IssueEnrichmentEngineLive.selectInvestigationImages({
+        attachmentIds: [],
+        resolveUsableImage: resolvesEverything,
+      }),
+      { imagePaths: [], omitted: 0 },
+    );
+    assert.deepStrictEqual(
+      IssueEnrichmentEngineLive.selectInvestigationImages({
+        attachmentIds: ["image-0"],
+        resolveUsableImage: resolvesEverything,
+      }),
+      { imagePaths: ["/attachments/image-0.png"], omitted: 0 },
+    );
+  });
 });

@@ -226,18 +226,30 @@ describe("suggestions", () => {
     expect(issueApplyPriorityPatch(issue(), null)).toBe(null);
   });
 
-  it("writes a title only when the run named one that moves it", () => {
+  it("writes a title only over a placeholder the run named something better for", () => {
     expect(issueApplyTitlePatch(issue({ title: "Slack message" }), "Login test flakes")).toEqual({
       title: "Login test flakes",
     });
-    expect(issueApplyTitlePatch(issue(), undefined)).toBe(null);
+    // Every placeholder the contract knows, including the case the tracker never stores.
+    expect(issueApplyTitlePatch(issue({ title: " untitled " }), "Login test flakes")).toEqual({
+      title: "Login test flakes",
+    });
+    expect(issueApplyTitlePatch(issue({ title: "New issue" }), "Login test flakes")).toEqual({
+      title: "Login test flakes",
+    });
+    expect(issueApplyTitlePatch(issue({ title: "Slack message" }), undefined)).toBe(null);
+    expect(issueApplyTitlePatch(issue({ title: "Slack message" }), "   ")).toBe(null);
+  });
+
+  it("never renames a title someone wrote, however good the suggestion is", () => {
     expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), "Login test flakes")).toBe(
       null,
     );
     expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), " Login test flakes ")).toBe(
       null,
     );
-    expect(issueApplyTitlePatch(issue(), "   ")).toBe(null);
+    // The one the review caught: a human title and a different suggestion is not a rename offer.
+    expect(issueApplyTitlePatch(issue({ title: "Auth flake" }), "Login test flakes")).toBe(null);
   });
 
   it("never writes a description over one someone typed", () => {
@@ -253,24 +265,47 @@ describe("suggestions", () => {
     expect(issueApplyDescriptionPatch(issue(), "  \n ")).toBe(null);
   });
 
-  it("resolves the rewrites the panel renders, and says which can still be taken", () => {
+  it("offers no rewrite card for a run that named none, or named a blank one", () => {
     expect(resolveIssueSuggestedTitle(RESULT, issue())).toBe(null);
     expect(resolveIssueSuggestedDescription(RESULT, issue())).toBe(null);
+    expect(resolveIssueSuggestedTitle({ ...RESULT, suggestedTitle: "  " }, issue())).toBe(null);
     expect(
-      resolveIssueSuggestedTitle({ ...RESULT, suggestedTitle: "Login test flakes" }, issue()),
-    ).toEqual({ text: "Login test flakes", canApply: true });
+      resolveIssueSuggestedDescription({ ...RESULT, suggestedDescription: " \n " }, issue()),
+    ).toBe(null);
+  });
+
+  it("separates a title the issue took from one it is not open to", () => {
+    const result = { ...RESULT, suggestedTitle: "Login test flakes" };
+    expect(resolveIssueSuggestedTitle(result, issue({ title: "Slack message" }))).toEqual({
+      text: "Login test flakes",
+      state: "applicable",
+    });
+    // Straight after the press the live title *is* the suggestion: a tick, not a refusal.
+    expect(resolveIssueSuggestedTitle(result, issue({ title: "Login test flakes" }))).toEqual({
+      text: "Login test flakes",
+      state: "applied",
+    });
+    // A title someone wrote. The card stays readable but must not claim it was applied.
+    expect(resolveIssueSuggestedTitle(result, issue({ title: "Auth flake" }))).toEqual({
+      text: "Login test flakes",
+      state: "blocked",
+    });
+  });
+
+  it("separates a description the issue took from a body it would overwrite", () => {
+    const result = { ...RESULT, suggestedDescription: "## Steps\n\n1. Log in" };
+    expect(resolveIssueSuggestedDescription(result, issue())).toEqual({
+      text: "## Steps\n\n1. Log in",
+      state: "applicable",
+    });
+    // The low finding: after the apply the panel used to still read "Apply … would overwrite it".
     expect(
-      resolveIssueSuggestedTitle(
-        { ...RESULT, suggestedTitle: "Login test flakes" },
-        issue({ title: "Login test flakes" }),
-      ),
-    ).toEqual({ text: "Login test flakes", canApply: false });
-    expect(
-      resolveIssueSuggestedDescription(
-        { ...RESULT, suggestedDescription: "Theirs." },
-        issue({ description: "Mine." }),
-      ),
-    ).toEqual({ text: "Theirs.", canApply: false });
+      resolveIssueSuggestedDescription(result, issue({ description: "## Steps\n\n1. Log in\n" })),
+    ).toEqual({ text: "## Steps\n\n1. Log in", state: "applied" });
+    expect(resolveIssueSuggestedDescription(result, issue({ description: "Mine." }))).toEqual({
+      text: "## Steps\n\n1. Log in",
+      state: "blocked",
+    });
   });
 
   it("renders no suggestion row when everything is already applied or unresolvable", () => {
@@ -309,6 +344,15 @@ describe("suggestions", () => {
       hasIssueEnrichmentSuggestions(
         { ...RESULT, suggestedTitle: "Slack message", suggestedDescription: "Theirs." },
         issue({ title: "Slack message", description: "Mine." }),
+        labels,
+      ),
+    ).toBe(false);
+    // A title suggestion the gate refuses is not outstanding work: nothing else to press means no
+    // row at all, the same as a priority the issue already has.
+    expect(
+      hasIssueEnrichmentSuggestions(
+        { ...RESULT, suggestedTitle: "Login test flakes" },
+        issue({ title: "Auth flake" }),
         labels,
       ),
     ).toBe(false);

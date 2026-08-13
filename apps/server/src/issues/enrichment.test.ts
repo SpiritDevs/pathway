@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { IssueEnrichmentResult } from "@t3tools/contracts";
+import { IssueEnrichmentResult, isPlaceholderIssueTitle } from "@t3tools/contracts";
 
+import { SLACK_UNTITLED_ISSUE_TITLE } from "./IssueTrackerService.ts";
 import {
   buildInvestigationComment,
   buildInvestigationPrompt,
@@ -81,8 +82,16 @@ describe("buildInvestigationPrompt", () => {
     assert.include(prompt, '"suggestedTitle": string — optional');
     assert.include(prompt, '"suggestedDescription": string — optional');
     // The gate is the whole point: an issue a person wrote a title for is not up for renaming.
-    assert.include(prompt, 'Include "suggestedTitle" only when the title above is a placeholder');
-    assert.include(prompt, '"Slack message", "Untitled"');
+    assert.include(
+      prompt,
+      'Include "suggestedTitle" only when the title above is one of the intake placeholders',
+    );
+    // The list the prompt names is the list `isPlaceholderIssueTitle` enforces. Prose that offers
+    // a case the normalizer then drops is a request the model can only lose by answering.
+    assert.include(prompt, '"Slack message", "Untitled", "New issue", or empty');
+    for (const placeholder of ["Slack message", "Untitled", "New issue", "  "]) {
+      assert.isTrue(isPlaceholderIssueTitle(placeholder));
+    }
     assert.include(prompt, "no trailing punctuation");
     assert.include(
       prompt,
@@ -126,10 +135,9 @@ describe("buildInvestigationPrompt", () => {
       prompt,
       "- 4 image attachment(s) from this issue are provided with this request.",
     );
-    assert.include(
-      prompt,
-      "- 2 further image attachment(s) exist on this issue but were not sent.",
-    );
+    // "not included" rather than "were not sent": the two that stayed behind may have been over
+    // the cap, unreadable, or missing from the store, and the model can act on none of those.
+    assert.include(prompt, "- 2 more attachment(s) on this issue were not included.");
   });
 
   it("says nothing about attachments when none were sent", () => {
@@ -340,6 +348,54 @@ describe("normalizeInvestigationResult", () => {
 
     assert.isFalse("suggestedTitle" in (result ?? {}));
     assert.isFalse("suggestedDescription" in (result ?? {}));
+  });
+
+  it("refuses to rename an issue a person already named", () => {
+    const result = normalizeInvestigationResult(
+      { summary: "s", suggestedTitle: "Websocket reconnect loses the queued turn" },
+      { ...vocabulary, currentTitle: "Reconnect drops the queued turn" },
+    );
+
+    // The prompt asks for this and a model mostly obeys; "mostly" is not a rule. A title somebody
+    // typed is not up for replacement, however much better the model's reads.
+    assert.isFalse("suggestedTitle" in (result ?? {}));
+    // Only the title is gated — the rest of the answer stands.
+    assert.strictEqual(result?.summary, "s");
+  });
+
+  it("takes a title for an issue that arrived without one of its own", () => {
+    for (const currentTitle of [
+      SLACK_UNTITLED_ISSUE_TITLE,
+      "  slack message ",
+      "Untitled",
+      "New issue",
+      "",
+      "   ",
+    ]) {
+      const result = normalizeInvestigationResult(
+        { summary: "s", suggestedTitle: "Reconnect drops the queued turn" },
+        { ...vocabulary, currentTitle },
+      );
+
+      assert.strictEqual(
+        result?.suggestedTitle,
+        "Reconnect drops the queued turn",
+        `expected a suggestion for the placeholder title ${JSON.stringify(currentTitle)}`,
+      );
+    }
+
+    // The intake default and the predicate are one fact in two files. If Slack's untitled issues
+    // ever get another name, this is what says the investigation may still name them.
+    assert.isTrue(isPlaceholderIssueTitle(SLACK_UNTITLED_ISSUE_TITLE));
+
+    // No opinion offered is no gate: the caller that omits `currentTitle` gets the suggestion.
+    assert.strictEqual(
+      normalizeInvestigationResult(
+        { summary: "s", suggestedTitle: "Reconnect drops the queued turn" },
+        vocabulary,
+      )?.suggestedTitle,
+      "Reconnect drops the queued turn",
+    );
   });
 
   it("keeps a bare-string likely file, and skips the entries with no path at all", () => {

@@ -16,6 +16,7 @@ import {
   ISSUE_TITLE_MAX_CHARS,
   IssueKey,
   IssuePriority,
+  isPlaceholderIssueTitle,
   type IssueEnrichmentLikelyFile,
   type IssueEnrichmentResult,
   type IssueRelationDirection,
@@ -67,7 +68,11 @@ export interface InvestigationComment {
 export interface InvestigationImageSummary {
   /** How many image files ride along with this request. */
   readonly provided: number;
-  /** How many the issue has that did not fit. Zero unless the cap bit. */
+  /**
+   * How many of the issue's other attachments were left behind — over the cap, in a format no
+   * provider reads, or missing from the store. Counted rather than described: the model can do
+   * nothing about any of those, and "there is more" is the only part it can act on.
+   */
   readonly omitted: number;
 }
 
@@ -85,7 +90,11 @@ export interface InvestigationPromptInput {
   /**
    * The images attached to the request, counted. A model cannot tell how many pictures it was
    * given from the pictures alone, and an issue reported with a screenshot has its whole report
-   * in one — so the prompt says how many arrived, and how many did not fit.
+   * in one — so the prompt says how many arrived, and how many did not.
+   *
+   * Only ever set by a caller that is genuinely sending the files to a provider that reads them.
+   * Left out for one that is not: a sentence about attachments no model can see is worse than
+   * silence, because it invites the model to reason about evidence it does not have.
    */
   readonly images?: InvestigationImageSummary | undefined;
   /**
@@ -121,7 +130,7 @@ function investigationImageLines(
     `- ${images.provided} image attachment(s) from this issue are provided with this request.`,
     "  Look at them: for an issue reported as a screenshot they are the report.",
     ...(images.omitted > 0
-      ? [`- ${images.omitted} further image attachment(s) exist on this issue but were not sent.`]
+      ? [`- ${images.omitted} more attachment(s) on this issue were not included.`]
       : []),
   ];
 }
@@ -162,8 +171,9 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
     "Use an empty array where you have nothing to say. Do not invent an issue key or a label name",
     "that is not on the lists. Nothing you suggest is applied automatically; a person reviews it.",
     "",
-    'Include "suggestedTitle" only when the title above is a placeholder or says nothing about the',
-    'problem — "Slack message", "Untitled", a bare timestamp, empty. Otherwise leave the key out.',
+    'Include "suggestedTitle" only when the title above is one of the intake placeholders —',
+    '"Slack message", "Untitled", "New issue", or empty. Otherwise leave the key out; a title a',
+    "person wrote is not up for replacement, however uninformative it reads.",
     "When you do include it: one line, concise, descriptive of the problem, no trailing punctuation.",
     'Include "suggestedDescription" only when the description above is empty or near-empty.',
     "Otherwise leave the key out. When you do include it: concise markdown, built strictly from the",
@@ -325,8 +335,12 @@ function normalizeSuggestedDescription(value: unknown): string | null {
  * a key that resolves to nothing renders as a dead link, and a suggested label nobody defined is
  * a chore rather than a suggestion.
  *
- * `currentTitle` and `currentDescription` are only there to drop a suggestion that proposes what
- * the issue already says. Absent is fine — the panel compares before offering "apply" too.
+ * `currentTitle` and `currentDescription` drop a suggestion that proposes what the issue already
+ * says. `currentTitle` does one thing more: unless it is one of the intake placeholders
+ * ({@link isPlaceholderIssueTitle}), the proposed title is dropped whatever it says. The prompt
+ * asks for that rule and a model mostly keeps it, but "mostly" is not a rule — a title somebody
+ * typed is not up for replacement by a suggestion nobody asked for. Absent `currentTitle` is the
+ * caller saying it has no opinion, and the suggestion stands.
  */
 export function normalizeInvestigationResult(
   value: unknown,
@@ -372,6 +386,10 @@ export function normalizeInvestigationResult(
   const currentTitle = vocabulary.currentTitle?.replace(/\s+/g, " ").trim();
   const currentDescription = vocabulary.currentDescription?.trim();
 
+  // A human-written title closes the question: the model may only name an issue that arrived
+  // without a name of its own.
+  const titleIsOpen = currentTitle === undefined || isPlaceholderIssueTitle(currentTitle);
+
   const priority = record["suggestedPriority"];
   return {
     summary: summary.slice(0, ISSUE_ENRICHMENT_SUMMARY_MAX_CHARS),
@@ -381,7 +399,9 @@ export function normalizeInvestigationResult(
     suggestedPriority: isPriority(priority) ? priority : null,
     // Written as absent keys rather than `undefined` values: the result is stored as JSON, and a
     // suggestion nobody made should not read as one the model declined to make.
-    ...(suggestedTitle !== null && suggestedTitle !== currentTitle ? { suggestedTitle } : {}),
+    ...(suggestedTitle !== null && titleIsOpen && suggestedTitle !== currentTitle
+      ? { suggestedTitle }
+      : {}),
     ...(suggestedDescription !== null && suggestedDescription !== currentDescription
       ? { suggestedDescription }
       : {}),

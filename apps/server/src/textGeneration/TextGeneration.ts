@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { TextGenerationError } from "@t3tools/contracts";
+import { ProviderDriverKind, TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -100,13 +100,35 @@ export interface InvestigationGenerationInput {
    * Images to hand the model with the prompt, as absolute paths to files on this machine.
    *
    * Paths rather than bytes: an issue's images are already files in the server's attachment store,
-   * and the providers here are CLIs on the same host that take an image by name. A provider with
-   * no way to attach one ignores these rather than failing; the prompt is built before the run's
-   * provider is known, so the count it states is what was offered, not what was read.
+   * and the providers here are CLIs on the same host that take an image by name. Only supply these
+   * to a provider that reads them — {@link supportsInvestigationImages} says which do. A provider
+   * without the capability ignores them rather than failing, but a caller that sends them anyway
+   * has also told the model in its prompt about pictures no model will ever see.
    */
   imagePaths?: ReadonlyArray<string> | undefined;
   /** What model and provider to use for the investigation. */
   modelSelection: ModelSelection;
+}
+
+/**
+ * The drivers whose `investigate` actually puts an image in front of the model.
+ *
+ * A capability rather than a hope: every implementation here accepts `imagePaths` on the input
+ * because they share one interface, but only Codex turns them into anything (`--image` per file).
+ * The others drop them silently, which is harmless until the caller has also written "4 images are
+ * provided with this request" into the prompt — at which point the model is being lied to about
+ * evidence it cannot see. Callers that build such a sentence must gate it on this.
+ *
+ * Kept as a list of driver kinds, not a flag on `TextGenerationShape`: the shape is one interface
+ * shared by five drivers, and the thing that differs between them is which driver it is.
+ */
+const INVESTIGATION_IMAGE_DRIVER_KINDS: ReadonlySet<string> = new Set<ProviderDriverKind>([
+  ProviderDriverKind.make("codex"),
+]);
+
+/** Whether `investigate` on this driver reads the `imagePaths` it is handed. */
+export function supportsInvestigationImages(driverKind: ProviderDriverKind): boolean {
+  return INVESTIGATION_IMAGE_DRIVER_KINDS.has(driverKind);
 }
 
 export interface InvestigationGenerationResult {
