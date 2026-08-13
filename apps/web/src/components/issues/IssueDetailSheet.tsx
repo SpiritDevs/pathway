@@ -147,6 +147,7 @@ import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
 import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
   issueAssigneePatch,
@@ -424,6 +425,7 @@ function IssueDetailBody({
   const milestones = useIssueMilestonesForProject(issue.projectId);
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
+  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id);
   const childRollup = useIssueChildRollup(issue.id);
   const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1213,12 +1215,13 @@ function IssueDetailBody({
 
               <IssueDescriptionEditor
                 onCommit={(description) => write(issueDescriptionPatch(issue, description))}
+                onPasteImages={attachmentDrafts.addFiles}
                 value={issue.description}
               />
 
               <IssueAttachments
                 comments={comments}
-                issueId={issue.id}
+                drafts={attachmentDrafts}
                 onCreateComment={handleCreateComment}
               />
 

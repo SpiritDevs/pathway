@@ -1,21 +1,28 @@
-import type { ChatAttachmentId, EnvironmentId, IssueComment, IssueId } from "@t3tools/contracts";
-import { ImagePlusIcon, ImagesIcon } from "lucide-react";
+import type { ChatAttachmentId, EnvironmentId, IssueComment } from "@t3tools/contracts";
+import {
+  ChevronDownIcon,
+  ClipboardPasteIcon,
+  FileImageIcon,
+  ImagePlusIcon,
+  ImagesIcon,
+} from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { issueClipboardImageFiles } from "./issueAttachmentClipboard";
 import {
   issueAttachmentComment,
   issueAttachmentIds,
   issueCommentAttachmentIds,
   isIssueVideoAttachmentUrl,
 } from "./issueCommentAttachments";
-import {
-  PendingIssueImageAttachment,
-  useIssueImageAttachmentDrafts,
-} from "./useIssueImageAttachmentDrafts";
+import { PendingIssueImageAttachment } from "./useIssueImageAttachmentDrafts";
+import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachmentDrafts";
 
 function AttachmentGallery({
   attachmentIds,
@@ -70,21 +77,51 @@ function AttachmentGallery({
 
 export function IssueAttachments({
   comments,
-  issueId,
   onCreateComment,
+  drafts,
 }: {
   comments: ReadonlyArray<IssueComment>;
-  issueId: IssueId;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
+  drafts: IssueImageAttachmentDraftController;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
-  const { attachments, addFiles, removeAttachment, clearAttachments } =
-    useIssueImageAttachmentDrafts(issueId);
+  const { attachments, addFiles, removeAttachment, clearAttachments } = drafts;
   const storedAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
   const pendingIds = issueCommentAttachmentIds(attachments);
   const uploading = attachments.some((attachment) => attachment.status === "uploading");
+
+  const addFromClipboard = async () => {
+    if (navigator.clipboard?.read === undefined) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Clipboard unavailable",
+          description: "This browser cannot read images directly from the clipboard.",
+        }),
+      );
+      return;
+    }
+
+    try {
+      const files = await issueClipboardImageFiles(await navigator.clipboard.read());
+      if (files.length > 0) {
+        addFiles(files);
+        return;
+      }
+      toastManager.add({ type: "info", title: "No image in clipboard" });
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not read clipboard",
+          description:
+            error instanceof Error ? error.message : "Clipboard access was not available.",
+        }),
+      );
+    }
+  };
 
   const attach = () => {
     if (pendingIds.length === 0 || uploading) return;
@@ -124,15 +161,27 @@ export function IssueAttachments({
             {storedAttachmentIds.length}
           </span>
         )}
-        <Button
-          className="ms-auto text-muted-foreground"
-          onClick={() => inputRef.current?.click()}
-          size="xs"
-          variant="ghost"
-        >
-          <ImagePlusIcon />
-          Add images
-        </Button>
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button className="ms-auto text-muted-foreground" size="xs" variant="ghost">
+                <ImagePlusIcon />
+                Add images
+                <ChevronDownIcon className="size-3" />
+              </Button>
+            }
+          />
+          <MenuPopup align="end" className="w-44">
+            <MenuItem onClick={() => inputRef.current?.click()}>
+              <FileImageIcon />
+              From file
+            </MenuItem>
+            <MenuItem onClick={() => void addFromClipboard()}>
+              <ClipboardPasteIcon />
+              From clipboard
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
         <input
           accept="image/*"
           className="sr-only"

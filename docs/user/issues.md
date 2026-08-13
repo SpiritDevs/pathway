@@ -65,6 +65,10 @@ who made it and what it was before. On wider sheets, drag the divider beside the
 resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
 sheet header to copy it.
 
+Use **Add images** in the attachment shelf to choose images from a file or from the clipboard. You
+can also paste an image directly into the description; Pathway moves it into the attachment shelf
+instead of inserting it into the description.
+
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
 
