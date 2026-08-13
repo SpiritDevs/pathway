@@ -21,6 +21,12 @@ const MERGE_BACK_BLOCKING_RUN_STATUSES = new Set<Run["status"]>([
 export interface QueuedThreadRun {
   readonly run: Run;
   readonly text: string;
+  /**
+   * Who authored the queued message. Provider continuation wakes (for example
+   * "Background command completed") are dispatched with `createdBy: "agent"`;
+   * surfaces must attribute those rows instead of presenting them as user text.
+   */
+  readonly createdBy: Projection["messages"][number]["createdBy"];
 }
 
 export interface ThreadQueueWorkflowState {
@@ -103,12 +109,14 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
     (left, right) =>
       (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
       left.ordinal - right.ordinal,
-  ).map((run) => ({
-    run,
-    text:
-      projection.messages.find((message) => message.id === run.userMessageId)?.text ??
-      "Queued message",
-  }));
+  ).map((run) => {
+    const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
+    return {
+      run,
+      text: message?.text ?? "Queued message",
+      createdBy: message?.createdBy ?? "user",
+    };
+  });
 
   return {
     activeRun,
