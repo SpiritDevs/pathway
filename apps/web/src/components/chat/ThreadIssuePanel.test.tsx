@@ -19,6 +19,9 @@ const testState = vi.hoisted(() => ({
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => testState.navigate,
 }));
+vi.mock("../issues/IssueDetailSheet", () => ({
+  IssueDetailSheet: () => null,
+}));
 vi.mock("~/state/issues", () => ({
   useIssueLinksForThread: () => ({
     links: testState.links,
@@ -92,7 +95,7 @@ describe("ThreadIssuePanel", () => {
     expect(html).toContain("In Progress");
     expect(html).toContain("Medium");
     expect(html).toContain("2026-08-20");
-    expect(html).toContain('aria-label="Open issue PAT-4"');
+    expect(html).toContain('aria-label="View issue PAT-4"');
   });
 
   it("does not treat a manually attached issue as the thread's origin", () => {

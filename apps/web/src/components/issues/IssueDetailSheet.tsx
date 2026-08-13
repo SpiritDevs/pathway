@@ -42,6 +42,7 @@ import type {
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
+  ArrowUpRightIcon,
   CheckIcon,
   CopyIcon,
   SearchXIcon,
@@ -214,6 +215,7 @@ const GROWING_TEXTAREA_CLASS_NAME =
 export function IssueDetailSheet({
   issueKey,
   onClose,
+  onOpenInIssues,
   onOpenIssueKey,
   startWorkRequestProvider = null,
   startWorkRequestProjectId = null,
@@ -222,6 +224,8 @@ export function IssueDetailSheet({
   /** The `?issue=` value: an issue key such as `PAT-221`, or null when the sheet is shut. */
   issueKey: string | null;
   onClose: () => void;
+  /** Navigates out of an embedded sheet to the issue's canonical Issues view. */
+  onOpenInIssues?: (key: string) => void;
   /** Reopens the sheet on an undone delete, which arrives after the sheet has already closed. */
   onOpenIssueKey: (key: string) => void;
   /** A triage Start Task press waiting for the accepted assignment to reach this sheet. */
@@ -299,6 +303,7 @@ export function IssueDetailSheet({
             issue={issue}
             key={issue.id}
             onClose={onClose}
+            onOpenInIssues={onOpenInIssues}
             onOpenIssueKey={onOpenIssueKey}
             onStartWorkRequestHandled={onStartWorkRequestHandled}
             propertiesMaxWidth={propertiesMaxWidth}
@@ -400,6 +405,7 @@ function IssueDetailPlaceholder({
 function IssueDetailBody({
   issue,
   onClose,
+  onOpenInIssues,
   onOpenIssueKey,
   propertiesMaxWidth,
   propertiesSize,
@@ -409,6 +415,7 @@ function IssueDetailBody({
 }: {
   issue: Issue;
   onClose: () => void;
+  onOpenInIssues: ((key: string) => void) | undefined;
   onOpenIssueKey: (key: string) => void;
   propertiesMaxWidth: number;
   propertiesSize: ReturnType<typeof useResizableWidth>;
@@ -1217,6 +1224,17 @@ function IssueDetailBody({
             </Button>
           }
         />
+        {onOpenInIssues === undefined ? null : (
+          <Button
+            aria-label={`Open ${issue.key} in Issues`}
+            onClick={() => onOpenInIssues(issue.key)}
+            size="icon-xs"
+            title={`Open ${issue.key} in Issues`}
+            variant="ghost"
+          >
+            <ArrowUpRightIcon />
+          </Button>
+        )}
       </SheetHeaderBar>
 
       <div className="relative flex min-h-0 flex-1 flex-col">
