@@ -68,7 +68,7 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
@@ -1518,7 +1518,8 @@ export function useInvestigatedIssueIds(): ReadonlySet<IssueId> {
 /**
  * The burn-up, reconstructed on the server from the change log and returned as one point per day.
  * A read rather than a stream: it only opens on the milestone detail page, and the store's own
- * diffs already move the live counts beside it.
+ * diffs already move the live counts beside it — which is exactly why the hook below re-reads when
+ * those counts move, so the chart never disagrees with the tiles sitting above it.
  */
 const issueMilestoneHistoryQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
   label: "environment-data:issues:milestone-history",
@@ -1539,6 +1540,14 @@ export interface IssueMilestoneHistoryView {
   readonly refresh: () => void;
 }
 
+/** A cheap fingerprint of one milestone's breakdown, stable across map identity churn. */
+function milestoneCategoryCountsKey(counts: ReadonlyMap<IssueStatusCategory, number>): string {
+  return [...counts.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([category, count]) => `${category}:${count}`)
+    .join(",");
+}
+
 export function useIssueMilestoneHistory(
   milestoneId: IssueMilestoneId | null,
 ): IssueMilestoneHistoryView {
@@ -1548,6 +1557,26 @@ export function useIssueMilestoneHistory(
       ? null
       : issueMilestoneHistoryQuery({ environmentId, input: { milestoneId } }),
   );
+
+  // The series is a read, not a stream, so an issue joining the milestone, leaving it, or changing
+  // category while the page stays open would otherwise leave the chart on the shape it had when the
+  // page opened, disagreeing with the tiles beside it. The breakdown is built from the same issues
+  // the series is, so it moves exactly when the chart would and never on an unrelated edit. The ref
+  // holds the first fingerprint rather than acting on it: the query has already read it.
+  const countsKey = milestoneCategoryCountsKey(useIssueMilestoneCategoryCount(milestoneId));
+  const seenCountsKey = useRef<string | null>(null);
+  const refetch = useEffectEvent(() => query.refresh());
+  useEffect(() => {
+    if (milestoneId === null) {
+      seenCountsKey.current = null;
+      return;
+    }
+    const seen = seenCountsKey.current;
+    seenCountsKey.current = countsKey;
+    if (seen === null || seen === countsKey) return;
+    refetch();
+  }, [countsKey, milestoneId]);
+
   return {
     points: query.data?.points ?? EMPTY_MILESTONE_HISTORY_POINTS,
     approximate: query.data?.approximate ?? false,
