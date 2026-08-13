@@ -53,12 +53,12 @@ import {
 } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { usePrimarySettings } from "~/hooks/useSettings";
-import { cn, newMessageId } from "~/lib/utils";
+import { cn, newMessageId, randomUUID } from "~/lib/utils";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -747,95 +747,126 @@ function IssueDetailBody({
     [issue.id, unlinkThread],
   );
 
-  /** The explicit press creates and dispatches the thread before changing the issue workflow. */
+  /** Opens the local draft and assembles the same issue context for both launch actions. */
+  const prepareIssueThreadDraft = useCallback(
+    async (workspaceMode: IssueStartWorkWorkspaceMode, baseBranch: string | null) => {
+      if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
+        throw new Error("The issue thread could not be prepared.");
+      }
+      const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
+      if (workspacePlan === null) {
+        throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
+      }
+      const relations: Array<IssueStartWorkRelation> = [];
+      if (parent !== null) {
+        relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
+      }
+      for (const display of relationDisplays) {
+        const counterpart = store.issuesById.get(display.issueId);
+        if (counterpart === undefined) continue;
+        relations.push({
+          label: display.label,
+          key: counterpart.key,
+          title: counterpart.title,
+        });
+      }
+      const prompt = buildIssueStartWorkPrompt({
+        issue,
+        statusName: status?.name ?? null,
+        completionStatusName:
+          statuses.find(
+            (candidate) =>
+              candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
+          )?.name ??
+          statuses.find((candidate) => candidate.category === "review")?.name ??
+          null,
+        projectTitle,
+        priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
+        todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
+        relations,
+        issueUrl: issueDetailUrl(window.location.origin, issue.key),
+      });
+      const files: File[] = [];
+      for (const [index, url] of startWorkAttachmentUrls.entries()) {
+        if (url === null) throw new Error("The issue images are still loading. Try again.");
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("An issue image could not be loaded.");
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) {
+          throw new Error("An issue attachment is not an image.");
+        }
+        files.push(new File([blob], `${issue.key}-attachment-${index + 1}`, { type: blob.type }));
+      }
+
+      const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+        branch: workspacePlan.branch,
+        worktreePath: null,
+        envMode: workspacePlan.envMode,
+        startFromOrigin:
+          workspaceMode === "new_worktree"
+            ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
+              ? false
+              : settings.newWorktreesStartFromOrigin
+            : false,
+        // An issue launch is a task boundary. It must never consume an unrelated empty draft.
+        forceNew: true,
+      });
+      if (opened === null) return null;
+      const session = useComposerDraftStore.getState().getDraftSession(opened.draftId);
+      if (session === null) throw new Error("The new thread draft could not be prepared.");
+
+      return {
+        files,
+        opened,
+        projectWorkspaceRoot: project.workspaceRoot,
+        prompt,
+        session,
+        workspacePlan,
+      };
+    },
+    [
+      detail,
+      issue,
+      newWorktreeBlockReason,
+      openNewThread,
+      parent,
+      project,
+      projectTitle,
+      relationDisplays,
+      settings.issueAutomation.statusTransitions.workFinishedStatusId,
+      settings.newWorktreesStartFromOrigin,
+      startWorkAttachmentsReady,
+      startWorkAttachmentUrls,
+      startWorkBranchRefs,
+      status,
+      statuses,
+      store,
+    ],
+  );
+
+  /** The primary press persists the thread and dispatches its first turn immediately. */
   const handleStartWork = useCallback(
     (
       modelSelection: ModelSelection,
       workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
       baseBranch: string | null = null,
     ) => {
-      if (
-        project === null ||
-        project.workspaceRoot === null ||
-        startingWork ||
-        !startWorkAttachmentsReady
-      ) {
-        return;
-      }
-      const projectWorkspaceRoot = project.workspaceRoot;
+      if (startingWork) return;
       setStartingWork(true);
       void (async () => {
         try {
-          const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
-          if (workspacePlan === null) {
-            throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
-          }
-          const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
-            branch: workspacePlan.branch,
-            worktreePath: null,
-            envMode: workspacePlan.envMode,
-            startFromOrigin:
-              workspaceMode === "new_worktree"
-                ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
-                  ? false
-                  : settings.newWorktreesStartFromOrigin
-                : false,
-            // An issue launch is a task boundary. It must never consume an unrelated empty draft.
-            forceNew: true,
-          });
-          if (opened === null) return;
-          const relations: Array<IssueStartWorkRelation> = [];
-          if (parent !== null) {
-            relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
-          }
-          for (const display of relationDisplays) {
-            const counterpart = store.issuesById.get(display.issueId);
-            if (counterpart === undefined) continue;
-            relations.push({
-              label: display.label,
-              key: counterpart.key,
-              title: counterpart.title,
-            });
-          }
-          const prompt = buildIssueStartWorkPrompt({
-            issue,
-            statusName: status?.name ?? null,
-            completionStatusName:
-              statuses.find(
-                (candidate) =>
-                  candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
-              )?.name ??
-              statuses.find((candidate) => candidate.category === "review")?.name ??
-              null,
-            projectTitle,
-            priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
-            todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
-            relations,
-            issueUrl: issueDetailUrl(window.location.origin, issue.key),
-          });
-          const draftStore = useComposerDraftStore.getState();
-          const session = draftStore.getDraftSession(opened.draftId);
-          if (session === null) throw new Error("The new thread draft could not be prepared.");
-
-          const attachments: Array<UploadChatAttachment> = [];
-          for (const [index, url] of startWorkAttachmentUrls.entries()) {
-            if (url === null) throw new Error("The issue images are still loading. Try again.");
-            const response = await fetch(url);
-            if (!response.ok) throw new Error("An issue image could not be loaded.");
-            const blob = await response.blob();
-            if (!blob.type.startsWith("image/")) {
-              throw new Error("An issue attachment is not an image.");
-            }
-            const name = `${issue.key}-attachment-${index + 1}`;
-            const file = new File([blob], name, { type: blob.type });
-            attachments.push({
-              type: "image",
-              name,
-              mimeType: blob.type,
-              sizeBytes: blob.size,
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const { files, projectWorkspaceRoot, prompt, session, workspacePlan } = prepared;
+          const attachments: Array<UploadChatAttachment> = await Promise.all(
+            files.map(async (file) => ({
+              type: "image" as const,
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
               dataUrl: await readFileAsDataUrl(file),
-            });
-          }
+            })),
+          );
 
           const createdAt = new Date().toISOString();
           const started = await startThreadTurn({
@@ -921,29 +952,65 @@ function IssueDetailBody({
       })();
     },
     [
-      detail,
       acceptTriage,
       issue,
       linkThread,
-      newWorktreeBlockReason,
-      openNewThread,
-      parent,
-      project,
-      projectTitle,
-      relationDisplays,
-      startingWork,
-      status,
-      statuses,
-      store,
-      settings.issueAutomation.statusTransitions.workFinishedStatusId,
+      prepareIssueThreadDraft,
       settings.issueAutomation.statusTransitions.workStartedStatusId,
-      settings.newWorktreesStartFromOrigin,
+      startingWork,
       startThreadTurn,
-      startWorkAttachmentsReady,
-      startWorkAttachmentUrls,
-      startWorkBranchRefs,
+      statuses,
       updateIssue,
     ],
+  );
+
+  /** The menu action fills the local draft without submitting it or creating a server thread. */
+  const handleCreatePendingThread = useCallback(
+    (
+      modelSelection: ModelSelection,
+      workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+      baseBranch: string | null = null,
+    ) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.setModelSelection(prepared.opened.draftId, modelSelection, {
+            replaceOptions: true,
+          });
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create pending thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
   );
 
   useEffect(() => {
@@ -1246,6 +1313,7 @@ function IssueDetailBody({
                 branchRefs={startWorkBranchRefs}
                 branchesPending={startWorkBranches.isPending && startWorkBranches.data === null}
                 newWorktreeBlockReason={newWorktreeBlockReason}
+                onCreatePendingThread={handleCreatePendingThread}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
                 onUnlinkThread={handleUnlinkThread}

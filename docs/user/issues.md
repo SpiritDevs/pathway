@@ -131,6 +131,10 @@ worktrees also run the project's configured setup tasks. The new thread keeps th
 in its details menu, where the current status and priority stay visible and the full detail sheet is
 one click away. Dragging cards around a board never launches an agent.
 
+Use the arrow beside **Start new thread** and choose **Create pending thread** when you want to
+prepare the same prompt, model, images, and workspace without sending the first turn. The pending
+thread opens in the composer so you can review or edit it before submitting it.
+
 When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
 selected provider, model, and reasoning level on the issue. **Start new thread** opens with that
 exact selection. The worker prompt also names the configured review status, so the agent can move the
