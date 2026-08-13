@@ -57,7 +57,7 @@ The sidebar also gives you **Triage** with its pending count, **My issues**, **P
 ### The detail sheet
 
 Opening an issue slides a sheet in from the right and leaves the list visible behind it, so you can
-work down a queue without losing your place. `Escape` closes the sheet.
+work down a queue without losing your place. Click outside the sheet or press `Escape` to close it.
 
 The sheet holds the description, the properties rail, todos, sub-issues, relations, comments, the
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with

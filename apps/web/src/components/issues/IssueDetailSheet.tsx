@@ -4,9 +4,9 @@
  * It shares `RightPanelSheet`'s geometry (the same `useResizableWidth`, the same max-width clamp,
  * the same popup classes) but not its `Sheet`, because it is deliberately **non-modal**: the
  * decision record puts the detail in a sheet rather than a page so the list stays visible for
- * triage, and a modal one would blur the list behind a backdrop, trap focus away from `j`/`k`, and
- * close itself the moment somebody clicked the next row. So: no backdrop, a click-through
- * viewport, no focus steal, and dismissal only through the close button, Escape, or the URL.
+ * triage, and a modal one would blur the list behind a backdrop and trap focus away from `j`/`k`.
+ * The viewport stays click-through so clicking another row can replace the open issue; any outside
+ * press also dismisses the current sheet.
  *
  * @module components/issues/IssueDetailSheet
  */
@@ -234,7 +234,6 @@ export function IssueDetailSheet({
 
   return (
     <Sheet
-      disablePointerDismissal
       modal={false}
       onOpenChange={(open) => {
         if (!open) onClose();
@@ -276,7 +275,7 @@ export function IssueDetailSheet({
 
 function SheetHeaderBar({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3">
+    <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
         {title}
       </span>
