@@ -42,6 +42,7 @@ import { layer as providerTurnControlServiceLayer } from "../ProviderTurnControl
 import { layer as providerTurnStartServiceLayer } from "../ProviderTurnStartService.ts";
 import { layer as runExecutionServiceLayer } from "../RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "../RunFinalizationService.ts";
+import { BrowserTakeoverService } from "../BrowserTakeoverService.ts";
 import { ThreadTitleRegenerationService } from "../ThreadTitleRegenerationService.ts";
 import {
   layer as runtimePolicyLayer,
@@ -233,6 +234,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     >;
     readonly enableLegacyTokenStreaming?: boolean;
     readonly runEffectWorker?: boolean;
+    readonly browserTakeoverLayer?: Layer.Layer<BrowserTakeoverService, never, OrchestratorV2>;
   } = {},
 ): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
   const serverConfigLayer = Layer.effect(
@@ -362,21 +364,14 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ThreadTitleRegenerationService,
     ThreadTitleRegenerationService.of({ execute: () => Effect.void }),
   );
-  const effectExecutorProvided = effectExecutorLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        runFinalizationServiceProvided,
-        checkpointRollbackServiceProvided,
-        providerSessionManagerProvided,
-        providerTurnControlServiceProvided,
-        providerTurnStartServiceProvided,
-        runtimeRequestServiceProvided,
-        threadTitleRegenerationTestLayer,
-      ),
-    ),
-  );
-  const effectWorkerProvided = effectWorkerLayer.pipe(
-    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
+  const browserTakeoverTestLayer = Layer.succeed(
+    BrowserTakeoverService,
+    BrowserTakeoverService.of({
+      establish: () => Effect.void,
+      proceed: () => Effect.void,
+      release: () => Effect.void,
+      recover: Effect.succeed({ failed: 0, rearmed: 0, completed: 0 }),
+    }),
   );
   const orchestratorProvided = orchestratorLayer.pipe(
     Layer.provide(
@@ -393,6 +388,30 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         threadForkServiceLayer,
       ),
     ),
+  );
+  // Integration suites can swap in the real browser-takeover service. The layer
+  // they supply is built against this harness' orchestrator so the takeover
+  // service, the effect worker and the test observe one projection.
+  const browserTakeoverProvided =
+    options.browserTakeoverLayer === undefined
+      ? browserTakeoverTestLayer
+      : options.browserTakeoverLayer.pipe(Layer.provide(orchestratorProvided));
+  const effectExecutorProvided = effectExecutorLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        runFinalizationServiceProvided,
+        checkpointRollbackServiceProvided,
+        providerSessionManagerProvided,
+        providerTurnControlServiceProvided,
+        providerTurnStartServiceProvided,
+        runtimeRequestServiceProvided,
+        threadTitleRegenerationTestLayer,
+        browserTakeoverProvided,
+      ),
+    ),
+  );
+  const effectWorkerProvided = effectWorkerLayer.pipe(
+    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
   );
   const replayRuntime = Layer.merge(orchestratorProvided, effectWorkerProvided);
 

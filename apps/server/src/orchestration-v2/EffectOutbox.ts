@@ -104,6 +104,24 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
       Schema.Struct({ type: Schema.Literal("regenerate") }),
     ]),
   }),
+  /**
+   * Browser takeover steps. All three are process-bound: they own an in-memory
+   * automation fence, so a claim inherited from a dead process must be failed
+   * (and the takeover marker driven to a terminal state) rather than replayed
+   * against a fence that no longer exists.
+   */
+  Schema.Struct({
+    type: Schema.Literal("browser-takeover.establish"),
+    takeoverId: CommandId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("browser-takeover.proceed"),
+    takeoverId: CommandId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("browser-takeover.release"),
+    takeoverId: CommandId,
+  }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
@@ -123,6 +141,9 @@ export const PROCESS_BOUND_EFFECT_TYPES = [
   "provider-turn.restart",
   "provider-thread.rollback-and-start",
   "runtime-request.respond",
+  "browser-takeover.establish",
+  "browser-takeover.proceed",
+  "browser-takeover.release",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const OrchestrationEffectStatusV2 = Schema.Literals([
@@ -281,8 +302,20 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         available,
         Array.from({ length: Math.min(64, Math.max(0, Math.floor(count))) }, () => undefined),
       ).pipe(Effect.asVoid);
-    // Title generation is correlated metadata work, so it has its own
-    // per-thread lane and cannot delay provider lifecycle effects.
+    // Effects are serialized per thread within a lane. Title generation is
+    // correlated metadata work, so it has its own lane and cannot delay provider
+    // lifecycle effects. Browser takeover needs a third lane for a stronger
+    // reason: establishing a takeover interrupts the live run and waits for it
+    // to settle, which is itself a provider lifecycle effect — sharing the main
+    // lane would have the takeover wait on work it is blocking.
+    const effectLaneExpression = (alias: string) =>
+      sql`
+        CASE
+          WHEN ${sql.literal(alias)}.effect_type = 'thread-title.generate' THEN 'title'
+          WHEN ${sql.literal(alias)}.effect_type LIKE 'browser-takeover.%' THEN 'browser-takeover'
+          ELSE 'main'
+        END
+      `;
     const claimableCandidatePredicate = (availableBefore?: string) =>
       sql`
         ${
@@ -296,17 +329,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           FROM orchestration_v2_effect_outbox AS active
           WHERE active.thread_id = candidate.thread_id
             AND active.status = 'running'
-            AND (
-              (
-                candidate.effect_type = 'thread-title.generate'
-                AND active.effect_type = 'thread-title.generate'
-              )
-              OR
-              (
-                candidate.effect_type != 'thread-title.generate'
-                AND active.effect_type != 'thread-title.generate'
-              )
-            )
+            AND ${effectLaneExpression("candidate")} = ${effectLaneExpression("active")}
         )
       `;
 

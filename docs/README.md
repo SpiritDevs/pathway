@@ -8,6 +8,7 @@
 - [Organizing threads](./user/thread-sidebar.md)
 - [Issues](./user/issues.md)
 - [Sending and editing messages](./user/editing-messages.md)
+- [Browser takeover](./user/browser-takeover.md)
 - [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)

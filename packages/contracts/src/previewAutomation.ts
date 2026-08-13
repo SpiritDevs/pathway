@@ -720,6 +720,30 @@ export class PreviewAutomationNoAvailableHostError extends Schema.TaggedErrorCla
   }
 }
 
+/**
+ * A human holds the Preview browser for this thread. Raised both when a fenced
+ * thread starts new automation and when a request already in flight is
+ * cancelled so the takeover can begin, so the request fields are optional:
+ * nothing has been routed to a host yet in the first case.
+ */
+export class PreviewAutomationTakeoverActiveError extends Schema.TaggedErrorClass<PreviewAutomationTakeoverActiveError>()(
+  "PreviewAutomationTakeoverActiveError",
+  {
+    ...PreviewAutomationScopeErrorFields,
+    clientId: Schema.optional(TrimmedNonEmptyString),
+    connectionId: Schema.optional(PreviewAutomationConnectionId),
+    requestId: Schema.optional(TrimmedNonEmptyString),
+    tabId: Schema.optional(PreviewTabId),
+    timeoutMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+    takeoverId: Schema.optional(TrimmedNonEmptyString),
+    ...PreviewAutomationOptionalRemoteDiagnosticFields,
+  },
+) {
+  override get message(): string {
+    return `Preview automation ${this.operation} is blocked: a user has taken over the browser for this thread.`;
+  }
+}
+
 export class PreviewAutomationUnsupportedClientError extends Schema.TaggedErrorClass<PreviewAutomationUnsupportedClientError>()(
   "PreviewAutomationUnsupportedClientError",
   {
@@ -868,6 +892,7 @@ export class PreviewAutomationMalformedResponseError extends Schema.TaggedErrorC
 export const PreviewAutomationError = Schema.Union([
   PreviewAutomationUnavailableError,
   PreviewAutomationNoAvailableHostError,
+  PreviewAutomationTakeoverActiveError,
   PreviewAutomationUnsupportedClientError,
   PreviewAutomationTabNotFoundError,
   PreviewAutomationTimeoutError,

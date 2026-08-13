@@ -285,6 +285,78 @@ export const OrchestrationV2ProviderCapabilities = Schema.Struct({
 });
 export type OrchestrationV2ProviderCapabilities = typeof OrchestrationV2ProviderCapabilities.Type;
 
+export const OrchestrationV2BrowserTakeoverStatus = Schema.Literals([
+  "requested",
+  "pausing",
+  "active",
+  "proceeding",
+  "completed",
+  "cancelled",
+  "failed",
+]);
+export type OrchestrationV2BrowserTakeoverStatus = typeof OrchestrationV2BrowserTakeoverStatus.Type;
+
+/**
+ * Run statuses during which a browser takeover may be requested. A run parked
+ * at "waiting" is post-terminal drain — its agent turn is already over — so
+ * the server rejects a request against it. Clients gate the takeover callout
+ * on the same list so they never offer an action the server will refuse.
+ */
+export const ORCHESTRATION_V2_BROWSER_TAKEOVER_ELIGIBLE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+] as const satisfies ReadonlyArray<OrchestrationV2RunStatus>;
+
+export const OrchestrationV2BrowserTakeoverFailure = Schema.Literals([
+  "already_finished",
+  "no_live_host",
+  "fence_failed",
+  "interrupt_failed",
+  "host_disconnected",
+  "continuation_failed",
+  "server_restarted",
+]);
+export type OrchestrationV2BrowserTakeoverFailure =
+  typeof OrchestrationV2BrowserTakeoverFailure.Type;
+
+/**
+ * Durable browser-takeover marker on the thread aggregate. `id` is the id of
+ * the command that requested the takeover, and every internal transition is
+ * fenced by it: a transition naming a different takeover is stale and ignored.
+ * Host/tab identity is captured when the automation fence is acquired, so the
+ * client can focus the exact tab the agent was driving.
+ */
+export const OrchestrationV2BrowserTakeover = Schema.Struct({
+  id: CommandId,
+  status: OrchestrationV2BrowserTakeoverStatus,
+  runId: RunId,
+  providerSessionId: Schema.NullOr(Schema.String),
+  tabId: Schema.NullOr(Schema.String),
+  hostClientId: Schema.NullOr(Schema.String),
+  hostConnectionId: Schema.NullOr(Schema.String),
+  failure: Schema.NullOr(OrchestrationV2BrowserTakeoverFailure),
+  requestedAt: Schema.DateTimeUtc,
+  updatedAt: Schema.DateTimeUtc,
+});
+export type OrchestrationV2BrowserTakeover = typeof OrchestrationV2BrowserTakeover.Type;
+
+/**
+ * Last known preview automation host and tab for the thread. The broker
+ * reports activity per routed automation request; the decider drops true
+ * no-ops (same run, session, host, and tab) before writing an event. Clients
+ * use it to decide whether offering a takeover is meaningful right now.
+ */
+export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
+  runId: Schema.NullOr(RunId),
+  providerSessionId: Schema.String,
+  tabId: Schema.NullOr(Schema.String),
+  hostClientId: Schema.String,
+  lastActivityAt: Schema.DateTimeUtc,
+});
+export type OrchestrationV2ThreadPreviewActivity =
+  typeof OrchestrationV2ThreadPreviewActivity.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -336,6 +408,13 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * In-flight or last-settled human browser takeover. Optional so payloads
+   * written before takeover shipped still decode.
+   */
+  browserTakeover: Schema.optional(Schema.NullOr(OrchestrationV2BrowserTakeover)),
+  /** Coalesced preview automation host/tab marker; see the schema doc. */
+  previewActivity: Schema.optional(Schema.NullOr(OrchestrationV2ThreadPreviewActivity)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1380,6 +1459,23 @@ export const OrchestrationV2StoredEvent = Schema.Struct({
 });
 export type OrchestrationV2StoredEvent = typeof OrchestrationV2StoredEvent.Type;
 
+export const OrchestrationV2BrowserTakeoverJson = OrchestrationV2BrowserTakeover.mapFields(
+  (fields) => ({
+    ...fields,
+    requestedAt: Schema.DateTimeUtcFromString,
+    updatedAt: Schema.DateTimeUtcFromString,
+  }),
+);
+export type OrchestrationV2BrowserTakeoverJson = typeof OrchestrationV2BrowserTakeoverJson.Type;
+
+export const OrchestrationV2ThreadPreviewActivityJson =
+  OrchestrationV2ThreadPreviewActivity.mapFields((fields) => ({
+    ...fields,
+    lastActivityAt: Schema.DateTimeUtcFromString,
+  }));
+export type OrchestrationV2ThreadPreviewActivityJson =
+  typeof OrchestrationV2ThreadPreviewActivityJson.Type;
+
 export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((fields) => ({
   ...fields,
   createdAt: Schema.DateTimeUtcFromString,
@@ -1402,6 +1498,8 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
       }),
     ),
   ),
+  browserTakeover: Schema.optional(Schema.NullOr(OrchestrationV2BrowserTakeoverJson)),
+  previewActivity: Schema.optional(Schema.NullOr(OrchestrationV2ThreadPreviewActivityJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.Type;
@@ -2049,6 +2147,62 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     title: Schema.optional(TrimmedNonEmptyString),
+  }),
+  /**
+   * User asks to take the Preview browser away from the agent. The command id
+   * becomes the takeover id that fences every later transition.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.browser-takeover.request"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
+  /**
+   * Internal: server services advance the takeover state machine. Rejected
+   * when `takeoverId` does not name the thread's current takeover, so a stale
+   * effect retry can never move a newer takeover.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.browser-takeover.transition"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    takeoverId: CommandId,
+    to: Schema.Literals(["pausing", "active", "completed", "cancelled", "failed"]),
+    /** Required when `to` is "failed". */
+    failure: Schema.optional(OrchestrationV2BrowserTakeoverFailure),
+    // Host identity captured when the automation fence was acquired. Omitted
+    // leaves the marker's current value alone.
+    hostClientId: Schema.optional(Schema.NullOr(Schema.String)),
+    hostConnectionId: Schema.optional(Schema.NullOr(Schema.String)),
+    tabId: Schema.optional(Schema.NullOr(Schema.String)),
+  }),
+  /** User hands control back and asks the agent to continue. */
+  Schema.Struct({
+    type: Schema.Literal("thread.browser-takeover.proceed"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    takeoverId: CommandId,
+  }),
+  /** User ends the takeover without continuing; never creates a run or message. */
+  Schema.Struct({
+    type: Schema.Literal("thread.browser-takeover.release"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    takeoverId: CommandId,
+  }),
+  /**
+   * Internal: the preview automation activity sink reports that the thread's
+   * (providerSessionId, hostClientId, tabId) tuple changed. Coalesced by the
+   * broker, so this is not per browser action.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.preview-activity.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: Schema.NullOr(RunId),
+    providerSessionId: Schema.String,
+    tabId: Schema.NullOr(Schema.String),
+    hostClientId: Schema.String,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),
