@@ -6,6 +6,7 @@ import {
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
+  PreviewAutomationTakeoverActiveError,
   PreviewAutomationTargetNotEditableError,
   PreviewTabId,
   ProviderDriverKind,
@@ -15,15 +16,26 @@ import {
   type PreviewAutomationRequest,
   type PreviewAutomationStreamEvent,
 } from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import {
+  PreviewAutomationActivitySink,
+  PreviewTakeoverFenceError,
+  type PreviewActivityRecord,
+} from "./PreviewAutomationTakeover.ts";
 
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+
+const makeBrokerWithFence = PreviewAutomationBroker.makeServices.pipe(
+  Effect.provide(NodeServices.layer),
+);
 
 const scope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -1041,6 +1053,430 @@ it.effect("accepts responses only from the host that received the request", () =
 
       const result = yield* broker.invoke<string>({ scope, operation: "status", input: {} });
       expect(result).toBe("owner");
+    }),
+  ),
+);
+
+const takeoverThreadId = scope.threadId;
+const takeoverEnvironmentId = scope.environmentId;
+const takeoverId = "takeover-1";
+
+const otherThreadScope = {
+  ...scope,
+  threadId: ThreadId.make("thread-2"),
+  providerSessionId: "provider-session-2",
+};
+
+it.effect("blocks new automation while a takeover drains and once it is exclusive", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const pinnedTabId = PreviewTabId.make("tab-pinned");
+      const releaseSnapshot = yield* Deferred.make<void>();
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        Effect.gen(function* () {
+          if (request.operation === "snapshot") yield* Deferred.await(releaseSnapshot);
+          yield* broker.respond({
+            clientId: "client-1",
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: true,
+            result: request.operation === "open" ? { tabId: pinnedTabId } : "done",
+          });
+        }).pipe(Effect.forkScoped, Effect.asVoid),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      const inFlight = yield* broker
+        .invoke<string>({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const acquiring = yield* fence
+        .acquire({
+          environmentId: takeoverEnvironmentId,
+          threadId: takeoverThreadId,
+          takeoverId,
+        })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const whileDraining = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(whileDraining).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(whileDraining).toMatchObject({
+        operation: "status",
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        providerSessionId: scope.providerSessionId,
+        takeoverId,
+      });
+
+      yield* Deferred.succeed(releaseSnapshot, undefined);
+      expect(yield* Fiber.join(inFlight)).toBe("done");
+      const lease = yield* Fiber.join(acquiring);
+      expect(lease).toMatchObject({ hostClientId: "client-1", tabId: pinnedTabId });
+
+      const whileExclusive = yield* broker
+        .invoke<void>({ scope, operation: "snapshot", input: {}, tabId: pinnedTabId })
+        .pipe(Effect.flip);
+      expect(whileExclusive).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(whileExclusive).toMatchObject({ tabId: pinnedTabId, takeoverId });
+    }),
+  ),
+);
+
+it.effect("cancels a straggling request when the drain window closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const routedRequests: RoutedRequest[] = [];
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) => {
+        routedRequests.push(request);
+        // The host answers everything except the snapshot left hanging below.
+        return request.operation === "snapshot"
+          ? Effect.void
+          : broker.respond({
+              clientId: "client-1",
+              connectionId: request.connectionId,
+              requestId: request.requestId,
+              ok: true,
+              result: "done",
+            });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const straggler = yield* broker
+        .invoke<void>({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const acquiring = yield* fence
+        .acquire({
+          environmentId: takeoverEnvironmentId,
+          threadId: takeoverThreadId,
+          takeoverId,
+          drainTimeoutMs: 1_000,
+        })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.millis(1_000));
+
+      const cancelled = yield* Fiber.join(straggler);
+      expect(cancelled).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(cancelled).toMatchObject({
+        operation: "snapshot",
+        clientId: "client-1",
+        requestId: "preview-0",
+        takeoverId,
+      });
+      yield* Fiber.join(acquiring);
+
+      // The cancelled request left no pending entry behind: a late response for
+      // it is dropped instead of resolving someone else's deferred.
+      const abandoned = routedRequests[0];
+      yield* broker.respond({
+        clientId: "client-1",
+        connectionId: abandoned?.connectionId ?? "",
+        requestId: abandoned?.requestId ?? "",
+        ok: true,
+        result: "late",
+      });
+      yield* fence.release({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+      expect(yield* broker.invoke<string>({ scope, operation: "status", input: {} })).toBe("done");
+      expect(routedRequests.map((request) => request.requestId)).toEqual([
+        "preview-0",
+        "preview-1",
+      ]);
+    }),
+  ).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("refuses a takeover for a thread with no live automation host", () =>
+  Effect.gen(function* () {
+    const { broker, fence } = yield* makeBrokerWithFence;
+    const error = yield* fence
+      .acquire({ environmentId: takeoverEnvironmentId, threadId: takeoverThreadId, takeoverId })
+      .pipe(Effect.flip);
+
+    expect(error).toBeInstanceOf(PreviewTakeoverFenceError);
+    expect(error.reason).toBe("no_live_host");
+    // Nothing was fenced, so automation keeps its ordinary failure mode.
+    const invoked = yield* broker
+      .invoke<void>({ scope, operation: "status", input: {} })
+      .pipe(Effect.flip);
+    expect(invoked).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+  }),
+);
+
+it.effect("refuses a takeover when the pinned host disconnected before it started", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const consumer = yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "done",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+
+      yield* Fiber.interrupt(consumer);
+      yield* Effect.yieldNow;
+
+      const error = yield* fence
+        .acquire({ environmentId: takeoverEnvironmentId, threadId: takeoverThreadId, takeoverId })
+        .pipe(Effect.flip);
+      expect(error.reason).toBe("no_live_host");
+    }),
+  ),
+);
+
+it.effect("keeps automation fenced when the pinned host dies mid-takeover", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const consumer = yield* Stream.runDrain(requests).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const inFlight = yield* broker
+        .invoke<void>({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const acquiring = yield* fence
+        .acquire({ environmentId: takeoverEnvironmentId, threadId: takeoverThreadId, takeoverId })
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* Fiber.interrupt(consumer);
+      expect(yield* Fiber.join(inFlight)).toBeInstanceOf(PreviewAutomationClientDisconnectedError);
+      const error = yield* Fiber.join(acquiring);
+      expect(error).toBeInstanceOf(PreviewTakeoverFenceError);
+      expect(error.reason).toBe("host_disconnected");
+
+      // Fail safe: a takeover that could not be established still blocks the
+      // agent until the caller releases it.
+      const blocked = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(blocked).toMatchObject({ takeoverId });
+    }),
+  ),
+);
+
+it.effect("returns the same pinned tab to the agent once the takeover is released", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const pinnedTabId = PreviewTabId.make("tab-pinned");
+      const routedRequests: RoutedRequest[] = [];
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) => {
+        routedRequests.push(request);
+        return broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: request.operation === "open" ? { tabId: pinnedTabId } : "done",
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      const lease = yield* fence.acquire({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+      expect(lease.tabId).toBe(pinnedTabId);
+
+      yield* fence.release({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId: "takeover-other",
+      });
+      const stillBlocked = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(stillBlocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+
+      yield* fence.release({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+      yield* fence.release({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+
+      expect(yield* broker.invoke<string>({ scope, operation: "snapshot", input: {} })).toBe(
+        "done",
+      );
+      expect(routedRequests.at(-1)?.tabId).toBe(pinnedTabId);
+    }),
+  ),
+);
+
+it.effect("re-arms a fence after a restart without disturbing in-flight requests", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      const routedRequests: RoutedRequest[] = [];
+      const releaseResponse = yield* Deferred.make<void>();
+      yield* Stream.runForEach(requests, (request) => {
+        routedRequests.push(request);
+        return Effect.gen(function* () {
+          yield* Deferred.await(releaseResponse);
+          yield* broker.respond({
+            clientId: "client-1",
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: true,
+            result: "done",
+          });
+        }).pipe(Effect.forkScoped, Effect.asVoid);
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const inFlight = yield* broker
+        .invoke<string>({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* fence.rearm({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+        hostClientId: "client-1",
+        hostConnectionId: routedRequests[0]?.connectionId ?? "",
+        tabId: null,
+      });
+      yield* fence.rearm({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+        hostClientId: "client-1",
+        hostConnectionId: routedRequests[0]?.connectionId ?? "",
+        tabId: null,
+      });
+
+      const blocked = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(blocked).toMatchObject({ takeoverId });
+
+      yield* Deferred.succeed(releaseResponse, undefined);
+      expect(yield* Fiber.join(inFlight)).toBe("done");
+    }),
+  ),
+);
+
+it.effect("fences one thread without touching another thread in the same environment", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "done",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+      yield* broker.invoke({ scope: otherThreadScope, operation: "status", input: {} });
+      yield* fence.acquire({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+
+      const blocked = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      expect(
+        yield* broker.invoke<string>({
+          scope: otherThreadScope,
+          operation: "status",
+          input: {},
+        }),
+      ).toBe("done");
+    }),
+  ),
+);
+
+it.effect("publishes preview activity only when the host and tab a thread drives change", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const records: PreviewActivityRecord[] = [];
+      const broker = yield* makeBroker.pipe(
+        Effect.provideService(PreviewAutomationActivitySink, {
+          record: (record) =>
+            Effect.sync(() => {
+              records.push(record);
+            }),
+        }),
+      );
+      const openedTabId = PreviewTabId.make("tab-opened");
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: request.operation === "open" ? { tabId: openedTabId } : "done",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+      yield* Effect.yieldNow;
+      expect(records).toEqual([
+        {
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          providerSessionId: scope.providerSessionId,
+          tabId: null,
+          hostClientId: "client-1",
+        },
+      ]);
+
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+      yield* Effect.yieldNow;
+      expect(records).toHaveLength(1);
+
+      yield* broker.invoke({ scope, operation: "open", input: {} });
+      yield* Effect.yieldNow;
+      expect(records).toHaveLength(2);
+      expect(records.at(-1)).toMatchObject({ tabId: openedTabId, hostClientId: "client-1" });
+
+      yield* broker.invoke({ scope, operation: "snapshot", input: {} });
+      yield* Effect.yieldNow;
+      expect(records).toHaveLength(2);
     }),
   ),
 );
