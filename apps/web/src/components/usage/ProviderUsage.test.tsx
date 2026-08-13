@@ -21,6 +21,7 @@ const atoms = vi.hoisted(() => ({
 
 const testState = vi.hoisted(() => ({
   queries: new Map<string, ServerProviderUsageSnapshot>(),
+  pendingQueries: new Set<string>(),
   refresh: vi.fn(),
   toast: vi.fn(),
 }));
@@ -64,7 +65,9 @@ vi.mock("~/state/query", () => ({
       ? (testState.queries.get(String(target.input.instanceId)) ?? null)
       : null,
     error: null,
-    isPending: false,
+    isPending: target?.input?.instanceId
+      ? testState.pendingQueries.has(String(target.input.instanceId))
+      : false,
     refresh: vi.fn(),
   }),
 }));
@@ -144,9 +147,9 @@ function findSpinningRefreshIcon(tree: ReactElement<Record<string, unknown>>) {
     tree,
     (element) =>
       typeof element.props.className === "string" &&
-      element.props.className.includes("animate-spin") &&
-      element.props.className.includes("[animation-duration:2s]") &&
-      element.props.className.includes("motion-reduce:animate-none"),
+      element.props.className.split(/\s+/).includes("animate-spin") &&
+      element.props.className.split(/\s+/).includes("[animation-duration:2s]") &&
+      element.props.className.split(/\s+/).includes("motion-reduce:animate-none"),
   );
 }
 
@@ -164,6 +167,7 @@ describe("provider usage panel refresh", () => {
     hooks.reset();
     atoms.providers = null;
     testState.queries.clear();
+    testState.pendingQueries.clear();
     testState.refresh.mockReset();
     testState.toast.mockReset();
   });
@@ -187,6 +191,34 @@ describe("provider usage panel refresh", () => {
     expect(button?.props["aria-busy"]).toBe(false);
     expect(button?.props.disabled).toBe(false);
     expect(tooltip).not.toBeNull();
+  });
+
+  it("reveals and spins the refresh action while usage refreshes automatically", () => {
+    testState.pendingQueries.add(String(codexId));
+
+    const panel = renderSingle();
+    const button = findRefreshButton(panel);
+    const pendingContent = visitElements(
+      panel,
+      (element) => element.props["data-provider-usage-pending"] === true,
+    );
+    const icon = visitElements(
+      panel,
+      (element) =>
+        typeof element.props.className === "string" &&
+        element.props.className.includes(
+          "group-has-[[data-provider-usage-pending]]/usage:animate-spin",
+        ),
+    );
+
+    expect(pendingContent).not.toBeNull();
+    expect(pendingContent?.props["aria-busy"]).toBe(true);
+    expect(button?.props.className).toContain(
+      "group-has-[[data-provider-usage-pending]]/usage:opacity-100",
+    );
+    expect(icon?.props.className).toContain(
+      "motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none",
+    );
   });
 
   it("forces one refresh, stays busy, preserves disclosure state, and applies the response", async () => {

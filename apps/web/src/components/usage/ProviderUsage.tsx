@@ -36,6 +36,10 @@ import {
 
 const SUPPORTED_PROVIDERS = new Set<ProviderUsageDriver>(["codex", "claudeAgent", "cursor"]);
 const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
+const AUTOMATIC_REFRESH_BUTTON_CLASS =
+  "group-has-[[data-provider-usage-pending]]/usage:pointer-events-auto group-has-[[data-provider-usage-pending]]/usage:opacity-100";
+const AUTOMATIC_REFRESH_SPIN_CLASS =
+  "group-has-[[data-provider-usage-pending]]/usage:animate-spin group-has-[[data-provider-usage-pending]]/usage:[animation-duration:2s] motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none";
 
 function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
   return SUPPORTED_PROVIDERS.has(driver as ProviderUsageDriver);
@@ -161,11 +165,16 @@ function usageSectionHeading({
               aria-busy={refreshing}
               disabled={refreshDisabled || refreshing}
               onClick={handleRefreshClick}
-              className="pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none"
+              className={cn(
+                "pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none",
+                AUTOMATIC_REFRESH_BUTTON_CLASS,
+                refreshing && "pointer-events-auto opacity-100",
+              )}
             >
               <RefreshCwIcon
                 className={cn(
                   "size-3.5",
+                  AUTOMATIC_REFRESH_SPIN_CLASS,
                   refreshing && "text-foreground",
                   refreshing && SLOW_REFRESH_SPIN_CLASS,
                 )}
@@ -377,7 +386,11 @@ export function EnvironmentProviderUsage({
         ) : (
           <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
         )}
-        <div className={isPanel ? "px-2 pb-2.5" : undefined}>
+        <div
+          className={isPanel ? "px-2 pb-2.5" : undefined}
+          data-provider-usage-pending={usage.isPending || undefined}
+          aria-busy={usage.isPending}
+        >
           {primary ? (
             <div className="flex items-start gap-2 px-2 py-1.5">
               <ProviderInstanceIcon
@@ -438,7 +451,11 @@ export function EnvironmentProviderUsage({
       ) : (
         <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Usage</p>
       )}
-      <div className={isPanel ? "px-2 pb-2.5" : undefined}>
+      <div
+        className={isPanel ? "px-2 pb-2.5" : undefined}
+        data-provider-usage-pending={usage.isPending || undefined}
+        aria-busy={usage.isPending}
+      >
         <Collapsible open={open} onOpenChange={setOpen}>
           <button
             type="button"
