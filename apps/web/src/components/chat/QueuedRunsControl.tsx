@@ -10,7 +10,10 @@
  * Hidden automatic completion deliveries never reach this list
  * (`deriveThreadQueueWorkflowState` filters them out) and keep the precedence
  * the server gave them; optimistic messages sit after the committed runs and
- * are neither draggable nor drop anchors until they have a run id.
+ * are neither draggable nor drop anchors until they have a run id. Provider
+ * continuation wakes (agent-authored messages such as "Background command
+ * completed") do appear, badged as agent-queued with edit and steer withheld,
+ * so an internal wake is never mistaken for the user's own words.
  *
  * @module components/chat/QueuedRunsControl
  */
@@ -42,6 +45,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-workflows";
 import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import {
+  BotIcon,
   CheckIcon,
   Clock3Icon,
   CornerUpRightIcon,
@@ -299,7 +303,14 @@ export function QueuedRunsControl(props: {
   };
 
   /** Everything after the handle and position: the text or its editor, and the row actions. */
-  const rowBody = (input: { readonly runId: RunId | null; readonly text: string }) => {
+  const rowBody = (input: {
+    readonly runId: RunId | null;
+    readonly text: string;
+    readonly createdBy: QueuedThreadRun["createdBy"];
+  }) => {
+    // Provider continuation wakes carry internal text the adapter swaps out on
+    // dispatch, so editing or steering them would corrupt the wake.
+    const agentAuthored = input.createdBy !== "user";
     const rowEditing =
       input.runId !== null && editing !== null && editing.runId === input.runId ? editing : null;
     if (rowEditing !== null) {
@@ -354,6 +365,15 @@ export function QueuedRunsControl(props: {
 
     return (
       <>
+        {agentAuthored ? (
+          <span
+            className="flex shrink-0 items-center gap-1 rounded-full bg-muted/70 px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+            title="Queued automatically by an agent, not typed by you"
+          >
+            <BotIcon aria-hidden className="size-3" />
+            Agent
+          </span>
+        ) : null}
         <span className="min-w-0 flex-1 truncate text-xs" title={input.text}>
           {input.text}
         </span>
@@ -362,7 +382,8 @@ export function QueuedRunsControl(props: {
           variant="ghost"
           aria-label="Edit queued message"
           className="size-6 text-muted-foreground"
-          disabled={input.runId === null || busyRunId !== null}
+          disabled={input.runId === null || busyRunId !== null || agentAuthored}
+          title={agentAuthored ? "Agent-queued messages cannot be edited" : undefined}
           onClick={() => {
             if (input.runId !== null) {
               setEditing({ runId: input.runId, draft: input.text });
@@ -375,8 +396,19 @@ export function QueuedRunsControl(props: {
           size="xs"
           variant="ghost"
           className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground"
-          disabled={input.runId === null || busyRunId !== null || !workflow?.canPromoteToSteer}
-          title={activeRun === null ? "There is no active run to steer" : "Send as a steer instead"}
+          disabled={
+            input.runId === null ||
+            busyRunId !== null ||
+            !workflow?.canPromoteToSteer ||
+            agentAuthored
+          }
+          title={
+            agentAuthored
+              ? "Agent-queued messages cannot be sent as a steer"
+              : activeRun === null
+                ? "There is no active run to steer"
+                : "Send as a steer instead"
+          }
           onClick={() => {
             if (input.runId !== null) {
               void steer(input.runId);
@@ -403,7 +435,7 @@ export function QueuedRunsControl(props: {
     );
   };
 
-  const committedRows = ordered.map(({ run, text }, index) =>
+  const committedRows = ordered.map(({ run, text, createdBy }, index) =>
     sortable ? (
       <SortableQueuedRow
         busy={busyRunId === run.id}
@@ -414,7 +446,7 @@ export function QueuedRunsControl(props: {
         reducedMotion={reducedMotion}
         runId={run.id}
       >
-        {rowBody({ runId: run.id, text })}
+        {rowBody({ runId: run.id, text, createdBy })}
       </SortableQueuedRow>
     ) : (
       <li
@@ -423,7 +455,7 @@ export function QueuedRunsControl(props: {
         key={run.id}
       >
         <QueuedRowPosition position={index + 1} />
-        {rowBody({ runId: run.id, text })}
+        {rowBody({ runId: run.id, text, createdBy })}
       </li>
     ),
   );
@@ -445,7 +477,7 @@ export function QueuedRunsControl(props: {
             className="size-4 shrink-0 p-px text-muted-foreground/60"
           />
           <QueuedRowPosition position={ordered.length + index + 1} />
-          {rowBody({ runId: null, text: message.text })}
+          {rowBody({ runId: null, text: message.text, createdBy: "user" })}
         </li>
       ))}
     </ol>

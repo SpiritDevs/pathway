@@ -155,6 +155,14 @@ function QueueRow(props: {
       <Text className="w-5 text-right text-3xs tabular-nums text-foreground-muted">
         {index + 1}
       </Text>
+      {props.controls.agentAuthored ? (
+        <View
+          accessibilityLabel="Queued automatically by an agent"
+          className="rounded-full bg-neutral-200/70 px-1.5 py-px dark:bg-white/[0.1]"
+        >
+          <Text className="font-t3-medium text-3xs text-foreground-muted">Agent</Text>
+        </View>
+      ) : null}
       <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
         {props.controls.displayText}
       </Text>
@@ -313,12 +321,13 @@ export function ThreadQueueControl(props: {
         </Text>
       </View>
       <ScrollView style={{ maxHeight: 156 }} contentContainerStyle={{ paddingVertical: 4 }}>
-        {ordered.map(({ run, text }, index) => (
+        {ordered.map(({ run, text, createdBy }, index) => (
           <QueueRow
             controls={resolveThreadQueueRowControls({
               busy: busyRunId !== null,
               canPromoteToSteer: workflow.canPromoteToSteer,
               canReorder: workflow.canReorder,
+              createdBy,
               index,
               queuedCount: ordered.length,
               text,

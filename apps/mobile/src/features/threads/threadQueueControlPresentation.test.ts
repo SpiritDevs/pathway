@@ -15,6 +15,7 @@ describe("threadQueueControlPresentation", () => {
       busy: false,
       canPromoteToSteer: true,
       canReorder: true,
+      createdBy: "user",
       index: 1,
       queuedCount: 3,
       text: "Please review the follow-up change.",
@@ -36,6 +37,7 @@ describe("threadQueueControlPresentation", () => {
       busy: false,
       canPromoteToSteer: false,
       canReorder: true,
+      createdBy: "user",
       index: 0,
       queuedCount: 2,
       text: "First",
@@ -44,6 +46,7 @@ describe("threadQueueControlPresentation", () => {
       busy: true,
       canPromoteToSteer: true,
       canReorder: true,
+      createdBy: "user",
       index: 0,
       queuedCount: 1,
       text: "Queued message",
@@ -64,6 +67,7 @@ describe("threadQueueControlPresentation", () => {
       busy: false,
       canPromoteToSteer: false,
       canReorder: true,
+      createdBy: "user",
       index: 0,
       queuedCount: 1,
       text: "Only",
@@ -72,6 +76,7 @@ describe("threadQueueControlPresentation", () => {
       busy: false,
       canPromoteToSteer: false,
       canReorder: false,
+      createdBy: "user",
       index: 0,
       queuedCount: 3,
       text: "First",
@@ -82,6 +87,23 @@ describe("threadQueueControlPresentation", () => {
     expect(incapable.canDrag).toBe(false);
     expect(incapable.canMoveDown).toBe(false);
     expect(incapable.canDismiss).toBe(true);
+  });
+
+  it("attributes agent-queued rows and withholds steer from them", () => {
+    const agent = resolveThreadQueueRowControls({
+      busy: false,
+      canPromoteToSteer: true,
+      canReorder: true,
+      createdBy: "agent",
+      index: 0,
+      queuedCount: 2,
+      text: "Background command completed (exit 1): sleep 5",
+    });
+
+    expect(agent.agentAuthored).toBe(true);
+    expect(agent.canSteer).toBe(false);
+    expect(agent.canDismiss).toBe(true);
+    expect(agent.canDrag).toBe(true);
   });
 
   it("turns a drag's travel into the row it lands on, clamped to the queue", () => {

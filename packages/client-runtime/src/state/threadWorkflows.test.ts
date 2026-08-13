@@ -129,6 +129,32 @@ describe("thread workflows", () => {
     ]);
   });
 
+  it("attributes provider continuation wakes to the agent that queued them", () => {
+    const state = deriveThreadQueueWorkflowState({
+      thread: { id: "thread", activeProviderThreadId: null },
+      runs: [
+        { id: "wake", status: "queued", userMessageId: "message-wake", ordinal: 2 },
+        { id: "typed", status: "queued", userMessageId: "message-typed", ordinal: 3 },
+      ],
+      messages: [
+        {
+          id: "message-wake",
+          text: "Background command completed (exit 1): sleep 5",
+          createdBy: "agent",
+        },
+        { id: "message-typed", text: "Typed by the user", createdBy: "user" },
+      ],
+      providerTurns: [],
+      providerThreads: [],
+      providerSessions: [],
+    } as never);
+
+    expect(state.queuedRuns.map(({ run, createdBy }) => [run.id, createdBy])).toEqual([
+      ["wake", "agent"],
+      ["typed", "user"],
+    ]);
+  });
+
   it("removes only the promoted head from the visible queue", () => {
     const state = deriveThreadQueueWorkflowState({
       thread: { id: "thread", activeProviderThreadId: "provider-thread" },

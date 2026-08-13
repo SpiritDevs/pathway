@@ -36,9 +36,10 @@ vi.mock("../../state/use-atom-command", () => ({
 
 import { QueuedRunsControl } from "./QueuedRunsControl";
 
-const queuedRun = (id: string, text: string) => ({
+const queuedRun = (id: string, text: string, createdBy: "user" | "agent" = "user") => ({
   run: { id: `run:${id}`, userMessageId: `message:${id}` },
   text,
+  createdBy,
 });
 
 const render = (optimisticMessages: ReadonlyArray<unknown> = []) =>
@@ -158,6 +159,26 @@ describe("QueuedRunsControl sorting", () => {
       { position: "3", text: "Pending message" },
     ]);
     expect(html).toContain("3 queued messages");
+  });
+});
+
+describe("QueuedRunsControl agent attribution", () => {
+  it("badges agent-queued rows and withholds their edit and steer affordances", () => {
+    setQueue({
+      queuedRuns: [
+        queuedRun("wake", "Background command completed (exit 1): sleep 5", "agent"),
+        queuedRun("typed", "Typed by the user"),
+      ],
+    });
+
+    const html = render();
+
+    expect(html).toContain("Queued automatically by an agent");
+    expect(html).toContain(">Agent<");
+    expect(html).toContain("Agent-queued messages cannot be edited");
+    expect(html).toContain("Agent-queued messages cannot be sent as a steer");
+    // The user's own row keeps the live steer affordance.
+    expect(html).toContain("Send as a steer instead");
   });
 });
 

@@ -1,4 +1,4 @@
-import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2Actor, RunId, ThreadId } from "@t3tools/contracts";
 
 export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Remove queued message";
 export const REORDER_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Reorder queued message";
@@ -7,6 +7,12 @@ export const REORDER_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Reorder queued messag
 export const QUEUE_ROW_HEIGHT = 44;
 
 export interface ThreadQueueRowControls {
+  /**
+   * The message was queued by an agent (a provider continuation wake), not
+   * typed by the user: the row shows attribution and cannot be steered,
+   * because the adapter swaps the placeholder text out on dispatch.
+   */
+  readonly agentAuthored: boolean;
   readonly canDismiss: boolean;
   /** Whether the handle can be dragged at all: a queue of one has nowhere to go. */
   readonly canDrag: boolean;
@@ -24,19 +30,22 @@ export function resolveThreadQueueRowControls(input: {
   readonly busy: boolean;
   readonly canPromoteToSteer: boolean;
   readonly canReorder: boolean;
+  readonly createdBy: OrchestrationV2Actor;
   readonly index: number;
   readonly queuedCount: number;
   readonly text: string;
 }): ThreadQueueRowControls {
   const mutationEnabled = !input.busy;
   const reorderEnabled = mutationEnabled && input.canReorder;
+  const agentAuthored = input.createdBy !== "user";
 
   return {
+    agentAuthored,
     canDismiss: !input.busy,
     canDrag: reorderEnabled && input.queuedCount > 1,
     canMoveDown: reorderEnabled && input.index < input.queuedCount - 1,
     canMoveUp: reorderEnabled && input.index > 0,
-    canSteer: mutationEnabled && input.canPromoteToSteer,
+    canSteer: mutationEnabled && input.canPromoteToSteer && !agentAuthored,
     dismissAccessibilityLabel: REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
     displayText: input.text,
     reorderAccessibilityLabel: REORDER_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
