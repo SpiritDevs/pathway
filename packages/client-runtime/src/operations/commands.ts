@@ -9,6 +9,7 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
+  type ProjectFaviconPath,
   type ProjectId,
   type ProjectScript,
   type ProviderApprovalDecision,
@@ -46,6 +47,7 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly workspaceRoot?: string;
   readonly createWorkspaceRootIfMissing?: boolean;
   readonly defaultModelSelection?: ModelSelection | null;
+  readonly faviconPath?: ProjectFaviconPath | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -338,6 +340,7 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     ...(input.defaultModelSelection === undefined
       ? {}
       : { defaultModelSelection: input.defaultModelSelection }),
+    ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
     ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
   });
 });

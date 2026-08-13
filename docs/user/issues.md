@@ -23,6 +23,13 @@ and the whole list stays fast at thousands of rows.
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.
 
+Right-click a row or a board card for the same properties in one menu: **Status**, **Priority**,
+**Assignee**, **Labels**, **Project**, **Milestone**, **Cycle**, and a **Due date** with the four
+dates worth one press. Below those sit **Investigate**, **Copy** (issue ID, title, link, or a
+markdown link), **Remove** for any property the issue is carrying, and **Delete**. Right-clicking a
+row that is part of a selection acts on the whole selection; anywhere else it acts on the one row.
+**Milestone** is only offered when the targets share a project, since a milestone belongs to one.
+
 Use the view options next to the list/board toggle to group the list by **Status**, **Project**,
 **Priority**, **Assignee**, or **No grouping**, and to order by **Manual**, **Priority**,
 **Last updated**, or **Created**. The board is always columns of statuses — grouping is a list
@@ -201,10 +208,16 @@ the model constrained to the assigned provider and initially using a compatible 
 Choose **Current checkout** to work in the project's main workspace, or **New worktree** and select
 the branch it should start from. Pressing the button creates a fresh thread, sends the
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New
-worktrees also run the project's configured setup tasks. The new thread keeps the originating issue
-in its details menu, where the current status and priority stay visible and the full detail sheet is
-one click away. Its issue code also appears in the thread sidebar card and hover details; select the
-code there to open the issue directly. Dragging cards around a board never launches an agent.
+worktrees also run the project's configured setup tasks. The new thread lists the originating issue
+under **Issues** in its details menu, where the current status and priority stay visible and the
+full detail sheet is one click away. Its issue code also appears in the thread sidebar card and
+hover details; select the code there to open the issue directly. Dragging cards around a board never
+launches an agent.
+
+That **Issues** section covers every issue the conversation is related to, not just the one it
+started from: the issue it was started from, any an agent attached while it worked, and any
+mentioned in the chat. Each issue appears once however many times it comes up, and an issue that
+has since been deleted is listed with a **Deleted** label rather than quietly dropped.
 
 Use the arrow beside **Start new thread** and choose **Create pending thread** when you want to
 prepare the same prompt, model, images, and workspace without sending the first turn. The pending
@@ -261,6 +274,24 @@ with its attachment id. Issue attachments are images only.
 Agent writes are not gated behind an approval, so treat them like your own: deletes are soft and
 reversible with **Restore**, and every write is attributed in the activity feed with the provider
 that made it.
+
+### Issue keys in chat
+
+Write an issue key like `PAT-12` in a chat message and, once that message is finished, the key
+becomes a link that opens the issue. It works the same way in what you send and in what the agent
+writes back, so a plan naming four tickets gives you four ways into the tracker. Mentioned issues
+also join the thread's **Issues** section in the details menu, so the conversation keeps a record of
+everything it touched.
+
+Only keys that match a real issue in this tracker become links. Anything that merely looks like a
+key — a branch name, a filename, a key from somebody else's tracker — stays plain text, so a link is
+never an invitation to a page that does not exist. Keys written inside code blocks or inline code
+stay plain too, since a key there is usually part of a path or a command rather than a reference.
+
+Conversations you already have are covered as well: Pathway reads back through finished messages
+once, so a key you wrote last month links exactly like one you write today.
+
+Linked keys are a web and desktop behaviour. Mobile shows the key as plain text for now.
 
 ## Slack intake
 

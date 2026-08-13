@@ -10,7 +10,10 @@ vi.mock("@t3tools/client-runtime/environment", () => ({
   scopeThreadRef: () => ({}) as never,
 }));
 
-vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
+// Only the projection-derived state is faked; the ordering helpers under test
+// stay real so the rendered queue and the reorder contract agree.
+vi.mock("@t3tools/client-runtime/state/thread-workflows", async (importActual) => ({
+  ...(await importActual<Record<string, unknown>>()),
   deriveThreadQueueWorkflowState: () => state.workflow,
 }));
 
@@ -32,6 +35,131 @@ vi.mock("../../state/use-atom-command", () => ({
 }));
 
 import { QueuedRunsControl } from "./QueuedRunsControl";
+
+const queuedRun = (id: string, text: string) => ({
+  run: { id: `run:${id}`, userMessageId: `message:${id}` },
+  text,
+});
+
+const render = (optimisticMessages: ReadonlyArray<unknown> = []) =>
+  renderToStaticMarkup(
+    <QueuedRunsControl
+      environmentId={"environment:test" as never}
+      optimisticMessages={optimisticMessages as never}
+      threadId={"thread:test" as never}
+    />,
+  );
+
+/** The queue as a reader sees it: each row's position label and its message text. */
+const renderedRows = (html: string) =>
+  html
+    .split("<li")
+    .slice(1)
+    .map((row) => ({
+      position: /tabular-nums[^"]*">(\d+)</.exec(row)?.[1],
+      text: /title="([^"]+)"/.exec(row)?.[1],
+    }));
+
+const setQueue = (input: {
+  readonly canReorder?: boolean;
+  readonly queuedRuns: ReadonlyArray<ReturnType<typeof queuedRun>>;
+}) => {
+  state.projection = { projection: { messages: [] } };
+  state.workflow = {
+    activeRun: { id: "run:active" },
+    canPromoteToSteer: true,
+    canReorder: input.canReorder ?? true,
+    queuedRuns: input.queuedRuns,
+  };
+};
+
+describe("QueuedRunsControl sorting", () => {
+  it("gives every committed row a drag handle and drops the arrow buttons", () => {
+    setQueue({
+      queuedRuns: [
+        queuedRun("first", "First message"),
+        queuedRun("second", "Second message"),
+        queuedRun("third", "Third message"),
+      ],
+    });
+
+    const html = render();
+
+    expect(html).not.toContain("Move queued message up");
+    expect(html).not.toContain("Move queued message down");
+    expect(html).toContain("Reorder queued message 1 of 3: First message");
+    expect(html).toContain("Reorder queued message 2 of 3: Second message");
+    expect(html).toContain("Reorder queued message 3 of 3: Third message");
+    // The handle announces the row it moves, and stays out of the way of a
+    // touch scroll until it is the thing being touched.
+    expect(html).toContain("touch-none");
+  });
+
+  it("numbers rows by display order, top row first", () => {
+    setQueue({
+      queuedRuns: [queuedRun("first", "First message"), queuedRun("second", "Second message")],
+    });
+
+    expect(renderedRows(render())).toEqual([
+      { position: "1", text: "First message" },
+      { position: "2", text: "Second message" },
+    ]);
+  });
+
+  it("keeps edit, steer and remove alongside the handle", () => {
+    setQueue({
+      queuedRuns: [queuedRun("first", "First message"), queuedRun("second", "Second message")],
+    });
+
+    const html = render();
+
+    expect(html).toContain("Edit queued message");
+    expect(html).toContain("Steer");
+    expect(html).toContain("Remove queued message");
+  });
+
+  it("offers no handles when the provider cannot reorder its queue", () => {
+    setQueue({
+      canReorder: false,
+      queuedRuns: [queuedRun("first", "First message"), queuedRun("second", "Second message")],
+    });
+
+    const html = render();
+
+    expect(html).not.toContain("Reorder queued message");
+    expect(html).toContain("First message");
+    expect(html).toContain("Remove queued message");
+  });
+
+  it("offers no handle for a queue of one, which cannot move", () => {
+    setQueue({ queuedRuns: [queuedRun("only", "Only message")] });
+
+    const html = render();
+
+    expect(html).not.toContain("Reorder queued message");
+    expect(html).toContain("Only message");
+  });
+
+  it("shows a message still being saved after the committed runs, without a handle", () => {
+    setQueue({
+      queuedRuns: [queuedRun("first", "First message"), queuedRun("second", "Second message")],
+    });
+
+    const html = render([
+      { id: "message:pending", inputIntent: "queued_turn", text: "Pending message" },
+    ]);
+
+    expect(html).toContain("Saving queued message");
+    expect(html).toContain("Reorder queued message 1 of 2: First message");
+    expect(html).not.toContain("Reorder queued message 3");
+    expect(renderedRows(html)).toEqual([
+      { position: "1", text: "First message" },
+      { position: "2", text: "Second message" },
+      { position: "3", text: "Pending message" },
+    ]);
+    expect(html).toContain("3 queued messages");
+  });
+});
 
 describe("QueuedRunsControl automatic completion delivery", () => {
   it("does not render a queue control when only hidden delivery remains", () => {
@@ -56,14 +184,6 @@ describe("QueuedRunsControl automatic completion delivery", () => {
       queuedRuns: [],
     };
 
-    const html = renderToStaticMarkup(
-      <QueuedRunsControl
-        environmentId={"environment:test" as never}
-        optimisticMessages={[]}
-        threadId={"thread:test" as never}
-      />,
-    );
-
-    expect(html).toBe("");
+    expect(render()).toBe("");
   });
 });

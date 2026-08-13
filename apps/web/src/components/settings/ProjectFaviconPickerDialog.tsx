@@ -25,7 +25,7 @@ export function ProjectFaviconPickerDialog(props: {
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onSelect: (path: string) => void;
+  readonly onSelect: (path: string) => Promise<void>;
   readonly open: boolean;
   readonly projectName: string;
 }) {
@@ -49,7 +49,7 @@ export function ProjectFaviconPickerDialog(props: {
         title: match.name,
         description: match.path,
         icon: <PierreEntryIcon pathValue={match.path} kind="file" theme={resolvedTheme} />,
-        run: async () => props.onSelect(match.path),
+        run: () => props.onSelect(match.path),
       })),
     [props.onSelect, resolvedTheme, result.entries, result.matchedQuery],
   );

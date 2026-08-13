@@ -97,6 +97,7 @@ import {
   type IssueTodosResult,
   type IssueThreadLink,
   type IssueThreadLinkInput,
+  type IssueThreadLinkOrigin,
   type IssueThreadLinksResult,
   type IssueLinksForThreadResult,
   type IssueThreadRefInput,
@@ -689,6 +690,25 @@ const storage = (operation: string) => (cause: IssueTrackerRepositoryError) =>
   new IssueTrackerError({ reason: "storage", message: `${operation}: ${cause.message}` });
 
 const categoryRank = (category: IssueStatusCategory) => CATEGORY_ORDER.indexOf(category);
+
+const THREAD_LINK_ORIGIN_RANK: Readonly<Record<IssueThreadLinkOrigin, number>> = {
+  "start-work": 3,
+  manual: 2,
+  mention: 1,
+};
+
+/**
+ * The origin a pair keeps when it is linked again. One row holds one origin, so relinking has to
+ * choose: a person attaching a thread outranks a key the reactor noticed, and the thread that was
+ * started from the issue outranks both. Only {@link linkThread} should need this.
+ */
+export function strongerThreadLinkOrigin(
+  already: IssueThreadLinkOrigin | undefined,
+  incoming: IssueThreadLinkOrigin,
+): IssueThreadLinkOrigin {
+  if (already === undefined) return incoming;
+  return THREAD_LINK_ORIGIN_RANK[already] >= THREAD_LINK_ORIGIN_RANK[incoming] ? already : incoming;
+}
 
 /** Trim to null, so "" and "   " off a Slack payload mean absent rather than a blank field. */
 const nullableTrimmed = (value: string | null | undefined): string | null => {
@@ -3305,20 +3325,34 @@ export const make = Effect.gen(function* () {
     const record = yield* requireIssueRecord(input.issueId);
     const existing = yield* readThreadLinks(record.id);
     const already = existing.find((link) => link.threadId === input.threadId);
+    // The row keeps the strongest origin it has seen. The repository is last-writer-wins and the
+    // mention reactor relinks a pair every time the key is said again, so without this a chat
+    // message would quietly demote the link that says this thread started on this issue.
+    const origin = strongerThreadLinkOrigin(already?.origin, input.origin);
+    // Nothing changed, so nothing is written and nothing is announced. Restating a link has to be
+    // a true no-op: every chat message that names the key comes through here, and a published
+    // list is both a websocket broadcast to every client and an automation trigger — replaying
+    // "this issue has a start-work thread" is how a card the user moved to In Review gets dragged
+    // back to the work status.
+    if (already !== undefined && already.origin === origin) {
+      return { issueId: record.id, links: existing };
+    }
+
     const now = yield* nowIso;
     yield* threadLinkRepository
       .link({
         issueId: record.id,
         threadId: input.threadId,
-        origin: input.origin,
+        origin,
         // The fact is when this thread started on this issue, not when somebody last said so.
         createdAt: already?.createdAt ?? now,
       })
       .pipe(Effect.mapError(storage("Failed to link the thread")));
 
-    // Only the first link is logged: relinking restates the same fact, and the feed should not
-    // print "linked thread …" twice for one thread.
-    if (already === undefined) {
+    // The feed follows the visible fact: a mention is the reactor noticing a key and stays silent,
+    // but the moment a person attaches the thread or starts work on it — first link or an upgrade
+    // out of `mention` — that is somebody's action and belongs in the activity feed.
+    if (origin !== "mention" && (already === undefined || already.origin === "mention")) {
       yield* appendChangeLog({
         issueId: record.id,
         actor,
@@ -3340,20 +3374,25 @@ export const make = Effect.gen(function* () {
     const existing = yield* readThreadLinks(record.id);
     // Forgetting something already forgotten is not an error: two clients can press this at once,
     // and the answer either way is the list without that thread on it.
-    if (!existing.some((link) => link.threadId === input.threadId)) {
+    const removed = existing.find((link) => link.threadId === input.threadId);
+    if (removed === undefined) {
       return { issueId: record.id, links: existing };
     }
 
     yield* threadLinkRepository
       .unlink({ issueId: record.id, threadId: input.threadId })
       .pipe(Effect.mapError(storage("Failed to unlink the thread")));
-    yield* appendChangeLog({
-      issueId: record.id,
-      actor,
-      createdAt: yield* nowIso,
-      kind: "field_changed",
-      changes: [{ field: "thread", before: input.threadId, after: null }],
-    });
+    // Symmetric with linking: a mention never announced itself, so removing one must not announce
+    // the removal of a link the feed never showed arriving.
+    if (removed.origin !== "mention") {
+      yield* appendChangeLog({
+        issueId: record.id,
+        actor,
+        createdAt: yield* nowIso,
+        kind: "field_changed",
+        changes: [{ field: "thread", before: input.threadId, after: null }],
+      });
+    }
 
     const links = yield* readThreadLinks(record.id);
     yield* publishThreadLinks(record.id, links);

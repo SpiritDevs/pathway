@@ -9,7 +9,7 @@
  * @module components/email/EmailView
  */
 import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@t3tools/contracts";
-import { BarChart3Icon, MailIcon, SearchXIcon } from "lucide-react";
+import { MailIcon, SearchXIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -51,6 +51,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { EmailBulkBar } from "./EmailBulkBar";
 import { EmailListToolbar } from "./EmailListToolbar";
+import { EmailAnalyticsPanel } from "./EmailAnalyticsPanel";
 import { EmailMessageList } from "./EmailMessageList";
 import { EmailReadingPane } from "./EmailReadingPane";
 import { reportEmailWriteFailure } from "./emailWrites";
@@ -266,21 +267,12 @@ export function EmailView({
     runAction(clicked, targets, message);
   };
 
+  // Analytics is a lens on the selected inbox rather than a route of its own, so it takes the same
+  // scope the mailbox below it would have shown.
   if (search.analytics === true) {
     return (
       <EmailShell inboxName={inboxName}>
-        <Empty className="flex-1">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <BarChart3Icon />
-            </EmptyMedia>
-            <EmptyTitle>Analytics</EmptyTitle>
-            <EmptyDescription>
-              Volume over time, per-project counts, top senders and recipients, and capture latency
-              for {inboxName}. Not wired up yet.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        <EmailAnalyticsPanel inboxName={inboxName} projectTitles={projectTitles} scope={scope} />
       </EmailShell>
     );
   }

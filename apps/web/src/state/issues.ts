@@ -909,6 +909,18 @@ export function findIssue(store: IssuesStore, issueKeyOrId: string): Issue | nul
   return null;
 }
 
+/**
+ * Every issue indexed by its human key, for surfaces that resolve a set of keys at once — chat
+ * mentions, the thread issue panel — where a per-key read would mean an unbounded atom cache or a
+ * hook count that changes with the text. Soft-deleted issues stay in the map: a mention of one is
+ * still a real reference, and the UI says so with a Deleted chip.
+ */
+export function issuesByKey(store: IssuesStore): ReadonlyMap<string, Issue> {
+  const byKey = new Map<string, Issue>();
+  for (const issue of store.issuesById.values()) byKey.set(issue.key, issue);
+  return byKey;
+}
+
 const issuesGroupedAtomFamily = Atom.family((tab: IssuesTab) =>
   Atom.make((get): IssuesGrouping => groupIssuesForTab(get(issuesStoreAtom), tab)).pipe(
     Atom.withLabel(`web-issues-grouped:${tab}`),
@@ -926,6 +938,17 @@ export const triageIssuesAtom = Atom.make(
 export const slackChannelNamesAtom = Atom.make(
   (get): ReadonlyMap<SlackChannelId, string> => slackChannelNames(get(issuesStoreAtom)),
 ).pipe(Atom.withLabel("web-issues-slack-channel-names"));
+
+export const issuesByKeyAtom = Atom.make(
+  (get): ReadonlyMap<string, Issue> => issuesByKey(get(issuesStoreAtom)),
+).pipe(Atom.withLabel("web-issues-by-key"));
+
+const EMPTY_ISSUES_BY_KEY: ReadonlyMap<string, Issue> = new Map();
+
+/** A constant stands in for the index so a caller with no keys never subscribes to the tracker. */
+const EMPTY_ISSUES_BY_KEY_ATOM = Atom.make(EMPTY_ISSUES_BY_KEY).pipe(
+  Atom.withLabel("web-issues-by-key:empty"),
+);
 
 const issueAtomFamily = Atom.family((issueKeyOrId: string) =>
   Atom.make((get): Issue | null => findIssue(get(issuesStoreAtom), issueKeyOrId)).pipe(
@@ -1284,6 +1307,20 @@ export function useSlackChannelNames(): ReadonlyMap<SlackChannelId, string> {
 
 export function useIssue(issueKeyOrId: string | null): Issue | null {
   return useAtomValue(issueKeyOrId === null ? EMPTY_ISSUE_ATOM : issueAtomFamily(issueKeyOrId));
+}
+
+/**
+ * One subscription for callers that resolve many keys at once. Prefer this over a `useIssue` per
+ * key: the count of keys comes from rendered text, and a per-key read would either vary the hook
+ * count or grow the atom family without bound.
+ *
+ * `enabled` is how a caller opts out of the subscription without opting out of the hook — the empty
+ * index is a constant atom, so the read count stays fixed and only the atom read varies. Every chat
+ * message calls this, and the overwhelming majority mention no key at all: were they all subscribed,
+ * an agent moving one issue's status would re-render every message on screen.
+ */
+export function useIssuesByKey(enabled = true): ReadonlyMap<string, Issue> {
+  return useAtomValue(enabled ? issuesByKeyAtom : EMPTY_ISSUES_BY_KEY_ATOM);
 }
 
 export function useIssueMilestones(): ReadonlyArray<IssueMilestone> {
