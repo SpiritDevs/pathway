@@ -13,7 +13,9 @@ import type {
   Issue,
   IssueCycleId,
   IssueLabelId,
+  IssueId,
   IssueMilestoneId,
+  IssuePatch,
   IssuePriority,
   IssueStatusId,
   ProjectId,
@@ -22,8 +24,10 @@ import { Link } from "@tanstack/react-router";
 import { ColumnsIcon, ListTodoIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
   issueChildRollups,
   useBulkUpdateIssues,
@@ -37,7 +41,9 @@ import {
   useIssuesGrouped,
   useIssuesStore,
   useIssuesStoreStatus,
+  useRestoreIssue,
   useSetIssueSortOrder,
+  useStartIssueEnrichment,
   useUpdateIssue,
   type IssuesTab,
 } from "~/state/issues";
@@ -53,8 +59,10 @@ import {
 } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
+import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
 import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
@@ -64,7 +72,14 @@ import { IssuesTriageView } from "./IssuesTriageView";
 import { IssuesViewOptions } from "./IssuesViewOptions";
 import { NewIssueDialog } from "./NewIssueDialog";
 import { SaveIssueViewControl } from "./SaveIssueViewControl";
+import {
+  ISSUE_CONTEXT_MENU_COPY_LABELS,
+  issueContextMenuCopyValue,
+  issueContextMenuIssues,
+  type IssueContextMenuCopyField,
+} from "./issueContextMenu.logic";
 import { issueAssigneeOptions } from "./issueDetail.logic";
+import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
@@ -127,6 +142,9 @@ const ASSIGNEE_GROUP_LABELS = new Map(
 /** The board draws its own cards, so the flat row array is dead weight while it is up. */
 const NO_ISSUES_LIST_ROWS: ReadonlyArray<IssuesListRowModel> = [];
 
+/** A stable empty array for the shut context menu, so its handlers never see a fresh one. */
+const NO_CONTEXT_ISSUES: ReadonlyArray<Issue> = [];
+
 /**
  * `/issues`, in one of its two modes. Triage is branched at the top rather than folded into the
  * list: it shares the URL and the detail sheet, and nothing else — no tabs, no filters, no board,
@@ -165,10 +183,15 @@ function IssuesListView({
   const updateIssue = useUpdateIssue();
   const bulkUpdateIssues = useBulkUpdateIssues();
   const deleteIssue = useDeleteIssue();
+  const restoreIssue = useRestoreIssue();
+  const startEnrichment = useStartIssueEnrichment();
   const setIssueSortOrder = useSetIssueSortOrder();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
 
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
+  /** The right-click menu's target, or null while it is shut. One menu for every row and card. */
+  const [contextMenu, setContextMenu] = useState<IssueContextMenuTarget | null>(null);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   /** Set by a column's `+`, which is the only path that names a status the filter did not. */
   const [newIssueStatusId, setNewIssueStatusId] = useState<IssueStatusId | null>(null);
@@ -372,8 +395,8 @@ function IssuesListView({
   };
   // Per issue rather than one bulk patch: `patch.labelIds` replaces the array, so a single write
   // would give every selected issue whichever label set was computed first.
-  const bulkToggleLabel = (labelId: IssueLabelId, add: boolean) => {
-    for (const issue of selectedIssues) {
+  const toggleLabelOn = (issues: ReadonlyArray<Issue>, labelId: IssueLabelId, add: boolean) => {
+    for (const issue of issues) {
       const has = issue.labelIds.includes(labelId);
       if (has === add) continue;
       write("Failed to change the labels", () =>
@@ -384,10 +407,58 @@ function IssuesListView({
       );
     }
   };
+  const bulkToggleLabel = (labelId: IssueLabelId, add: boolean) => {
+    toggleLabelOn(selectedIssues, labelId, add);
+  };
+
+  /**
+   * Soft deletes, so the toast can offer them back. The undo restores every issue the delete
+   * actually took: a batch that half failed would otherwise resurrect rows that never left.
+   */
+  const deleteIssues = (issues: ReadonlyArray<Issue>) => {
+    if (issues.length === 0) return;
+    const first = issues[0];
+    if (first === undefined) return;
+    const title = issues.length === 1 ? `${first.key} deleted` : `${issues.length} issues deleted`;
+    void (async () => {
+      const deleted: Array<IssueId> = [];
+      for (const issue of issues) {
+        if (
+          !reportIssueWriteFailure(
+            "Failed to delete the issue",
+            await deleteIssue({ issueId: issue.id }),
+          )
+        ) {
+          deleted.push(issue.id);
+        }
+      }
+      if (deleted.length === 0) return;
+      const toastId = toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title,
+          description: "The change log keeps them, so this can be undone.",
+          actionProps: {
+            children: "Undo",
+            onClick: () => {
+              void (async () => {
+                toastManager.close(toastId);
+                for (const issueId of deleted) {
+                  reportIssueWriteFailure(
+                    "Failed to restore the issue",
+                    await restoreIssue({ issueId }),
+                  );
+                }
+              })();
+            },
+          },
+        }),
+      );
+    })();
+  };
+
   const bulkDelete = () => {
-    for (const issueId of bulkIssueIds) {
-      write("Failed to delete the issue", () => deleteIssue({ issueId }));
-    }
+    deleteIssues(selectedIssues);
     setSelection(EMPTY_ISSUES_SELECTION);
   };
 
@@ -401,6 +472,88 @@ function IssuesListView({
         ...(drop.statusId === null ? {} : { statusId: drop.statusId }),
       }),
     );
+  };
+
+  // ── Right-click menu ─────────────────────────────────────────────────
+
+  const contextIssues = contextMenu?.issues ?? NO_CONTEXT_ISSUES;
+  const contextIssue = contextIssues.length === 1 ? (contextIssues[0] ?? null) : null;
+  // Investigate needs a directory to read, so it is only offered for one issue at a time and only
+  // once that issue's project has one. The reason is the tooltip on the disabled item.
+  const investigateBlockReason = useMemo(() => {
+    if (contextIssue === null) return null;
+    const project =
+      contextIssue.projectId === null
+        ? null
+        : (projects.find(
+            (candidate) =>
+              candidate.id === contextIssue.projectId &&
+              candidate.environmentId === primaryEnvironmentId,
+          ) ?? null);
+    const block = issueInvestigateBlock({
+      connected: storeStatus !== "disconnected",
+      deleted: contextIssue.deletedAt !== null,
+      projectId: contextIssue.projectId,
+      workspaceRoot: project?.workspaceRoot,
+      hasRunInFlight: investigatingIssueIds.has(contextIssue.id),
+    });
+    return block === null ? null : ISSUE_INVESTIGATE_BLOCK_REASONS[block];
+  }, [contextIssue, investigatingIssueIds, primaryEnvironmentId, projects, storeStatus]);
+
+  const { copyToClipboard: copyIssueField } = useCopyToClipboard<IssueContextMenuCopyField>({
+    target: "issue",
+    onCopy: (field) => {
+      toastManager.add({
+        type: "success",
+        title: `${ISSUE_CONTEXT_MENU_COPY_LABELS[field]} copied`,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({ type: "error", title: "Failed to copy", description: error.message }),
+      );
+    },
+  });
+
+  const handleRowContextMenu = (issue: Issue, event: MouseEvent) => {
+    event.preventDefault();
+    const targets = issueContextMenuIssues(issue, selectedIssues);
+    // A right-click outside the selection moves the cursor onto the row under the pointer, so what
+    // is highlighted and what the menu is about are the same rows. Inside it, the selection stands.
+    if (targets.length === 1) {
+      setSelection((current) =>
+        selectIssueRow(current, { ids, issueId: issue.id, mode: "replace" }),
+      );
+    }
+    setContextMenu({ issues: targets, x: event.clientX, y: event.clientY });
+  };
+
+  // The board has no selection model, so a card is always its own target.
+  const handleCardContextMenu = (issue: Issue, event: MouseEvent) => {
+    event.preventDefault();
+    setContextMenu({ issues: [issue], x: event.clientX, y: event.clientY });
+  };
+
+  const applyContextPatch = (patch: IssuePatch, label: string) => {
+    if (contextIssues.length === 0) return;
+    const title = `Failed to change the ${label}`;
+    if (contextIssue !== null) {
+      write(title, () => updateIssue({ issueId: contextIssue.id, patch }));
+      return;
+    }
+    const issueIds = contextIssues.map((issue) => issue.id);
+    write(title, () => bulkUpdateIssues({ issueIds, patch }));
+  };
+
+  const copyContextField = (field: IssueContextMenuCopyField) => {
+    if (contextIssues.length === 0) return;
+    copyIssueField(issueContextMenuCopyValue(contextIssues, field, window.location.origin), field);
+  };
+
+  // The run reports into the sheet's investigation tab, so the sheet is what a press opens.
+  const investigateContextIssue = (issue: Issue) => {
+    openIssue(issue);
+    write("Failed to start the investigation", () => startEnrichment({ issueId: issue.id }));
   };
 
   const openNewIssue = (statusId: IssueStatusId | null) => {
@@ -441,6 +594,7 @@ function IssuesListView({
         issue={item.issue}
         labels={labels}
         labelsById={labelsById}
+        onContextMenu={handleRowContextMenu}
         onOpen={openIssue}
         onPriority={setIssuePriority}
         onRowClick={handleRowClick}
@@ -634,6 +788,7 @@ function IssuesListView({
               columns={boardColumns}
               investigatingIssueIds={investigatingIssueIds}
               labelsById={labelsById}
+              onContextMenuIssue={handleCardContextMenu}
               onMove={moveBoardCard}
               onNewIssue={openNewIssue}
               onOpenIssue={openIssue}
@@ -687,6 +842,24 @@ function IssuesListView({
         open={newIssueOpen}
         projects={projects}
         statuses={statuses}
+      />
+
+      <IssueContextMenu
+        cycles={cycles}
+        investigateBlockReason={investigateBlockReason}
+        labels={labels}
+        milestones={milestones}
+        onClose={() => setContextMenu(null)}
+        onCopy={copyContextField}
+        onDelete={() => deleteIssues(contextIssues)}
+        onInvestigate={investigateContextIssue}
+        onOpen={openIssue}
+        onPatch={applyContextPatch}
+        onToggleLabel={(labelId, add) => toggleLabelOn(contextIssues, labelId, add)}
+        projects={projects}
+        statuses={statuses}
+        target={contextMenu}
+        today={today}
       />
 
       <IssueDetailSheet

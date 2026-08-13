@@ -23,6 +23,13 @@ and the whole list stays fast at thousands of rows.
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.
 
+Right-click a row or a board card for the same properties in one menu: **Status**, **Priority**,
+**Assignee**, **Labels**, **Project**, **Milestone**, **Cycle**, and a **Due date** with the four
+dates worth one press. Below those sit **Investigate**, **Copy** (issue ID, title, link, or a
+markdown link), **Remove** for any property the issue is carrying, and **Delete**. Right-clicking a
+row that is part of a selection acts on the whole selection; anywhere else it acts on the one row.
+**Milestone** is only offered when the targets share a project, since a milestone belongs to one.
+
 Use the view options next to the list/board toggle to group the list by **Status**, **Project**,
 **Priority**, **Assignee**, or **No grouping**, and to order by **Manual**, **Priority**,
 **Last updated**, or **Created**. The board is always columns of statuses — grouping is a list

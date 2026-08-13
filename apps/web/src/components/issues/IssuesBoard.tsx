@@ -38,7 +38,7 @@ import type {
   IssueViewSortMode,
 } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
-import { memo, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { memo, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import type { IssueChildRollup } from "~/state/issues";
@@ -82,6 +82,8 @@ export interface IssuesBoardProps {
    */
   readonly sortMode: IssueViewSortMode;
   readonly onOpenIssue: (issue: Issue) => void;
+  /** The right-click on a card. A card is always its own target: the board has no selection. */
+  readonly onContextMenuIssue: (issue: Issue, event: MouseEvent) => void;
   readonly onNewIssue: (statusId: IssueStatusId) => void;
   readonly onMove: (drop: IssuesBoardDrop) => void;
 }
@@ -94,6 +96,7 @@ export function IssuesBoard({
   today,
   sortMode,
   onOpenIssue,
+  onContextMenuIssue,
   onNewIssue,
   onMove,
 }: IssuesBoardProps) {
@@ -154,6 +157,7 @@ export function IssuesBoard({
             investigatingIssueIds={investigatingIssueIds}
             key={column.id}
             labelsById={labelsById}
+            onContextMenuIssue={onContextMenuIssue}
             onNewIssue={onNewIssue}
             onOpenIssue={onOpenIssue}
             sortable={sortable}
@@ -186,6 +190,7 @@ function BoardColumn({
   today,
   sortable,
   onOpenIssue,
+  onContextMenuIssue,
   onNewIssue,
 }: {
   column: IssuesBoardColumn;
@@ -195,6 +200,7 @@ function BoardColumn({
   today: string;
   sortable: boolean;
   onOpenIssue: (issue: Issue) => void;
+  onContextMenuIssue: (issue: Issue, event: MouseEvent) => void;
   onNewIssue: (statusId: IssueStatusId) => void;
 }) {
   // The tail, not the column: a droppable wrapped around the cards would sit dead centre of the
@@ -238,6 +244,7 @@ function BoardColumn({
               issue={issue}
               key={issue.id}
               labelsById={labelsById}
+              onContextMenu={onContextMenuIssue}
               onOpen={onOpenIssue}
               sortable={sortable}
               today={today}
@@ -268,6 +275,7 @@ function SortableBoardCard({
   today,
   sortable,
   onOpen,
+  onContextMenu,
 }: {
   issue: Issue;
   labelsById: ReadonlyMap<IssueLabelId, IssueLabel>;
@@ -276,6 +284,7 @@ function SortableBoardCard({
   today: string;
   sortable: boolean;
   onOpen: (issue: Issue) => void;
+  onContextMenu: (issue: Issue, event: MouseEvent) => void;
 }) {
   // Disabled takes the card out of both registries, so under a non-manual order there is no drag
   // to start and no target to land on — the drop resolver's refusal is never even reached.
@@ -302,6 +311,7 @@ function SortableBoardCard({
       issue={issue}
       labelsById={labelsById}
       onClick={() => onOpen(issue)}
+      onContextMenu={(event) => onContextMenu(issue, event)}
       onKeyDown={handleKeyDown}
       // The original stays in place as a hole; the overlay is what follows the pointer.
       placeholder={isDragging}
@@ -330,6 +340,7 @@ function IssueBoardCardImpl({
   setNodeRef,
   style,
   onClick,
+  onContextMenu,
   onKeyDown,
 }: {
   issue: Issue;
@@ -346,6 +357,7 @@ function IssueBoardCardImpl({
   setNodeRef?: (node: HTMLElement | null) => void;
   style?: CSSProperties;
   onClick?: () => void;
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
   const rowLabels = resolveIssueRowLabels(issue.labelIds, labelsById);
@@ -363,6 +375,7 @@ function IssueBoardCardImpl({
       )}
       data-issue-key={issue.key}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       onKeyDown={onKeyDown}
       ref={setNodeRef}
       style={style}
