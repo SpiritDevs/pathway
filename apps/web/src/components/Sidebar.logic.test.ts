@@ -11,6 +11,7 @@ import {
   getProjectSortTimestamp,
   getSidebarForkParentThreadId,
   getSidebarThreadIdsToPrewarm,
+  getVisibleThreadsForCollapsibleShelf,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   hasUnseenCompletion,
@@ -913,6 +914,43 @@ describe("sortSettledThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("getVisibleThreadsForCollapsibleShelf", () => {
+  const threads = [{ key: "settled-1" }, { key: "settled-2" }];
+
+  it("shows only the active shelf thread while collapsed", () => {
+    expect(
+      getVisibleThreadsForCollapsibleShelf({
+        threads,
+        isExpanded: false,
+        activeThreadKey: "settled-2",
+        getThreadKey: (thread) => thread.key,
+      }),
+    ).toEqual([{ key: "settled-2" }]);
+  });
+
+  it("hides the shelf again when focus moves elsewhere", () => {
+    expect(
+      getVisibleThreadsForCollapsibleShelf({
+        threads,
+        isExpanded: false,
+        activeThreadKey: "active-thread",
+        getThreadKey: (thread) => thread.key,
+      }),
+    ).toEqual([]);
+  });
+
+  it("shows every shelf thread while expanded", () => {
+    expect(
+      getVisibleThreadsForCollapsibleShelf({
+        threads,
+        isExpanded: true,
+        activeThreadKey: "active-thread",
+        getThreadKey: (thread) => thread.key,
+      }),
+    ).toBe(threads);
   });
 });
 

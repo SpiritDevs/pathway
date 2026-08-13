@@ -627,6 +627,22 @@ export function searchSidebarThreadsByTitle<T extends { readonly title: string }
   return threads.filter((thread) => thread.title.toLowerCase().includes(normalizedQuery));
 }
 
+/** Collapsed lifecycle shelves keep only the routed thread visible. This
+    preserves its location and row affordances without exposing its neighbors. */
+export function getVisibleThreadsForCollapsibleShelf<T>(input: {
+  threads: readonly T[];
+  isExpanded: boolean;
+  activeThreadKey: string | null;
+  getThreadKey: (thread: T) => string;
+}): readonly T[] {
+  if (input.isExpanded) return input.threads;
+  if (input.activeThreadKey === null) return [];
+  const activeThread = input.threads.find(
+    (thread) => input.getThreadKey(thread) === input.activeThreadKey,
+  );
+  return activeThread === undefined ? [] : [activeThread];
+}
+
 type SettledTimestampInput = Pick<
   SidebarThreadSummary,
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
