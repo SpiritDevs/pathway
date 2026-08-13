@@ -210,7 +210,7 @@ const hostAssignmentKey = (scope: McpInvocationContext.McpInvocationScope): stri
 
 /** Takeovers and preview activity are keyed per thread, not per provider session. */
 const threadKey = (environmentId: EnvironmentId, threadId: ThreadId): string =>
-  `${environmentId} ${threadId}`;
+  `${environmentId}\u0000${threadId}`;
 
 const isConnectionLive = (current: BrokerState, assignment: HostAssignment): boolean => {
   const connection = current.clients.get(assignment.clientId);
