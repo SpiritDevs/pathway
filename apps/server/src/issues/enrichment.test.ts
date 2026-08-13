@@ -101,6 +101,16 @@ describe("buildInvestigationPrompt", () => {
     assert.include(prompt, "invent a detail");
     assert.include(prompt, "Priority and safe missing-field suggestions may be applied");
     assert.include(prompt, "labels remain for a person to review.");
+    assert.include(prompt, "summary is appended to the issue description");
+  });
+
+  it("asks for a specific replacement title for a Slack-ingested issue", () => {
+    const prompt = buildInvestigationPrompt({ ...PROMPT_INPUT, slackIngested: true });
+
+    assert.include(prompt, "This issue was ingested from Slack");
+    assert.include(prompt, 'Include "suggestedTitle" even though it already has');
+    assert.include(prompt, "specific job to be done");
+    assert.notInclude(prompt, "title above is one of the intake placeholders");
   });
 
   it("says so rather than going quiet when an issue has no body", () => {

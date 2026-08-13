@@ -112,6 +112,19 @@ Agents are first-class here. A new `issues` MCP toolkit follows
 Agents have **full write access, including completing and deleting**. Soft deletes and the
 `issue_events` log are what make that recoverable; there is no approval gate.
 
+Issue reads preserve attachment ownership: the structured result has an issue-level attachment
+list and attachment ids on each complete comment, while the MCP response includes a bounded set of
+actual image content blocks. Each image is labelled with its source comment body, author, and
+timestamp. `issues_get_attachment` retrieves any listed image individually, so the eager response
+can remain bounded without making later attachments inaccessible.
+
+Browser verification is written through `issues_comment_evidence`. Screenshots cross the existing
+Preview snapshot response. Recordings stay in the desktop artifact directory until the issue tool
+reads them in bounded chunks over the Preview broker, caps them at 25 MB, and copies them into the
+environment attachment store. This keeps evidence remote-safe without putting one large recording
+inside a WebSocket frame. Issue comments remain the owner, and the issue attachment shelf remains
+the aggregate view of those comment attachments.
+
 Agents can be assignees. Assignment records intent and surfaces a "Start new thread" action that
 creates and dispatches a fresh thread seeded with the issue's title, description, todos, links, and
 images — it does not auto-spawn. The assignee constrains the provider; model, reasoning, and current

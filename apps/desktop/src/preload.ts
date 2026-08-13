@@ -196,6 +196,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
           mimeType,
           data,
         }),
+      read: (path, offset, length) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_RECORDING_READ_CHANNEL, {
+          path,
+          offset,
+          length,
+        }),
       onFrame: (listener) => {
         const wrappedListener = (_event: Electron.IpcRendererEvent, frame: unknown) => {
           if (typeof frame !== "object" || frame === null) return;

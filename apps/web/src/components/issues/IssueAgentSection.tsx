@@ -17,7 +17,14 @@ import type {
   VcsRef,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
-import { FolderIcon, GitBranchIcon, MessageSquareIcon, PlayIcon, XIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  FolderIcon,
+  GitBranchIcon,
+  MessageSquareIcon,
+  PlayIcon,
+  XIcon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -28,9 +35,14 @@ import type { ModelEsque } from "../chat/providerIconUtils";
 import { shouldRenderTraitsControls, TraitsPicker } from "../chat/TraitsPicker";
 import { PROVIDER_CLIENT_DEFINITION_BY_VALUE } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
+import { ButtonGroup } from "../ui/group";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
-import type { IssueStartWorkWorkspaceMode } from "./issueStartWork.logic";
+import {
+  issueStartWorkWorkspaceModeLabel,
+  type IssueStartWorkWorkspaceMode,
+} from "./issueStartWork.logic";
 
 const ignorePromptChange = (_prompt: string): void => undefined;
 
@@ -53,6 +65,7 @@ function IssueStartWorkLauncher({
   branchesPending,
   newWorktreeBlockReason,
   onStartWork,
+  onCreatePendingThread,
 }: {
   issue: Issue;
   initialModelSelection: ModelSelection | null;
@@ -65,6 +78,11 @@ function IssueStartWorkLauncher({
   branchesPending: boolean;
   newWorktreeBlockReason: string | null;
   onStartWork: (
+    modelSelection: ModelSelection,
+    workspaceMode: IssueStartWorkWorkspaceMode,
+    baseBranch: string | null,
+  ) => void;
+  onCreatePendingThread: (
     modelSelection: ModelSelection,
     workspaceMode: IssueStartWorkWorkspaceMode,
     baseBranch: string | null,
@@ -168,9 +186,7 @@ function IssueStartWorkLauncher({
               className="w-full min-w-0 text-foreground/90"
               size="sm"
             >
-              <SelectValue>
-                {workspaceMode === "new_worktree" ? "New branch" : "Current checkout"}
-              </SelectValue>
+              <SelectValue>{issueStartWorkWorkspaceModeLabel(workspaceMode)}</SelectValue>
             </SelectTrigger>
             <SelectPopup className="w-72">
               <SelectItem value="current_checkout">
@@ -194,7 +210,7 @@ function IssueStartWorkLauncher({
                 <span className="flex items-start gap-2">
                   <GitBranchIcon className="mt-0.5 size-4" />
                   <span className="flex min-w-0 flex-col">
-                    <span>New worktree</span>
+                    <span>{issueStartWorkWorkspaceModeLabel("new_worktree")}</span>
                     <span className="text-xs text-muted-foreground">
                       Branch from a ref you choose and run its setup tasks.
                     </span>
@@ -243,21 +259,56 @@ function IssueStartWorkLauncher({
         </div>
       )}
 
-      <Button
-        className="w-full justify-start"
-        disabled={starting || blockReason !== null}
-        onClick={() => {
-          if (modelSelection !== null) {
-            onStartWork(modelSelection, workspaceMode, selectedBaseBranch);
-          }
-        }}
-        size="sm"
-        title={blockReason ?? undefined}
-        variant="outline"
-      >
-        {starting ? <Spinner className="size-3.5" /> : <PlayIcon />}
-        <span className="truncate">{startWorkLabel}</span>
-      </Button>
+      <ButtonGroup className="w-full">
+        <Button
+          className="min-w-0 flex-1 justify-start"
+          disabled={starting || blockReason !== null}
+          onClick={() => {
+            if (modelSelection !== null) {
+              onStartWork(modelSelection, workspaceMode, selectedBaseBranch);
+            }
+          }}
+          size="sm"
+          title={blockReason ?? undefined}
+          variant="outline"
+        >
+          {starting ? <Spinner className="size-3.5" /> : <PlayIcon />}
+          <span className="truncate">{startWorkLabel}</span>
+        </Button>
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                aria-label="More thread creation options"
+                className="shrink-0 px-2"
+                disabled={starting || blockReason !== null}
+                size="sm"
+                title={blockReason ?? undefined}
+                variant="outline"
+              />
+            }
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end" className="w-64" side="bottom">
+            <MenuItem
+              onClick={() => {
+                if (modelSelection !== null) {
+                  onCreatePendingThread(modelSelection, workspaceMode, selectedBaseBranch);
+                }
+              }}
+            >
+              <MessageSquareIcon />
+              <span className="flex min-w-0 flex-col">
+                <span>Create pending thread</span>
+                <span className="text-xs text-muted-foreground">
+                  Prepare the thread without submitting it.
+                </span>
+              </span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </ButtonGroup>
     </div>
   );
 }
@@ -276,6 +327,7 @@ export function IssueAgentSection({
   branchesPending,
   newWorktreeBlockReason,
   onStartWork,
+  onCreatePendingThread,
   onOpenThread,
   onUnlinkThread,
 }: {
@@ -300,6 +352,11 @@ export function IssueAgentSection({
     workspaceMode: IssueStartWorkWorkspaceMode,
     baseBranch: string | null,
   ) => void;
+  onCreatePendingThread: (
+    modelSelection: ModelSelection,
+    workspaceMode: IssueStartWorkWorkspaceMode,
+    baseBranch: string | null,
+  ) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onUnlinkThread: (threadId: ThreadId) => void;
 }) {
@@ -319,6 +376,7 @@ export function IssueAgentSection({
           branchRefs={branchRefs}
           branchesPending={branchesPending}
           newWorktreeBlockReason={newWorktreeBlockReason}
+          onCreatePendingThread={onCreatePendingThread}
           onStartWork={onStartWork}
           starting={starting}
           startWorkBlockReason={startWorkBlockReason}

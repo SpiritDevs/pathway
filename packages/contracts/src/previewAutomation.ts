@@ -563,6 +563,27 @@ export const PreviewAutomationRecordingArtifact = Schema.Struct({
 });
 export type PreviewAutomationRecordingArtifact = typeof PreviewAutomationRecordingArtifact.Type;
 
+export const PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES = 512 * 1024;
+
+export const PreviewAutomationRecordingReadInput = Schema.Struct({
+  path: Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(4096)),
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  length: Schema.Int.check(
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES),
+  ),
+});
+export type PreviewAutomationRecordingReadInput = typeof PreviewAutomationRecordingReadInput.Type;
+
+export const PreviewAutomationRecordingChunk = Schema.Struct({
+  /** Base64 keeps this bounded chunk portable across the typed WebSocket RPC. */
+  data: Schema.String,
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  nextOffset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+export type PreviewAutomationRecordingChunk = typeof PreviewAutomationRecordingChunk.Type;
+
 export const PreviewAutomationClientId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 export type PreviewAutomationClientId = typeof PreviewAutomationClientId.Type;
 export const PreviewAutomationConnectionId = TrimmedNonEmptyString.check(Schema.isMaxLength(64));

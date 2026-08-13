@@ -41,7 +41,15 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { SearchXIcon, Trash2Icon, UnplugIcon, WandSparklesIcon, XIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  SearchXIcon,
+  Trash2Icon,
+  UnplugIcon,
+  WandSparklesIcon,
+  XIcon,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -53,12 +61,13 @@ import {
 } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { usePrimarySettings } from "~/hooks/useSettings";
-import { cn, newMessageId } from "~/lib/utils";
+import { cn, newMessageId, randomUUID } from "~/lib/utils";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -137,6 +146,8 @@ import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
+import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
   issueAssigneePatch,
@@ -164,6 +175,7 @@ import {
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
+  buildIssueTalkPrompt,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
   issueStartWorkTodos,
@@ -300,12 +312,44 @@ export function IssueDetailSheet({
   );
 }
 
-function SheetHeaderBar({ title, children }: { title: string; children?: ReactNode }) {
+function SheetHeaderBar({
+  title,
+  children,
+  onTitleClick,
+  titleActionLabel,
+  titleActionComplete = false,
+}: {
+  title: string;
+  children?: ReactNode;
+  onTitleClick?: () => void;
+  titleActionLabel?: string;
+  titleActionComplete?: boolean;
+}) {
   return (
     <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-        {title}
-      </span>
+      {onTitleClick === undefined ? (
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+          {title}
+        </span>
+      ) : (
+        <button
+          aria-label={titleActionLabel}
+          className="group/title flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onTitleClick}
+          title={titleActionLabel}
+          type="button"
+        >
+          <span className="truncate">{title}</span>
+          {titleActionComplete ? (
+            <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+          ) : (
+            <CopyIcon
+              aria-hidden="true"
+              className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
+            />
+          )}
+        </button>
+      )}
       {children}
       <SheetClose
         aria-label="Close issue"
@@ -381,6 +425,7 @@ function IssueDetailBody({
   const milestones = useIssueMilestonesForProject(issue.projectId);
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
+  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id);
   const childRollup = useIssueChildRollup(issue.id);
   const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -415,6 +460,21 @@ function IssueDetailBody({
   const acceptTriage = useTriageAccept();
   const linkThread = useLinkIssueThread();
   const unlinkThread = useUnlinkIssueThread();
+  const { copyToClipboard: copyIssueKey, isCopied: issueKeyCopied } = useCopyToClipboard({
+    target: "issue code",
+    onCopy: () => {
+      toastManager.add({ type: "success", title: "Issue code copied", description: issue.key });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy issue code",
+          description: error.message,
+        }),
+      );
+    },
+  });
 
   const write = useCallback(
     (patch: IssuePatch | null) => {
@@ -489,6 +549,7 @@ function IssueDetailBody({
   const [todoFocusRequest, setTodoFocusRequest] = useState(0);
   const [showRelations, setShowRelations] = useState(false);
   const [relationOpenRequest, setRelationOpenRequest] = useState(0);
+  const [investigationRequested, setInvestigationRequested] = useState(false);
 
   /**
    * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
@@ -659,21 +720,25 @@ function IssueDetailBody({
   ]);
 
   const activeRun = activeIssueEnrichmentRun(enrichmentRuns);
+  const investigating =
+    (investigationRequested && enrichmentRuns.length === 0) || activeRun !== null;
   const investigateBlock = issueInvestigateBlock({
     connected: storeStatus !== "disconnected",
     deleted: issue.deletedAt !== null,
     projectId: issue.projectId,
     workspaceRoot: project?.workspaceRoot,
-    hasRunInFlight: activeRun !== null,
+    hasRunInFlight: investigating,
   });
 
   const handleInvestigate = useCallback(() => {
     setActiveTab("investigation");
+    setInvestigationRequested(true);
     void (async () => {
-      reportFailure(
+      const failed = reportFailure(
         "Failed to start the investigation",
         await startEnrichment({ issueId: issue.id }),
       );
+      if (failed) setInvestigationRequested(false);
     })();
   }, [issue.id, startEnrichment]);
 
@@ -747,95 +812,135 @@ function IssueDetailBody({
     [issue.id, unlinkThread],
   );
 
-  /** The explicit press creates and dispatches the thread before changing the issue workflow. */
+  /** Opens the local draft and assembles the same issue context for both launch actions. */
+  const prepareIssueThreadDraft = useCallback(
+    async (
+      workspaceMode: IssueStartWorkWorkspaceMode,
+      baseBranch: string | null,
+      purpose: "start-work" | "talk" = "start-work",
+    ) => {
+      if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
+        throw new Error("The issue thread could not be prepared.");
+      }
+      const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
+      if (workspacePlan === null) {
+        throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
+      }
+      const relations: Array<IssueStartWorkRelation> = [];
+      if (parent !== null) {
+        relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
+      }
+      for (const display of relationDisplays) {
+        const counterpart = store.issuesById.get(display.issueId);
+        if (counterpart === undefined) continue;
+        relations.push({
+          label: display.label,
+          key: counterpart.key,
+          title: counterpart.title,
+        });
+      }
+      const promptContext = {
+        issue,
+        statusName: status?.name ?? null,
+        completionStatusName:
+          statuses.find(
+            (candidate) =>
+              candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
+          )?.name ??
+          statuses.find((candidate) => candidate.category === "review")?.name ??
+          null,
+        projectTitle,
+        priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
+        todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
+        relations,
+        issueUrl: issueDetailUrl(window.location.origin, issue.key),
+      };
+      const prompt =
+        purpose === "talk"
+          ? buildIssueTalkPrompt(promptContext)
+          : buildIssueStartWorkPrompt(promptContext);
+      const files: File[] = [];
+      for (const [index, url] of startWorkAttachmentUrls.entries()) {
+        if (url === null) throw new Error("The issue images are still loading. Try again.");
+        if (isIssueVideoAttachmentUrl(url)) continue;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("An issue image could not be loaded.");
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) {
+          throw new Error("An issue attachment is not an image.");
+        }
+        files.push(new File([blob], `${issue.key}-attachment-${index + 1}`, { type: blob.type }));
+      }
+
+      const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+        branch: workspacePlan.branch,
+        worktreePath: null,
+        envMode: workspacePlan.envMode,
+        startFromOrigin:
+          workspaceMode === "new_worktree"
+            ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
+              ? false
+              : settings.newWorktreesStartFromOrigin
+            : false,
+        // An issue launch is a task boundary. It must never consume an unrelated empty draft.
+        forceNew: true,
+      });
+      if (opened === null) return null;
+      const session = useComposerDraftStore.getState().getDraftSession(opened.draftId);
+      if (session === null) throw new Error("The new thread draft could not be prepared.");
+
+      return {
+        files,
+        opened,
+        projectWorkspaceRoot: project.workspaceRoot,
+        prompt,
+        session,
+        workspacePlan,
+      };
+    },
+    [
+      detail,
+      issue,
+      newWorktreeBlockReason,
+      openNewThread,
+      parent,
+      project,
+      projectTitle,
+      relationDisplays,
+      settings.issueAutomation.statusTransitions.workFinishedStatusId,
+      settings.newWorktreesStartFromOrigin,
+      startWorkAttachmentsReady,
+      startWorkAttachmentUrls,
+      startWorkBranchRefs,
+      status,
+      statuses,
+      store,
+    ],
+  );
+
+  /** The primary press persists the thread and dispatches its first turn immediately. */
   const handleStartWork = useCallback(
     (
       modelSelection: ModelSelection,
       workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
       baseBranch: string | null = null,
     ) => {
-      if (
-        project === null ||
-        project.workspaceRoot === null ||
-        startingWork ||
-        !startWorkAttachmentsReady
-      ) {
-        return;
-      }
-      const projectWorkspaceRoot = project.workspaceRoot;
+      if (startingWork) return;
       setStartingWork(true);
       void (async () => {
         try {
-          const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
-          if (workspacePlan === null) {
-            throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
-          }
-          const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
-            branch: workspacePlan.branch,
-            worktreePath: null,
-            envMode: workspacePlan.envMode,
-            startFromOrigin:
-              workspaceMode === "new_worktree"
-                ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
-                  ? false
-                  : settings.newWorktreesStartFromOrigin
-                : false,
-            // An issue launch is a task boundary. It must never consume an unrelated empty draft.
-            forceNew: true,
-          });
-          if (opened === null) return;
-          const relations: Array<IssueStartWorkRelation> = [];
-          if (parent !== null) {
-            relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
-          }
-          for (const display of relationDisplays) {
-            const counterpart = store.issuesById.get(display.issueId);
-            if (counterpart === undefined) continue;
-            relations.push({
-              label: display.label,
-              key: counterpart.key,
-              title: counterpart.title,
-            });
-          }
-          const prompt = buildIssueStartWorkPrompt({
-            issue,
-            statusName: status?.name ?? null,
-            completionStatusName:
-              statuses.find(
-                (candidate) =>
-                  candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
-              )?.name ??
-              statuses.find((candidate) => candidate.category === "review")?.name ??
-              null,
-            projectTitle,
-            priorityLabel: issue.priority === "none" ? null : ISSUE_PRIORITY_LABELS[issue.priority],
-            todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
-            relations,
-            issueUrl: issueDetailUrl(window.location.origin, issue.key),
-          });
-          const draftStore = useComposerDraftStore.getState();
-          const session = draftStore.getDraftSession(opened.draftId);
-          if (session === null) throw new Error("The new thread draft could not be prepared.");
-
-          const attachments: Array<UploadChatAttachment> = [];
-          for (const [index, url] of startWorkAttachmentUrls.entries()) {
-            if (url === null) throw new Error("The issue images are still loading. Try again.");
-            const response = await fetch(url);
-            if (!response.ok) throw new Error("An issue image could not be loaded.");
-            const blob = await response.blob();
-            if (!blob.type.startsWith("image/")) {
-              throw new Error("An issue attachment is not an image.");
-            }
-            const name = `${issue.key}-attachment-${index + 1}`;
-            const file = new File([blob], name, { type: blob.type });
-            attachments.push({
-              type: "image",
-              name,
-              mimeType: blob.type,
-              sizeBytes: blob.size,
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const { files, projectWorkspaceRoot, prompt, session, workspacePlan } = prepared;
+          const attachments: Array<UploadChatAttachment> = await Promise.all(
+            files.map(async (file) => ({
+              type: "image" as const,
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
               dataUrl: await readFileAsDataUrl(file),
-            });
-          }
+            })),
+          );
 
           const createdAt = new Date().toISOString();
           const started = await startThreadTurn({
@@ -892,10 +997,7 @@ function IssueDetailBody({
                   priority: issue.priority,
                   runEnrichment: false,
                 })
-              : await updateIssue({
-                  issueId: issue.id,
-                  patch: { statusId: targetStatusId },
-                });
+              : await updateIssue({ issueId: issue.id, patch: { statusId: targetStatusId } });
             reportFailure("Work started, but the issue status could not be updated", transitioned);
           }
 
@@ -921,30 +1023,105 @@ function IssueDetailBody({
       })();
     },
     [
-      detail,
       acceptTriage,
       issue,
       linkThread,
-      newWorktreeBlockReason,
-      openNewThread,
-      parent,
-      project,
-      projectTitle,
-      relationDisplays,
-      startingWork,
-      status,
-      statuses,
-      store,
-      settings.issueAutomation.statusTransitions.workFinishedStatusId,
+      prepareIssueThreadDraft,
       settings.issueAutomation.statusTransitions.workStartedStatusId,
-      settings.newWorktreesStartFromOrigin,
+      startingWork,
       startThreadTurn,
-      startWorkAttachmentsReady,
-      startWorkAttachmentUrls,
-      startWorkBranchRefs,
+      statuses,
       updateIssue,
     ],
   );
+
+  /** The menu action fills the local draft without submitting it or creating a server thread. */
+  const handleCreatePendingThread = useCallback(
+    (
+      modelSelection: ModelSelection,
+      workspaceMode: IssueStartWorkWorkspaceMode = "current_checkout",
+      baseBranch: string | null = null,
+    ) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(workspaceMode, baseBranch);
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.setModelSelection(prepared.opened.draftId, modelSelection, {
+            replaceOptions: true,
+          });
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create pending thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
+  );
+
+  /** Opens a current-checkout draft so the user's first message can steer the discussion. */
+  const handleTalkAboutIssue = useCallback(() => {
+    if (startingWork) return;
+    setStartingWork(true);
+    void (async () => {
+      try {
+        const prepared = await prepareIssueThreadDraft("current_checkout", null, "talk");
+        if (prepared === null) return;
+        const draftStore = useComposerDraftStore.getState();
+        draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+        draftStore.addImages(
+          prepared.opened.draftId,
+          prepared.files.map(
+            (file) =>
+              ({
+                type: "image",
+                id: randomUUID(),
+                name: file.name,
+                mimeType: file.type,
+                sizeBytes: file.size,
+                previewUrl: URL.createObjectURL(file),
+                file,
+              }) satisfies ComposerImageAttachment,
+          ),
+        );
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to create issue discussion",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setStartingWork(false);
+      }
+    })();
+  }, [prepareIssueThreadDraft, startingWork]);
 
   useEffect(() => {
     if (
@@ -1004,7 +1181,28 @@ function IssueDetailBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar title={issue.key}>
+      <SheetHeaderBar
+        onTitleClick={() => copyIssueKey(issue.key, undefined)}
+        title={issue.key}
+        titleActionComplete={issueKeyCopied}
+        titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
+      >
+        {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
+          <Button
+            disabled={investigateBlock !== null}
+            onClick={handleInvestigate}
+            size="xs"
+            title={
+              investigateBlock === null
+                ? "Run a read-only investigation of this issue's repository."
+                : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
+            }
+            variant="outline"
+          >
+            <WandSparklesIcon />
+            Investigate
+          </Button>
+        ) : null}
         <IssueDeleteMenu
           count={1}
           onConfirm={handleDelete}
@@ -1038,18 +1236,20 @@ function IssueDetailBody({
 
               <IssueDescriptionEditor
                 onCommit={(description) => write(issueDescriptionPatch(issue, description))}
+                onPasteImages={attachmentDrafts.addFiles}
                 value={issue.description}
               />
 
               <IssueAttachments
                 comments={comments}
-                issueId={issue.id}
+                drafts={attachmentDrafts}
                 onCreateComment={handleCreateComment}
               />
 
               <IssueDetailTabs
-                activityCount={events.length + comments.length}
-                investigating={activeRun !== null}
+                activityCount={events.length}
+                commentCount={comments.length}
+                investigating={investigating}
                 investigationCount={enrichmentRuns.length}
                 onChange={setActiveTab}
                 value={activeTab}
@@ -1128,6 +1328,9 @@ function IssueDetailBody({
                     issueKeys={issueKeys}
                     projectTitles={projectTitles}
                   />
+                </div>
+              ) : activeTab === "comments" ? (
+                <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
                     comments={comments}
                     isPending={detailPending}
@@ -1158,8 +1361,7 @@ function IssueDetailBody({
                         Repository investigation
                       </h3>
                       <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                        Read-only analysis. Finished runs are also left as agent comments in
-                        Activity.
+                        Read-only analysis. Finished runs are also left in Comments.
                       </p>
                     </div>
                     <Button
@@ -1173,8 +1375,8 @@ function IssueDetailBody({
                       }
                       variant="outline"
                     >
-                      {activeRun === null ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
-                      {activeRun === null
+                      {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
+                      {!investigating
                         ? enrichmentRuns.length === 0
                           ? "Investigate"
                           : "Investigate again"
@@ -1246,6 +1448,7 @@ function IssueDetailBody({
                 branchRefs={startWorkBranchRefs}
                 branchesPending={startWorkBranches.isPending && startWorkBranches.data === null}
                 newWorktreeBlockReason={newWorktreeBlockReason}
+                onCreatePendingThread={handleCreatePendingThread}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
                 onUnlinkThread={handleUnlinkThread}
@@ -1285,6 +1488,18 @@ function IssueDetailBody({
                 onAddRelation={handleAddRelation}
                 onAddSubIssue={handleAddSubIssue}
                 onAddTodo={handleAddTodo}
+                onTalkAboutIssue={handleTalkAboutIssue}
+                talkAboutIssueBlockReason={
+                  project?.workspaceRoot == null
+                    ? "Choose a project with a connected workspace before starting a discussion."
+                    : storeStatus === "disconnected"
+                      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+                      : !startWorkAttachmentsReady
+                        ? "Issue images are still loading."
+                        : startingWork
+                          ? "Another issue thread is being prepared."
+                          : null
+                }
               />
             </aside>
           </div>

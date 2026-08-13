@@ -1,4 +1,5 @@
 import { it as effectIt } from "@effect/vitest";
+import { PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -48,6 +49,24 @@ describe("preview IPC methods", () => {
         const error = Cause.findErrorOption(exit.cause);
         expect(Option.isSome(error) && Schema.isSchemaError(error.value)).toBe(true);
         expect(fromPartition).not.toHaveBeenCalled();
+      },
+    ),
+  );
+
+  effectIt.effect("bounds recording reads before resolving the preview service", () =>
+    Effect.map(
+      PreviewIpc.readRecording
+        .handler({
+          path: "/tmp/browser-recording.webm",
+          offset: 0,
+          length: PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES + 1,
+        })
+        .pipe(Effect.provideService(PreviewManager.PreviewManager, null as never), Effect.exit),
+      (exit) => {
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) return;
+        const error = Cause.findErrorOption(exit.cause);
+        expect(Option.isSome(error) && Schema.isSchemaError(error.value)).toBe(true);
       },
     ),
   );

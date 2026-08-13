@@ -25,6 +25,16 @@ describe("pull request review drafts", () => {
     ]);
   });
 
+  it("does not duplicate a deterministic agent finding after remounting", () => {
+    const store = usePullRequestReviewStore.getState();
+    store.addComment("review-a", comment("agent-finding"));
+    usePullRequestReviewStore.getState().addComment("review-a", comment("agent-finding"));
+
+    expect(usePullRequestReviewStore.getState().drafts["review-a"]).toEqual([
+      comment("agent-finding"),
+    ]);
+  });
+
   it("keeps summary bodies isolated by review key", () => {
     const store = usePullRequestReviewStore.getState();
     store.setSummary("review-a", "Summary A");

@@ -32,6 +32,9 @@ Pathway works with the platforms your team already uses:
 **Create pull requests while you work**
 
 - Push a branch and create a pull request from the Git actions controls in the toolbar
+- If Git rejects a push, Pathway can ask the active agent to synchronize the branch, resolve
+  conflicts, run focused checks, and retry. Pathway always asks before starting this recovery and
+  never instructs the agent to force-push or discard unrelated work.
 - Pathway can suggest titles and descriptions based on your commits
 - Supports GitHub Pull Requests, GitLab Merge Requests, Bitbucket Pull Requests, and Azure DevOps Pull Requests
 
@@ -43,6 +46,10 @@ Pathway works with the platforms your team already uses:
   leaving the conversation
 - Open the review directly in your browser with one click
 - Check out a teammate's branch to review code locally
+- Choose **Review with an agent** from a pull request's menu to select the agent, model, reasoning,
+  and speed options. The conversation stays in a **Reviewing** tab beside **Code** instead of the
+  thread list. Findings can be published as inline host comments or kept as draft markers for you
+  to inspect and submit from **Code**.
 
 ### Know Your Setup at a Glance
 

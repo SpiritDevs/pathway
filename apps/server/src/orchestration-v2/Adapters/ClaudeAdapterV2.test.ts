@@ -498,6 +498,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
 
     assert.deepEqual([...CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS].sort(), readOnlyToolNames);
     assert.include(readOnlyToolNames, "mcp__pathway__issues_get");
+    assert.include(readOnlyToolNames, "mcp__pathway__issues_get_attachment");
     assert.include(readOnlyToolNames, "mcp__pathway__email_get");
     assert.include(readOnlyToolNames, "mcp__pathway__preview_snapshot");
   });

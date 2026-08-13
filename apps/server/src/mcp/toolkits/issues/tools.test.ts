@@ -48,6 +48,7 @@ it("states the side effect of every tool that writes", () => {
     "issues_create",
     "issues_update",
     "issues_comment",
+    "issues_comment_evidence",
     "issues_delete",
     "issues_restore",
     "issues_link_thread",
@@ -62,15 +63,16 @@ it("states the side effect of every tool that writes", () => {
 });
 
 it("marks the read tools read-only and the delete destructive", () => {
-  for (const name of ["issues_list", "issues_get"] as const) {
+  for (const name of ["issues_list", "issues_get", "issues_get_attachment"] as const) {
     expect(Context.get(IssuesToolkit.tools[name].annotations, Tool.Readonly)).toBe(true);
   }
   expect(Context.get(IssuesToolkit.tools.issues_delete.annotations, Tool.Destructive)).toBe(true);
   expect(Context.get(IssuesToolkit.tools.issues_update.annotations, Tool.Destructive)).toBe(false);
-  // A local SQLite table is not the open world; nothing here reaches the network.
+  // A local SQLite table is not the open world. Evidence is the exception because it reads the
+  // collaborative browser, whose current page may be remote.
   for (const tool of Object.values(IssuesToolkit.tools)) {
-    expect(Context.get(tool.annotations, Tool.OpenWorld), `${tool.name} is closed-world`).toBe(
-      false,
+    expect(Context.get(tool.annotations, Tool.OpenWorld), `${tool.name} open-world hint`).toBe(
+      tool.name === "issues_comment_evidence",
     );
   }
 });

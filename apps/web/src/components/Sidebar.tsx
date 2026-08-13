@@ -29,7 +29,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { Issue, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -50,6 +50,7 @@ import {
   ServerIcon,
   SettingsIcon,
   SquarePenIcon,
+  TicketIcon,
   TerminalIcon,
   Undo2Icon,
   XIcon,
@@ -109,6 +110,7 @@ import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../s
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
+import { useStartWorkIssuesByThread } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   buildThreadRouteParams,
@@ -248,6 +250,7 @@ function terminalProcessLabel(count: number): string {
 
 function SidebarThreadTooltip({
   thread,
+  issue,
   projectTitle,
   projectCwd,
   projectFaviconPath,
@@ -258,8 +261,10 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  onOpenIssue,
 }: {
   thread: SidebarThreadSummary;
+  issue: Issue | null;
   projectTitle: string | null;
   projectCwd: string | null;
   projectFaviconPath: string | null;
@@ -273,6 +278,7 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  onOpenIssue: (issueKey: string) => void;
 }) {
   return (
     <TooltipPopup
@@ -280,7 +286,10 @@ function SidebarThreadTooltip({
       align="start"
       sideOffset={4}
       variant="glass"
-      className="max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0"
+      className={cn(
+        "max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0",
+        issue !== null && "pointer-events-auto",
+      )}
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
         <div className="min-w-0 truncate text-xs leading-none font-medium text-foreground">
@@ -309,6 +318,17 @@ function SidebarThreadTooltip({
               <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
               <div className="min-w-0 truncate text-foreground/75">{thread.branch}</div>
             </div>
+          ) : null}
+          {issue ? (
+            <button
+              type="button"
+              className="flex min-w-0 cursor-pointer items-center gap-2 text-left text-foreground/75 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Open issue ${issue.key}`}
+              onClick={() => onOpenIssue(issue.key)}
+            >
+              <TicketIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
+              <span className="min-w-0 truncate font-mono">{issue.key}</span>
+            </button>
           ) : null}
           {branchMismatch ? (
             <div className="flex min-w-0 items-start gap-2 text-warning">
@@ -656,6 +676,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
+  issue: Issue | null;
   variant: "card" | "slim";
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
@@ -709,6 +730,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  onOpenIssue: (issueKey: string) => void;
 }) {
   const {
     isRenaming,
@@ -878,6 +900,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const detailsTooltip = (
     <SidebarThreadTooltip
       thread={thread}
+      issue={props.issue}
       projectTitle={props.projectTitle}
       projectCwd={props.projectCwd}
       projectFaviconPath={props.projectFaviconPath}
@@ -888,6 +911,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      onOpenIssue={props.onOpenIssue}
     />
   );
 
@@ -896,6 +920,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       onThreadClick(event, threadRef);
     },
     [onThreadClick, threadRef],
+  );
+  const handleIssueClick = useCallback(
+    (event: ReactMouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (props.issue !== null) props.onOpenIssue(props.issue.key);
+    },
+    [props.issue, props.onOpenIssue],
   );
   const handleAcknowledgeWokeClick = useCallback(
     (event: ReactMouseEvent) => {
@@ -1434,6 +1466,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
                   branch, so the row lost its most stable identifier. */}
+              {props.issue ? (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer font-mono text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={`Open issue ${props.issue.key}`}
+                  onClick={handleIssueClick}
+                >
+                  {props.issue.key}
+                </button>
+              ) : null}
+              {props.issue && thread.branch ? <span aria-hidden>·</span> : null}
               {thread.branch ? (
                 <>
                   <ThreadWorktreeIndicator thread={thread} />
@@ -1490,6 +1533,7 @@ function latestRunDiff(
 
 const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   thread: SidebarThreadSummary;
+  issue: Issue | null;
   projectCwd: string | null;
   projectFaviconPath: string | null;
   projectTitle: string | null;
@@ -1500,6 +1544,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   resultId: string;
   onHighlight: () => void;
   onSelect: () => void;
+  onOpenIssue: (issueKey: string) => void;
 }) {
   const { thread } = props;
   // Same details tooltip as the regular rows: a search hit is still a thread,
@@ -1575,6 +1620,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
         </TooltipTrigger>
         <SidebarThreadTooltip
           thread={thread}
+          issue={props.issue}
           projectTitle={props.projectTitle}
           projectCwd={props.projectCwd}
           projectFaviconPath={props.projectFaviconPath}
@@ -1585,6 +1631,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          onOpenIssue={props.onOpenIssue}
         />
       </Tooltip>
     </li>
@@ -1595,6 +1642,7 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const startWorkIssuesByThread = useStartWorkIssuesByThread();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1690,6 +1738,14 @@ export default function Sidebar() {
       markThreadVisited(scopedThreadKey(threadRef), visitedAt);
     },
     [markThreadVisited],
+  );
+  const openIssue = useCallback(
+    (issueKey: string) => {
+      clearSelection();
+      if (isMobile) setOpenMobile(false);
+      void router.navigate({ to: "/issues", search: { issue: issueKey } });
+    },
+    [clearSelection, isMobile, router, setOpenMobile],
   );
   const routeTarget = useParams({
     strict: false,
@@ -3518,6 +3574,11 @@ export default function Sidebar() {
                       <SidebarSearchResultRow
                         key={threadKey}
                         thread={thread}
+                        issue={
+                          thread.environmentId === primaryEnvironmentId
+                            ? (startWorkIssuesByThread.get(thread.id) ?? null)
+                            : null
+                        }
                         projectCwd={
                           projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                         }
@@ -3538,6 +3599,7 @@ export default function Sidebar() {
                         resultId={`sidebar-thread-search-result-${index}`}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
+                        onOpenIssue={openIssue}
                       />
                     );
                   })}
@@ -3585,6 +3647,11 @@ export default function Sidebar() {
                         // painted over text).
                         key={`${threadKey}:${rowVariant}`}
                         thread={thread}
+                        issue={
+                          thread.environmentId === primaryEnvironmentId
+                            ? (startWorkIssuesByThread.get(thread.id) ?? null)
+                            : null
+                        }
                         variant={rowVariant}
                         // Snoozed rows wake; settled rows un-settle (explicit
                         // settles clear the override, auto-settled rows get
@@ -3658,6 +3725,7 @@ export default function Sidebar() {
                         onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
                         onChangeRequestState={handleChangeRequestState}
+                        onOpenIssue={openIssue}
                       />
                     );
                   };

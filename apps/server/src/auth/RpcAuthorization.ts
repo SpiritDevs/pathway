@@ -145,6 +145,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ISSUES_WS_METHODS.getEvents]: AuthOrchestrationReadScope,
   [ISSUES_WS_METHODS.getEnrichmentRuns]: AuthOrchestrationReadScope,
   [ISSUES_WS_METHODS.getThreadLinks]: AuthOrchestrationReadScope,
+  [ISSUES_WS_METHODS.getIssueLinksForThread]: AuthOrchestrationReadScope,
   [ISSUES_WS_METHODS.commentsList]: AuthOrchestrationReadScope,
   [ISSUES_WS_METHODS.milestoneHistory]: AuthOrchestrationReadScope,
   [ISSUES_WS_METHODS.stream]: AuthOrchestrationReadScope,

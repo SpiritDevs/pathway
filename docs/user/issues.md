@@ -63,7 +63,12 @@ work down a queue without losing your place. Click outside the sheet or press `E
 The sheet holds the description, the properties rail, todos, sub-issues, relations, comments, the
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with
 who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
-resize it; Pathway remembers the width for the next issue you open.
+resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
+sheet header to copy it.
+
+Use **Add images** in the attachment shelf to choose images from a file or from the clipboard. You
+can also paste an image directly into the description; Pathway moves it into the attachment shelf
+instead of inserting it into the description.
 
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
@@ -164,6 +169,18 @@ sees the issues that are on the milestone now — one moved off it leaves no tra
 status or the milestone itself has been renamed since, the chart says the history is partly a guess
 instead of pretending otherwise.
 
+### Browser evidence from agents
+
+An agent working from an issue can attach its browser verification directly to the issue instead
+of leaving the proof inside its conversation. Screenshots appear inline, and short Preview
+recordings play in the comment and in the issue's attachment shelf. The comment remains attributed
+to the agent and should explain what it verified, what the evidence demonstrates, and any known
+limitations.
+
+For a video, the agent starts and stops a Preview recording, then attaches the returned recording
+to the issue. Pathway copies that recording into the environment's issue attachment store, so it is
+still available when the issue is opened from another device or over a remote connection.
+
 ## Importing from Linear
 
 **Settings → Issues → Import** takes a Linear CSV export as-is. It reads the exported keys, titles,
@@ -184,8 +201,19 @@ the model constrained to the assigned provider and initially using a compatible 
 Choose **Current checkout** to work in the project's main workspace, or **New worktree** and select
 the branch it should start from. Pressing the button creates a fresh thread, sends the
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New
-worktrees also run the project's configured setup tasks. Dragging cards around a board never
-launches an agent.
+worktrees also run the project's configured setup tasks. The new thread keeps the originating issue
+in its details menu, where the current status and priority stay visible and the full detail sheet is
+one click away. Its issue code also appears in the thread sidebar card and hover details; select the
+code there to open the issue directly. Dragging cards around a board never launches an agent.
+
+Use the arrow beside **Start new thread** and choose **Create pending thread** when you want to
+prepare the same prompt, model, images, and workspace without sending the first turn. The pending
+thread opens in the composer so you can review or edit it before submitting it.
+
+Choose **Talk about issue** under **Actions** to open a pending discussion thread even when the
+issue is not assigned to an agent. Add your question to the prepared issue context, then send it
+when you are ready. The agent links the thread to the issue and keeps the ticket current as the
+conversation produces decisions, without starting implementation unless you ask.
 
 When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
 selected provider, model, and reasoning level on the issue. **Start new thread** opens with that
@@ -201,11 +229,13 @@ read-only mode and records what it found as an **Investigation** comment:
 - the files the work probably lands in,
 - related issues,
 - suggested labels and a priority,
-- a title or description when the issue arrived without useful ones.
+- a more specific title when an integration supplied the original one.
 
-Pathway applies the priority and an empty description when the investigation finishes. It also
-replaces a generic title supplied by an integration, such as **Slack message**. A title created or
-edited by you is never replaced without confirmation, and labels remain suggestions you apply.
+Pathway applies the priority and appends the agent's summary to the bottom of the description,
+separated from the original report by a blank line. For Slack intake, the source message stays
+below a **Slack comment** label and the investigation replaces Slack's generated title
+with a specific description of the job. A title created or edited by you is never replaced without
+confirmation, and labels remain suggestions you apply.
 
 The run cannot edit, stage, or commit anything. One investigation runs at a time and a second
 queues behind it. You will see the live transcript in the issue's investigation panel.
@@ -221,6 +251,12 @@ generation model, and changing it here does not change that one.
 Coding agents get an issues toolkit automatically, whichever provider you use. They can search and
 read issues, create and update them, comment, delete, and restore, and link the thread they are
 working in to an issue.
+
+Issue reads include every image attachment in the issue-level attachment list and on the comment
+that owns it, together with that comment's body, author, and timestamp. Pathway sends a bounded set
+of those images directly with the issue read so the agent can inspect them visually. If an issue has
+more images than fit safely in that response, the agent can read any remaining image individually
+with its attachment id. Issue attachments are images only.
 
 Agent writes are not gated behind an approval, so treat them like your own: deletes are soft and
 reversible with **Restore**, and every write is attributed in the activity feed with the provider

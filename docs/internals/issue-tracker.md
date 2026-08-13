@@ -243,7 +243,9 @@ The registry uses `DO NOTHING` on conflict. The intake ledger's processed-messag
   gets its confirmation reply.
 - **Unbounded map.** The poller's `issueStates` gains an entry per issue seen on the stream and
   never evicts.
-- **MCP coverage.** The issues toolkit ships 8 tools ending at `issues_link_thread`. There is no
+- **MCP coverage.** The issues toolkit includes attributed attachment reads through `issues_get`
+  and `issues_get_attachment`, plus screenshot and recording evidence comments through
+  `issues_comment_evidence`. There is no
   `triage_accept` / `triage_reject`, so agents can write issues but cannot work the triage queue.
 - **Test composition.** `server.test.ts` still composes `SlackIntakeEngine.layerStub`; the real
   graph typechecks and is acyclic, but `SlackApiClient.layer` plus `forkParked` are never booted

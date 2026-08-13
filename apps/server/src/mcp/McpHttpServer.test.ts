@@ -15,15 +15,18 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpServerResponse } from "effect/unstable/http";
 
+import * as ServerConfig from "../config.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { PATHWAY_MCP_TOOL_NAMES } from "./PathwayMcpToolCatalog.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import type { IssuesMcpDetail, IssuesMcpGetAttachmentResult } from "./toolkits/issues/tools.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -142,6 +145,144 @@ it("normalizes empty successful notification responses to accepted", () => {
   );
   expect(resultResponse.status).toBe(200);
 });
+
+it.effect(
+  "returns issue images inline and describes video evidence without loading it inline",
+  () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const attachmentId = "iss_issue-1-00000000-0000-4000-8000-000000000001";
+      const missingAttachmentId = "iss_issue-1-00000000-0000-4000-8000-000000000002";
+      const imageBytes = new TextEncoder().encode("issue-image");
+      const videoAttachmentId = "iss_issue-1-00000000-0000-4000-8000-000000000003";
+      const videoBytes = new TextEncoder().encode("issue-video");
+      yield* fileSystem.writeFile(`${config.attachmentsDir}/${attachmentId}.png`, imageBytes);
+      yield* fileSystem.writeFile(`${config.attachmentsDir}/${videoAttachmentId}.webm`, videoBytes);
+
+      const comments = [
+        {
+          author: "user",
+          body: "The toolbar is clipped on mobile.",
+          attachmentIds: [attachmentId, missingAttachmentId],
+          createdAt: "2026-08-13T00:00:00.000Z",
+          editedAt: null,
+        },
+      ];
+      const attachments = [attachmentId, missingAttachmentId].map((id) => ({
+        attachmentId: id,
+        commentNumber: 1,
+        author: "user",
+        commentBody: comments[0]!.body,
+        commentCreatedAt: comments[0]!.createdAt,
+      }));
+      const detail: IssuesMcpDetail = {
+        key: "ISS-1",
+        title: "Mobile toolbar clipping",
+        description: "The action bar leaves the viewport.",
+        status: "Todo",
+        statusCategory: "unstarted",
+        priority: "high",
+        assignee: null,
+        project: "Pathway",
+        milestone: null,
+        cycle: null,
+        labels: ["bug"],
+        dueDate: null,
+        triage: false,
+        parentKey: null,
+        subIssueKeys: [],
+        todos: [],
+        relations: [],
+        comments,
+        attachments,
+        threads: [],
+        createdAt: "2026-08-13T00:00:00.000Z",
+        updatedAt: "2026-08-13T00:00:00.000Z",
+        deletedAt: null,
+      };
+
+      const result = yield* McpHttpServer.issueDetailCallToolResult(detail);
+      expect(result.isError).toBe(false);
+      expect(result.structuredContent).toEqual({
+        ...detail,
+        attachments: [
+          {
+            ...attachments[0],
+            kind: "image",
+            mimeType: "image/png",
+            sizeBytes: imageBytes.byteLength,
+          },
+          attachments[1],
+        ],
+      });
+      expect(result.content.find((content) => content.type === "image")).toEqual({
+        type: "image",
+        data: Buffer.from(imageBytes).toString("base64"),
+        mimeType: "image/png",
+      });
+      expect(
+        result.content.some(
+          (content) =>
+            content.type === "text" &&
+            content.text.includes("comment 1 by user") &&
+            content.text.includes(comments[0]!.body),
+        ),
+      ).toBe(true);
+      expect(
+        result.content.some(
+          (content) =>
+            content.type === "text" && content.text.includes("1 issue attachment was not included"),
+        ),
+      ).toBe(true);
+
+      const attachmentResult: IssuesMcpGetAttachmentResult = {
+        key: detail.key,
+        attachment: attachments[0]!,
+      };
+      const single = yield* McpHttpServer.issueAttachmentCallToolResult(attachmentResult);
+      expect(single.isError).toBe(false);
+      expect(single.content.at(-1)).toEqual({
+        type: "image",
+        data: Buffer.from(imageBytes).toString("base64"),
+        mimeType: "image/png",
+      });
+
+      const video = yield* McpHttpServer.issueAttachmentCallToolResult({
+        key: detail.key,
+        attachment: { ...attachments[0]!, attachmentId: videoAttachmentId },
+      });
+      expect(video.isError).toBe(false);
+      expect(video.structuredContent).toMatchObject({
+        attachment: {
+          attachmentId: videoAttachmentId,
+          kind: "video",
+          mimeType: "video/webm",
+          sizeBytes: videoBytes.byteLength,
+        },
+      });
+      expect(video.content.some((content) => content.type === "image")).toBe(false);
+      expect(
+        video.content.some(
+          (content) =>
+            content.type === "text" && content.text.includes("playable from the Pathway"),
+        ),
+      ).toBe(true);
+
+      const missing = yield* McpHttpServer.issueAttachmentCallToolResult({
+        key: detail.key,
+        attachment: attachments[1]!,
+      });
+      expect(missing.isError).toBe(true);
+      expect(missing.content.some((content) => content.type === "image")).toBe(false);
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-issue-images-test-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+);
 
 it.effect("serves discover and all preview tools through the v2 client", () =>
   Effect.scoped(
@@ -272,12 +413,14 @@ it.effect("serves every production Pathway toolkit through one endpoint", () =>
       const actual = listed.tools.map(({ name }) => name).sort();
       const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
 
-      expect(expected).toHaveLength(43);
+      expect(expected).toHaveLength(45);
       expect(new Set(expected).size).toBe(expected.length);
       expect(actual).toEqual(expected);
       expect(actual).toContain("issues_get");
+      expect(actual).toContain("issues_get_attachment");
       expect(actual).toContain("issues_update");
       expect(actual).toContain("issues_comment");
+      expect(actual).toContain("issues_comment_evidence");
     }),
   ),
 );
@@ -382,6 +525,7 @@ it.effect("serves issue tools through Codex's legacy MCP handshake", () =>
       expect(toolNames).toContain("issues_get");
       expect(toolNames).toContain("issues_update");
       expect(toolNames).toContain("issues_comment");
+      expect(toolNames).toContain("issues_comment_evidence");
     }),
   ),
 );

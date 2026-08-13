@@ -51,12 +51,21 @@ export function PendingIssueImageAttachment({
   );
 }
 
+export interface IssueImageAttachmentDraftController {
+  readonly attachments: ReadonlyArray<IssueCommentAttachmentDraft>;
+  readonly addFiles: (files: ReadonlyArray<File>) => void;
+  readonly removeAttachment: (draftId: string) => void;
+  readonly clearAttachments: () => void;
+}
+
 /**
  * Uploads issue-owned images and owns their local previews until a comment claims their ids.
  * Keeping this in one hook means the description shelf and comment composer share compression,
  * limits, error handling, cleanup, and the same remote-safe attachment namespace.
  */
-export function useIssueImageAttachmentDrafts(issueId: IssueId) {
+export function useIssueImageAttachmentDrafts(
+  issueId: IssueId,
+): IssueImageAttachmentDraftController {
   const [attachments, setAttachments] = useState<ReadonlyArray<IssueCommentAttachmentDraft>>([]);
   const uploadAttachment = useUploadIssueCommentAttachment();
   const attachmentsRef = useRef(attachments);

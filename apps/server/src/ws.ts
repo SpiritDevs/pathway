@@ -2360,6 +2360,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(ISSUES_WS_METHODS.getThreadLinks, issueTracker.getThreadLinks(input), {
             "rpc.aggregate": "issues",
           }),
+        [ISSUES_WS_METHODS.getIssueLinksForThread]: (input) =>
+          observeRpcEffect(
+            ISSUES_WS_METHODS.getIssueLinksForThread,
+            issueTracker.getIssueLinksForThread(input),
+            { "rpc.aggregate": "issues" },
+          ),
         [ISSUES_WS_METHODS.slackSetToken]: (input) =>
           observeRpcEffect(ISSUES_WS_METHODS.slackSetToken, issueTracker.slackSetToken(input), {
             "rpc.aggregate": "issues",

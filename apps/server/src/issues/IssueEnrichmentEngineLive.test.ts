@@ -278,24 +278,27 @@ describe("IssueEnrichmentEngineLive", () => {
       assert.strictEqual(finished.transcript, "reading files\nthinking\n");
 
       const updated = yield* issueById(tracker, issue.id);
-      assert.strictEqual(updated.description, "Body.");
-      // Suggestions are suggestions: the run applied neither the label nor the priority.
+      assert.strictEqual(updated.description, `Body.\n\n${ANSWER.summary}`);
+      // Labels remain suggestions, while the investigation's priority is applied automatically.
       assert.deepStrictEqual(updated.labelIds, []);
-      assert.strictEqual(updated.priority, "none");
+      assert.strictEqual(updated.priority, "high");
 
       const detail = yield* tracker.getDetail({ issueId: issue.id });
       assert.strictEqual(detail.comments.length, 1);
       assert.include(detail.comments[0]?.body ?? "", "- `apps/server/src/ws.ts` — Owns reconnect");
-      assert.include(detail.comments[0]?.body ?? "", "**Suggested** (not applied)");
+      assert.include(detail.comments[0]?.body ?? "", "**Suggested**");
       assert.deepStrictEqual(detail.comments[0]?.author, {
         kind: "agent",
         provider: ProviderDriverKind.make("codex"),
       });
 
-      // A completed investigation no longer creates a noisy description edit in Activity.
+      // The agent-authored description edit makes the durable summary visible in Details.
       const { events } = yield* tracker.getEvents({ issueId: issue.id });
       const descriptionChange = events.find((event) => event.field === "description");
-      assert.isUndefined(descriptionChange);
+      assert.deepStrictEqual(descriptionChange?.actor, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   issueAttachmentComment,
   issueAttachmentIds,
+  isIssueVideoAttachmentUrl,
   issueCommentAttachmentDataUrlRejection,
   issueCommentAttachmentIds,
   issueCommentAttachmentIntake,
@@ -18,6 +19,15 @@ import {
   issueCommentComposerState,
   type IssueCommentAttachmentDraft,
 } from "./issueCommentAttachments";
+
+it("identifies issue video evidence from signed attachment URLs", () => {
+  expect(
+    isIssueVideoAttachmentUrl("https://pathway.test/api/assets/token/browser-recording-proof.webm"),
+  ).toBe(true);
+  expect(isIssueVideoAttachmentUrl("https://pathway.test/api/assets/token/screenshot.png")).toBe(
+    false,
+  );
+});
 
 const png = { type: "image/png" } as const;
 const text = { type: "text/plain" } as const;

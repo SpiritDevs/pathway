@@ -60,6 +60,7 @@ import {
   type SlackChannelId,
   type SlackChannelWatch,
   type SlackIntakeStatus,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -725,6 +726,38 @@ const issueAgentStateAtom = Atom.make(
 ).pipe(Atom.withLabel("web-issue-agent-state"));
 
 /**
+ * The issue that created each work thread. Manual links remain a detail-sheet concern: the
+ * sidebar code is provenance, matching the thread-details issue panel.
+ */
+export function startWorkIssuesByThread(
+  issuesById: ReadonlyMap<IssueId, Issue>,
+  linksByIssue: ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>>,
+): ReadonlyMap<ThreadId, Issue> {
+  const candidates = new Map<ThreadId, { readonly issue: Issue; readonly createdAt: string }>();
+  for (const [issueId, links] of linksByIssue) {
+    const issue = issuesById.get(issueId);
+    if (issue === undefined) continue;
+    for (const link of links) {
+      if (link.origin !== "start-work") continue;
+      const current = candidates.get(link.threadId);
+      if (
+        current === undefined ||
+        link.createdAt < current.createdAt ||
+        (link.createdAt === current.createdAt && issue.key < current.issue.key)
+      ) {
+        candidates.set(link.threadId, { issue, createdAt: link.createdAt });
+      }
+    }
+  }
+  return new Map([...candidates].map(([threadId, candidate]) => [threadId, candidate.issue]));
+}
+
+const startWorkIssuesByThreadAtom = Atom.make(
+  (get): ReadonlyMap<ThreadId, Issue> =>
+    startWorkIssuesByThread(get(issuesStoreAtom).issuesById, get(issueAgentStateAtom).linksByIssue),
+).pipe(Atom.withLabel("web-start-work-issues-by-thread"));
+
+/**
  * The issues with an investigation in flight, for the marker on a list row or a board card. One
  * subscription for the whole list rather than one per row, and the set only changes identity when
  * its membership does.
@@ -1358,6 +1391,13 @@ const issueThreadLinksQuery = createEnvironmentRpcQueryAtomFamily(connectionAtom
   idleTtlMs: 60_000,
 });
 
+const issueLinksForThreadQuery = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:issues:links-for-thread",
+  tag: ISSUES_WS_METHODS.getIssueLinksForThread,
+  staleTimeMs: 5_000,
+  idleTtlMs: 60_000,
+});
+
 const EMPTY_ISSUE_EVENTS: ReadonlyArray<IssueEvent> = Object.freeze([]);
 const EMPTY_ISSUE_COMMENTS: ReadonlyArray<IssueComment> = Object.freeze([]);
 
@@ -1503,9 +1543,68 @@ export function useIssueThreadLinks(issueId: IssueId | null): IssueThreadLinksVi
   };
 }
 
+/**
+ * Reconciles the persisted thread-side read with whole-list stream patches from the issue side.
+ * A patch replaces that issue's answer outright, which also makes an unlink disappear immediately.
+ */
+export function mergeIssueLinksForThread(
+  persisted: ReadonlyArray<IssueThreadLink>,
+  patchesByIssue: ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>>,
+  threadId: ThreadId,
+): ReadonlyArray<IssueThreadLink> {
+  const byIssue = new Map(persisted.map((link) => [link.issueId, link]));
+  for (const [issueId, links] of patchesByIssue) {
+    const link = links.find((candidate) => candidate.threadId === threadId);
+    if (link === undefined) byIssue.delete(issueId);
+    else byIssue.set(issueId, link);
+  }
+  return [...byIssue.values()].sort(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.issueId.localeCompare(right.issueId),
+  );
+}
+
+export interface IssueLinksForThreadView {
+  readonly links: ReadonlyArray<IssueThreadLink>;
+  readonly isPending: boolean;
+  readonly error: string | null;
+  readonly refresh: () => void;
+}
+
+/** Persisted and live issue links for one thread, read from the primary issue-tracker environment. */
+export function useIssueLinksForThread(
+  threadId: ThreadId | null,
+  enabled = true,
+): IssueLinksForThreadView {
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const query = useEnvironmentQuery(
+    environmentId === null || threadId === null || !enabled
+      ? null
+      : issueLinksForThreadQuery({ environmentId, input: { threadId } }),
+  );
+  const patchesByIssue = useAtomValue(issueAgentStateAtom).linksByIssue;
+  const links = useMemo(
+    () =>
+      threadId === null
+        ? EMPTY_THREAD_LINKS
+        : mergeIssueLinksForThread(
+            query.data?.links ?? EMPTY_THREAD_LINKS,
+            patchesByIssue,
+            threadId,
+          ),
+    [patchesByIssue, query.data, threadId],
+  );
+  return { links, isPending: query.isPending, error: query.error, refresh: query.refresh };
+}
+
 /** For the list and the board: one subscription, membership-stable, no per-row reads. */
 export function useInvestigatingIssueIds(): ReadonlySet<IssueId> {
   return useAtomValue(investigatingIssueIdsAtom);
+}
+
+/** One subscription for the whole sidebar; avoids a thread-link request per rendered thread. */
+export function useStartWorkIssuesByThread(): ReadonlyMap<ThreadId, Issue> {
+  return useAtomValue(startWorkIssuesByThreadAtom);
 }
 
 /** Runs observed on this connection, used to avoid offering a duplicate investigation by default. */

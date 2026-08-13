@@ -51,6 +51,14 @@ describe("resolveT3McpToolPresentation", () => {
       displayName: "Read a Pathway issue",
       logo: "pathway",
     });
+    expect(resolveT3McpToolPresentation("mcp__pathway__issues_get_attachment")).toEqual({
+      displayName: "Read a Pathway issue attachment",
+      logo: "pathway",
+    });
+    expect(resolveT3McpToolPresentation("mcp__pathway__issues_comment_evidence")).toEqual({
+      displayName: "Attach browser evidence to a Pathway issue",
+      logo: "pathway",
+    });
     expect(resolveT3McpToolPresentation("pathway.email_latest_code")).toEqual({
       displayName: "Get latest email code",
       logo: "pathway",

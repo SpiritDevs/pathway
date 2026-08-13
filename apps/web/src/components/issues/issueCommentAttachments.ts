@@ -148,6 +148,15 @@ export function issueAttachmentIds(
   return attachmentIds;
 }
 
+/** Video evidence stays reviewable on the issue but cannot ride on an image-only provider turn. */
+export function isIssueVideoAttachmentUrl(url: string): boolean {
+  try {
+    return /\.(?:mp4|webm)$/i.test(decodeURIComponent(new URL(url).pathname));
+  } catch {
+    return false;
+  }
+}
+
 /** The visible Activity comment that owns images added from the description attachment shelf. */
 export function issueAttachmentComment(count: number): string {
   return count === 1 ? "Added an image to this issue." : `Added ${count} images to this issue.`;

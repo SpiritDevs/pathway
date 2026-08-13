@@ -1,6 +1,7 @@
 import { IssueThreadLink } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
@@ -56,6 +57,17 @@ const makeIssueThreadLinkRepository = Effect.gen(function* () {
       `,
   });
 
+  const listAllIssueThreadLinkRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: IssueThreadLink,
+    execute: () =>
+      sql`
+        SELECT ${linkColumns}
+        FROM issue_thread_links
+        ORDER BY issue_id ASC, created_at ASC, thread_id ASC
+      `,
+  });
+
   const listIssueThreadLinkRowsByIssue = SqlSchema.findAll({
     Request: ListIssueThreadLinksByIssueInput,
     Result: IssueThreadLink,
@@ -100,6 +112,16 @@ const makeIssueThreadLinkRepository = Effect.gen(function* () {
       ),
     );
 
+  const listAll: IssueThreadLinkRepositoryShape["listAll"] = () =>
+    listAllIssueThreadLinkRows().pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "IssueThreadLinkRepository.listAll:query",
+          "IssueThreadLinkRepository.listAll:decodeRows",
+        ),
+      ),
+    );
+
   const listByIssue: IssueThreadLinkRepositoryShape["listByIssue"] = (input) =>
     listIssueThreadLinkRowsByIssue(input).pipe(
       Effect.mapError(
@@ -123,6 +145,7 @@ const makeIssueThreadLinkRepository = Effect.gen(function* () {
   return {
     link,
     unlink,
+    listAll,
     listByIssue,
     listByThread,
   } satisfies IssueThreadLinkRepositoryShape;

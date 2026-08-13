@@ -3,6 +3,9 @@
 Open the thread details menu in a thread header to see workspace actions and live resources for
 that thread's environment.
 
+When a thread was started from an issue, the menu also shows the issue key, title, status, priority,
+and due date. Select the issue row to open its full detail sheet.
+
 When local development servers are listening, the **Development environments** section shows their
 process names and localhost ports. Expand **Local servers**, then choose a server to open it in
 Pathway's browser panel. Hover a server to open it, copy its URL, or stop its owning process. Stop is

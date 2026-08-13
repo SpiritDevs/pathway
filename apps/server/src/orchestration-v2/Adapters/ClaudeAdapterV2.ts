@@ -730,6 +730,7 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "preview_wait_for",
   "issues_list",
   "issues_get",
+  "issues_get_attachment",
   "orchestrator_capabilities",
   "list_scheduled_tasks",
   "t3_thread_list",

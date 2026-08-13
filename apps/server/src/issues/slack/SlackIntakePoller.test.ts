@@ -547,6 +547,7 @@ describe("SlackIntakePoller", () => {
           permalink: null,
           authorName: null,
         });
+        assert.strictEqual(issue.description, "**Slack comment:**\n\nthe build is red");
 
         const confirmation = state.posts.at(-1);
         assert.ok(confirmation);

@@ -16,9 +16,11 @@ import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
   buildIssueStartWorkPrompt,
+  buildIssueTalkPrompt,
   issueDetailPath,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
+  issueStartWorkWorkspaceModeLabel,
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
@@ -171,6 +173,10 @@ describe("issueDetailUrl", () => {
 });
 
 describe("resolveIssueStartWorkWorkspacePlan", () => {
+  it("uses the New worktree option label for the selected workspace trigger", () => {
+    expect(issueStartWorkWorkspaceModeLabel("new_worktree")).toBe("New worktree");
+  });
+
   it("starts current-checkout work in a distinct local thread without worktree preparation", () => {
     expect(resolveIssueStartWorkWorkspacePlan("current_checkout", "main")).toEqual({
       envMode: "local",
@@ -259,6 +265,7 @@ describe("buildIssueStartWorkPrompt", () => {
     expect(prompt).toContain("## Description\nIt fails one run in ten.");
     expect(prompt).toContain("Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("`issues_update` and `issues_comment`");
+    expect(prompt).toContain("`issues_comment_evidence`");
     expect(prompt).toContain("do not use Linear or another external issue tracker");
   });
 
@@ -272,6 +279,32 @@ describe("buildIssueStartWorkPrompt", () => {
     expect(prompt).toContain("genuinely finished");
     expect(prompt).toContain("move it to Ready for QA");
     expect(prompt).toContain("starts its configured audits");
+  });
+});
+
+describe("buildIssueTalkPrompt", () => {
+  const base = {
+    issue: issue({ description: "Decide whether retries belong in the client." }),
+    statusName: "Todo",
+    projectTitle: "Pathway",
+    priorityLabel: "Medium",
+    todos: [todo("t1", "Document the chosen retry boundary", 0)],
+    relations: [],
+    issueUrl: "http://localhost:5733/issues?issue=PAT-12",
+    completionStatusName: "Done",
+  };
+
+  it("carries the issue context into a user-led discussion without starting implementation", () => {
+    const prompt = buildIssueTalkPrompt(base);
+
+    expect(prompt).toContain("# PAT-12 — Login test is flaky");
+    expect(prompt).toContain("## Description\nDecide whether retries belong in the client.");
+    expect(prompt).toContain("## Checklist\n- [ ] Document the chosen retry boundary");
+    expect(prompt).toContain("I want to talk through PAT-12");
+    expect(prompt).toContain("`issues_link_thread`");
+    expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
+    expect(prompt).toContain("`issues_update` and `issues_comment`");
+    expect(prompt).not.toContain("move it to Done");
   });
 });
 

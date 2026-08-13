@@ -2,11 +2,13 @@ import type { OrchestrationV2ProjectedTurnItem, VcsStatusResult } from "@t3tools
 import { assert, describe, it } from "vite-plus/test";
 import {
   actionIncludesCommitStep,
+  buildPushRecoveryPrompt,
   buildGitActionProgressStages,
   buildMenuItems,
   canScopeCommitToThread,
   collectThreadTouchedPaths,
   formatGitActionElapsed,
+  isPushCommandFailure,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -127,6 +129,32 @@ describe("git action result toast timing", () => {
       timeout: 0,
       dismissAfterVisibleMs: 10_000,
     });
+  });
+});
+
+describe("push failure recovery", () => {
+  it("recognizes failures raised by the current-branch push operations", () => {
+    assert.isTrue(
+      isPushCommandFailure({
+        _tag: "GitCommandError",
+        operation: "GitVcsDriver.pushCurrentBranch.pushUpstream",
+      }),
+    );
+    assert.isFalse(
+      isPushCommandFailure({
+        _tag: "GitCommandError",
+        operation: "GitVcsDriver.commit.commit",
+      }),
+    );
+    assert.isFalse(isPushCommandFailure(new Error("push failed")));
+  });
+
+  it("asks the agent to preserve work, verify, and avoid force pushing", () => {
+    const prompt = buildPushRecoveryPrompt();
+
+    assert.include(prompt, "preserving unrelated local work");
+    assert.include(prompt, "run the relevant focused checks");
+    assert.include(prompt, "Do not force-push");
   });
 });
 

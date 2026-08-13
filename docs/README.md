@@ -7,7 +7,7 @@
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
 - [Issues](./user/issues.md)
-- [Editing your latest message](./user/editing-messages.md)
+- [Sending and editing messages](./user/editing-messages.md)
 - [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)

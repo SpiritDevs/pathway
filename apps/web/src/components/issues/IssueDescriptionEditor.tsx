@@ -226,9 +226,11 @@ function ExternalDescriptionValuePlugin({
 export function IssueDescriptionEditor({
   value,
   onCommit,
+  onPasteImages,
 }: {
   value: string;
   onCommit: (next: string) => void;
+  onPasteImages: (files: ReadonlyArray<File>) => void;
 }) {
   const initialValueRef = useRef(value);
   const draftRef = useRef(value);
@@ -295,6 +297,14 @@ export function IssueDescriptionEditor({
               onFocus={() => {
                 focusedRef.current = true;
                 setFocused(true);
+              }}
+              onPaste={(event) => {
+                const images = [...event.clipboardData.files].filter((file) =>
+                  file.type.startsWith("image/"),
+                );
+                if (images.length === 0) return;
+                event.preventDefault();
+                onPasteImages(images);
               }}
             />
           }

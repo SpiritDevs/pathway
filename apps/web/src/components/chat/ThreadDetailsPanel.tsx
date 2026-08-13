@@ -25,6 +25,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { cn } from "../../lib/utils";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { ThreadIssuePanel } from "./ThreadIssuePanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import {
   EnvironmentProviderUsage,
@@ -68,6 +69,7 @@ export interface ThreadDetailsPanelProps {
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
   onHandoff?: () => void;
+  onRecoverPushFailure?: (prompt: string) => Promise<boolean>;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
   versionMismatch: VersionMismatchIssue | null;
@@ -221,6 +223,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </div>
         </section>
 
+        {!props.draftId ? (
+          <ThreadIssuePanel threadId={props.threadId} enabled={props.resourcesEnabled} />
+        ) : null}
+
         {props.activeProjectScripts ? (
           <section
             aria-labelledby="thread-details-actions-heading"
@@ -295,6 +301,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   {...(props.draftId ? { draftId: props.draftId } : {})}
                   {...(props.onOpenChanges ? { onOpenChanges: props.onOpenChanges } : {})}
                   {...(props.onHandoff ? { onHandoff: props.onHandoff } : {})}
+                  {...(props.onRecoverPushFailure
+                    ? { onRecoverPushFailure: props.onRecoverPushFailure }
+                    : {})}
                 />
               ) : null}
             </div>

@@ -114,6 +114,13 @@ describe("attachmentStore", () => {
         attachmentId,
       });
       expect(resolved).toBe(pngPath);
+
+      const videoAttachmentId = "iss_issue-1-00000000-0000-4000-8000-000000000001";
+      const webmPath = NodePath.join(attachmentsDir, `${videoAttachmentId}.webm`);
+      NodeFS.writeFileSync(webmPath, Buffer.from("video"));
+      expect(resolveAttachmentPathById({ attachmentsDir, attachmentId: videoAttachmentId })).toBe(
+        webmPath,
+      );
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
