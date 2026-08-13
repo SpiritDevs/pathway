@@ -10,8 +10,17 @@
  */
 import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@t3tools/contracts";
 import { BarChart3Icon, MailIcon, MailOpenIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
+import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import {
@@ -41,6 +50,13 @@ import {
   type EmailSearchPatch,
 } from "./emailView.logic";
 
+const EMAIL_MESSAGE_LIST_DEFAULT_WIDTH = 352;
+const EMAIL_MESSAGE_LIST_MIN_WIDTH = 240;
+const EMAIL_MESSAGE_LIST_MAX_WIDTH = 640;
+const EMAIL_READING_PANE_MIN_WIDTH = 320;
+const EMAIL_MESSAGE_LIST_WIDTH_STORAGE_KEY = "pathway:email-message-list-width";
+const EMAIL_MESSAGE_LIST_KEYBOARD_STEP = 24;
+
 export function EmailView({
   search,
   onSearch,
@@ -53,6 +69,37 @@ export function EmailView({
   const projects = useProjects();
   const markRead = useMarkEmailRead();
   const markUnread = useMarkEmailUnread();
+  const splitPaneRef = useRef<HTMLDivElement | null>(null);
+  const [messageListMaxWidth, setMessageListMaxWidth] = useState(EMAIL_MESSAGE_LIST_MAX_WIDTH);
+
+  useEffect(() => {
+    const splitPane = splitPaneRef.current;
+    if (splitPane === null) return;
+
+    const updateMaxWidth = () => {
+      setMessageListMaxWidth(
+        Math.max(
+          EMAIL_MESSAGE_LIST_MIN_WIDTH,
+          Math.min(
+            EMAIL_MESSAGE_LIST_MAX_WIDTH,
+            splitPane.clientWidth - EMAIL_READING_PANE_MIN_WIDTH,
+          ),
+        ),
+      );
+    };
+    const observer = new ResizeObserver(updateMaxWidth);
+    observer.observe(splitPane);
+    updateMaxWidth();
+    return () => observer.disconnect();
+  }, []);
+
+  const messageListWidth = useResizableWidth({
+    storageKey: EMAIL_MESSAGE_LIST_WIDTH_STORAGE_KEY,
+    defaultWidth: EMAIL_MESSAGE_LIST_DEFAULT_WIDTH,
+    minWidth: EMAIL_MESSAGE_LIST_MIN_WIDTH,
+    maxWidth: messageListMaxWidth,
+    edge: "right",
+  });
 
   const selectedId = (search.message ?? null) as EmailMessageId | null;
   const detail = useEmailMessage(selectedId);
@@ -108,8 +155,11 @@ export function EmailView({
 
   return (
     <EmailShell inboxName={inboxName}>
-      <div className="flex min-h-0 flex-1">
-        <div className="flex w-[22rem] min-w-0 shrink-0 flex-col border-e border-border/50">
+      <div className="flex min-h-0 flex-1" ref={splitPaneRef}>
+        <div
+          className="relative flex min-w-0 shrink-0 flex-col border-e border-border/50"
+          style={{ width: messageListWidth.width }}
+        >
           <div className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5">
             <span className="truncate text-xs font-medium text-foreground">{inboxName}</span>
             <span className="text-xs tabular-nums text-muted-foreground/70">
@@ -142,6 +192,13 @@ export function EmailView({
               />
             </div>
           )}
+
+          <EmailMessageListResizeHandle
+            maxWidth={messageListMaxWidth}
+            onResize={messageListWidth.resizeTo}
+            pointerHandlers={messageListWidth.handlers}
+            width={messageListWidth.width}
+          />
         </div>
 
         <EmailReadingPane
@@ -162,6 +219,56 @@ export function EmailView({
         />
       </div>
     </EmailShell>
+  );
+}
+
+function EmailMessageListResizeHandle({
+  width,
+  maxWidth,
+  onResize,
+  pointerHandlers,
+}: {
+  width: number;
+  maxWidth: number;
+  onResize: (width: number) => void;
+  pointerHandlers: ReturnType<typeof useResizableWidth>["handlers"];
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const nextWidth =
+      event.key === "ArrowLeft"
+        ? width - EMAIL_MESSAGE_LIST_KEYBOARD_STEP
+        : event.key === "ArrowRight"
+          ? width + EMAIL_MESSAGE_LIST_KEYBOARD_STEP
+          : event.key === "Home"
+            ? EMAIL_MESSAGE_LIST_MIN_WIDTH
+            : event.key === "End"
+              ? maxWidth
+              : null;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    onResize(nextWidth);
+  };
+
+  return (
+    <div
+      aria-label="Resize message list"
+      aria-orientation="vertical"
+      aria-valuemax={maxWidth}
+      aria-valuemin={EMAIL_MESSAGE_LIST_MIN_WIDTH}
+      aria-valuenow={width}
+      className="group absolute inset-y-0 -end-1 z-20 w-2 cursor-col-resize touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      onDoubleClick={() => onResize(EMAIL_MESSAGE_LIST_DEFAULT_WIDTH)}
+      onKeyDown={onKeyDown}
+      role="separator"
+      tabIndex={0}
+      title="Drag to resize the message list"
+      {...pointerHandlers}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 start-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border group-active:bg-primary/60"
+      />
+    </div>
   );
 }
 
