@@ -128,6 +128,11 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.mark-unread":
     case "thread.metadata.update":
     case "thread.title.regeneration.complete":
+    case "thread.browser-takeover.request":
+    case "thread.browser-takeover.transition":
+    case "thread.browser-takeover.proceed":
+    case "thread.browser-takeover.release":
+    case "thread.preview-activity.record":
     case "thread.runtime-mode.set":
     case "thread.interaction-mode.set":
     case "thread.model-selection.set":

@@ -131,6 +131,10 @@ import {
   OrchestrationV2ProductionLayerLive,
   ProjectSetupScriptRunnerLayerLive,
 } from "./orchestration-v2/runtimeLayer.ts";
+import {
+  activitySinkLayer as browserTakeoverActivitySinkLayer,
+  registerPreviewAutomationFence,
+} from "./orchestration-v2/BrowserTakeoverService.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import {
@@ -561,6 +565,17 @@ const PullRequestServiceLive = PullRequestService.layer.pipe(
   Layer.provide(VcsProcess.layer),
 );
 
+// The broker and orchestration are mutually dependent (the broker publishes
+// preview activity into orchestration; orchestration fences the broker during a
+// browser takeover), which no layer edge can express. So the broker is built
+// with the activity sink provided, and the fence it exposes is registered into
+// the orchestration-side registry as the layer comes up.
+const previewAutomationBrokerLayer = Layer.effectDiscard(registerPreviewAutomationFence).pipe(
+  Layer.provideMerge(
+    PreviewAutomationBroker.layer.pipe(Layer.provide(browserTakeoverActivitySinkLayer)),
+  ),
+);
+
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
@@ -584,7 +599,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(previewAutomationBrokerLayer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),

@@ -26,6 +26,7 @@ import * as ServerConfig from "./config.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { BrowserTakeoverService } from "./orchestration-v2/BrowserTakeoverService.ts";
 import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
@@ -363,6 +364,7 @@ export const make = (options?: StartupOptions) =>
     const keybindings = yield* Keybindings.Keybindings;
     const projectionMaintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
     const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
+    const browserTakeover = yield* BrowserTakeoverService;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
     const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -477,6 +479,24 @@ export const make = (options?: StartupOptions) =>
         ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
       });
       yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
+
+      // Runs are settled by now, so a takeover marker still mid-flight belongs
+      // to the previous process: fail what cannot survive a restart and re-arm
+      // the fence for the ones the user is still holding. Never fatal to
+      // startup — a stuck marker must not keep the server from coming up.
+      yield* runStartupPhase(
+        "orchestration-v2.browser-takeover.recovery",
+        browserTakeover.recover.pipe(
+          Effect.tap((summary) =>
+            Effect.logInfo("V2 browser takeover recovery completed", summary),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("V2 browser takeover recovery failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      );
 
       // Compaction is maintenance-only and can scan a large event history, so
       // it runs off the startup critical path in small yielding delete batches.

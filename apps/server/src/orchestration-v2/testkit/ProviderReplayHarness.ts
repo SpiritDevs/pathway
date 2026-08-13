@@ -42,6 +42,7 @@ import { layer as providerTurnControlServiceLayer } from "../ProviderTurnControl
 import { layer as providerTurnStartServiceLayer } from "../ProviderTurnStartService.ts";
 import { layer as runExecutionServiceLayer } from "../RunExecutionService.ts";
 import { layer as runFinalizationServiceLayer } from "../RunFinalizationService.ts";
+import { BrowserTakeoverService } from "../BrowserTakeoverService.ts";
 import { ThreadTitleRegenerationService } from "../ThreadTitleRegenerationService.ts";
 import {
   layer as runtimePolicyLayer,
@@ -362,6 +363,15 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ThreadTitleRegenerationService,
     ThreadTitleRegenerationService.of({ execute: () => Effect.void }),
   );
+  const browserTakeoverTestLayer = Layer.succeed(
+    BrowserTakeoverService,
+    BrowserTakeoverService.of({
+      establish: () => Effect.void,
+      proceed: () => Effect.void,
+      release: () => Effect.void,
+      recover: Effect.succeed({ failed: 0, rearmed: 0, completed: 0 }),
+    }),
+  );
   const effectExecutorProvided = effectExecutorLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -372,6 +382,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         providerTurnStartServiceProvided,
         runtimeRequestServiceProvided,
         threadTitleRegenerationTestLayer,
+        browserTakeoverTestLayer,
       ),
     ),
   );

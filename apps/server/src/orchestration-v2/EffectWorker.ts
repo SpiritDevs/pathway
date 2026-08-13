@@ -24,6 +24,7 @@ import {
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
   type OrchestrationEffectV2,
 } from "./EffectOutbox.ts";
+import { BrowserTakeoverService } from "./BrowserTakeoverService.ts";
 import { CheckpointRollbackServiceV2 } from "./CheckpointRollbackService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
@@ -85,6 +86,7 @@ export const executorLayer: Layer.Layer<
   | ProviderTurnStartServiceV2
   | RuntimeRequestServiceV2
   | ThreadTitleRegenerationService
+  | BrowserTakeoverService
 > = Layer.effect(
   OrchestrationEffectExecutorV2,
   Effect.gen(function* () {
@@ -96,6 +98,7 @@ export const executorLayer: Layer.Layer<
     const providerTurnStart = yield* ProviderTurnStartServiceV2;
     const runtimeRequests = yield* RuntimeRequestServiceV2;
     const threadTitleRegeneration = yield* ThreadTitleRegenerationService;
+    const browserTakeover = yield* BrowserTakeoverService;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
         switch (effect.request.type) {
@@ -336,6 +339,31 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
+          case "browser-takeover.establish":
+          case "browser-takeover.proceed":
+          case "browser-takeover.release": {
+            const step = {
+              threadId: effect.threadId,
+              takeoverId: effect.request.takeoverId,
+              attemptId: effect.commandId,
+            };
+            const run =
+              effect.request.type === "browser-takeover.establish"
+                ? browserTakeover.establish(step)
+                : effect.request.type === "browser-takeover.proceed"
+                  ? browserTakeover.proceed(step)
+                  : browserTakeover.release(step);
+            return run.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
         }
       },
     });
