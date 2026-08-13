@@ -1,10 +1,17 @@
-import type {
+import { useAtomValue } from "@effect/atom-react";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
   EnvironmentId,
+  type ModelSelection,
   PullRequestAction,
   PullRequestMergeMethod,
   PullRequestRef,
   PullRequestState,
+  type ThreadId,
 } from "@t3tools/contracts";
+import { pullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
 import {
   ArrowDownUpIcon,
   ArrowLeftIcon,
@@ -23,6 +30,7 @@ import {
   HammerIcon,
   MessageCircleQuestionIcon,
   MessageSquareIcon,
+  ScanSearchIcon,
   LinkIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
@@ -41,11 +49,24 @@ import {
 } from "react";
 
 import { useCopyToClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { usePrimarySettings } from "~/hooks/useSettings";
+import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
+import { newMessageId, newThreadId } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
+import { getCustomModelOptionsByInstance } from "~/modelSelection";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  resolveDefaultProviderModelSelection,
+  sortProviderInstanceEntries,
+} from "~/providerInstances";
+import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import { primaryServerProvidersAtom } from "~/state/server";
+import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
@@ -60,6 +81,7 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import {
   Menu,
   MenuItem,
@@ -71,6 +93,8 @@ import {
 } from "../ui/menu";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { PullRequestAgentReviewDialog } from "./PullRequestAgentReviewDialog";
+import { PullRequestReviewingTab } from "./PullRequestReviewingTab";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
@@ -91,6 +115,7 @@ import {
   resolveSelectedMergeMethod,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import { buildPullRequestAgentReviewPrompt } from "./pullRequestAgentReview.logic";
 import { usePullRequestActionRunner, usePullRequestHandoffs } from "./usePullRequestActions";
 import {
   PullRequestActorLabel,
@@ -100,7 +125,7 @@ import {
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 
-type DetailTab = "summary" | "timeline" | "code";
+type DetailTab = "summary" | "timeline" | "code" | "reviewing";
 
 /** Named for the host rather than "externally": the point is where you will land. */
 const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
@@ -114,6 +139,7 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
   { value: "code", label: "Code" },
+  { value: "reviewing", label: "Reviewing" },
 ];
 
 // The diff viewer pulls in its worker pool, so it stays out of the bundle until Code is opened.
@@ -233,6 +259,29 @@ export function PullRequestDetailPanel({
     target: "branch name",
     timeout: 1600,
   });
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [startingReview, setStartingReview] = useState(false);
+  const [launchedReview, setLaunchedReview] = useState<{
+    readonly pullRequestKey: string;
+    readonly threadId: ThreadId;
+    readonly publishComments: boolean;
+  } | null>(null);
+  const settings = usePrimarySettings();
+  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const projects = useProjects();
+  const threadShells = useThreadShells();
+  const reviewInstanceEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+      ),
+    [serverProviders, settings],
+  );
+  const reviewModelOptionsByInstance = useMemo(
+    () => getCustomModelOptionsByInstance(settings, serverProviders),
+    [serverProviders, settings],
+  );
+  const startReviewTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
 
   // The chunk is fetched as soon as the panel exists rather than waiting for the Code tab to be
   // clicked, so a reader who does click it lands on a chunk already in the module cache.
@@ -271,6 +320,61 @@ export function PullRequestDetailPanel({
           },
     [activity, coreDetail],
   );
+  const reviewProject = useMemo(
+    () =>
+      detail === null
+        ? null
+        : (projects.find(
+            (project) => project.environmentId === environmentId && project.id === detail.projectId,
+          ) ?? null),
+    [detail, environmentId, projects],
+  );
+  const initialReviewModelSelection = useMemo<ModelSelection | null>(
+    () =>
+      resolveDefaultProviderModelSelection(
+        serverProviders,
+        reviewProject?.defaultModelSelection ?? settings.textGenerationModelSelection,
+      ),
+    [reviewProject?.defaultModelSelection, serverProviders, settings.textGenerationModelSelection],
+  );
+  const prepareReviewThread = usePreparePullRequestThreadAction({
+    environmentId,
+    cwd: detail?.workspaceRoot ?? null,
+  });
+  const discoveredReview = useMemo(() => {
+    if (detail === null) return null;
+    const draftTitle = pullRequestReviewThreadTitle({
+      repository: detail.repository,
+      number: detail.number,
+      publishComments: false,
+    });
+    const publishingTitle = pullRequestReviewThreadTitle({
+      repository: detail.repository,
+      number: detail.number,
+      publishComments: true,
+    });
+    return (
+      threadShells
+        .filter(
+          (thread) =>
+            thread.environmentId === environmentId &&
+            thread.projectId === detail.projectId &&
+            thread.deletedAt === null &&
+            (thread.title === draftTitle || thread.title === publishingTitle),
+        )
+        .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+    );
+  }, [detail, environmentId, threadShells]);
+  const activeReview =
+    launchedReview?.pullRequestKey === pullRequestKey
+      ? launchedReview
+      : discoveredReview === null
+        ? null
+        : {
+            pullRequestKey,
+            threadId: discoveredReview.id,
+            publishComments: discoveredReview.title.endsWith(" · publish"),
+          };
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
   const refreshDetail = useCallback(() => {
@@ -305,6 +409,122 @@ export function PullRequestDetailPanel({
     refreshDetail();
     setRefreshToken((token) => token + 1);
   }, [environmentId, invalidate, reference, refreshDetail]);
+  const startAgentReview = useCallback(
+    (input: {
+      readonly modelSelection: ModelSelection;
+      readonly instructions: string;
+      readonly publishComments: boolean;
+    }) => {
+      if (detail === null || startingReview) return;
+      setStartingReview(true);
+      const toastId = toastManager.add({
+        type: "loading",
+        title: "Preparing the pull request review…",
+      });
+      void (async () => {
+        const threadId = newThreadId();
+        try {
+          const prepared = await prepareReviewThread.run({
+            reference: detail.url,
+            mode: "worktree",
+            threadId,
+          });
+          if (prepared._tag === "Failure") {
+            const description =
+              prepareReviewThread.error instanceof Error
+                ? prepareReviewThread.error.message
+                : "The pull request checkout could not be prepared.";
+            toastManager.update(toastId, {
+              type: "error",
+              title: "Could not prepare the review",
+              description,
+            });
+            return;
+          }
+          if (!prepared.value.isOnPullRequestHead) {
+            toastManager.update(toastId, {
+              type: "error",
+              title: "The review checkout is behind the pull request",
+              description:
+                "Local work kept this checkout from moving to the latest commit. Remove or move that work, then start the review again.",
+            });
+            return;
+          }
+
+          const createdAt = new Date().toISOString();
+          const title = pullRequestReviewThreadTitle({
+            repository: detail.repository,
+            number: detail.number,
+            publishComments: input.publishComments,
+          });
+          const started = await startReviewTurn({
+            environmentId,
+            input: {
+              threadId,
+              message: {
+                messageId: newMessageId(),
+                role: "user",
+                text: buildPullRequestAgentReviewPrompt({
+                  number: detail.number,
+                  title: detail.title,
+                  url: detail.url,
+                  repository: detail.repository,
+                  headBranch: detail.headBranch,
+                  baseBranch: detail.baseBranch,
+                  instructions: input.instructions,
+                }),
+                attachments: [],
+              },
+              modelSelection: input.modelSelection,
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              bootstrap: {
+                createThread: {
+                  projectId: detail.projectId,
+                  title,
+                  modelSelection: input.modelSelection,
+                  runtimeMode: DEFAULT_RUNTIME_MODE,
+                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+                  branch: prepared.value.branch,
+                  worktreePath: prepared.value.worktreePath,
+                  createdAt,
+                },
+              },
+              createdAt,
+            },
+          });
+          if (started._tag === "Failure") {
+            const failure = squashAtomCommandFailure(started);
+            toastManager.update(toastId, {
+              type: "error",
+              title: "Could not start the agent review",
+              description:
+                failure instanceof Error ? failure.message : "The agent could not be started.",
+            });
+            return;
+          }
+          setLaunchedReview({ pullRequestKey, threadId, publishComments: input.publishComments });
+          setMountedTabs((previous) => new Set<DetailTab>(previous).add("reviewing"));
+          setTab("reviewing");
+          setReviewDialogOpen(false);
+          toastManager.update(toastId, {
+            type: "success",
+            title: "Agent review started",
+            description: "Follow its progress in Reviewing.",
+          });
+        } catch (error) {
+          toastManager.update(toastId, {
+            type: "error",
+            title: "Could not start the agent review",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          });
+        } finally {
+          setStartingReview(false);
+        }
+      })();
+    },
+    [detail, environmentId, prepareReviewThread, pullRequestKey, startReviewTurn, startingReview],
+  );
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
@@ -420,9 +640,11 @@ export function PullRequestDetailPanel({
   const conflicting = isPullRequestConflicting(detail);
   // A host that cannot produce a patch has no Code tab to open. The tabs themselves stay hidden
   // until the detail arrives, so the loading ghost is the panel's only unfinished UI.
-  const visibleTabs = TABS.filter(
-    (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
-  );
+  const visibleTabs = TABS.filter((item) => {
+    if (item.value === "code") return detail === null || detail.capabilities.diff;
+    if (item.value === "reviewing") return activeReview !== null;
+    return true;
+  });
   // The Code tab can be opened while the detail is still on its way, and the detail may then say
   // this host has no patch to show. The tab goes, so whoever was standing on it is moved back to
   // the summary rather than left looking at a panel that is no longer reachable.
@@ -554,6 +776,19 @@ export function PullRequestDetailPanel({
                       <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
                       <span className="text-xs text-muted-foreground">
                         A walk through the diff and what to read closely.
+                      </span>
+                    </span>
+                  </MenuItem>
+                  <MenuItem disabled={startingReview} onClick={() => setReviewDialogOpen(true)}>
+                    <ScanSearchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>
+                        {activeReview === null
+                          ? "Review with an agent"
+                          : "Start another agent review"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Choose an agent, model, reasoning, and speed.
                       </span>
                     </span>
                   </MenuItem>
@@ -1082,9 +1317,44 @@ export function PullRequestDetailPanel({
                 </Suspense>
               </div>
             ) : null}
+            {mountedTabs.has("reviewing") && activeReview !== null ? (
+              <div className={cn("absolute inset-0", tab !== "reviewing" && "invisible")}>
+                <PullRequestReviewingTab
+                  activityState={
+                    activity !== null ? "ready" : activityError === null ? "pending" : "unavailable"
+                  }
+                  canPublishComments={
+                    detail.capabilities.review.inlineComment &&
+                    detail.capabilities.review.verdicts.includes("comment")
+                  }
+                  codeAvailable={detail.capabilities.diff}
+                  environmentId={environmentId}
+                  onOpenCode={() => setTab("code")}
+                  onPublished={refreshFromHost}
+                  publishComments={activeReview.publishComments}
+                  reference={reference}
+                  reviewThreads={detail.reviewThreads}
+                  threadId={activeReview.threadId}
+                />
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>
+
+      <PullRequestAgentReviewDialog
+        canPublishComments={
+          detail?.capabilities.review.inlineComment === true &&
+          detail.capabilities.review.verdicts.includes("comment")
+        }
+        initialModelSelection={initialReviewModelSelection}
+        instanceEntries={reviewInstanceEntries}
+        modelOptionsByInstance={reviewModelOptionsByInstance}
+        onOpenChange={setReviewDialogOpen}
+        onStart={startAgentReview}
+        open={reviewDialogOpen}
+        starting={startingReview}
+      />
 
       <AlertDialog
         open={confirmAction !== null}

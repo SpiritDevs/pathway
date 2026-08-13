@@ -279,6 +279,12 @@ describe("sidebar thread lineage helpers", () => {
       projectId,
       archivedAt: "2026-01-02T00:00:00.000Z",
     });
+    const pullRequestReview = makeThreadFixture({
+      id: ThreadId.make("thread-pull-request-review"),
+      environmentId,
+      projectId,
+      title: "PR review · coreybaines/pathway#4843 · publish",
+    });
     const otherProject = makeThreadFixture({
       id: ThreadId.make("thread-other-project"),
       environmentId,
@@ -287,7 +293,7 @@ describe("sidebar thread lineage helpers", () => {
 
     expect(
       filterSidebarV2VisibleThreads(
-        [root, subagent, fork, archived, otherProject],
+        [root, subagent, fork, archived, pullRequestReview, otherProject],
         new Set([`${environmentId}:${projectId}`]),
       ).map((thread) => thread.id),
     ).toEqual([parentId, fork.id]);

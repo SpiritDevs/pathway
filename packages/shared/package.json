@@ -31,6 +31,10 @@
       "types": "./src/sourceControl.ts",
       "import": "./src/sourceControl.ts"
     },
+    "./pullRequestReview": {
+      "types": "./src/pullRequestReview.ts",
+      "import": "./src/pullRequestReview.ts"
+    },
     "./logging": {
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"

@@ -46,6 +46,10 @@ Pathway works with the platforms your team already uses:
   leaving the conversation
 - Open the review directly in your browser with one click
 - Check out a teammate's branch to review code locally
+- Choose **Review with an agent** from a pull request's menu to select the agent, model, reasoning,
+  and speed options. The conversation stays in a **Reviewing** tab beside **Code** instead of the
+  thread list. Findings can be published as inline host comments or kept as draft markers for you
+  to inspect and submit from **Code**.
 
 ### Know Your Setup at a Glance
 

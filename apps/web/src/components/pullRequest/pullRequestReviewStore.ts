@@ -12,6 +12,8 @@ import { create } from "zustand";
 export interface PendingReviewComment {
   readonly id: string;
   readonly path: string;
+  /** Previous name for a renamed file; needed by hosts that resolve both sides of a diff. */
+  readonly oldPath?: string;
   /** The line in the file the comment's side names: the new file on the right, the old on the left. */
   readonly line: number;
   readonly side: PullRequestDiffSide;
@@ -53,9 +55,11 @@ export const usePullRequestReviewStore = create<PullRequestReviewStoreState>()((
   drafts: {},
   summaries: {},
   addComment: (key, comment) =>
-    set((state) => ({
-      drafts: { ...state.drafts, [key]: [...(state.drafts[key] ?? EMPTY), comment] },
-    })),
+    set((state) => {
+      const current = state.drafts[key] ?? EMPTY;
+      if (current.some((entry) => entry.id === comment.id)) return state;
+      return { drafts: { ...state.drafts, [key]: [...current, comment] } };
+    }),
   removeComment: (key, commentId) =>
     set((state) => {
       const remaining = (state.drafts[key] ?? EMPTY).filter((entry) => entry.id !== commentId);

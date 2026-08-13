@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { isPullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
 import {
   getThreadSortTimestamp,
   sortThreads,
@@ -102,7 +103,7 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage"> & {
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "title"> & {
     environmentId: string;
     projectId: string;
   },
@@ -111,6 +112,7 @@ export function filterSidebarV2VisibleThreads<
     (thread) =>
       thread.archivedAt === null &&
       !isSidebarSubagentThread(thread) &&
+      !isPullRequestReviewThreadTitle(thread.title) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
@@ -964,7 +966,7 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage" | "title">,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],
@@ -984,7 +986,7 @@ export function sortSidebarV2ProjectGroups<
  */
 export function sortScopedProjectsForSidebar<
   TProject extends ScopedSidebarProject,
-  TThread extends ScopedSidebarThread,
+  TThread extends ScopedSidebarThread & { readonly title: string },
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],
@@ -994,7 +996,7 @@ export function sortScopedProjectsForSidebar<
     `${environmentId}\u0000${projectId}`;
   const threadsByProject = new Map<string, TThread[]>();
   for (const thread of threads) {
-    if (thread.archivedAt !== null) {
+    if (thread.archivedAt !== null || isPullRequestReviewThreadTitle(thread.title)) {
       continue;
     }
     const key = scopedKey(thread.environmentId, thread.projectId);
