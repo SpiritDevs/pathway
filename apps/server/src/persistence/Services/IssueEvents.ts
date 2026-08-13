@@ -17,6 +17,18 @@ export const ListIssueEventsInput = Schema.Struct({ issueId: IssueId });
 export type ListIssueEventsInput = typeof ListIssueEventsInput.Type;
 
 /**
+ * The fields a history reconstruction replays. Narrow on purpose: a description edit is noise to
+ * anything counting issues, and the log holds far more rows of it.
+ */
+export const ISSUE_EVENT_ASSIGNMENT_FIELDS = ["status", "milestone"] as const;
+
+export const ListIssueEventsByFieldInput = Schema.Struct({
+  issueIds: Schema.Array(IssueId),
+  fields: Schema.Array(Schema.String).check(Schema.isMinLength(1)),
+});
+export type ListIssueEventsByFieldInput = typeof ListIssueEventsByFieldInput.Type;
+
+/**
  * IssueEventRepositoryShape - Service API for change log rows.
  */
 export interface IssueEventRepositoryShape {
@@ -39,6 +51,16 @@ export interface IssueEventRepositoryShape {
    */
   readonly listByIssue: (
     input: ListIssueEventsInput,
+  ) => Effect.Effect<ReadonlyArray<IssueEvent>, IssueTrackerRepositoryError>;
+
+  /**
+   * List the named `field_changed` rows for a set of issues at once, oldest first.
+   *
+   * One query rather than one per issue, and covered by `idx_issue_events_issue(issue_id,
+   * created_at)`. An empty `issueIds` answers with nothing without touching the database.
+   */
+  readonly listByIssuesAndFields: (
+    input: ListIssueEventsByFieldInput,
   ) => Effect.Effect<ReadonlyArray<IssueEvent>, IssueTrackerRepositoryError>;
 }
 
