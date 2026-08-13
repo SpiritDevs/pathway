@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ProjectReadFileError,
+  ProjectMutation,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchEntriesError,
@@ -34,6 +35,43 @@ describe("project search inputs", () => {
       useRegex: false,
     });
     expect(decoded.query).toBe(" foo ");
+  });
+});
+
+describe("project mutations", () => {
+  const decodeMutation = Schema.decodeUnknownSync(ProjectMutation);
+
+  it.each(["branding/project icon.png", "branding/project icon.svg"])(
+    "accepts a supported workspace-relative favicon path: %s",
+    (faviconPath) => {
+      expect(
+        decodeMutation({
+          type: "project.update",
+          commandId: "command-project-icon",
+          projectId: "project-1",
+          faviconPath,
+        }),
+      ).toMatchObject({ faviconPath });
+    },
+  );
+
+  it("accepts clearing the explicit favicon and rejects unsupported files", () => {
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-icon-reset",
+        projectId: "project-1",
+        faviconPath: null,
+      }),
+    ).toMatchObject({ faviconPath: null });
+    expect(() =>
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-icon-invalid",
+        projectId: "project-1",
+        faviconPath: "branding/project icon.txt",
+      }),
+    ).toThrow();
   });
 });
 

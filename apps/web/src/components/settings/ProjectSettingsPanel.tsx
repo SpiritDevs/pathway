@@ -303,7 +303,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
   return <ProjectDetail key={selected.projectKey} group={selected} />;
 }
 
-function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
+export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
   // Captured mail belongs to the machine the listener runs on, so the capture section follows this
@@ -1214,7 +1214,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           cwd={representative.workspaceRoot}
           environmentId={representative.environmentId}
           onOpenChange={setFaviconPickerOpen}
-          onSelect={(path) => void setFaviconPath(path)}
+          onSelect={setFaviconPath}
           open={faviconPickerOpen}
           projectName={group.displayName}
         />

@@ -997,6 +997,7 @@ const makeWsRpcLayer = (
               ...(mutation.defaultModelSelection === undefined
                 ? {}
                 : { defaultModelSelection: mutation.defaultModelSelection }),
+              ...(mutation.faviconPath === undefined ? {} : { faviconPath: mutation.faviconPath }),
               ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
             });
           case "project.delete": {
