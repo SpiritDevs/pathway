@@ -404,3 +404,123 @@ it("atomically resolves a failed native fork as portable context when startup co
     expect(startedMessage).toContain("Remember the portable source fact.");
   }).pipe(Effect.provide(testLayer), Effect.runPromise);
 });
+
+it("seeds related child routing only from routable subagents", async () => {
+  const threadId = ThreadId.make("thread_provider_turn_start_related_seed");
+  const runId = RunId.make("run_provider_turn_start_related_seed");
+  const attemptId = RunAttemptId.make("attempt_provider_turn_start_related_seed");
+  const rootNodeId = NodeId.make("node_provider_turn_start_related_seed");
+  const providerThreadId = ProviderThreadId.make("provider_thread_related_seed");
+  const providerSessionId = ProviderSessionId.make("provider_session_related_seed");
+  const messageId = MessageId.make("message_provider_turn_start_related_seed");
+  const checkpointScopeId = CheckpointScopeId.make("checkpoint_scope_related_seed");
+  const providerInstanceId = ProviderInstanceId.make("provider_related_seed");
+  const modelSelection = { instanceId: providerInstanceId, model: "test-model" };
+  const makeSubagent = (key: string, status: string, withChild = true) => ({
+    id: NodeId.make(`node_related_seed_${key}`),
+    threadId,
+    status,
+    childThreadId: withChild ? ThreadId.make(`thread_related_seed_${key}_child`) : null,
+    providerThreadId: withChild
+      ? ProviderThreadId.make(`provider_thread_related_seed_${key}_child`)
+      : null,
+  });
+  const projection = {
+    thread: { id: threadId, modelSelection },
+    runs: [
+      {
+        id: runId,
+        status: "starting",
+        rootNodeId,
+        activeAttemptId: attemptId,
+        providerThreadId,
+        providerInstanceId,
+        userMessageId: messageId,
+        ordinal: 2,
+        modelSelection,
+      },
+    ],
+    nodes: [{ id: rootNodeId, checkpointScopeId }],
+    attempts: [{ id: attemptId }],
+    providerSessions: [],
+    providerThreads: [
+      {
+        id: providerThreadId,
+        providerSessionId,
+        providerInstanceId,
+        nativeThreadRef: null,
+        handoffIds: [],
+        forkedFrom: null,
+      },
+    ],
+    providerTurns: [],
+    messages: [
+      { id: messageId, text: "Resume", attachments: [], createdBy: "user", creationSource: "web" },
+    ],
+    checkpointScopes: [{ id: checkpointScopeId }],
+    contextHandoffs: [],
+    contextTransfers: [],
+    turnItems: [],
+    subagents: [
+      makeSubagent("running", "running"),
+      makeSubagent("completed", "completed"),
+      makeSubagent("interrupted", "interrupted"),
+      makeSubagent("failed", "failed"),
+      makeSubagent("cancelled", "cancelled"),
+      makeSubagent("unlinked", "running", false),
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+  let related:
+    | {
+        readonly relatedThreadIds?: ReadonlyArray<ThreadId>;
+        readonly relatedProviderThreadIds?: ReadonlyArray<ProviderThreadId>;
+      }
+    | undefined;
+  const startRootRun = vi.fn((input: NonNullable<typeof related>) => {
+    related = input;
+    return Effect.void;
+  });
+  const ensureThread = vi.fn(() => Effect.succeed({ ...projection.providerThreads[0] } as never));
+  const testLayer = ProviderTurnStart.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
+        Layer.mock(EventSink.EventSinkV2)({
+          writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] } as never),
+        }),
+        IdAllocator.layer,
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          open: () =>
+            Effect.succeed({
+              driver: ProviderDriverKind.make("codex"),
+              providerSession: { id: providerSessionId, capabilities: CodexProviderCapabilitiesV2 },
+              ensureThread,
+            } as never),
+        }),
+        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
+        Layer.mock(RuntimePolicy.RuntimePolicyV2)({
+          resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
+        }),
+      ),
+    ),
+  );
+
+  await Effect.gen(function* () {
+    yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2).start({ threadId, runId });
+
+    expect(startRootRun).toHaveBeenCalledOnce();
+    // canRouteRelatedSubagent: terminal-at-start (interrupted/failed/cancelled)
+    // subagents must not seed child routing; unlinked rows contribute nothing.
+    expect(related?.relatedThreadIds).toEqual([
+      ThreadId.make("thread_related_seed_running_child"),
+      ThreadId.make("thread_related_seed_completed_child"),
+    ]);
+    expect(related?.relatedProviderThreadIds).toEqual([
+      ProviderThreadId.make("provider_thread_related_seed_running_child"),
+      ProviderThreadId.make("provider_thread_related_seed_completed_child"),
+    ]);
+  }).pipe(Effect.provide(testLayer), Effect.runPromise);
+});

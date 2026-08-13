@@ -409,8 +409,25 @@ export function routeProviderEvent(
       }
       return [true, addProviderThread(event.node.providerThreadId)];
     }
-    case "subagent.updated":
-      return [ownsRun(event.subagent.runId) || ownsChildThread(event.subagent.threadId), state];
+    case "subagent.updated": {
+      // A reopened subagent re-attributes its row to the current run without a
+      // fresh app_thread.created (the adapter dedups it per session), so a
+      // run-owned row is the only signal that re-owns the child thread here.
+      if (ownsRun(event.subagent.runId)) {
+        const childThreadId = event.subagent.childThreadId;
+        if (childThreadId === null || state.ownedThreadIds.has(childThreadId)) {
+          return [true, state];
+        }
+        return [
+          true,
+          {
+            ...state,
+            ownedThreadIds: new Set([...state.ownedThreadIds, childThreadId]),
+          },
+        ];
+      }
+      return [ownsChildThread(event.subagent.threadId), state];
+    }
     case "message.updated":
       return [ownsRun(event.message.runId) || ownsChildThread(event.message.threadId), state];
     case "turn_item.updated": {

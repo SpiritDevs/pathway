@@ -50,6 +50,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -112,6 +113,11 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
+import {
+  type ClaudeSubagentTranscriptReader,
+  makeClaudeSubagentTranscriptMirror,
+  makeSubagentReasoningTurnItem,
+} from "./ClaudeSubagentTranscriptMirror.ts";
 
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 export const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
@@ -351,6 +357,7 @@ export interface ClaudeAgentSdkLoggedQueryOptions {
   readonly settings?: ClaudeAgentSdkQueryOptions["settings"];
   readonly effort?: ClaudeAgentSdkQueryOptions["effort"];
   readonly includePartialMessages?: true;
+  readonly forwardSubagentText?: true;
   readonly pathToClaudeCodeExecutable?: ClaudeAgentSdkQueryOptions["pathToClaudeCodeExecutable"];
   readonly hasExtraArgs?: true;
   readonly allowDangerouslySkipPermissions?: true;
@@ -441,6 +448,7 @@ export function loggedClaudeQueryOptions(
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.effort === undefined ? {} : { effort: options.effort }),
     ...(options.includePartialMessages === true ? { includePartialMessages: true } : {}),
+    ...(options.forwardSubagentText === true ? { forwardSubagentText: true } : {}),
     ...(options.pathToClaudeCodeExecutable === undefined
       ? {}
       : { pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable }),
@@ -681,6 +689,10 @@ export function makeClaudeQueryOptions(input: {
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
     permissionMode: input.permissionMode ?? "default",
     includePartialMessages: true,
+    // Forward subagent assistant frames on the parent stream so foreground
+    // child threads receive live text/thinking; handleSdkMessage routes them
+    // by parent_tool_use_id and must keep them out of the parent transcript.
+    forwardSubagentText: true,
     ...(compiledSelection.effort === undefined
       ? {}
       : {
@@ -799,6 +811,10 @@ function providerSession(input: {
 
 function textFromClaudeContent(content: SDKAssistantMessage["message"]["content"]): string {
   return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+}
+
+function thinkingTextFromClaudeContent(content: SDKAssistantMessage["message"]["content"]): string {
+  return content.flatMap((part) => (part.type === "thinking" ? [part.thinking] : [])).join("\n\n");
 }
 
 function assistantTextFromSdkMessage(
@@ -1583,17 +1599,28 @@ function claudeSubagentResultText(output: ClaudeNativeToolOutput): string {
   return claudeNativeToolOutputText(output);
 }
 
-function isClaudeSubagentAsyncLaunchAck(output: ClaudeNativeToolOutput): boolean {
+function claudeSubagentAsyncLaunchAck(
+  output: ClaudeNativeToolOutput,
+): { readonly agentId: string | null } | null {
   const value = claudeNativeToolOutputValue(output);
+  const agentId =
+    typeof value === "object" &&
+    value !== null &&
+    "agentId" in value &&
+    typeof value.agentId === "string"
+      ? value.agentId
+      : null;
   if (typeof value === "object" && value !== null) {
     if ("isAsync" in value && value.isAsync === true) {
-      return true;
+      return { agentId };
     }
     if ("status" in value && value.status === "async_launched") {
-      return true;
+      return { agentId };
     }
   }
-  return claudeSubagentResultText(output).startsWith("Async agent launched successfully.");
+  return claudeSubagentResultText(output).startsWith("Async agent launched successfully.")
+    ? { agentId }
+    : null;
 }
 
 function webSearchPatternsFromClaudeTool(input: {
@@ -2054,6 +2081,11 @@ interface ActiveClaudeSubagent {
   progressItemOrdinal: number | null;
   progressStartedAt: DateTime.Utc | null;
   resultItemOrdinal: number | null;
+  /** Async-launched (run_in_background); child content comes from the transcript mirror. */
+  background: boolean;
+  // Shared by reference across registry generations so forwarded frames are
+  // emitted to the child thread exactly once even when the entry is replaced.
+  readonly emittedChildItemIds: Set<string>;
 }
 
 interface ClaudeLiveQueryContext {
@@ -2094,6 +2126,11 @@ export interface ClaudeAdapterV2Options {
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
   readonly continuationRequests?: {
     readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
+  };
+  /** Test seam for background-subagent transcript mirroring. */
+  readonly subagentTranscripts?: {
+    readonly read?: ClaudeSubagentTranscriptReader;
+    readonly pollInterval?: Duration.Input;
   };
 }
 
@@ -2191,6 +2228,46 @@ export function makeClaudeAdapterV2(
 
         const emitProviderEvent = (event: ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        // Background subagents never stream frames on the parent query, so
+        // their child threads are hydrated by polling the CLI's subagent
+        // transcript. Poll fibers live in the session scope.
+        const subagentTranscriptMirror = yield* makeClaudeSubagentTranscriptMirror({
+          driver: CLAUDE_PROVIDER,
+          idAllocator,
+          emitEvent: emitProviderEvent,
+          ...(adapterOptions.subagentTranscripts?.read === undefined
+            ? {}
+            : { readSubagentMessages: adapterOptions.subagentTranscripts.read }),
+          ...(adapterOptions.subagentTranscripts?.pollInterval === undefined
+            ? {}
+            : { pollInterval: adapterOptions.subagentTranscripts.pollInterval }),
+        });
+
+        const startSubagentTranscriptMirror = Effect.fnUntraced(function* (input: {
+          readonly taskId: string;
+          readonly nativeThreadId: string;
+          readonly cwd: string | null;
+        }) {
+          const subagent = (yield* Ref.get(sessionSubagentsByTaskId)).get(input.taskId);
+          if (subagent === undefined) {
+            return;
+          }
+          subagent.background = true;
+          yield* subagentTranscriptMirror.start({
+            taskId: input.taskId,
+            sessionId: input.nativeThreadId,
+            ...(input.cwd === null ? {} : { cwd: input.cwd }),
+            childThreadId: subagent.childThreadId,
+            childRootNodeId: subagent.childRootNodeId,
+            // Registry entries are replaced objects; always allocate from the
+            // live generation so mirror ordinals interleave with stream items.
+            nextChildItemOrdinal: Effect.gen(function* () {
+              const live = (yield* Ref.get(sessionSubagentsByTaskId)).get(input.taskId) ?? subagent;
+              return ++live.nextChildItemOrdinal;
+            }),
+          });
+        });
 
         const rememberProviderThread = (providerThread: OrchestrationV2ProviderThread) =>
           Effect.gen(function* () {
@@ -2876,6 +2953,8 @@ export function makeClaudeAdapterV2(
             progressItemOrdinal: existingSubagent?.progressItemOrdinal ?? null,
             progressStartedAt: existingSubagent?.progressStartedAt ?? null,
             resultItemOrdinal: existingSubagent?.resultItemOrdinal ?? null,
+            background: existingSubagent?.background ?? false,
+            emittedChildItemIds: existingSubagent?.emittedChildItemIds ?? new Set(),
           } satisfies ActiveClaudeSubagent;
           input.context.subagentsByTaskId.set(input.taskId, subagent);
           if (input.toolUseId !== undefined) {
@@ -3538,6 +3617,71 @@ export function makeClaudeAdapterV2(
           );
         });
 
+        const emitSubagentChildAssistantContent = Effect.fnUntraced(function* (input: {
+          readonly subagent: ActiveClaudeSubagent;
+          readonly nativeItemId: string;
+          readonly content: SDKAssistantMessage["message"]["content"];
+        }) {
+          const { subagent } = input;
+          const now = yield* DateTime.now;
+          const thinking = thinkingTextFromClaudeContent(input.content);
+          const thinkingNativeItemId = `${input.nativeItemId}:thinking`;
+          if (thinking.length > 0 && !subagent.emittedChildItemIds.has(thinkingNativeItemId)) {
+            subagent.emittedChildItemIds.add(thinkingNativeItemId);
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: makeSubagentReasoningTurnItem({
+                driver: CLAUDE_PROVIDER,
+                idAllocator,
+                nativeItemId: thinkingNativeItemId,
+                threadId: subagent.childThreadId,
+                rootNodeId: subagent.childRootNodeId,
+                text: thinking,
+                ordinal: ++subagent.nextChildItemOrdinal,
+                now,
+              }),
+            });
+          }
+          const text = textFromClaudeContent(input.content);
+          if (text.length > 0 && !subagent.emittedChildItemIds.has(input.nativeItemId)) {
+            subagent.emittedChildItemIds.add(input.nativeItemId);
+            const artifacts = makeSubagentConversationArtifacts({
+              messageId: idAllocator.derive.messageFromProviderItem({
+                driver: CLAUDE_PROVIDER,
+                nativeItemId: input.nativeItemId,
+              }),
+              turnItemId: idAllocator.derive.turnItemFromProviderItem({
+                driver: CLAUDE_PROVIDER,
+                nativeItemId: input.nativeItemId,
+              }),
+              threadId: subagent.childThreadId,
+              rootNodeId: subagent.childRootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: {
+                driver: CLAUDE_PROVIDER,
+                nativeId: input.nativeItemId,
+                strength: "strong",
+              },
+              role: "assistant",
+              text,
+              ordinal: ++subagent.nextChildItemOrdinal,
+              now,
+            });
+            yield* emitProviderEvent({
+              type: "message.updated",
+              driver: CLAUDE_PROVIDER,
+              message: artifacts.message,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+          }
+        });
+
         const finalizeActiveTurnAfterQueryExit = Effect.fnUntraced(function* (
           cause?: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
         ) {
@@ -3634,12 +3778,14 @@ export function makeClaudeAdapterV2(
               });
             });
           }
+          // Forwarded subagent frames (forwardSubagentText) are child-thread
+          // content, not proof the parent began a wake turn.
           const isWakeEvidence =
             isPendingTaskNotification ||
             isPendingSubagentNotification ||
             isKnownSubagentTaskStarted ||
-            message.type === "assistant" ||
-            message.type === "user" ||
+            ((message.type === "assistant" || message.type === "user") &&
+              parentToolUseIdFromSdkMessage(message) === null) ||
             message.type === "result";
           if (!isWakeEvidence) {
             return;
@@ -3836,7 +3982,9 @@ export function makeClaudeAdapterV2(
             return;
           }
 
-          if (message.type === "assistant") {
+          // Forwarded subagent frames carry their own uuids, which are not
+          // valid resume points on the parent transcript.
+          if (message.type === "assistant" && message.parent_tool_use_id === null) {
             context.nativeMessageCursor = message.uuid;
           }
 
@@ -3912,6 +4060,16 @@ export function makeClaudeAdapterV2(
                 status: "running",
                 reopen: true,
               });
+              // A resumed background task streams nothing on the parent
+              // query; restart its transcript mirror.
+              const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id);
+              if (registered?.background === true) {
+                yield* startSubagentTranscriptMirror({
+                  taskId: message.task_id,
+                  nativeThreadId: liveQuery.nativeThreadId,
+                  cwd: context.input.runtimePolicy.cwd,
+                });
+              }
             }
           }
 
@@ -3951,6 +4109,9 @@ export function makeClaudeAdapterV2(
               activeContext: context,
             });
             if (!wasBackgroundTask && !context.ignoredTaskIds.has(message.task_id)) {
+              // Stop mirroring with one final backfill read before the
+              // terminal update, so transcript-tail items precede the result.
+              yield* subagentTranscriptMirror.stop(message.task_id);
               yield* updateClaudeSubagentNode({
                 context,
                 taskId: message.task_id,
@@ -3998,7 +4159,18 @@ export function makeClaudeAdapterV2(
               // A background Agent launch resolves its tool_use immediately
               // with an async-launch ACK while the task keeps running; only
               // the eventual task_notification terminalizes the subagent.
-              if (isClaudeSubagentAsyncLaunchAck(output)) {
+              const asyncAck = claudeSubagentAsyncLaunchAck(output);
+              if (asyncAck !== null) {
+                subagent.background = true;
+                const mirrorTaskId =
+                  asyncAck.agentId ?? subagent.task.nativeTaskRef?.nativeId ?? null;
+                if (mirrorTaskId !== null) {
+                  yield* startSubagentTranscriptMirror({
+                    taskId: mirrorTaskId,
+                    nativeThreadId: liveQuery.nativeThreadId,
+                    cwd: context.input.runtimePolicy.cwd,
+                  });
+                }
                 continue;
               }
               const result = claudeSubagentResultText(output);
@@ -4040,6 +4212,23 @@ export function makeClaudeAdapterV2(
             });
             yield* emitToolCallArtifacts(artifacts);
             context.toolCalls.delete(toolCall.nativeItemId);
+          }
+
+          // forwardSubagentText frames belong to the child thread. A known
+          // parent_tool_use_id routes text/thinking there; an unknown one is
+          // dropped entirely so foreign frames can never reach the parent
+          // transcript, its result fallback, or turn finalization.
+          const forwardedParentToolUseId = parentToolUseIdFromSdkMessage(message);
+          if (message.type === "assistant" && forwardedParentToolUseId !== null) {
+            const subagent = context.subagentsByToolUseId.get(forwardedParentToolUseId);
+            if (subagent !== undefined) {
+              yield* emitSubagentChildAssistantContent({
+                subagent,
+                nativeItemId: message.uuid,
+                content: message.message.content,
+              });
+            }
+            return;
           }
 
           const assistantText = assistantTextFromSdkMessage(message);

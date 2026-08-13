@@ -2,6 +2,7 @@ import type {
   Query as ClaudeQuery,
   SDKMessage,
   SDKUserMessage,
+  SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -62,6 +63,7 @@ import {
   makeClaudeAdapterV2,
   makeClaudeAgentSdkProtocolLogger,
   makeClaudeQueryOptions,
+  type ClaudeAdapterV2Options,
   type ClaudeAgentSdkQueryOptions,
   type ClaudeAgentSdkQueryOpenInput,
 } from "./ClaudeAdapterV2.ts";
@@ -664,6 +666,22 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       hasExtraArgs: true,
     });
     assert.notInclude(JSON.stringify(loggedClaudeQueryOptions(options)), "secret launch prompt");
+  });
+
+  it("enables forwarded subagent text alongside partial messages", () => {
+    const options = makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "native-forward-subagent-text",
+      resume: false,
+      cwd: null,
+    });
+    assert.isTrue(options.includePartialMessages);
+    assert.isTrue(options.forwardSubagentText);
+    assert.deepEqual(
+      loggedClaudeQueryOptions(options).forwardSubagentText,
+      true,
+      "logged options must record the forwardSubagentText flag",
+    );
   });
 });
 
@@ -1270,6 +1288,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   const makeWakeHarnessWithOptions = (options?: {
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
     readonly interrupt?: Effect.Effect<void>;
+    readonly subagentTranscripts?: ClaudeAdapterV2Options["subagentTranscripts"];
   }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1287,6 +1306,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         attachmentsDir,
         fileSystem,
         idAllocator,
+        // Background-launch acks start the transcript mirror; tests must
+        // never fall through to the SDK's real on-disk transcript reader.
+        subagentTranscripts: options?.subagentTranscripts ?? {
+          read: () => Promise.resolve([]),
+        },
         continuationRequests: {
           offer: (request) =>
             Effect.sync(() => {
@@ -2910,6 +2934,303 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(finalSubagentNode?.status, "completed");
         assert.equal(finalSubagentNode?.runId, subagentNodeEvents[0]?.node.runId);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("routes forwarded subagent text and thinking to the child thread only", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const SUBAGENT_TASK_ID = "task-forwarded-frames";
+        const SUBAGENT_TOOL_USE_ID = "toolu-forwarded-frames";
+        const FORWARDED_TEXT = "Forwarded child assistant text.";
+        const FORWARDED_THINKING = "Forwarded child thinking.";
+        const subagentTaskStarted = claudeSdkFrame({
+          type: "system",
+          subtype: "task_started",
+          task_id: SUBAGENT_TASK_ID,
+          tool_use_id: SUBAGENT_TOOL_USE_ID,
+          description: "Investigate the forwarded frames",
+          subagent_type: "general-purpose",
+          task_type: "local_agent",
+          prompt: "Investigate, then report.",
+          uuid: "00000000-0000-4000-8000-000000000401",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+        const forwardedFrame = claudeSdkFrame({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: FORWARDED_THINKING, signature: "sig" },
+              { type: "text", text: FORWARDED_TEXT },
+            ],
+          },
+          parent_tool_use_id: SUBAGENT_TOOL_USE_ID,
+          uuid: "00000000-0000-4000-8000-000000000402",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const subagentEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+              event.type === "subagent.updated",
+          );
+        const messageEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
+              event.type === "message.updated",
+          );
+        const turnItemEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+              event.type === "turn_item.updated",
+          );
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-forwarded-frames"),
+            text: "Spawn a foreground subagent.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, subagentTaskStarted);
+        yield* awaitUntil(() => subagentEvents().length >= 1, "subagent node created");
+        const childThreadId = subagentEvents()[0]?.subagent.childThreadId;
+        assert.isDefined(childThreadId);
+
+        yield* Queue.offer(harness.sdkMessages, forwardedFrame);
+        yield* awaitUntil(
+          () => messageEvents().some((event) => event.message.text === FORWARDED_TEXT),
+          "forwarded child message",
+        );
+        const childMessage = messageEvents().find(
+          (event) => event.message.text === FORWARDED_TEXT,
+        )?.message;
+        assert.equal(childMessage?.threadId, childThreadId);
+        assert.equal(childMessage?.runId, null);
+        assert.equal(childMessage?.role, "assistant");
+        const reasoningItem = turnItemEvents().find(
+          (event) =>
+            event.turnItem.type === "reasoning" && event.turnItem.text === FORWARDED_THINKING,
+        )?.turnItem;
+        assert.isDefined(reasoningItem);
+        assert.equal(reasoningItem?.threadId, childThreadId);
+        assert.equal(reasoningItem?.runId, null);
+        // Prompt holds ordinal 100; thinking then text follow in frame order.
+        assert.equal(reasoningItem?.ordinal, 101);
+        const childItem = turnItemEvents().find(
+          (event) =>
+            event.turnItem.type === "assistant_message" && event.turnItem.text === FORWARDED_TEXT,
+        )?.turnItem;
+        assert.equal(childItem?.threadId, childThreadId);
+        assert.equal(childItem?.runId, null);
+        assert.equal(childItem?.ordinal, 102);
+
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000403",
+            result: "Subagent is working.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+        // The forwarded frame must not leak into the parent transcript, the
+        // parent's fallback assistant text, or turn finalization.
+        const leaked = [FORWARDED_TEXT, FORWARDED_THINKING];
+        assert.isFalse(
+          messageEvents().some(
+            (event) =>
+              event.message.threadId === harness.threadId &&
+              leaked.some((text) => event.message.text.includes(text)),
+          ),
+          "forwarded text must not reach parent messages",
+        );
+        assert.isFalse(
+          turnItemEvents().some(
+            (event) =>
+              event.turnItem.threadId === harness.threadId &&
+              "text" in event.turnItem &&
+              typeof event.turnItem.text === "string" &&
+              leaked.some((text) => (event.turnItem as { text: string }).text.includes(text)),
+          ),
+          "forwarded text must not reach parent turn items",
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("drops forwarded assistant frames with an unknown parent tool use", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const UNKNOWN_TEXT = "Orphan forwarded text that must vanish.";
+        const orphanFrame = claudeSdkFrame({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: UNKNOWN_TEXT }],
+          },
+          parent_tool_use_id: "toolu-unknown-forwarded",
+          uuid: "00000000-0000-4000-8000-000000000411",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-orphan-forward"),
+            text: "No subagent registered.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, orphanFrame);
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000412",
+            result: "Done without subagents.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.isFalse(
+          harness.events.some(
+            (event) =>
+              (event.type === "message.updated" && event.message.text.includes(UNKNOWN_TEXT)) ||
+              (event.type === "turn_item.updated" &&
+                "text" in event.turnItem &&
+                typeof event.turnItem.text === "string" &&
+                event.turnItem.text.includes(UNKNOWN_TEXT)),
+          ),
+          "unknown-parent forwarded text must be dropped everywhere",
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("starts the transcript mirror from an async-launch ack agent id", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const SUBAGENT_TASK_ID = "task-mirror-ack";
+        const SUBAGENT_TOOL_USE_ID = "toolu-mirror-ack";
+        const MIRRORED_TEXT = "Mirrored background answer.";
+        const subagentTaskStarted = claudeSdkFrame({
+          type: "system",
+          subtype: "task_started",
+          task_id: SUBAGENT_TASK_ID,
+          tool_use_id: SUBAGENT_TOOL_USE_ID,
+          description: "Background research",
+          subagent_type: "general-purpose",
+          task_type: "local_agent",
+          prompt: "Research in the background.",
+          uuid: "00000000-0000-4000-8000-000000000421",
+          session_id: WAKE_NATIVE_SESSION,
+        });
+        const subagentAsyncAck = claudeSdkFrame({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: SUBAGENT_TOOL_USE_ID,
+                content: [{ type: "text", text: "Async agent launched successfully." }],
+              },
+            ],
+          },
+          parent_tool_use_id: null,
+          uuid: "00000000-0000-4000-8000-000000000422",
+          session_id: WAKE_NATIVE_SESSION,
+          tool_use_result: {
+            isAsync: true,
+            status: "async_launched",
+            agentId: SUBAGENT_TASK_ID,
+            prompt: "Research in the background.",
+          },
+        });
+        const readerCalls: Array<{
+          readonly sessionId: string;
+          readonly agentId: string;
+          readonly dir?: string;
+        }> = [];
+        const transcript: SessionMessage[] = [
+          {
+            type: "user",
+            uuid: "sub-transcript-user-1",
+            session_id: WAKE_NATIVE_SESSION,
+            message: { role: "user", content: "Research in the background." },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+          },
+          {
+            type: "assistant",
+            uuid: "sub-transcript-assistant-1",
+            session_id: WAKE_NATIVE_SESSION,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: MIRRORED_TEXT }],
+            },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+          },
+        ];
+        const harness = yield* makeWakeHarnessWithOptions({
+          subagentTranscripts: {
+            read: (input) => {
+              readerCalls.push(input);
+              return Promise.resolve(transcript);
+            },
+          },
+        });
+        const now = yield* DateTime.now;
+        const subagentEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+              event.type === "subagent.updated",
+          );
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-mirror-ack"),
+            text: "Spawn a background subagent.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(harness.sdkMessages, subagentTaskStarted);
+        yield* awaitUntil(() => subagentEvents().length >= 1, "subagent node created");
+        const childThreadId = subagentEvents()[0]?.subagent.childThreadId;
+        yield* Queue.offer(harness.sdkMessages, subagentAsyncAck);
+        yield* awaitUntil(() => readerCalls.length >= 1, "transcript reader called");
+        assert.equal(readerCalls[0]?.agentId, SUBAGENT_TASK_ID);
+        assert.equal(readerCalls[0]?.sessionId, WAKE_NATIVE_SESSION);
+        assert.equal(readerCalls[0]?.dir, "/workspace");
+        const mirroredMessage = () =>
+          harness.events.find(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
+              event.type === "message.updated" && event.message.text === MIRRORED_TEXT,
+          );
+        yield* awaitUntil(() => mirroredMessage() !== undefined, "mirrored child message");
+        assert.equal(mirroredMessage()?.message.threadId, childThreadId);
+        assert.equal(mirroredMessage()?.message.runId, null);
+        // The transcript's kickoff prompt is already projected at ordinal
+        // 100; the mirror must not duplicate it.
+        const promptDuplicates = harness.events.filter(
+          (event) =>
+            event.type === "message.updated" &&
+            event.message.threadId === childThreadId &&
+            event.message.role === "user",
+        );
+        assert.lengthOf(promptDuplicates, 1);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

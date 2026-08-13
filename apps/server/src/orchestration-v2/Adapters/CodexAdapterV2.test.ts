@@ -56,6 +56,7 @@ import {
   makeCodexAgentMessageDeltaCoalescer,
   makeCodexAppServerProtocolLogger,
   makeCodexAppServerSpawnCommand,
+  mapCodexCollabAgentStatus,
   projectCodexDynamicToolItem,
   resolveCodexRollbackTurnCount,
 } from "./CodexAdapterV2.ts";
@@ -1029,102 +1030,102 @@ function makeCodexReplayTranscript(input: {
   };
 }
 
-describe("CodexAdapterV2 post-settle continuation", () => {
-  const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) {
-          return;
-        }
-        yield* Effect.yieldNow;
+const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 5000; attempt++) {
+      if (predicate()) {
+        return;
       }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(`Timed out waiting for ${label}.`);
+  });
 
-  const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const idAllocator = yield* IdAllocatorV2;
-      const serverConfig = yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie);
-      const continuationRequests: Array<ProviderContinuationRequest> = [];
-      const clientFactory: CodexAppServerClientFactoryShape = {
-        open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterOpenSessionError({
-                  driver: CODEX_DRIVER_KIND,
-                  providerSessionId: openInput.providerSessionId,
-                  cause,
-                }),
-            ),
-            Effect.flatMap((context) =>
-              Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
-            ),
+const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const idAllocator = yield* IdAllocatorV2;
+    const serverConfig = yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie);
+    const continuationRequests: Array<ProviderContinuationRequest> = [];
+    const clientFactory: CodexAppServerClientFactoryShape = {
+      open: (openInput) =>
+        Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterOpenSessionError({
+                driver: CODEX_DRIVER_KIND,
+                providerSessionId: openInput.providerSessionId,
+                cause,
+              }),
           ),
-      };
-      const adapter = makeCodexAdapterV2({
-        instanceId: CODEX_DEFAULT_INSTANCE_ID,
-        settings: DEFAULT_CODEX_SETTINGS,
-        environment: {},
-        clientFactory,
-        fileSystem,
-        idAllocator,
-        serverConfig,
-        continuationRequests: {
-          offer: (request) =>
-            Effect.sync(() => {
-              continuationRequests.push(request);
-            }),
-        },
-      });
-      const threadId = ThreadId.make(`thread-${transcript.scenario}`);
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
-        modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection: CODEX_TEST_MODEL_SELECTION,
-        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-      });
-      const events: Array<ProviderAdapterV2Event> = [];
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) =>
-          Effect.sync(() => {
-            events.push(event);
-          }),
+          Effect.flatMap((context) =>
+            Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
+          ),
         ),
-        Effect.forkScoped,
-      );
-      if (runtime.hasPendingBackgroundWork === undefined) {
-        return yield* Effect.die("Codex adapter runtime must expose hasPendingBackgroundWork.");
-      }
-      const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
-      const terminalEvents = () =>
-        events.filter(
-          (event): event is Extract<ProviderAdapterV2Event, { type: "turn.terminal" }> =>
-            event.type === "turn.terminal",
-        );
-      const subagentUpdates = () =>
-        events.filter(
-          (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
-            event.type === "subagent.updated",
-        );
-      return {
-        runtime,
-        providerThread,
-        threadId,
-        events,
-        continuationRequests,
-        terminalEvents,
-        subagentUpdates,
-        hasPendingBackgroundWork,
-      };
+    };
+    const adapter = makeCodexAdapterV2({
+      instanceId: CODEX_DEFAULT_INSTANCE_ID,
+      settings: DEFAULT_CODEX_SETTINGS,
+      environment: {},
+      clientFactory,
+      fileSystem,
+      idAllocator,
+      serverConfig,
+      continuationRequests: {
+        offer: (request) =>
+          Effect.sync(() => {
+            continuationRequests.push(request);
+          }),
+      },
     });
+    const threadId = ThreadId.make(`thread-${transcript.scenario}`);
+    const runtime = yield* adapter.openSession({
+      threadId,
+      providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
+      modelSelection: CODEX_TEST_MODEL_SELECTION,
+      runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+    });
+    const providerThread = yield* runtime.ensureThread({
+      threadId,
+      modelSelection: CODEX_TEST_MODEL_SELECTION,
+      runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+    });
+    const events: Array<ProviderAdapterV2Event> = [];
+    yield* runtime.events.pipe(
+      Stream.runForEach((event) =>
+        Effect.sync(() => {
+          events.push(event);
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    if (runtime.hasPendingBackgroundWork === undefined) {
+      return yield* Effect.die("Codex adapter runtime must expose hasPendingBackgroundWork.");
+    }
+    const hasPendingBackgroundWork = runtime.hasPendingBackgroundWork;
+    const terminalEvents = () =>
+      events.filter(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "turn.terminal" }> =>
+          event.type === "turn.terminal",
+      );
+    const subagentUpdates = () =>
+      events.filter(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+          event.type === "subagent.updated",
+      );
+    return {
+      runtime,
+      providerThread,
+      threadId,
+      events,
+      continuationRequests,
+      terminalEvents,
+      subagentUpdates,
+      hasPendingBackgroundWork,
+    };
+  });
 
+describe("CodexAdapterV2 post-settle continuation", () => {
   const assistantMessages = (events: ReadonlyArray<ProviderAdapterV2Event>) =>
     events.filter(
       (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
@@ -3538,6 +3539,545 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+});
+
+describe("CodexAdapterV2 collab agent status mapping", () => {
+  it("maps the native CollabAgentStatus union onto subagent statuses", () => {
+    assert.equal(mapCodexCollabAgentStatus("pendingInit"), "running");
+    assert.equal(mapCodexCollabAgentStatus("running"), "running");
+    assert.equal(mapCodexCollabAgentStatus("completed"), "completed");
+    assert.equal(mapCodexCollabAgentStatus("errored"), "failed");
+    assert.equal(mapCodexCollabAgentStatus("notFound"), "failed");
+    assert.equal(mapCodexCollabAgentStatus("interrupted"), "cancelled");
+    assert.equal(mapCodexCollabAgentStatus("shutdown"), "cancelled");
+    assert.equal(mapCodexCollabAgentStatus("someFutureStatus"), "running");
+  });
+});
+
+describe("CodexAdapterV2 subagent visibility", () => {
+  const childUserMessages = (
+    events: ReadonlyArray<ProviderAdapterV2Event>,
+    childThreadId: string,
+  ) =>
+    events.filter(
+      (event): event is Extract<ProviderAdapterV2Event, { type: "message.updated" }> =>
+        event.type === "message.updated" &&
+        event.message.role === "user" &&
+        String(event.message.threadId) === childThreadId,
+    );
+
+  const childThreadIdOf = (events: ReadonlyArray<ProviderAdapterV2Event>) => {
+    const created = events.find(
+      (event): event is Extract<ProviderAdapterV2Event, { type: "app_thread.created" }> =>
+        event.type === "app_thread.created",
+    );
+    assert.isDefined(created);
+    return String(created?.appThread.id);
+  };
+
+  it.effect("projects the wire kickoff prompt for subAgentActivity spawns", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-activity-kickoff-prompt";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const childThreadId = `native-${scenario}-child-thread`;
+        const childTurnId = `native-${scenario}-child-turn`;
+        const kickoffPrompt = "Say hello to the user.";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId,
+              prompt: "Spawn the hello agent.",
+            }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/subAgentActivity-started",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "subAgentActivity",
+                    id: "spawn-activity",
+                    kind: "started",
+                    agentThreadId: childThreadId,
+                    agentPath: "/root/hello_agent",
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/started/child",
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: childThreadId,
+                  turn: makeCodexReplayTurn({ id: childTurnId, status: "inProgress" }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/started/child-user",
+              frame: {
+                method: "item/started",
+                params: {
+                  item: {
+                    type: "userMessage",
+                    id: "child-user",
+                    clientId: null,
+                    content: [{ type: "text", text: kickoffPrompt, text_elements: [] }],
+                  },
+                  threadId: childThreadId,
+                  turnId: childTurnId,
+                  startedAtMs: 1782622441100,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/child-user",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "userMessage",
+                    id: "child-user",
+                    clientId: null,
+                    content: [{ type: "text", text: kickoffPrompt, text_elements: [] }],
+                  },
+                  threadId: childThreadId,
+                  turnId: childTurnId,
+                  completedAtMs: 1782622441200,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/child-answer",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "agentMessage",
+                    id: "child-answer",
+                    text: "Hello.",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                  threadId: childThreadId,
+                  turnId: childTurnId,
+                  completedAtMs: 1782622442000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/child",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: childThreadId,
+                  turn: makeCodexReplayTurn({ id: childTurnId, status: "completed" }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/root-answer",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "agentMessage",
+                    id: "root-answer",
+                    text: "Spawned the hello agent.",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622443000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Spawn the hello agent.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+
+        const childThread = childThreadIdOf(harness.events);
+        const userMessages = childUserMessages(harness.events, childThread);
+        assert.isAtLeast(userMessages.length, 1);
+        assert.isTrue(
+          userMessages.every((event) => event.message.text === kickoffPrompt),
+          "child thread user messages must all carry the wire kickoff prompt",
+        );
+        assert.lengthOf(new Set(userMessages.map((event) => String(event.message.id))), 1);
+
+        const kickoffItems = harness.events.filter(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "user_message" &&
+            String(event.turnItem.threadId) === childThread,
+        );
+        assert.isAtLeast(kickoffItems.length, 1);
+        assert.equal(kickoffItems[0]?.turnItem.ordinal, 100);
+
+        const promptUpdates = harness
+          .subagentUpdates()
+          .filter((event) => event.subagent.prompt === kickoffPrompt);
+        assert.isAtLeast(promptUpdates.length, 1, "subagent prompt must be backfilled");
+        const finalUpdate = harness.subagentUpdates().at(-1);
+        assert.equal(finalUpdate?.subagent.prompt, kickoffPrompt);
+        assert.equal(finalUpdate?.subagent.status, "completed");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("keeps suppressing the turn-1 userMessage for spawnAgent kickoffs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-spawn-agent-prompt-suppression";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const childThreadId = `native-${scenario}-child-thread`;
+        const childTurnId = `native-${scenario}-child-turn`;
+        const kickoffPrompt = "Read package.json only.";
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId,
+              prompt: "Spawn a reader subagent.",
+            }),
+            {
+              type: "emit_inbound",
+              label: "item/completed/spawnAgent",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "collabAgentToolCall",
+                    id: "call-spawn",
+                    tool: "spawnAgent",
+                    status: "completed",
+                    senderThreadId: nativeThreadId,
+                    receiverThreadIds: [childThreadId],
+                    prompt: kickoffPrompt,
+                    model: "gpt-5.4",
+                    reasoningEffort: "low",
+                    agentsStates: {
+                      [childThreadId]: { status: "pendingInit", message: null },
+                    },
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/started/child",
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: childThreadId,
+                  turn: makeCodexReplayTurn({ id: childTurnId, status: "inProgress" }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/child-user",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "userMessage",
+                    id: "child-user",
+                    clientId: null,
+                    content: [{ type: "text", text: kickoffPrompt, text_elements: [] }],
+                  },
+                  threadId: childThreadId,
+                  turnId: childTurnId,
+                  completedAtMs: 1782622441100,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/child-answer",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "agentMessage",
+                    id: "child-answer",
+                    text: "The package is effect-codex-app-server.",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                  threadId: childThreadId,
+                  turnId: childTurnId,
+                  completedAtMs: 1782622442000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/child",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: childThreadId,
+                  turn: makeCodexReplayTurn({ id: childTurnId, status: "completed" }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/root-answer",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "agentMessage",
+                    id: "root-answer",
+                    text: "Done.",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622443000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Spawn a reader subagent.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+
+        const childThread = childThreadIdOf(harness.events);
+        const userMessages = childUserMessages(harness.events, childThread);
+        assert.isAtLeast(userMessages.length, 1);
+        assert.lengthOf(
+          new Set(userMessages.map((event) => String(event.message.id))),
+          1,
+          "only the synthesized prompt item may exist; the wire turn-1 userMessage stays suppressed",
+        );
+        assert.equal(userMessages[0]?.message.text, kickoffPrompt);
+        const finalUpdate = harness.subagentUpdates().at(-1);
+        assert.equal(finalUpdate?.subagent.prompt, kickoffPrompt);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("projects reasoning deltas and drops empty reasoning items", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "codex-reasoning-projection";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId,
+              nativeTurnId,
+              prompt: "Think, then answer.",
+            }),
+            {
+              type: "emit_inbound",
+              label: "item/started/reasoning",
+              frame: {
+                method: "item/started",
+                params: {
+                  item: { type: "reasoning", id: "reasoning-1", summary: [], content: [] },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  startedAtMs: 1782622440500,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/reasoning/summaryTextDelta/one",
+              frame: {
+                method: "item/reasoning/summaryTextDelta",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  itemId: "reasoning-1",
+                  summaryIndex: 0,
+                  delta: "Thinking about",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/reasoning/summaryTextDelta/two",
+              frame: {
+                method: "item/reasoning/summaryTextDelta",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  itemId: "reasoning-1",
+                  summaryIndex: 0,
+                  delta: " the plan.",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/reasoning",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: { type: "reasoning", id: "reasoning-1", summary: [], content: [] },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/reasoning-empty",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: { type: "reasoning", id: "reasoning-empty", summary: [], content: [] },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622441100,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "item/completed/answer",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "agentMessage",
+                    id: "answer",
+                    text: "Planned.",
+                    phase: "final_answer",
+                    memoryCitation: null,
+                  },
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  completedAtMs: 1782622442000,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+            text: "Think, then answer.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+
+        const reasoningItems = harness.events.filter(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+            event.type === "turn_item.updated" && event.turnItem.type === "reasoning",
+        );
+        assert.isAtLeast(reasoningItems.length, 1);
+        const finalReasoning = reasoningItems.at(-1)?.turnItem;
+        if (finalReasoning?.type !== "reasoning") {
+          throw new Error("Expected a reasoning turn item.");
+        }
+        assert.equal(finalReasoning.text, "Thinking about the plan.");
+        assert.isFalse(finalReasoning.streaming);
+        assert.equal(finalReasoning.status, "completed");
+        assert.isTrue(
+          reasoningItems.every((event) => event.turnItem.title === null),
+          "reasoning items carry no title",
+        );
+        assert.isFalse(
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "reasoning" &&
+              event.turnItem.text.length === 0,
+          ),
+          "empty reasoning items must not be projected",
+        );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );

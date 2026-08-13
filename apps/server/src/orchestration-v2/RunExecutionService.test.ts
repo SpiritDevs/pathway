@@ -426,6 +426,115 @@ it("does not carry interrupted child ownership into later attempts", () => {
   assert.isFalse(routeProviderEvent(lateChildNode, identity, state)[0]);
 });
 
+function reopenedChildRoutingFixture(key: string): {
+  readonly identity: ProviderEventRouteIdentity;
+  readonly childThreadId: ThreadId;
+  readonly childEvents: ReadonlyArray<ProviderAdapterV2Event>;
+  readonly subagentUpdatedForRun: (runId: RunId) => ProviderAdapterV2Event;
+} {
+  const threadId = ThreadId.make(`thread:${key}`);
+  const childThreadId = ThreadId.make(`thread:${key}:child`);
+  const identity: ProviderEventRouteIdentity = {
+    threadId,
+    runId: RunId.make(`run:${key}:current`),
+    attemptId: RunAttemptId.make(`attempt:${key}:current`),
+    providerThreadId: ProviderThreadId.make(`provider-thread:${key}:current`),
+  };
+  const subagentUpdatedForRun = (runId: RunId): ProviderAdapterV2Event =>
+    ({
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        id: NodeId.make(`node:${key}:subagent`),
+        threadId,
+        runId,
+        childThreadId,
+        status: "running",
+      },
+    }) as ProviderAdapterV2Event;
+  const childEvents: ReadonlyArray<ProviderAdapterV2Event> = [
+    {
+      type: "turn_item.updated",
+      driver,
+      turnItem: {
+        id: TurnItemId.make(`turn-item:${key}:child`),
+        threadId: childThreadId,
+        runId: null,
+        providerTurnId: null,
+        ordinal: 1,
+        type: "reasoning",
+        status: "running",
+      },
+    } as ProviderAdapterV2Event,
+    {
+      type: "message.updated",
+      driver,
+      message: {
+        id: MessageId.make(`message:${key}:child`),
+        threadId: childThreadId,
+        runId: null,
+        role: "assistant",
+        text: "child progress",
+        streaming: false,
+      },
+    } as ProviderAdapterV2Event,
+    {
+      type: "node.updated",
+      driver,
+      node: {
+        id: NodeId.make(`node:${key}:child-root`),
+        threadId: childThreadId,
+        runId: null,
+        providerThreadId: null,
+        status: "running",
+      },
+    } as ProviderAdapterV2Event,
+  ];
+  return { identity, childThreadId, childEvents, subagentUpdatedForRun };
+}
+
+it("re-owns a reopened subagent's child thread from a run-owned subagent.updated", () => {
+  const { identity, childEvents, subagentUpdatedForRun } =
+    reopenedChildRoutingFixture("reopened-child");
+  // Reopen shape: the child terminalized before this run started, so static
+  // seeding excluded it and the adapter does not replay app_thread.created.
+  const initial = makeProviderEventRoutingState({ identity, providerTurnId: null });
+  for (const childEvent of childEvents) {
+    assert.isFalse(routeProviderEvent(childEvent, identity, initial)[0]);
+  }
+
+  const [subagentAccepted, afterSubagent] = routeProviderEvent(
+    subagentUpdatedForRun(identity.runId),
+    identity,
+    initial,
+  );
+  assert.isTrue(subagentAccepted);
+  for (const childEvent of childEvents) {
+    assert.isTrue(
+      routeProviderEvent(childEvent, identity, afterSubagent)[0],
+      `${childEvent.type} for the reopened child thread must route`,
+    );
+  }
+});
+
+it("does not re-own a child thread from a dead run's subagent.updated", () => {
+  const { identity, childEvents, subagentUpdatedForRun } =
+    reopenedChildRoutingFixture("reopened-child-zombie");
+  const initial = makeProviderEventRoutingState({ identity, providerTurnId: null });
+  const [staleAccepted, afterStale] = routeProviderEvent(
+    subagentUpdatedForRun(RunId.make("run:reopened-child-zombie:dead")),
+    identity,
+    initial,
+  );
+  assert.isFalse(staleAccepted);
+  for (const childEvent of childEvents) {
+    assert.isFalse(
+      routeProviderEvent(childEvent, identity, afterStale)[0],
+      `${childEvent.type} from a dead run's child thread must stay dropped`,
+    );
+  }
+});
+
 it.effect("rechecks run ownership immediately before calling the provider", () =>
   Effect.gen(function* () {
     const runExecution = yield* RunExecutionServiceV2;
@@ -773,6 +882,205 @@ it.effect("keeps ingesting owned child events after the root turn terminalizes",
       Effect.timeoutOption("2 seconds"),
     );
     assert.isTrue(Option.isSome(observed), "child message was not ingested after root terminal");
+    assert.deepEqual(yield* Ref.get(order), ["root-finalized", "child-message"]);
+  }),
+);
+
+it.effect("ingests a reopened subagent's child events without a fresh app_thread.created", () =>
+  Effect.gen(function* () {
+    const key = "run-execution-reopened-child";
+    const threadId = ThreadId.make(`thread:${key}`);
+    const childThreadId = ThreadId.make(`thread:${key}:child`);
+    const runId = RunId.make(`run:${key}`);
+    const attemptId = RunAttemptId.make(`attempt:${key}`);
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const providerSessionId = ProviderSessionId.make(`session:${key}`);
+    const providerThreadId = ProviderThreadId.make(`provider-thread:${key}`);
+    const childProviderThreadId = ProviderThreadId.make(`provider-thread:${key}:child`);
+    const rootProviderTurnId = ProviderTurnId.make(`provider-turn:${key}`);
+    const childProviderTurnId = ProviderTurnId.make(`provider-turn:${key}:child`);
+    const rootNodeId = NodeId.make(`node:${key}`);
+    const childNodeId = NodeId.make(`node:${key}:child`);
+    const subagentNodeId = NodeId.make(`node:${key}:subagent`);
+    const childMessageIngested = yield* Deferred.make<void>();
+    const order = yield* Ref.make<ReadonlyArray<string>>([]);
+    const testLayer = runExecutionServiceLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointServiceV2)({ captureBaseline: () => Effect.void }),
+          Layer.mock(EventSinkV2)({
+            write: () => Effect.succeed([]),
+            writeWithEffects: (input) =>
+              Effect.gen(function* () {
+                if (
+                  input.events.some(
+                    (event) => event.type === "run.updated" && event.runId === runId,
+                  )
+                ) {
+                  yield* Ref.update(order, (current) => [...current, "root-finalized"]);
+                }
+                return [];
+              }),
+            writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
+          }),
+          idAllocatorLayer,
+          Layer.mock(ProviderEventIngestorV2)({
+            ingestNormalized: (input) =>
+              Effect.gen(function* () {
+                if (
+                  input.event.type === "message.updated" &&
+                  input.event.message.threadId === childThreadId
+                ) {
+                  yield* Ref.update(order, (current) => [...current, "child-message"]);
+                  yield* Deferred.succeed(childMessageIngested, undefined).pipe(Effect.ignore);
+                }
+                return [];
+              }),
+          }),
+          ServerSettingsService.layerTest(),
+        ),
+      ),
+    );
+    // Reopen shape: the child thread already exists from an interrupted prior
+    // run, so the adapter's session-lifetime registry dedups app_thread.created
+    // and static seeding excluded the terminal subagent row. The run-owned
+    // subagent.updated is the only ownership signal for the child thread.
+    const events: ReadonlyArray<ProviderAdapterV2Event> = [
+      {
+        type: "subagent.updated",
+        driver,
+        subagent: {
+          id: subagentNodeId,
+          threadId,
+          runId,
+          childThreadId,
+          status: "running",
+        },
+      } as ProviderAdapterV2Event,
+      {
+        type: "provider_thread.updated",
+        driver,
+        providerThread: {
+          id: childProviderThreadId,
+          appThreadId: childThreadId,
+        },
+      } as ProviderAdapterV2Event,
+      {
+        type: "provider_turn.updated",
+        driver,
+        threadId: childThreadId,
+        providerTurn: {
+          id: childProviderTurnId,
+          providerThreadId: childProviderThreadId,
+          nodeId: childNodeId,
+          runAttemptId: null,
+          status: "running",
+        },
+      } as ProviderAdapterV2Event,
+      {
+        type: "turn.terminal",
+        driver,
+        providerThreadId,
+        providerTurnId: rootProviderTurnId,
+        runOrdinal: 1,
+        status: "completed",
+        failure: null,
+        threadDisposition: "reusable",
+      },
+      {
+        type: "message.updated",
+        driver,
+        message: {
+          id: MessageId.make(`message:${key}:child`),
+          threadId: childThreadId,
+          runId: null,
+          nodeId: childNodeId,
+          role: "assistant",
+          text: "Resumed.",
+          streaming: false,
+        },
+      } as ProviderAdapterV2Event,
+      {
+        type: "provider_turn.updated",
+        driver,
+        threadId: childThreadId,
+        providerTurn: {
+          id: childProviderTurnId,
+          providerThreadId: childProviderThreadId,
+          nodeId: childNodeId,
+          runAttemptId: null,
+          status: "completed",
+        },
+      } as ProviderAdapterV2Event,
+      {
+        type: "subagent.updated",
+        driver,
+        subagent: {
+          id: subagentNodeId,
+          threadId,
+          runId,
+          childThreadId,
+          status: "completed",
+        },
+      } as ProviderAdapterV2Event,
+    ];
+
+    yield* Effect.gen(function* () {
+      const runExecution = yield* RunExecutionServiceV2;
+      yield* runExecution.startRootRun({
+        commandId: CommandId.make(`command:${key}`),
+        appThread: { id: threadId } as OrchestrationV2AppThread,
+        providerSessionId,
+        session: {
+          events: Stream.fromIterable(events),
+          startTurn: () => Effect.void,
+        } as unknown as ProviderAdapterV2SessionRuntime,
+        run: {
+          id: runId,
+          threadId,
+          ordinal: 2,
+          providerInstanceId,
+        } as OrchestrationV2Run,
+        rootNode: { id: rootNodeId } as OrchestrationV2ExecutionNode,
+        checkpointScope: {
+          id: CheckpointScopeId.make(`checkpoint-scope:${key}`),
+        } as OrchestrationV2CheckpointScope,
+        providerThread: {
+          id: providerThreadId,
+          driver,
+        } as OrchestrationV2ProviderThread,
+        attempt: {
+          id: attemptId,
+          providerTurnId: rootProviderTurnId,
+        } as OrchestrationV2RunAttempt,
+        attemptId,
+        providerTurnOrdinal: 2,
+        message: {
+          messageId: MessageId.make(`message:${key}:user`),
+          text: "Continue the interrupted subagent.",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+        modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+        runtimePolicy: {
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "readOnly",
+            access: { type: "fullAccess" },
+            networkAccess: false,
+          },
+        },
+      });
+    }).pipe(Effect.provide(testLayer));
+
+    const observed = yield* Deferred.await(childMessageIngested).pipe(
+      Effect.timeoutOption("2 seconds"),
+    );
+    assert.isTrue(Option.isSome(observed), "reopened child message was not ingested");
     assert.deepEqual(yield* Ref.get(order), ["root-finalized", "child-message"]);
   }),
 );

@@ -1,5 +1,6 @@
 import {
   ProviderDriverKind,
+  type OrchestrationV2AppThreadLineage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProjectedTurnItem,
@@ -690,6 +691,42 @@ export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase 
     return "connecting";
   if (runtime.status === "running" || runtime.status === "waiting") return "running";
   return "ready";
+}
+
+/**
+ * Subagent child threads run without runs of their own: their turn items carry
+ * `runId: null`, so run-derived runtime summaries stay null even while the
+ * subagent is actively streaming. Detect activity from the projected content
+ * instead: any visible item still running or streaming, or a running root turn
+ * node, means the subagent is working.
+ */
+export function deriveSubagentIsWorking(input: {
+  readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  readonly nodes: ReadonlyArray<Pick<OrchestrationV2ExecutionNode, "kind" | "status">>;
+}): boolean {
+  return (
+    input.visibleTurnItems.some(
+      ({ item }) => item.status === "running" || ("streaming" in item && item.streaming),
+    ) || input.nodes.some((node) => node.kind === "root_turn" && node.status === "running")
+  );
+}
+
+/**
+ * Run-aware phase derivation that keeps subagent child threads out of the
+ * "disconnected" state: they have no runs, so `derivePhase` alone would report
+ * them disconnected even mid-stream. Non-subagent threads keep the exact
+ * runtime-derived phase.
+ */
+export function deriveThreadPhase(input: {
+  readonly runtime: ThreadRuntimeSummary | null;
+  readonly relationshipToParent: OrchestrationV2AppThreadLineage["relationshipToParent"];
+  readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  readonly nodes: ReadonlyArray<Pick<OrchestrationV2ExecutionNode, "kind" | "status">>;
+}): SessionPhase {
+  const phase = derivePhase(input.runtime);
+  if (input.relationshipToParent !== "subagent") return phase;
+  if (deriveSubagentIsWorking(input)) return "running";
+  return phase === "disconnected" ? "ready" : phase;
 }
 
 export type { TurnDiffSummary };

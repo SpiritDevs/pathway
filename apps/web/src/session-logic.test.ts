@@ -17,6 +17,8 @@ import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveSubagentIsWorking,
+  deriveThreadPhase,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveRevertTurnCountByUserMessageId,
   findLatestProposedPlan,
@@ -633,5 +635,108 @@ describe("V2 session presentation", () => {
       [supersededAttemptId, "superseded"],
       [activeAttemptId, "running"],
     ]);
+  });
+});
+
+describe("subagent thread phase", () => {
+  const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+  const threadId = ThreadId.make("thread-subagent");
+  const assistantItem = (input: {
+    readonly id: string;
+    readonly status: OrchestrationV2TurnItem["status"];
+    readonly streaming: boolean;
+  }): OrchestrationV2TurnItem => ({
+    id: TurnItemId.make(input.id),
+    threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: input.status,
+    title: null,
+    startedAt: now,
+    completedAt: input.status === "completed" ? now : null,
+    updatedAt: now,
+    type: "assistant_message",
+    messageId: MessageId.make(`message-${input.id}`),
+    text: "Subagent reply",
+    streaming: input.streaming,
+  });
+  const projected = (
+    items: ReadonlyArray<OrchestrationV2TurnItem>,
+  ): ReadonlyArray<OrchestrationV2ProjectedTurnItem> =>
+    items.map((item, position) => ({
+      position,
+      visibility: "local",
+      sourceThreadId: threadId,
+      sourceItemId: item.id,
+      item,
+    }));
+
+  it("reports a subagent thread as running while a visible item is running", () => {
+    expect(
+      deriveThreadPhase({
+        runtime: null,
+        relationshipToParent: "subagent",
+        visibleTurnItems: projected([
+          assistantItem({ id: "item-running", status: "running", streaming: false }),
+        ]),
+        nodes: [],
+      }),
+    ).toBe("running");
+  });
+
+  it("reports a subagent thread as running while an item is streaming or its root turn runs", () => {
+    expect(
+      deriveSubagentIsWorking({
+        visibleTurnItems: projected([
+          assistantItem({ id: "item-streaming", status: "completed", streaming: true }),
+        ]),
+        nodes: [],
+      }),
+    ).toBe(true);
+    expect(
+      deriveSubagentIsWorking({
+        visibleTurnItems: [],
+        nodes: [{ kind: "root_turn", status: "running" }],
+      }),
+    ).toBe(true);
+    expect(
+      deriveThreadPhase({
+        runtime: null,
+        relationshipToParent: "subagent",
+        visibleTurnItems: [],
+        nodes: [{ kind: "root_turn", status: "running" }],
+      }),
+    ).toBe("running");
+  });
+
+  it("reports a subagent thread as ready once all items settle", () => {
+    expect(
+      deriveThreadPhase({
+        runtime: null,
+        relationshipToParent: "subagent",
+        visibleTurnItems: projected([
+          assistantItem({ id: "item-done", status: "completed", streaming: false }),
+        ]),
+        nodes: [{ kind: "root_turn", status: "completed" }],
+      }),
+    ).toBe("ready");
+  });
+
+  it("keeps non-subagent threads disconnected without a runtime", () => {
+    expect(
+      deriveThreadPhase({
+        runtime: null,
+        relationshipToParent: null,
+        visibleTurnItems: projected([
+          assistantItem({ id: "item-running", status: "running", streaming: false }),
+        ]),
+        nodes: [],
+      }),
+    ).toBe("disconnected");
   });
 });

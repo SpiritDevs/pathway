@@ -802,6 +802,34 @@ export function parseCodexRetryProgress(
   return { attempt, maxAttempts };
 }
 
+/** Maps the native CollabAgentStatus union onto subagent task status. */
+export function mapCodexCollabAgentStatus(status: string): OrchestrationV2Subagent["status"] {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "errored":
+    case "notFound":
+      return "failed";
+    case "interrupted":
+    case "shutdown":
+      return "cancelled";
+    // pendingInit, running, and unknown future literals stay running.
+    default:
+      return "running";
+  }
+}
+
+function codexReasoningItemText(item: {
+  readonly summary?: ReadonlyArray<string>;
+  readonly content?: ReadonlyArray<string>;
+}): string {
+  const summary = (item.summary ?? []).join("\n\n").trim();
+  if (summary.length > 0) {
+    return summary;
+  }
+  return (item.content ?? []).join("\n\n").trim();
+}
+
 function codexErrorInfoCode(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
@@ -864,6 +892,12 @@ interface CodexSubagentThreadContext {
   readonly startedAt: DateTime.Utc;
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
+  /**
+   * True when the parent-side registration synthesized the kickoff prompt
+   * item (spawnAgent path). False for agents-v2 subAgentActivity spawns,
+   * where the child's own turn-1 userMessage carries the real prompt.
+   */
+  readonly kickoffPromptSynthesized: boolean;
   task: OrchestrationV2Subagent;
 }
 
@@ -916,7 +950,8 @@ export type CodexDynamicToolItem = Extract<
 >;
 
 type CodexCollabAgentToolCallItem = Extract<
-  CodexSchema.V2ItemCompletedNotification__ThreadItem,
+  | CodexSchema.V2ItemStartedNotification__ThreadItem
+  | CodexSchema.V2ItemCompletedNotification__ThreadItem,
   { readonly type: "collabAgentToolCall" }
 >;
 
@@ -2047,6 +2082,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               createdBy: "agent",
               creationSource: "provider",
             });
+            const kickoffPromptSynthesized = input.emitInitialPrompt && input.prompt.length > 0;
             const subagent = {
               parentContext: input.context,
               providerThread,
@@ -2057,6 +2093,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeToolCallId: input.nativeToolCallId,
               ordinal: input.ordinal,
               startedAt: now,
+              kickoffPromptSynthesized,
               turnItemId: idAllocator.derive.turnItemFromProviderItem({
                 driver: CODEX_PROVIDER,
                 nativeItemId: input.nativeItemId,
@@ -2122,7 +2159,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               driver: CODEX_PROVIDER,
               providerThread,
             });
-            if (input.emitInitialPrompt && input.prompt.length > 0) {
+            if (kickoffPromptSynthesized) {
               const promptNativeItemId = `${input.nativeItemId}:prompt`;
               const promptArtifacts = makeSubagentConversationArtifacts({
                 messageId: idAllocator.derive.messageFromProviderItem({
@@ -2233,7 +2270,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 subagent,
                 status: "interrupted",
               });
+              return;
             }
+
+            // "interacted": surface activity without changing lifecycle state.
+            yield* emitSubagentTaskUpdate({
+              subagent,
+              status: subagent.task.status,
+              completedAt: subagent.task.completedAt,
+            });
           });
 
         const updateSubagentStates = (input: { readonly item: CodexCollabAgentToolCallItem }) =>
@@ -2244,15 +2289,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               if (subagent === undefined) {
                 continue;
               }
-              const nativeStatus = String(state.status);
-              const status: OrchestrationV2Subagent["status"] =
-                nativeStatus === "completed"
-                  ? "completed"
-                  : nativeStatus === "failed" || nativeStatus === "errored"
-                    ? "failed"
-                    : nativeStatus === "cancelled" || nativeStatus === "closed"
-                      ? "cancelled"
-                      : "running";
+              const status = mapCodexCollabAgentStatus(String(state.status));
               yield* emitSubagentTaskUpdate({
                 subagent,
                 status,
@@ -2462,6 +2499,91 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }),
         });
 
+        const buildReasoningArtifacts = (
+          context: ActiveCodexTurnContext,
+          item: { readonly id: string; readonly text: string },
+          completed: boolean,
+        ) =>
+          Effect.gen(function* () {
+            const updatedAt = yield* DateTime.now;
+            const completedAt = completed ? updatedAt : null;
+            const nodeId = idAllocator.derive.nodeFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const ordinal = yield* resolveItemOrdinal(context, item.id);
+            const node: OrchestrationV2ExecutionNode = {
+              id: nodeId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              parentNodeId: context.itemParentNodeId,
+              rootNodeId: context.rootNodeId,
+              kind: "reasoning",
+              status: completed ? "completed" : "running",
+              countsForRun: false,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: context.startedAt,
+              completedAt,
+            };
+            const turnItem: OrchestrationV2TurnItem = {
+              id: turnItemId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              nodeId,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              parentItemId: null,
+              ordinal,
+              status: completed ? "completed" : "running",
+              title: null,
+              startedAt: context.startedAt,
+              completedAt,
+              updatedAt,
+              type: "reasoning",
+              text: item.text,
+              streaming: !completed,
+            };
+            return { node, turnItem };
+          });
+
+        const reasoningDeltas = yield* makeCodexAgentMessageDeltaCoalescer({
+          flushIntervalMs: CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS,
+          emit: (update) =>
+            Effect.gen(function* () {
+              if (update.text.length === 0) {
+                return;
+              }
+              const context = yield* awaitActiveTurn(update.turnId);
+              if (context === undefined) {
+                return;
+              }
+              const artifacts = yield* buildReasoningArtifacts(
+                context,
+                { id: update.itemId, text: update.text },
+                update.completed,
+              );
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+            }),
+        });
+
         const emitSubagentUserMessage = (
           context: ActiveCodexTurnContext,
           item: Extract<
@@ -2471,12 +2593,31 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           >,
         ) =>
           Effect.gen(function* () {
-            if (context.subagent === null || context.providerTurnOrdinal === 1) {
+            if (context.subagent === null) {
+              return false;
+            }
+            const subagent = context.subagent;
+            const kickoffTurn = context.providerTurnOrdinal === 1;
+            if (kickoffTurn && subagent.kickoffPromptSynthesized) {
+              // The spawnAgent path already emitted a synthetic prompt item;
+              // the child's turn-1 userMessage would duplicate it.
               return false;
             }
             const text = codexUserMessageText(item.content);
             if (text.length === 0) {
               return false;
+            }
+            if (kickoffTurn) {
+              // Pin the wire kickoff prompt ahead of the turn's other items,
+              // matching the ordinal the synthesized prompt path uses.
+              yield* Ref.update(itemOrdinals, (current) => {
+                if (current.has(item.id)) {
+                  return current;
+                }
+                const updated = new Map(current);
+                updated.set(item.id, context.providerTurnOrdinal * 100);
+                return updated;
+              });
             }
             const now = yield* DateTime.now;
             const ordinal = yield* resolveItemOrdinal(context, item.id);
@@ -2509,6 +2650,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               driver: CODEX_PROVIDER,
               turnItem: artifacts.turnItem,
             });
+            if (kickoffTurn && subagent.task.prompt.length === 0) {
+              // Backfill the real prompt onto the parent's subagent row.
+              subagent.task = { ...subagent.task, prompt: text, updatedAt: now };
+              yield* emitSubagentTaskUpdate({
+                subagent,
+                status: subagent.task.status,
+                completedAt: subagent.task.completedAt,
+              });
+            }
             return true;
           });
 
@@ -3088,6 +3238,32 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }),
         );
 
+        yield* client.handleServerNotification("item/reasoning/summaryTextDelta", (payload) =>
+          reasoningDeltas.append({
+            turnId: payload.turnId,
+            itemId: payload.itemId,
+            delta: payload.delta,
+          }),
+        );
+
+        yield* client.handleServerNotification("item/reasoning/textDelta", (payload) =>
+          reasoningDeltas.append({
+            turnId: payload.turnId,
+            itemId: payload.itemId,
+            delta: payload.delta,
+          }),
+        );
+
+        yield* client.handleServerNotification("item/reasoning/summaryPartAdded", (payload) =>
+          payload.summaryIndex > 0
+            ? reasoningDeltas.append({
+                turnId: payload.turnId,
+                itemId: payload.itemId,
+                delta: "\n\n",
+              })
+            : Effect.void,
+        );
+
         yield* client.handleServerNotification("item/plan/delta", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -3272,6 +3448,20 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             if (payload.item.type === "subAgentActivity") {
               yield* registerSubagentActivity({
                 context,
+                item: payload.item,
+              });
+              return;
+            }
+
+            if (payload.item.type === "collabAgentToolCall") {
+              // receiverThreadIds is typically still empty at item/started,
+              // so registration usually no-ops here; a server that populates
+              // it early makes the spawn visible while still in flight.
+              yield* registerSubagentThreads({
+                context,
+                item: payload.item,
+              });
+              yield* updateSubagentStates({
                 item: payload.item,
               });
               return;
@@ -3540,6 +3730,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               yield* registerSubagentActivity({
                 context,
                 item: payload.item,
+              });
+              return;
+            }
+
+            if (payload.item.type === "reasoning") {
+              // Prefer the item's own summary/content text; fall back to the
+              // accumulated deltas. Empty reasoning projects nothing.
+              const finalText = codexReasoningItemText(payload.item);
+              yield* reasoningDeltas.complete({
+                turnId: payload.turnId,
+                itemId: payload.item.id,
+                ...(finalText.length === 0 ? {} : { finalText }),
+                emitEmpty: false,
               });
               return;
             }
@@ -4113,6 +4316,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 });
               }
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
+              yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* emitProviderEvent({
                 type: "provider_turn.updated",
                 driver: CODEX_PROVIDER,
