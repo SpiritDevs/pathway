@@ -549,6 +549,7 @@ function IssueDetailBody({
   const [todoFocusRequest, setTodoFocusRequest] = useState(0);
   const [showRelations, setShowRelations] = useState(false);
   const [relationOpenRequest, setRelationOpenRequest] = useState(0);
+  const [investigationRequested, setInvestigationRequested] = useState(false);
 
   /**
    * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
@@ -719,21 +720,25 @@ function IssueDetailBody({
   ]);
 
   const activeRun = activeIssueEnrichmentRun(enrichmentRuns);
+  const investigating =
+    (investigationRequested && enrichmentRuns.length === 0) || activeRun !== null;
   const investigateBlock = issueInvestigateBlock({
     connected: storeStatus !== "disconnected",
     deleted: issue.deletedAt !== null,
     projectId: issue.projectId,
     workspaceRoot: project?.workspaceRoot,
-    hasRunInFlight: activeRun !== null,
+    hasRunInFlight: investigating,
   });
 
   const handleInvestigate = useCallback(() => {
     setActiveTab("investigation");
+    setInvestigationRequested(true);
     void (async () => {
-      reportFailure(
+      const failed = reportFailure(
         "Failed to start the investigation",
         await startEnrichment({ issueId: issue.id }),
       );
+      if (failed) setInvestigationRequested(false);
     })();
   }, [issue.id, startEnrichment]);
 
@@ -1182,6 +1187,22 @@ function IssueDetailBody({
         titleActionComplete={issueKeyCopied}
         titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
       >
+        {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
+          <Button
+            disabled={investigateBlock !== null}
+            onClick={handleInvestigate}
+            size="xs"
+            title={
+              investigateBlock === null
+                ? "Run a read-only investigation of this issue's repository."
+                : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
+            }
+            variant="outline"
+          >
+            <WandSparklesIcon />
+            Investigate
+          </Button>
+        ) : null}
         <IssueDeleteMenu
           count={1}
           onConfirm={handleDelete}
@@ -1228,7 +1249,7 @@ function IssueDetailBody({
               <IssueDetailTabs
                 activityCount={events.length}
                 commentCount={comments.length}
-                investigating={activeRun !== null}
+                investigating={investigating}
                 investigationCount={enrichmentRuns.length}
                 onChange={setActiveTab}
                 value={activeTab}
@@ -1354,8 +1375,8 @@ function IssueDetailBody({
                       }
                       variant="outline"
                     >
-                      {activeRun === null ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
-                      {activeRun === null
+                      {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
+                      {!investigating
                         ? enrichmentRuns.length === 0
                           ? "Investigate"
                           : "Investigate again"
