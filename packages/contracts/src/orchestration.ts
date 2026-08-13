@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -27,7 +26,7 @@ import {
   RuntimeMode,
 } from "./providerPolicy.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { Project, ProjectScript } from "./project.ts";
+import { ProjectFaviconPath, ProjectScript } from "./project.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 import {
@@ -38,6 +37,7 @@ import {
 } from "./applicationEvent.ts";
 
 export { OrchestrationProjectShell } from "./orchestrationProject.ts";
+export { ProjectFaviconPath } from "./project.ts";
 
 export {
   ApplicationProjectCreatedPayload as ProjectCreatedPayload,
@@ -59,12 +59,6 @@ export {
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
 export type CorrelationId = typeof CorrelationId.Type;
-
-export const ProjectFaviconPath = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(1024),
-  Schema.isPattern(/\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/i),
-);
-export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,

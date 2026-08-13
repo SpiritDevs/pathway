@@ -116,14 +116,25 @@ it.layer(TestLayer)("ProjectService", (it) => {
         commandId: CommandId.make("command:project:update"),
         projectId,
         title: "Renamed",
+        faviconPath: "brand assets/project icon.svg",
       });
       assert.equal(updated.title, "Renamed");
       assert.equal(updated.createdAt, created.createdAt);
+
+      const sql = yield* SqlClient.SqlClient;
+      const faviconRows = yield* sql<{ readonly faviconPath: string | null }>`
+        SELECT favicon_path AS "faviconPath"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+      assert.equal(faviconRows[0]?.faviconPath, "brand assets/project icon.svg");
 
       const byId = yield* service.getById(projectId);
       const byWorkspace = yield* service.getByWorkspaceRoot("/work/project/");
       assert.isTrue(Option.isSome(byId));
       assert.isTrue(Option.isSome(byWorkspace));
+      assert.equal(Option.getOrThrow(byId).faviconPath, "brand assets/project icon.svg");
+      assert.equal(Option.getOrThrow(byWorkspace).faviconPath, "brand assets/project icon.svg");
       assert.equal(Option.getOrThrow(byWorkspace).id, projectId);
       assert.deepEqual(
         (yield* service.snapshot).projects.map((project) => project.id),
@@ -139,7 +150,6 @@ it.layer(TestLayer)("ProjectService", (it) => {
       assert.isTrue(Option.isSome(yield* service.getById(projectId, { includeDeleted: true })));
       assert.deepEqual((yield* service.snapshot).projects, []);
 
-      const sql = yield* SqlClient.SqlClient;
       const changes = yield* sql<{ readonly event_type: string }>`
         SELECT event_type
         FROM orchestration_events

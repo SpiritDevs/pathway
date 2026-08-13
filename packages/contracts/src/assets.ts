@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { ProjectFaviconPath } from "./orchestration.ts";
+import { ProjectFaviconPath } from "./project.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
 
