@@ -30,6 +30,7 @@ import { Route as SettingsProvidersRouteImport } from './routes/settings.provide
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
+import { Route as SettingsIssuesMilestonesRouteImport } from './routes/settings.issues-milestones'
 import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
 import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issues-intake'
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
@@ -41,10 +42,12 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as IssuesMilestonesRouteImport } from './routes/issues_.milestones'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
+import { Route as IssuesMilestonesMilestoneIdRouteImport } from './routes/issues_.milestones_.$milestoneId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 import { Route as ChatThreadsDraftDraftIdRouteImport } from './routes/_chat.threads_.draft.$draftId'
@@ -154,6 +157,12 @@ const SettingsIssuesStatusesRoute = SettingsIssuesStatusesRouteImport.update({
   path: '/issues-statuses',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsIssuesMilestonesRoute =
+  SettingsIssuesMilestonesRouteImport.update({
+    id: '/issues-milestones',
+    path: '/issues-milestones',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
   id: '/issues-labels',
   path: '/issues-labels',
@@ -210,6 +219,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IssuesMilestonesRoute = IssuesMilestonesRouteImport.update({
+  id: '/issues_/milestones',
+  path: '/issues/milestones',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
   id: '/connect_/callback',
   path: '/connect/callback',
@@ -230,6 +244,12 @@ const SettingsProjectsProjectKeyRoute =
     id: '/projects_/$projectKey',
     path: '/projects/$projectKey',
     getParentRoute: () => SettingsRoute,
+  } as any)
+const IssuesMilestonesMilestoneIdRoute =
+  IssuesMilestonesMilestoneIdRouteImport.update({
+    id: '/issues_/milestones_/$milestoneId',
+    path: '/issues/milestones/$milestoneId',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
@@ -271,6 +291,7 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -282,6 +303,7 @@ export interface FileRoutesByFullPath {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -291,6 +313,7 @@ export interface FileRoutesByFullPath {
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -312,6 +335,7 @@ export interface FileRoutesByTo {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -323,6 +347,7 @@ export interface FileRoutesByTo {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -332,6 +357,7 @@ export interface FileRoutesByTo {
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -355,6 +381,7 @@ export interface FileRoutesById {
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/threads': typeof ChatThreadsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
+  '/issues_/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -366,6 +393,7 @@ export interface FileRoutesById {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/projects': typeof SettingsProjectsRoute
@@ -375,6 +403,7 @@ export interface FileRoutesById {
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/_chat/threads_/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -398,6 +427,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/threads'
     | '/connect/callback'
+    | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -409,6 +439,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -418,6 +449,7 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/issues/milestones/$milestoneId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
@@ -439,6 +471,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/threads'
     | '/connect/callback'
+    | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -450,6 +483,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -459,6 +493,7 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/issues/milestones/$milestoneId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
@@ -481,6 +516,7 @@ export interface FileRouteTypes {
     | '/_chat/pull-requests'
     | '/_chat/threads'
     | '/connect_/callback'
+    | '/issues_/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -492,6 +528,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/projects'
@@ -501,6 +538,7 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/issues_/milestones_/$milestoneId'
     | '/settings/projects_/$projectKey'
     | '/_chat/threads_/$environmentId/$threadId'
     | '/_chat/threads_/draft/$draftId'
@@ -522,7 +560,9 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
+  IssuesMilestonesRoute: typeof IssuesMilestonesRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  IssuesMilestonesMilestoneIdRoute: typeof IssuesMilestonesMilestoneIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -674,6 +714,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIssuesStatusesRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/issues-milestones': {
+      id: '/settings/issues-milestones'
+      path: '/issues-milestones'
+      fullPath: '/settings/issues-milestones'
+      preLoaderRoute: typeof SettingsIssuesMilestonesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/issues-labels': {
       id: '/settings/issues-labels'
       path: '/issues-labels'
@@ -751,6 +798,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/issues_/milestones': {
+      id: '/issues_/milestones'
+      path: '/issues/milestones'
+      fullPath: '/issues/milestones'
+      preLoaderRoute: typeof IssuesMilestonesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect_/callback': {
       id: '/connect_/callback'
       path: '/connect/callback'
@@ -778,6 +832,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/projects/$projectKey'
       preLoaderRoute: typeof SettingsProjectsProjectKeyRouteImport
       parentRoute: typeof SettingsRoute
+    }
+    '/issues_/milestones_/$milestoneId': {
+      id: '/issues_/milestones_/$milestoneId'
+      path: '/issues/milestones/$milestoneId'
+      fullPath: '/issues/milestones/$milestoneId'
+      preLoaderRoute: typeof IssuesMilestonesMilestoneIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
@@ -841,6 +902,7 @@ interface SettingsRouteChildren {
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
   SettingsIssuesIntakeRoute: typeof SettingsIssuesIntakeRoute
   SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
+  SettingsIssuesMilestonesRoute: typeof SettingsIssuesMilestonesRoute
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
@@ -862,6 +924,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,
   SettingsIssuesIntakeRoute: SettingsIssuesIntakeRoute,
   SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
+  SettingsIssuesMilestonesRoute: SettingsIssuesMilestonesRoute,
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
@@ -892,7 +955,9 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
+  IssuesMilestonesRoute: IssuesMilestonesRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  IssuesMilestonesMilestoneIdRoute: IssuesMilestonesMilestoneIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
