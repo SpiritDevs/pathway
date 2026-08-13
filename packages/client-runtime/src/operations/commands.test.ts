@@ -51,6 +51,7 @@ import {
   settleThread,
   startThreadTurn,
   unsettleThread,
+  updateProject,
   updateThreadMetadata,
 } from "./commands.ts";
 
@@ -161,6 +162,41 @@ describe("V2 environment commands", () => {
           title: "Project",
           workspaceRoot: "/workspace/project",
           createWorkspaceRootIfMissing: true,
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("forwards project favicon overrides and resets without changing the path", () =>
+    Effect.gen(function* () {
+      const projects: ProjectMutation[] = [];
+      const supervisor = yield* makeSupervisor({ commands: [], projects });
+      const environment = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+
+      yield* updateProject({
+        projectId: ProjectId.make("project-1"),
+        faviconPath: "brand assets/nested/project icon.svg",
+      }).pipe(environment);
+      yield* updateProject({
+        projectId: ProjectId.make("project-1"),
+        faviconPath: null,
+      }).pipe(environment);
+
+      expect(projects).toEqual([
+        {
+          type: "project.update",
+          commandId: "00000000-0000-4000-8000-000000000000",
+          projectId: "project-1",
+          faviconPath: "brand assets/nested/project icon.svg",
+        },
+        {
+          type: "project.update",
+          commandId: "00000000-0000-4000-8000-000000000000",
+          projectId: "project-1",
+          faviconPath: null,
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

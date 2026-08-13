@@ -1,6 +1,7 @@
 import {
   type CommandId,
   ModelSelection,
+  type ProjectFaviconPath,
   ProjectId,
   type Project,
   type ProjectScript,
@@ -34,6 +35,7 @@ export interface ProjectUpdateInput {
   readonly title?: string;
   readonly workspaceRoot?: string;
   readonly defaultModelSelection?: ModelSelection | null;
+  readonly faviconPath?: ProjectFaviconPath | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
 }
 
@@ -340,6 +342,7 @@ export const make = Effect.gen(function* () {
           ...(input.defaultModelSelection === undefined
             ? {}
             : { defaultModelSelection: input.defaultModelSelection }),
+          ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
           ...(input.scripts === undefined ? {} : { scripts: [...input.scripts] }),
         },
         (workspaceRoot === undefined || workspaceRoot === existing.value.workspaceRoot
