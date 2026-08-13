@@ -133,6 +133,7 @@ import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { IssueActivityFeed } from "./IssueActivityFeed";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { IssueActionPanel } from "./IssueActionPanel";
@@ -173,6 +174,7 @@ import {
   issueApplyPriorityPatch,
   issueApplyTitlePatch,
   issueInvestigateBlock,
+  type IssueInvestigateBlock,
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
@@ -1195,20 +1197,10 @@ function IssueDetailBody({
         titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
       >
         {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
-          <Button
-            disabled={investigateBlock !== null}
-            onClick={handleInvestigate}
-            size="xs"
-            title={
-              investigateBlock === null
-                ? "Run a read-only investigation of this issue's repository."
-                : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
-            }
-            variant="outline"
-          >
+          <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
             <WandSparklesIcon />
             Investigate
-          </Button>
+          </IssueInvestigateButton>
         ) : null}
         <IssueDeleteMenu
           count={1}
@@ -1382,24 +1374,14 @@ function IssueDetailBody({
                         Read-only analysis. Finished runs are also left in Comments.
                       </p>
                     </div>
-                    <Button
-                      disabled={investigateBlock !== null}
-                      onClick={handleInvestigate}
-                      size="xs"
-                      title={
-                        investigateBlock === null
-                          ? "Run a read-only investigation of this issue's repository."
-                          : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock]
-                      }
-                      variant="outline"
-                    >
+                    <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
                       {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
                       {!investigating
                         ? enrichmentRuns.length === 0
                           ? "Investigate"
                           : "Investigate again"
                         : "Investigating"}
-                    </Button>
+                    </IssueInvestigateButton>
                   </div>
                   <IssueEnrichmentPanel
                     error={runsError}
@@ -1509,7 +1491,7 @@ function IssueDetailBody({
                 onTalkAboutIssue={handleTalkAboutIssue}
                 talkAboutIssueBlockReason={
                   project?.workspaceRoot == null
-                    ? "Choose a project with a connected workspace before starting a discussion."
+                    ? "Assign this issue to a project with a connected workspace before starting a discussion."
                     : storeStatus === "disconnected"
                       ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
                       : !startWorkAttachmentsReady
@@ -1524,6 +1506,34 @@ function IssueDetailBody({
         </ScrollArea>
       </div>
     </div>
+  );
+}
+
+function IssueInvestigateButton({
+  block,
+  children,
+  onClick,
+}: {
+  block: IssueInvestigateBlock | null;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  const disabled = block !== null;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className={cn("inline-flex", disabled && "cursor-not-allowed")} />}
+      >
+        <Button disabled={disabled} onClick={onClick} size="xs" variant="outline">
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipPopup>
+        {disabled
+          ? ISSUE_INVESTIGATE_BLOCK_REASONS[block]
+          : "Run a read-only investigation of this issue's repository."}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 

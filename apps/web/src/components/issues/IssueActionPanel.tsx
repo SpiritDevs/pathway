@@ -1,6 +1,8 @@
 import { GitBranchIcon, Link2Icon, ListTodoIcon, MessageSquareIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
 function ActionRow({
   icon,
   label,
@@ -14,12 +16,11 @@ function ActionRow({
   disabled?: boolean;
   title?: string | undefined;
 }) {
-  return (
+  const control = (
     <button
       className="group/action flex min-h-8 w-full items-center gap-2 rounded-md px-1.5 text-start text-[13px] text-muted-foreground outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground pointer-coarse:min-h-11"
       disabled={disabled}
       onClick={onClick}
-      title={title}
       type="button"
     >
       <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground group-hover/action:text-foreground">
@@ -27,6 +28,17 @@ function ActionRow({
       </span>
       <span>{label}</span>
     </button>
+  );
+
+  return title === undefined ? (
+    control
+  ) : (
+    <Tooltip>
+      <TooltipTrigger render={<span className="block w-full cursor-not-allowed" />}>
+        {control}
+      </TooltipTrigger>
+      <TooltipPopup side="left">{title}</TooltipPopup>
+    </Tooltip>
   );
 }
 

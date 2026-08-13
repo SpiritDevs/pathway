@@ -40,7 +40,8 @@ export type IssueInvestigateBlock =
 export const ISSUE_INVESTIGATE_BLOCK_REASONS: Readonly<Record<IssueInvestigateBlock, string>> = {
   disconnected: "The tracker lives on the machine you are connected to.",
   deleted: "This issue is deleted. Restore it to investigate.",
-  "no-project": "An investigation runs in a project's directory. Give this issue a project first.",
+  "no-project":
+    "Assign this issue to a project with a connected workspace before investigating it.",
   "rootless-project":
     "This project has no directory yet. Attach one and the investigation can read it.",
   "in-flight": "An investigation is already running on this issue.",
