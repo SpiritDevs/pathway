@@ -16,6 +16,7 @@ import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
   buildIssueStartWorkPrompt,
+  buildIssueTalkPrompt,
   issueDetailPath,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
@@ -272,6 +273,32 @@ describe("buildIssueStartWorkPrompt", () => {
     expect(prompt).toContain("genuinely finished");
     expect(prompt).toContain("move it to Ready for QA");
     expect(prompt).toContain("starts its configured audits");
+  });
+});
+
+describe("buildIssueTalkPrompt", () => {
+  const base = {
+    issue: issue({ description: "Decide whether retries belong in the client." }),
+    statusName: "Todo",
+    projectTitle: "Pathway",
+    priorityLabel: "Medium",
+    todos: [todo("t1", "Document the chosen retry boundary", 0)],
+    relations: [],
+    issueUrl: "http://localhost:5733/issues?issue=PAT-12",
+    completionStatusName: "Done",
+  };
+
+  it("carries the issue context into a user-led discussion without starting implementation", () => {
+    const prompt = buildIssueTalkPrompt(base);
+
+    expect(prompt).toContain("# PAT-12 — Login test is flaky");
+    expect(prompt).toContain("## Description\nDecide whether retries belong in the client.");
+    expect(prompt).toContain("## Checklist\n- [ ] Document the chosen retry boundary");
+    expect(prompt).toContain("I want to talk through PAT-12");
+    expect(prompt).toContain("`issues_link_thread`");
+    expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
+    expect(prompt).toContain("`issues_update` and `issues_comment`");
+    expect(prompt).not.toContain("move it to Done");
   });
 });
 

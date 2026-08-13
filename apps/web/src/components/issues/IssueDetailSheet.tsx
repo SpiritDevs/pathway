@@ -41,7 +41,15 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { SearchXIcon, Trash2Icon, UnplugIcon, WandSparklesIcon, XIcon } from "lucide-react";
+import {
+  CheckIcon,
+  CopyIcon,
+  SearchXIcon,
+  Trash2Icon,
+  UnplugIcon,
+  WandSparklesIcon,
+  XIcon,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -55,6 +63,7 @@ import {
 import { useAssetUrls } from "~/assets/assetUrls";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { usePrimarySettings } from "~/hooks/useSettings";
@@ -164,6 +173,7 @@ import {
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
+  buildIssueTalkPrompt,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
   issueStartWorkTodos,
@@ -300,12 +310,44 @@ export function IssueDetailSheet({
   );
 }
 
-function SheetHeaderBar({ title, children }: { title: string; children?: ReactNode }) {
+function SheetHeaderBar({
+  title,
+  children,
+  onTitleClick,
+  titleActionLabel,
+  titleActionComplete = false,
+}: {
+  title: string;
+  children?: ReactNode;
+  onTitleClick?: () => void;
+  titleActionLabel?: string;
+  titleActionComplete?: boolean;
+}) {
   return (
     <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
-      <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-        {title}
-      </span>
+      {onTitleClick === undefined ? (
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+          {title}
+        </span>
+      ) : (
+        <button
+          aria-label={titleActionLabel}
+          className="group/title flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onTitleClick}
+          title={titleActionLabel}
+          type="button"
+        >
+          <span className="truncate">{title}</span>
+          {titleActionComplete ? (
+            <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+          ) : (
+            <CopyIcon
+              aria-hidden="true"
+              className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
+            />
+          )}
+        </button>
+      )}
       {children}
       <SheetClose
         aria-label="Close issue"
@@ -415,6 +457,21 @@ function IssueDetailBody({
   const acceptTriage = useTriageAccept();
   const linkThread = useLinkIssueThread();
   const unlinkThread = useUnlinkIssueThread();
+  const { copyToClipboard: copyIssueKey, isCopied: issueKeyCopied } = useCopyToClipboard({
+    target: "issue code",
+    onCopy: () => {
+      toastManager.add({ type: "success", title: "Issue code copied", description: issue.key });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy issue code",
+          description: error.message,
+        }),
+      );
+    },
+  });
 
   const write = useCallback(
     (patch: IssuePatch | null) => {
@@ -749,7 +806,11 @@ function IssueDetailBody({
 
   /** Opens the local draft and assembles the same issue context for both launch actions. */
   const prepareIssueThreadDraft = useCallback(
-    async (workspaceMode: IssueStartWorkWorkspaceMode, baseBranch: string | null) => {
+    async (
+      workspaceMode: IssueStartWorkWorkspaceMode,
+      baseBranch: string | null,
+      purpose: "start-work" | "talk" = "start-work",
+    ) => {
       if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
         throw new Error("The issue thread could not be prepared.");
       }
@@ -770,7 +831,7 @@ function IssueDetailBody({
           title: counterpart.title,
         });
       }
-      const prompt = buildIssueStartWorkPrompt({
+      const promptContext = {
         issue,
         statusName: status?.name ?? null,
         completionStatusName:
@@ -785,7 +846,11 @@ function IssueDetailBody({
         todos: issueStartWorkTodos(detail?.todos ?? EMPTY_TODOS),
         relations,
         issueUrl: issueDetailUrl(window.location.origin, issue.key),
-      });
+      };
+      const prompt =
+        purpose === "talk"
+          ? buildIssueTalkPrompt(promptContext)
+          : buildIssueStartWorkPrompt(promptContext);
       const files: File[] = [];
       for (const [index, url] of startWorkAttachmentUrls.entries()) {
         if (url === null) throw new Error("The issue images are still loading. Try again.");
@@ -923,10 +988,7 @@ function IssueDetailBody({
                   priority: issue.priority,
                   runEnrichment: false,
                 })
-              : await updateIssue({
-                  issueId: issue.id,
-                  patch: { statusId: targetStatusId },
-                });
+              : await updateIssue({ issueId: issue.id, patch: { statusId: targetStatusId } });
             reportFailure("Work started, but the issue status could not be updated", transitioned);
           }
 
@@ -1013,6 +1075,45 @@ function IssueDetailBody({
     [prepareIssueThreadDraft, startingWork],
   );
 
+  /** Opens a current-checkout draft so the user's first message can steer the discussion. */
+  const handleTalkAboutIssue = useCallback(() => {
+    if (startingWork) return;
+    setStartingWork(true);
+    void (async () => {
+      try {
+        const prepared = await prepareIssueThreadDraft("current_checkout", null, "talk");
+        if (prepared === null) return;
+        const draftStore = useComposerDraftStore.getState();
+        draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+        draftStore.addImages(
+          prepared.opened.draftId,
+          prepared.files.map(
+            (file) =>
+              ({
+                type: "image",
+                id: randomUUID(),
+                name: file.name,
+                mimeType: file.type,
+                sizeBytes: file.size,
+                previewUrl: URL.createObjectURL(file),
+                file,
+              }) satisfies ComposerImageAttachment,
+          ),
+        );
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to create issue discussion",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setStartingWork(false);
+      }
+    })();
+  }, [prepareIssueThreadDraft, startingWork]);
+
   useEffect(() => {
     if (
       startWorkRequestProvider === null ||
@@ -1071,7 +1172,12 @@ function IssueDetailBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar title={issue.key}>
+      <SheetHeaderBar
+        onTitleClick={() => copyIssueKey(issue.key, undefined)}
+        title={issue.key}
+        titleActionComplete={issueKeyCopied}
+        titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
+      >
         <IssueDeleteMenu
           count={1}
           onConfirm={handleDelete}
@@ -1356,6 +1462,18 @@ function IssueDetailBody({
                 onAddRelation={handleAddRelation}
                 onAddSubIssue={handleAddSubIssue}
                 onAddTodo={handleAddTodo}
+                onTalkAboutIssue={handleTalkAboutIssue}
+                talkAboutIssueBlockReason={
+                  project?.workspaceRoot == null
+                    ? "Choose a project with a connected workspace before starting a discussion."
+                    : storeStatus === "disconnected"
+                      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+                      : !startWorkAttachmentsReady
+                        ? "Issue images are still loading."
+                        : startingWork
+                          ? "Another issue thread is being prepared."
+                          : null
+                }
               />
             </aside>
           </div>

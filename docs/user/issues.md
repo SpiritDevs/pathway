@@ -62,7 +62,8 @@ work down a queue without losing your place. Click outside the sheet or press `E
 The sheet holds the description, the properties rail, todos, sub-issues, relations, comments, the
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with
 who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
-resize it; Pathway remembers the width for the next issue you open.
+resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
+sheet header to copy it.
 
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
@@ -134,6 +135,11 @@ one click away. Dragging cards around a board never launches an agent.
 Use the arrow beside **Start new thread** and choose **Create pending thread** when you want to
 prepare the same prompt, model, images, and workspace without sending the first turn. The pending
 thread opens in the composer so you can review or edit it before submitting it.
+
+Choose **Talk about issue** under **Actions** to open a pending discussion thread even when the
+issue is not assigned to an agent. Add your question to the prepared issue context, then send it
+when you are ready. The agent links the thread to the issue and keeps the ticket current as the
+conversation produces decisions, without starting implementation unless you ask.
 
 When the issue came from an intake channel with **Auto-assign worker** enabled, Pathway saves the
 selected provider, model, and reasoning level on the issue. **Start new thread** opens with that

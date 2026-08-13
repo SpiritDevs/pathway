@@ -150,12 +150,8 @@ function metaLine(context: IssueStartWorkContext): string | null {
  * Markdown, in the order a person reads an issue: what it is, where it lives, what it says, what
  * it is made of, what it touches. Empty sections are dropped rather than printed empty — a
  * "## Checklist" with nothing under it reads as a checklist the model failed to load.
- *
- * The closing line is the only instruction, and it is deliberately not a plan: this is dispatched
- * by an explicit Start work press, so the agent should begin from the issue rather than inventing
- * work beyond it.
  */
-export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): string {
+function buildIssueContextBlocks(context: IssueStartWorkContext): Array<string> {
   const { issue } = context;
   const blocks: Array<string> = [`# ${issue.key} — ${issue.title}`];
 
@@ -182,12 +178,33 @@ export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): strin
     );
   }
 
+  return blocks;
+}
+
+/** Adds the implementation instruction used by the explicit Start work press. */
+export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): string {
+  const blocks = buildIssueContextBlocks(context);
+
   const completionInstruction =
     context.completionStatusName == null
       ? ""
       : ` When the implementation and its verification are genuinely finished, use \`issues_update\` to move it to ${context.completionStatusName}; that transition starts its configured audits.`;
   blocks.push(
     `Start by reading the issue with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the issue current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.${completionInstruction}`,
+  );
+
+  return `${blocks.join("\n\n")}\n`;
+}
+
+/**
+ * Seeds a user-led discussion rather than an implementation turn. The first response links the
+ * materialized thread back to the issue; after that, issue edits follow the decisions made in the
+ * conversation instead of treating opening the draft as permission to change code or workflow.
+ */
+export function buildIssueTalkPrompt(context: IssueStartWorkContext): string {
+  const blocks = buildIssueContextBlocks(context);
+  blocks.push(
+    `I want to talk through ${context.issue.key} before deciding what to do. Start by reading it with Pathway MCP's \`issues_get\` tool and link this thread to it with \`issues_link_thread\`. Answer my questions and help me clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the ticket current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.`,
   );
 
   return `${blocks.join("\n\n")}\n`;
