@@ -296,6 +296,18 @@ export const OrchestrationV2BrowserTakeoverStatus = Schema.Literals([
 ]);
 export type OrchestrationV2BrowserTakeoverStatus = typeof OrchestrationV2BrowserTakeoverStatus.Type;
 
+/**
+ * Run statuses during which a browser takeover may be requested. A run parked
+ * at "waiting" is post-terminal drain — its agent turn is already over — so
+ * the server rejects a request against it. Clients gate the takeover callout
+ * on the same list so they never offer an action the server will refuse.
+ */
+export const ORCHESTRATION_V2_BROWSER_TAKEOVER_ELIGIBLE_RUN_STATUSES = [
+  "preparing",
+  "starting",
+  "running",
+] as const satisfies ReadonlyArray<OrchestrationV2RunStatus>;
+
 export const OrchestrationV2BrowserTakeoverFailure = Schema.Literals([
   "already_finished",
   "no_live_host",
@@ -330,10 +342,10 @@ export const OrchestrationV2BrowserTakeover = Schema.Struct({
 export type OrchestrationV2BrowserTakeover = typeof OrchestrationV2BrowserTakeover.Type;
 
 /**
- * Last known preview automation host and tab for the thread. Coalesced by the
- * broker: recorded only when the (providerSessionId, hostClientId, tabId)
- * tuple changes, never per browser action. Clients use it to decide whether
- * offering a takeover is meaningful right now.
+ * Last known preview automation host and tab for the thread. The broker
+ * reports activity per routed automation request; the decider drops true
+ * no-ops (same run, session, host, and tab) before writing an event. Clients
+ * use it to decide whether offering a takeover is meaningful right now.
  */
 export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
   runId: Schema.NullOr(RunId),

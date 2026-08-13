@@ -162,7 +162,13 @@ const FENCE_DRAIN_TIMEOUT_MS = 10_000;
  * a spinner forever.
  */
 const RUN_TERMINAL_TIMEOUT_MS = 60_000;
-const RUN_TERMINAL_POLL_INTERVAL_MS = 25;
+/**
+ * Matches `ThreadManagementService.waitForThread`: each poll re-decodes the
+ * whole thread projection, so a tighter interval buys nothing but CPU while a
+ * provider takes seconds to shut a turn down. The common case (a run with no
+ * live provider turn) settles synchronously and never sleeps at all.
+ */
+const RUN_TERMINAL_POLL_INTERVAL_MS = 250;
 
 export interface BrowserTakeoverStepInput {
   readonly threadId: ThreadId;
@@ -355,13 +361,29 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<StepOutcome, OrchestratorV2Error> =>
     Effect.gen(function* () {
       const loaded = yield* loadMarker(input);
-      if (loaded === null || loaded.marker.status !== "requested") {
+      // "pausing" means an earlier attempt at *this* takeover (loadMarker
+      // already fenced on the takeover id, so a pausing marker belonging to a
+      // different takeover still reads as stale) died mid-establish. Without
+      // resuming, the marker would sit at "pausing" with the fence armed until
+      // a server restart ran recovery, so the retry picks up where it left off.
+      const resuming = loaded !== null && loaded.marker.status === "pausing";
+      if (loaded === null || (loaded.marker.status !== "requested" && !resuming)) {
         return { type: "done" } as const;
       }
-      if (!(yield* transition({ ...input, step: "takeover-pausing", to: "pausing" }))) {
+      if (resuming) {
+        yield* Effect.logInfo("Resuming an interrupted browser takeover", {
+          threadId: input.threadId,
+          takeoverId: input.takeoverId,
+        });
+      } else if (!(yield* transition({ ...input, step: "takeover-pausing", to: "pausing" }))) {
         return { type: "done" } as const;
       }
 
+      // Safe to repeat for a resumed takeover: the broker keys one fence per
+      // environment+thread and overwrites it, so re-acquiring re-arms the same
+      // entry and re-captures the lease. The drain is a no-op the second time
+      // because the armed fence has been rejecting new automation since the
+      // first attempt.
       const acquired = yield* fence
         .acquire({
           threadId: input.threadId,
@@ -390,34 +412,43 @@ export const make = Effect.gen(function* () {
       const run = projection.runs.find((candidate) => candidate.id === loaded.marker.runId);
       // "waiting" counts as finished here for the same reason it does not count
       // as eligible in the decider: the provider turn is already over, so there
-      // is nothing left to pause and the user should be told so.
-      if (run === undefined || isTerminalRunStatus(run.status) || run.status === "waiting") {
+      // is nothing left to pause.
+      const alreadySettled =
+        run === undefined || isTerminalRunStatus(run.status) || run.status === "waiting";
+      if (alreadySettled && !resuming) {
         yield* fence.release({
           threadId: input.threadId,
           takeoverId: input.takeoverId,
         });
         return { type: "failed", failure: "already_finished" } as const;
       }
-
-      const interrupted = yield* threads
-        .dispatch({
-          type: "run.interrupt",
-          commandId: CommandId.make(`${input.attemptId}:takeover-interrupt`),
-          threadId: input.threadId,
-          runId: loaded.marker.runId,
-          reason: "Paused so the user can drive the browser.",
-        })
-        .pipe(Effect.result);
-      if (interrupted._tag === "Failure") {
-        yield* Effect.logWarning("Browser takeover could not interrupt the run", {
-          threadId: input.threadId,
-          takeoverId: input.takeoverId,
-          cause: interrupted.failure,
-        });
-        return { type: "failed", failure: "interrupt_failed" } as const;
-      }
-      if (!(yield* awaitRunSettled({ threadId: input.threadId, runId: loaded.marker.runId }))) {
-        return { type: "failed", failure: "interrupt_failed" } as const;
+      // A resumed takeover usually finds the run already stopped, because the
+      // first attempt's interrupt landed before it died. Reporting
+      // "already_finished" there would strand the user: no eligible run remains
+      // to request a fresh takeover against. The fence is armed and the agent
+      // is not driving the browser, so hand control over — proceeding starts the
+      // next turn from whatever the user does.
+      if (!alreadySettled) {
+        const interrupted = yield* threads
+          .dispatch({
+            type: "run.interrupt",
+            commandId: CommandId.make(`${input.attemptId}:takeover-interrupt`),
+            threadId: input.threadId,
+            runId: loaded.marker.runId,
+            reason: "Paused so the user can drive the browser.",
+          })
+          .pipe(Effect.result);
+        if (interrupted._tag === "Failure") {
+          yield* Effect.logWarning("Browser takeover could not interrupt the run", {
+            threadId: input.threadId,
+            takeoverId: input.takeoverId,
+            cause: interrupted.failure,
+          });
+          return { type: "failed", failure: "interrupt_failed" } as const;
+        }
+        if (!(yield* awaitRunSettled({ threadId: input.threadId, runId: loaded.marker.runId }))) {
+          return { type: "failed", failure: "interrupt_failed" } as const;
+        }
       }
 
       yield* transition({

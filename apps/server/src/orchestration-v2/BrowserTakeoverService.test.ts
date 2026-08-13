@@ -9,7 +9,9 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import {
@@ -65,25 +67,32 @@ interface FenceProbe {
   readonly layer: Layer.Layer<BrowserTakeoverFenceRegistry>;
   readonly calls: ReadonlyArray<string>;
   readonly failAcquire: (reason: FenceReason) => void;
+  /** Runs inside `acquire` before it answers, so a test can stall there. */
+  readonly gateAcquire: (gate: Effect.Effect<void>) => void;
 }
 
 /** Programmable stand-in for the preview automation fence. */
 function makeFenceProbe(): FenceProbe {
   const calls: Array<string> = [];
   let acquireFailure: FenceReason | null = null;
+  let acquireGate: Effect.Effect<void> = Effect.void;
   const fence: BrowserTakeoverFenceShape = {
     acquire: (input) =>
       Effect.suspend(() => {
         calls.push(`acquire:${input.takeoverId}`);
-        return acquireFailure === null
-          ? Effect.succeed(defaultLease)
-          : Effect.fail(
-              new PreviewTakeoverFenceError({
-                reason: acquireFailure,
-                threadId: input.threadId,
-                takeoverId: input.takeoverId,
-              }),
-            );
+        return acquireGate.pipe(
+          Effect.andThen(() =>
+            acquireFailure === null
+              ? Effect.succeed(defaultLease)
+              : Effect.fail(
+                  new PreviewTakeoverFenceError({
+                    reason: acquireFailure,
+                    threadId: input.threadId,
+                    takeoverId: input.takeoverId,
+                  }),
+                ),
+          ),
+        );
       }),
     release: (input) =>
       Effect.sync(() => {
@@ -105,6 +114,9 @@ function makeFenceProbe(): FenceProbe {
     calls,
     failAcquire: (reason) => {
       acquireFailure = reason;
+    },
+    gateAcquire: (gate) => {
+      acquireGate = gate;
     },
   };
 }
@@ -479,6 +491,72 @@ describe("browser takeover establish", () => {
         const pausedRun = projection.runs.find((candidate) => candidate.id === run.id);
         assert.equal(pausedRun?.status, "interrupted");
         assert.equal(pausedRun?.delegatedCompletion?.disposition, "stopped");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("resumes an establish that was interrupted while pausing", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const takeover = yield* BrowserTakeoverService;
+        const threadId = yield* createThread("resume");
+        const run = yield* startRun("resume", threadId);
+        const { takeoverId } = yield* requestTakeover({ name: "resume", threadId });
+        // The outbox retries the same effect, so the retry carries the same
+        // attempt id and the same derived command ids.
+        const attemptId = CommandId.make("attempt:resume:1");
+
+        const inAcquire = yield* Deferred.make<void>();
+        const held = yield* Deferred.make<void>();
+        harness.fence.gateAcquire(
+          Deferred.succeed(inAcquire, undefined).pipe(Effect.andThen(Deferred.await(held))),
+        );
+        const attempt = yield* Effect.forkChild(
+          takeover.establish({ threadId, takeoverId, attemptId }),
+        );
+        yield* Deferred.await(inAcquire);
+        yield* Fiber.interrupt(attempt);
+
+        // Stranded exactly the way the finding describes: pausing, fence armed.
+        assert.equal((yield* markerOf(threadId))?.status, "pausing");
+        assert.deepEqual(harness.fence.calls, [`acquire:${takeoverId}`]);
+
+        harness.fence.gateAcquire(Effect.void);
+        yield* takeover.establish({ threadId, takeoverId, attemptId });
+
+        const marker = yield* markerOf(threadId);
+        assert.equal(marker?.status, "active");
+        assert.equal(marker?.tabId, defaultLease.tabId);
+        assert.isNull(marker?.failure ?? null);
+        // Re-acquired rather than trusting the half-armed fence, and the run the
+        // first attempt never got to interrupt is paused now.
+        assert.deepEqual(harness.fence.calls, [
+          `acquire:${takeoverId}`,
+          `acquire:${takeoverId}`,
+        ]);
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.runs.find((candidate) => candidate.id === run.id)?.status, "interrupted");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("ignores a pausing marker that belongs to a different takeover", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const takeover = yield* BrowserTakeoverService;
+        const stranded = yield* driveMarkerTo({ name: "resume-stale", status: "pausing" });
+
+        yield* takeover.establish({
+          threadId: stranded.threadId,
+          takeoverId: CommandId.make("command:takeover:resume-stale:other"),
+          attemptId: CommandId.make("attempt:resume-stale:1"),
+        });
+
+        assert.deepEqual(harness.fence.calls, []);
+        assert.equal((yield* markerOf(stranded.threadId))?.status, "pausing");
       }).pipe(Effect.provide(harness.layer));
     }),
   );

@@ -1428,11 +1428,15 @@ it.effect("fences one thread without touching another thread in the same environ
   ),
 );
 
-it.effect("publishes preview activity only when the host and tab a thread drives change", () =>
+// The broker cannot see the run behind an invoke, and provider session, host,
+// and pinned tab all survive across runs on a thread. Suppressing repeats here
+// would mute the takeover marker for every run after the first, so every
+// routed invoke publishes and the decider does the run-aware deduping.
+it.effect("publishes preview activity for every automation request it routes", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const records: PreviewActivityRecord[] = [];
-      const broker = yield* makeBroker.pipe(
+      const { broker, fence } = yield* makeBrokerWithFence.pipe(
         Effect.provideService(PreviewAutomationActivitySink, {
           record: (record) =>
             Effect.sync(() => {
@@ -1465,18 +1469,38 @@ it.effect("publishes preview activity only when the host and tab a thread drives
         },
       ]);
 
+      // Same host, same (absent) tab, same provider session: still published.
       yield* broker.invoke({ scope, operation: "status", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(1);
+      expect(records).toHaveLength(2);
+      expect(records.at(-1)).toMatchObject({ tabId: null, hostClientId: "client-1" });
 
+      // Opening a tab publishes on the way out and again once the response
+      // moves the thread onto the tab it just opened.
       yield* broker.invoke({ scope, operation: "open", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(2);
+      expect(records).toHaveLength(4);
+      expect(records.at(-2)).toMatchObject({ tabId: null });
       expect(records.at(-1)).toMatchObject({ tabId: openedTabId, hostClientId: "client-1" });
 
+      // A later request inherits the pinned tab, so one record, not a correction.
       yield* broker.invoke({ scope, operation: "snapshot", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(2);
+      expect(records).toHaveLength(5);
+      expect(records.at(-1)).toMatchObject({ tabId: openedTabId, hostClientId: "client-1" });
+
+      // Fenced automation never ran, so it leaves no trace.
+      yield* fence.acquire({
+        environmentId: takeoverEnvironmentId,
+        threadId: takeoverThreadId,
+        takeoverId,
+      });
+      const blocked = yield* broker
+        .invoke<void>({ scope, operation: "status", input: {} })
+        .pipe(Effect.flip);
+      expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
+      yield* Effect.yieldNow;
+      expect(records).toHaveLength(5);
     }),
   ),
 );

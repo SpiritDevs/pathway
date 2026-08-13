@@ -36,9 +36,10 @@ Two ways to finish, both on the takeover banner:
 ## Who can take over
 
 Only the Pathway desktop that is hosting the Preview browser can take it over — it is the one with
-the actual window. Other devices signed into the same thread see the takeover status ("the browser
-is under manual control on another Pathway desktop") and can still select **Proceed** when you are
-ready, but the page itself is prepared on the hosting desktop.
+the actual window. Other desktops and browsers signed into the same thread see the takeover status
+("the browser is under manual control on another Pathway desktop") and can still select **Proceed**
+when you are ready, but the page itself is prepared on the hosting desktop. On mobile the takeover
+is shown as a status only.
 
 ## If something goes wrong
 

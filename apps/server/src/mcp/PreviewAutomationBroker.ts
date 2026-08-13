@@ -147,23 +147,15 @@ type InvokeRoute =
       readonly requestId: string;
       readonly requestContext: PreviewAutomationRequestErrorContext;
       readonly requestSequence: number;
-      readonly activity: PreviewActivityRecord | undefined;
+      readonly activity: PreviewActivityRecord;
     }
   | undefined;
-
-/** Last (providerSessionId, hostClientId, tabId) published for a thread; the coalescing key. */
-interface ThreadActivity {
-  readonly providerSessionId: string;
-  readonly hostClientId: string;
-  readonly tabId: PreviewTabId | null;
-}
 
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly fences: ReadonlyMap<string, TakeoverFence>;
-  readonly activity: ReadonlyMap<string, ThreadActivity>;
   readonly requestSequence: number;
   readonly focusSequence: number;
 }
@@ -222,41 +214,24 @@ const isConnectionLive = (current: BrokerState, assignment: HostAssignment): boo
 const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
 
 /**
- * Coalesces preview activity: a record is only worth publishing when the
- * (providerSessionId, hostClientId, tabId) tuple a thread is driving actually
- * changes, never once per browser action.
+ * The broker deliberately does not suppress repeat records. It cannot see the
+ * run driving an invoke (the orchestrator resolves that at dispatch time), and
+ * a provider session, host, and pinned tab all survive across runs on a thread,
+ * so any broker-side "nothing changed" check would silently drop the marker for
+ * every run after the first. Deduping belongs to the decider, which knows the
+ * run id and rejects true no-ops before writing an event.
  */
-const nextThreadActivity = (
-  current: BrokerState,
+const activityRecord = (
   scope: McpInvocationContext.McpInvocationScope,
   hostClientId: string,
   tabId: PreviewTabId | null,
-): {
-  readonly activity: BrokerState["activity"];
-  readonly record: PreviewActivityRecord | undefined;
-} => {
-  const key = threadKey(scope.environmentId, scope.threadId);
-  const previous = current.activity.get(key);
-  if (
-    previous?.providerSessionId === scope.providerSessionId &&
-    previous.hostClientId === hostClientId &&
-    previous.tabId === tabId
-  ) {
-    return { activity: current.activity, record: undefined };
-  }
-  const activity = new Map(current.activity);
-  activity.set(key, { providerSessionId: scope.providerSessionId, hostClientId, tabId });
-  return {
-    activity,
-    record: {
-      environmentId: scope.environmentId,
-      threadId: scope.threadId,
-      providerSessionId: scope.providerSessionId,
-      tabId,
-      hostClientId,
-    },
-  };
-};
+): PreviewActivityRecord => ({
+  environmentId: scope.environmentId,
+  threadId: scope.threadId,
+  providerSessionId: scope.providerSessionId,
+  tabId,
+  hostClientId,
+});
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 
@@ -393,15 +368,14 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
     assignments: new Map(),
     pending: new Map(),
     fences: new Map(),
-    activity: new Map(),
     requestSequence: 0,
     focusSequence: 0,
   });
 
   /**
-   * Publishes a coalesced host/tab observation. Detached and log-only: the
-   * marker exists so the client can offer a takeover, and losing one must never
-   * fail the browser action that produced it.
+   * Publishes a host/tab observation. Detached and log-only: the marker exists
+   * so the client can offer a takeover, and losing one must never fail the
+   * browser action that produced it.
    */
   const publishActivity = (record: PreviewActivityRecord) =>
     activitySink
@@ -634,12 +608,6 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         };
         const pending = new Map(current.pending);
         pending.set(requestId, { queue: connection.queue, deferred, settled, context });
-        const activity = nextThreadActivity(
-          current,
-          input.scope,
-          connection.clientId,
-          tabId ?? null,
-        );
         return [
           {
             kind: "routed",
@@ -647,13 +615,12 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
             requestId,
             requestContext: context,
             requestSequence,
-            activity: activity.record,
+            activity: activityRecord(input.scope, connection.clientId, tabId ?? null),
           } as const,
           {
             ...current,
             assignments,
             pending,
-            activity: activity.activity,
             requestSequence: requestSequence + 1,
           },
         ] as const;
@@ -714,7 +681,7 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         onSome: (value) => Effect.succeed(value as A),
       });
     });
-    if (route.activity) yield* publishActivity(route.activity);
+    yield* publishActivity(route.activity);
     // `settled` outlives the response deferred on purpose: a takeover drain
     // waits for the whole invoke, including the tab bookkeeping below, so the
     // lease it hands the user names the tab this request ended on.
@@ -745,8 +712,13 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
             tabSequence: requestSequence,
           });
         }
-        const next = nextThreadActivity(current, input.scope, connection.clientId, resultTabId);
-        return [next.record, { ...current, assignments, activity: next.activity }] as const;
+        // Only a correction: the record published when this request was routed
+        // named the tab we expected, and the response moved it.
+        const record =
+          resultTabId === route.activity.tabId
+            ? undefined
+            : activityRecord(input.scope, connection.clientId, resultTabId);
+        return [record, { ...current, assignments }] as const;
       });
       return { result, activity };
     }).pipe(Effect.ensuring(Deferred.succeed(settled, undefined)));

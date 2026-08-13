@@ -11,7 +11,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ComposerBannerStack } from "./ComposerBannerStack";
-import type { BrowserTakeoverBannerInput } from "./browserTakeoverBanner";
+import type {
+  BrowserTakeoverBannerInput,
+  BrowserTakeoverCalloutInput,
+} from "./browserTakeoverBanner";
 import {
   browserTakeoverBannerItem,
   browserTakeoverCalloutDismissKey,
@@ -42,10 +45,11 @@ const eligible = {
   previewActivity: activity(),
   takeoverStatus: null,
   activeRunId: RUN_ID,
+  activeRunStatus: "running",
   previewSupported: true,
   automationHostClientId: HOST_CLIENT_ID,
   dismissed: false,
-} as const;
+} as const satisfies BrowserTakeoverCalloutInput;
 
 const takeover = (
   overrides: Partial<OrchestrationV2BrowserTakeover> = {},
@@ -68,6 +72,7 @@ const bannerInput = {
   takeover: null,
   previewActivity: activity(),
   activeRunId: RUN_ID,
+  activeRunStatus: "running",
   previewSupported: true,
   automationHostClientId: HOST_CLIENT_ID,
   requestPending: false,
@@ -111,6 +116,18 @@ describe("shouldShowBrowserTakeoverCallout", () => {
         previewActivity: activity({ runId: null }),
       }),
     ).toBe(false);
+  });
+
+  it("only offers a takeover while the run can still be paused", () => {
+    for (const status of ["preparing", "starting", "running"] as const) {
+      expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunStatus: status })).toBe(true);
+    }
+    // "waiting" is post-turn drain: the sidebar still calls the run active, but
+    // the server has no agent turn left to interrupt and rejects the request.
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunStatus: "waiting" })).toBe(
+      false,
+    );
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunStatus: null })).toBe(false);
   });
 
   it("hides on clients that cannot host the browser", () => {
@@ -223,11 +240,16 @@ describe("resolveBrowserTakeoverBanner", () => {
     }
   });
 
-  it("shows a non-interactive live status while pausing and resuming", () => {
+  it("keeps an escape hatch while pausing, and none while resuming", () => {
     for (const status of ["requested", "pausing"] as const) {
       const banner = bannerFor(status);
       expect(banner?.title).toBe("Pausing agent...");
-      expect(banner?.actions).toEqual([]);
+      // Draining a wedged provider can hold this state for over a minute, so
+      // the user always keeps a way out. Proceed stays absent: there is
+      // nothing to proceed to until the agent has actually stopped.
+      expect(banner?.actions.map((action) => action.kind)).toEqual(["release"]);
+      expect(banner?.actions[0]?.label).toBe("End takeover");
+      expect(banner?.actions[0]?.emphasis).toBe("secondary");
       expect(banner?.transient).toBe(true);
       expect(banner?.dismissKey).toBeNull();
     }
@@ -297,6 +319,7 @@ describe("resolveBrowserTakeoverBanner", () => {
         takeover: undefined,
         previewActivity: undefined,
         activeRunId: RUN_ID,
+        activeRunStatus: "running",
         previewSupported: true,
         automationHostClientId: HOST_CLIENT_ID,
         requestPending: false,
@@ -334,7 +357,7 @@ describe("browserTakeoverBannerItem", () => {
     expect(markup).not.toContain('role="status"');
   });
 
-  it("wraps a transient status in a polite live region and renders no buttons", () => {
+  it("wraps a transient status in a polite live region, keeping only the escape hatch", () => {
     const descriptor = bannerFor("pausing");
     if (descriptor === null) throw new Error("expected a pausing descriptor");
 
@@ -353,6 +376,7 @@ describe("browserTakeoverBannerItem", () => {
 
     expect(markup).toContain('role="status"');
     expect(markup).toContain("Pausing agent...");
-    expect(markup).not.toContain("<button");
+    expect(markup).toContain("End takeover</button>");
+    expect(markup).not.toContain("Proceed</button>");
   });
 });

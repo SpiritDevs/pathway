@@ -4788,11 +4788,12 @@ function ChatViewContent(props: ChatViewProps) {
     string | null
   >(null);
   const projectedBrowserTakeover = serverProjection?.thread.browserTakeover ?? null;
-  const activeBrowserTakeoverRunId = useMemo(
-    () =>
-      serverProjection === null ? null : (resolveActiveThreadRun(serverProjection)?.id ?? null),
-    [serverProjection],
-  );
+  const activeBrowserTakeoverRun =
+    serverProjection === null ? null : (resolveActiveThreadRun(serverProjection) ?? null);
+  // Kept as two primitives rather than the run object: the projection hands back
+  // a fresh run on every stream tick, and the memo below must not churn with it.
+  const activeBrowserTakeoverRunId = activeBrowserTakeoverRun?.id ?? null;
+  const activeBrowserTakeoverRunStatus = activeBrowserTakeoverRun?.status ?? null;
   // Re-read every render (a cheap map lookup) rather than inside the memo: the
   // answer flips when the first projection lands, which need not move any other
   // dependency of the memo below.
@@ -4805,6 +4806,7 @@ function ChatViewContent(props: ChatViewProps) {
       takeover: projectedBrowserTakeover,
       previewActivity: serverProjection?.thread.previewActivity ?? null,
       activeRunId: activeBrowserTakeoverRunId,
+      activeRunStatus: activeBrowserTakeoverRunStatus,
       previewSupported: isPreviewSupportedInRuntime(),
       automationHostClientId: browserTakeoverHostClientId,
       requestPending:
@@ -4815,6 +4817,7 @@ function ChatViewContent(props: ChatViewProps) {
     // so the tick has to be an explicit dependency to re-evaluate.
   }, [
     activeBrowserTakeoverRunId,
+    activeBrowserTakeoverRunStatus,
     activeThreadKey,
     activeThreadRef,
     browserTakeoverHostClientId,
