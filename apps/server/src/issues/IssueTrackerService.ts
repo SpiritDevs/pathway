@@ -16,6 +16,7 @@ import {
   ISSUE_MAX_PARENT_DEPTH,
   ISSUE_TITLE_MAX_CHARS,
   SLACK_MAX_CHANNEL_WATCHES,
+  isPlaceholderIssueTitle,
   type Issue,
   type IssueActor,
   type IssueBulkUpdateInput,
@@ -695,6 +696,52 @@ interface IssueFieldChange {
 const WHOLE_ISSUE_CHANGE: ReadonlyArray<IssueFieldChange> = [
   { field: null, before: null, after: null },
 ];
+
+/**
+ * The actor that last chose an issue's title. A field change wins; otherwise creation/import is
+ * the provenance of the initial title. Missing history is treated conservatively by callers.
+ */
+export function latestIssueTitleActor(events: ReadonlyArray<IssueEvent>): IssueActor | null {
+  const changed = events.findLast((event) => event.field === "title");
+  if (changed !== undefined) return changed.actor;
+  return (
+    events.find((event) => event.kind === "created" || event.kind === "imported")?.actor ?? null
+  );
+}
+
+/**
+ * Fields an investigation may write without asking. Priority is the investigation's direct
+ * classification. Description only fills a body that is still empty. A title is automatic only
+ * while it is still a generic intake title and its latest writer was not the user; a user-created
+ * or user-edited title remains a reviewable suggestion in the client.
+ */
+export function issueEnrichmentAutomaticPatch(input: {
+  readonly issue: Pick<Issue, "title" | "description" | "priority">;
+  readonly result: NonNullable<IssueEnrichmentRun["result"]>;
+  readonly titleActor: IssueActor | null;
+}): IssuePatch {
+  const title = input.result.suggestedTitle?.trim();
+  const description = input.result.suggestedDescription;
+  const applyTitle =
+    title !== undefined &&
+    title.length > 0 &&
+    title !== input.issue.title.trim() &&
+    isPlaceholderIssueTitle(input.issue.title) &&
+    input.titleActor !== null &&
+    input.titleActor.kind !== "user";
+  const applyDescription =
+    description !== undefined &&
+    description.trim().length > 0 &&
+    input.issue.description.trim().length === 0;
+  const applyPriority =
+    input.result.suggestedPriority !== null &&
+    input.result.suggestedPriority !== input.issue.priority;
+  return {
+    ...(applyTitle ? { title } : {}),
+    ...(applyDescription ? { description } : {}),
+    ...(applyPriority ? { priority: input.result.suggestedPriority } : {}),
+  };
+}
 
 interface IssueNaming {
   readonly statusNames: ReadonlyMap<string, string>;
@@ -2925,8 +2972,8 @@ export const make = Effect.gen(function* () {
    * Leave a finished investigation as a comment from the agent that ran it.
    *
    * The run row remains the source for transcripts and suggestions; the comment is the durable,
-   * human-readable handoff. Nothing else is applied: taking a suggested label or priority remains
-   * a human's write.
+   * human-readable handoff. Priority and safe missing-field rewrites land first as agent-authored
+   * issue changes. Labels remain reviewable suggestions.
    */
   const recordInvestigation = (input: {
     readonly issueId: IssueId;
@@ -2935,6 +2982,27 @@ export const make = Effect.gen(function* () {
     readonly finishedAt: string;
   }) =>
     Effect.gen(function* () {
+      const actor: IssueActor = {
+        // The instance id doubles as the driver kind for every built-in provider, and names the
+        // configured instance for the rest; either way the feed says which agent wrote this.
+        kind: "agent",
+        provider: ProviderDriverKind.make(input.modelSelection.instanceId),
+      };
+      // Read the row before its history: if a user title lands between the two reads, its event is
+      // visible and closes the automatic-title path. Parallel reads could observe the inverse.
+      const record = yield* requireIssueRecord(input.issueId);
+      const events = yield* eventRepository
+        .listByIssue({ issueId: input.issueId })
+        .pipe(Effect.mapError(storage("Failed to read the issue change log")));
+      const patch = issueEnrichmentAutomaticPatch({
+        issue: record,
+        result: input.result,
+        titleActor: latestIssueTitleActor(events),
+      });
+      if (Object.keys(patch).length > 0) {
+        yield* update({ issueId: input.issueId, patch }, actor);
+      }
+
       const body = buildInvestigationComment({
         result: input.result,
         model: `${input.modelSelection.instanceId} / ${input.modelSelection.model}`,
@@ -2945,9 +3013,7 @@ export const make = Effect.gen(function* () {
           issueId: input.issueId,
           body,
         },
-        // The instance id doubles as the driver kind for every built-in provider, and names the
-        // configured instance for the rest; either way the feed says which agent wrote this.
-        { kind: "agent", provider: ProviderDriverKind.make(input.modelSelection.instanceId) },
+        actor,
       );
     });
 

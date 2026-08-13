@@ -99,8 +99,8 @@ describe("buildInvestigationPrompt", () => {
     );
     assert.include(prompt, "Never");
     assert.include(prompt, "invent a detail");
-    // And the rule the whole feature rests on survives the additions.
-    assert.include(prompt, "Nothing you suggest is applied automatically; a person reviews it.");
+    assert.include(prompt, "Priority and safe missing-field suggestions may be applied");
+    assert.include(prompt, "labels remain for a person to review.");
   });
 
   it("says so rather than going quiet when an issue has no body", () => {
@@ -350,16 +350,15 @@ describe("normalizeInvestigationResult", () => {
     assert.isFalse("suggestedDescription" in (result ?? {}));
   });
 
-  it("refuses to rename an issue a person already named", () => {
+  it("retains an unexpected title suggestion for the live provenance decision", () => {
     const result = normalizeInvestigationResult(
       { summary: "s", suggestedTitle: "Websocket reconnect loses the queued turn" },
       { ...vocabulary, currentTitle: "Reconnect drops the queued turn" },
     );
 
-    // The prompt asks for this and a model mostly obeys; "mostly" is not a rule. A title somebody
-    // typed is not up for replacement, however much better the model's reads.
-    assert.isFalse("suggestedTitle" in (result ?? {}));
-    // Only the title is gated — the rest of the answer stands.
+    // The model was asked to omit this, but the issue may have changed while it ran. The
+    // completion path owns the live author check and leaves a user title for confirmation.
+    assert.strictEqual(result?.suggestedTitle, "Websocket reconnect loses the queued turn");
     assert.strictEqual(result?.summary, "s");
   });
 
@@ -451,8 +450,9 @@ describe("buildInvestigationComment", () => {
     assert.include(comment, "- Priority: high");
   });
 
-  it("says out loud that nothing was applied", () => {
-    assert.include(comment, "**Suggested** (not applied)");
+  it("does not falsely claim that every suggestion stayed unapplied", () => {
+    assert.include(comment, "**Suggested**");
+    assert.notInclude(comment, "(not applied)");
   });
 
   it("renders a proposed title on one line and a proposed description as a quote", () => {

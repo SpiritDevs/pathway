@@ -226,7 +226,7 @@ describe("suggestions", () => {
     expect(issueApplyPriorityPatch(issue(), null)).toBe(null);
   });
 
-  it("writes a title only over a placeholder the run named something better for", () => {
+  it("turns a different suggested title into an explicit apply patch", () => {
     expect(issueApplyTitlePatch(issue({ title: "Slack message" }), "Login test flakes")).toEqual({
       title: "Login test flakes",
     });
@@ -241,15 +241,16 @@ describe("suggestions", () => {
     expect(issueApplyTitlePatch(issue({ title: "Slack message" }), "   ")).toBe(null);
   });
 
-  it("never renames a title someone wrote, however good the suggestion is", () => {
+  it("leaves an unchanged title alone and offers a different one for confirmation", () => {
     expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), "Login test flakes")).toBe(
       null,
     );
     expect(issueApplyTitlePatch(issue({ title: "Login test flakes" }), " Login test flakes ")).toBe(
       null,
     );
-    // The one the review caught: a human title and a different suggestion is not a rename offer.
-    expect(issueApplyTitlePatch(issue({ title: "Auth flake" }), "Login test flakes")).toBe(null);
+    expect(issueApplyTitlePatch(issue({ title: "Auth flake" }), "Login test flakes")).toEqual({
+      title: "Login test flakes",
+    });
   });
 
   it("never writes a description over one someone typed", () => {
@@ -285,10 +286,10 @@ describe("suggestions", () => {
       text: "Login test flakes",
       state: "applied",
     });
-    // A title someone wrote. The card stays readable but must not claim it was applied.
+    // A title someone wrote while the run was in flight is a confirmation action.
     expect(resolveIssueSuggestedTitle(result, issue({ title: "Auth flake" }))).toEqual({
       text: "Login test flakes",
-      state: "blocked",
+      state: "applicable",
     });
   });
 
@@ -347,14 +348,13 @@ describe("suggestions", () => {
         labels,
       ),
     ).toBe(false);
-    // A title suggestion the gate refuses is not outstanding work: nothing else to press means no
-    // row at all, the same as a priority the issue already has.
+    // A user title is not silently replaced, but the suggestion remains an explicit action.
     expect(
       hasIssueEnrichmentSuggestions(
         { ...RESULT, suggestedTitle: "Login test flakes" },
         issue({ title: "Auth flake" }),
         labels,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

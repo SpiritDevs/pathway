@@ -1543,6 +1543,98 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeDependencyLayer())),
   );
 
+  it.effect("automatically applies investigation fields and a system-owned generic title", () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void, never>();
+      const result: IssueEnrichmentResult = {
+        summary: "The screenshot shows an editor menu with no available actions.",
+        likelyFiles: [],
+        relatedIssueKeys: [],
+        suggestedLabels: [],
+        suggestedPriority: "medium",
+        suggestedTitle: "Hide editor menus that have no available actions",
+        suggestedDescription: "Hide context-specific menus when they have no available actions.",
+      };
+      const tracker = yield* buildTracker(
+        makeFakeEngine({
+          start: ({ recorder }) =>
+            recorder.markRunning.pipe(
+              Effect.andThen(recorder.succeed(result)),
+              Effect.andThen(Deferred.succeed(finished, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.intakeCreateIssue({
+        channelId: "C1",
+        messageTs: "1723459200.000100",
+        title: "",
+        projectId: PROJECT,
+      });
+
+      yield* tracker.startEnrichment({ issueId: issue.id });
+      yield* Deferred.await(finished);
+
+      const updated = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      assert.strictEqual(updated?.title, result.suggestedTitle);
+      assert.strictEqual(updated?.description, result.suggestedDescription);
+      assert.strictEqual(updated?.priority, "medium");
+
+      const automaticChanges = (yield* tracker.getEvents({ issueId: issue.id })).events.filter(
+        (event) => event.kind === "field_changed",
+      );
+      assert.deepStrictEqual(
+        automaticChanges.map((event) => event.field),
+        ["title", "description", "priority"],
+      );
+      assert.isTrue(automaticChanges.every((event) => event.actor.kind === "agent"));
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
+  it.effect("keeps a user-authored generic title as a confirmation action", () =>
+    Effect.gen(function* () {
+      const finished = yield* Deferred.make<void, never>();
+      const result: IssueEnrichmentResult = {
+        summary: "The issue needs a specific name.",
+        likelyFiles: [],
+        relatedIssueKeys: [],
+        suggestedLabels: [],
+        suggestedPriority: "high",
+        suggestedTitle: "Reconnect drops the queued turn",
+        suggestedDescription: "A relay reconnect loses the queued turn.",
+      };
+      const tracker = yield* buildTracker(
+        makeFakeEngine({
+          start: ({ recorder }) =>
+            recorder.markRunning.pipe(
+              Effect.andThen(recorder.succeed(result)),
+              Effect.andThen(Deferred.succeed(finished, undefined)),
+              Effect.asVoid,
+            ),
+        }),
+      );
+      yield* seedProject(PROJECT, "/tmp/pathway");
+      const { issue } = yield* tracker.create({ title: "Untitled", projectId: PROJECT }, ACTOR);
+
+      yield* tracker.startEnrichment({ issueId: issue.id });
+      yield* Deferred.await(finished);
+
+      const updated = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      assert.strictEqual(updated?.title, "Untitled");
+      assert.strictEqual(updated?.description, result.suggestedDescription);
+      assert.strictEqual(updated?.priority, "high");
+      assert.strictEqual(
+        (yield* tracker.getEnrichmentRuns({ issueId: issue.id })).runs[0]?.result?.suggestedTitle,
+        result.suggestedTitle,
+      );
+    }).pipe(Effect.provide(makeDependencyLayer())),
+  );
+
   it.effect("lands a cancelled run in failed, and refuses to cancel a finished one", () =>
     Effect.gen(function* () {
       const cancelled = yield* Deferred.make<IssueEnrichmentRunId, never>();

@@ -12,7 +12,6 @@
  * @module components/issues/issueEnrichment.logic
  */
 import {
-  isPlaceholderIssueTitle,
   type Issue,
   type IssueEnrichmentResult,
   type IssueEnrichmentRun,
@@ -222,18 +221,15 @@ export function issueApplyPriorityPatch(
 }
 
 /**
- * Null when the run named no title, when it names the title the issue already reads, or — the
- * rule that matters — when the issue's own title is not a placeholder. A run finishes minutes
- * after it started and the issue is editable throughout, so the live title decides: a suggestion
- * may fill in an intake default ("Slack message", "Untitled", an empty one), never rename
- * something a person wrote. Trimmed on both sides: the suggestion arrives trimmed from the
- * contract, and the comparison should not turn trailing space into a write.
+ * Null when the run named no title or when it names the title the issue already reads. Automatic
+ * replacement of a generic system title happens on the server; a suggestion left outstanding is
+ * therefore an explicit confirmation action, including when the user edited the title while the
+ * investigation was running.
  */
 export function issueApplyTitlePatch(issue: Issue, title: string | undefined): IssuePatch | null {
   if (title === undefined) return null;
   const next = title.trim();
   if (next.length === 0 || next === issue.title.trim()) return null;
-  if (!isPlaceholderIssueTitle(issue.title)) return null;
   return { title: next };
 }
 
@@ -280,8 +276,8 @@ function rewriteState(
 
 /**
  * Null when the run offered no title, which is the usual case, and null for a blank one: a card
- * with nothing in it is not a suggestion. `blocked` is the interesting state — the issue carries a
- * title someone wrote, which no suggestion replaces.
+ * with nothing in it is not a suggestion. A different live title remains applicable because this
+ * card is the explicit confirmation the automatic server path deliberately withheld.
  */
 export function resolveIssueSuggestedTitle(
   result: IssueEnrichmentResult,

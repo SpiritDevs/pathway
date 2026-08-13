@@ -60,7 +60,7 @@ export function EnrichmentSettingsPanel() {
       <SettingsSection {...searchableSetting("issue-enrichment")}>
         <SettingsRow
           title="What enrichment does"
-          description="Investigate runs the model once over the issue's project directory and appends what it found to the description as an Investigation block: the problem restated, the files the work probably lands in, related issues, and suggested labels and a priority. Suggestions are chips you press — nothing on the issue is changed for you except that block."
+          description="Investigate runs the model once over the issue's project directory and records the problem restated, likely files, related issues, labels, priority, and safe missing-field suggestions. It applies priority and an empty description automatically, and replaces a generic system title automatically. User-written title changes and labels still ask for confirmation."
         />
 
         <SettingsRow

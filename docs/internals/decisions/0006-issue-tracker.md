@@ -124,8 +124,10 @@ kanban drag must not start three agents.
 A new TextGeneration operation beside commit-message and PR-content generation, running the
 configured model as a read-only one-shot in the project's `cwd`. It returns a structured result —
 restated problem, likely files, related issues, suggested labels and priority — recorded as a
-comment from the agent that ran it. It fires on triage accept and from a manual Investigate button.
-Never on bulk import. Skipped for rootless projects.
+comment from the agent that ran it. Priority and safe missing-field rewrites are applied as agent
+writes; a generic integration title is automatic only while its latest writer is not the user.
+It fires on triage accept and from a manual Investigate button. Never on bulk import. Skipped for
+rootless projects.
 
 Runs are owned by an `issue_enrichment_runs` table: state, streamed transcript, structured result,
 model, duration. The Investigation tab renders that transcript live; the comment is the readable

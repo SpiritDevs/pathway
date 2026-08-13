@@ -187,9 +187,9 @@ function Suggestions({
   );
   const priority = result.suggestedPriority;
   const priorityApplied = priority !== null && priority === issue.priority;
-  // Only pressable for an issue that arrived without one of its own — a Slack message with a
-  // placeholder title and no body — so both are usually absent, and both can still be read while
-  // greyed once the issue has picked up a title or a body of its own.
+  // Generic system titles and empty descriptions are applied by the server. Any title still
+  // pressable here needs confirmation; a description can remain blocked if the user filled it
+  // while the investigation was running.
   const suggestedTitle = resolveIssueSuggestedTitle(result, issue);
   const suggestedDescription = resolveIssueSuggestedDescription(result, issue);
 
@@ -203,7 +203,7 @@ function Suggestions({
             <p className="mt-0.5 break-words text-[13px] text-foreground">{suggestedTitle.text}</p>
           </div>
           <RewriteApplyButton
-            blockedReason="This issue already has a title of its own. A suggestion only fills in a placeholder."
+            blockedReason="Review this title before replacing the current one."
             onApply={onApplyTitle}
             rewrite={suggestedTitle}
           />
@@ -396,7 +396,7 @@ export interface IssueEnrichmentPanelProps {
   readonly onCancel: (runId: IssueEnrichmentRunId) => void;
   readonly onApplyLabel: (labelId: IssueLabelId) => void;
   readonly onApplyPriority: (priority: IssuePriority) => void;
-  /** Only reachable while the issue's title is still a placeholder. */
+  /** A title left outstanding by server-side automatic application. */
   readonly onApplyTitle: (title: string) => void;
   /** Only reachable while the issue's description is still empty. */
   readonly onApplyDescription: (description: string) => void;

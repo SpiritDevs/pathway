@@ -16,7 +16,6 @@ import {
   ISSUE_TITLE_MAX_CHARS,
   IssueKey,
   IssuePriority,
-  isPlaceholderIssueTitle,
   type IssueEnrichmentLikelyFile,
   type IssueEnrichmentResult,
   type IssueRelationDirection,
@@ -169,7 +168,8 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
     '  "suggestedDescription": string — optional, and omitted entirely unless it applies',
     "",
     "Use an empty array where you have nothing to say. Do not invent an issue key or a label name",
-    "that is not on the lists. Nothing you suggest is applied automatically; a person reviews it.",
+    "that is not on the lists. Priority and safe missing-field suggestions may be applied",
+    "automatically after the run; labels remain for a person to review.",
     "",
     'Include "suggestedTitle" only when the title above is one of the intake placeholders —',
     '"Slack message", "Untitled", "New issue", or empty. Otherwise leave the key out; a title a',
@@ -336,11 +336,9 @@ function normalizeSuggestedDescription(value: unknown): string | null {
  * a chore rather than a suggestion.
  *
  * `currentTitle` and `currentDescription` drop a suggestion that proposes what the issue already
- * says. `currentTitle` does one thing more: unless it is one of the intake placeholders
- * ({@link isPlaceholderIssueTitle}), the proposed title is dropped whatever it says. The prompt
- * asks for that rule and a model mostly keeps it, but "mostly" is not a rule — a title somebody
- * typed is not up for replacement by a suggestion nobody asked for. Absent `currentTitle` is the
- * caller saying it has no opinion, and the suggestion stands.
+ * says. Title provenance is deliberately not decided here: the issue may be edited while the run
+ * is working, so the completion path uses the live title and its latest actor to decide between
+ * automatic application and a reviewable suggestion.
  */
 export function normalizeInvestigationResult(
   value: unknown,
@@ -386,10 +384,6 @@ export function normalizeInvestigationResult(
   const currentTitle = vocabulary.currentTitle?.replace(/\s+/g, " ").trim();
   const currentDescription = vocabulary.currentDescription?.trim();
 
-  // A human-written title closes the question: the model may only name an issue that arrived
-  // without a name of its own.
-  const titleIsOpen = currentTitle === undefined || isPlaceholderIssueTitle(currentTitle);
-
   const priority = record["suggestedPriority"];
   return {
     summary: summary.slice(0, ISSUE_ENRICHMENT_SUMMARY_MAX_CHARS),
@@ -399,9 +393,7 @@ export function normalizeInvestigationResult(
     suggestedPriority: isPriority(priority) ? priority : null,
     // Written as absent keys rather than `undefined` values: the result is stored as JSON, and a
     // suggestion nobody made should not read as one the model declined to make.
-    ...(suggestedTitle !== null && titleIsOpen && suggestedTitle !== currentTitle
-      ? { suggestedTitle }
-      : {}),
+    ...(suggestedTitle !== null && suggestedTitle !== currentTitle ? { suggestedTitle } : {}),
     ...(suggestedDescription !== null && suggestedDescription !== currentDescription
       ? { suggestedDescription }
       : {}),
@@ -439,9 +431,8 @@ export interface InvestigationBlockInput {
 /**
  * Render a finished investigation as a Markdown comment.
  *
- * Suggestions are listed, never applied. The label and priority lines exist so the description
- * says what was proposed even after the investigation tab is closed — taking them up is a human's
- * write, through the ordinary update path, attributed to the human.
+ * Suggestions are listed as the model returned them. Automatic field changes also appear in the
+ * activity feed; labels remain reviewable in the investigation panel.
  */
 export function buildInvestigationComment(input: InvestigationBlockInput): string {
   const day = input.finishedAt.slice(0, 10);
@@ -472,7 +463,7 @@ export function buildInvestigationComment(input: InvestigationBlockInput): strin
       "**Related issues**",
       result.relatedIssueKeys.length > 0 ? [result.relatedIssueKeys.join(", ")] : [],
     ),
-    ...section("**Suggested** (not applied)", [
+    ...section("**Suggested**", [
       ...suggestions.map((line) => `- ${line}`),
       // Quoted rather than fenced: a proposed description is markdown itself, and a fence around
       // a fence renders as neither. The blank line keeps it off the bullet above it.

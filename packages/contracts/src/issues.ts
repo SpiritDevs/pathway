@@ -608,8 +608,8 @@ export type IssueEnrichmentLikelyFile = typeof IssueEnrichmentLikelyFile.Type;
 
 /**
  * What a finished run hands back. Structured rather than prose so the client can render the run,
- * leave a durable investigation comment, and offer its suggestions as one-click writes —
- * suggestions, not writes: nothing here is applied by the run itself.
+ * leave a durable investigation comment, apply safe automatic fields, and offer the remaining
+ * suggestions as one-click writes.
  */
 export const IssueEnrichmentResult = Schema.Struct({
   /** The problem restated, in the model's words. Markdown, so it is not trimmed. */
@@ -627,9 +627,9 @@ export const IssueEnrichmentResult = Schema.Struct({
   ),
   suggestedPriority: Schema.NullOr(IssuePriority),
   /**
-   * A title for an issue that arrived without one — a Slack message ingested with no user-entered
-   * text. Absent whenever the issue already says what it is: renaming a title a person wrote is
-   * not the run's business.
+   * A title for an issue that arrived without one — usually a Slack message ingested with no
+   * user-entered text. The live issue and its title provenance decide whether this is automatic or
+   * remains a confirmation action when the run finishes.
    */
   suggestedTitle: Schema.optionalKey(
     TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)),

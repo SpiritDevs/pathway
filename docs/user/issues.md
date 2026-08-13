@@ -136,14 +136,17 @@ issue there with the issues tools once implementation and verification are genui
 ### Investigate
 
 **Investigate** on an issue runs the configured model once over the project's directory in
-read-only mode and appends what it found to the description as an **Investigation** block:
+read-only mode and records what it found as an **Investigation** comment:
 
 - the problem restated,
 - the files the work probably lands in,
 - related issues,
-- suggested labels and a priority.
+- suggested labels and a priority,
+- a title or description when the issue arrived without useful ones.
 
-The suggestions are chips you press. Nothing on the issue changes by itself except that block.
+Pathway applies the priority and an empty description when the investigation finishes. It also
+replaces a generic title supplied by an integration, such as **Slack message**. A title created or
+edited by you is never replaced without confirmation, and labels remain suggestions you apply.
 
 The run cannot edit, stage, or commit anything. One investigation runs at a time and a second
 queues behind it. You will see the live transcript in the issue's investigation panel.
