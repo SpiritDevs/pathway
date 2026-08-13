@@ -3,6 +3,7 @@ import {
   McpServer as SdkMcpServer,
   SERVER_INFO_META_KEY,
   SUBSCRIPTION_ID_META_KEY,
+  SUPPORTED_PROTOCOL_VERSIONS,
   classifyInboundRequest,
   createMcpHandler,
   fromJsonSchema,
@@ -64,6 +65,10 @@ import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
+export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
+  MCP_PROTOCOL_VERSION,
+  ...SUPPORTED_PROTOCOL_VERSIONS,
+];
 export const MCP_TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
 export const PATHWAY_MCP_SERVER_INFO = { name: "Pathway", version: packageJson.version } as const;
 const TASK_NOTIFICATION_FILTER = MCP_TASKS_EXTENSION;
@@ -414,7 +419,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
         },
         instructions:
           "Pathway tools act on the authenticated coding-agent thread and its environment.",
-        supportedProtocolVersions: [MCP_PROTOCOL_VERSION],
+        supportedProtocolVersions: MCP_SUPPORTED_PROTOCOL_VERSIONS,
       });
       for (const registration of registeredTools) {
         const { annotations, built, description, inputSchema, tool } = registration;
@@ -464,7 +469,7 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
       }
       return server;
     },
-    { legacy: "reject", responseMode: "auto" },
+    { legacy: "stateless", responseMode: "auto" },
   );
 
   const serveListen = (

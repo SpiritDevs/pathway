@@ -58,10 +58,19 @@ const decodeSseMessage = Schema.decodeUnknownSync(SseMessage);
 const toWebRequest = (input: string | URL, init?: RequestInit) =>
   new Request(typeof input === "string" ? input : input.href, init);
 
-const connectClient = async (handler: McpHttpServer.PathwayMcpHandler) => {
+const connectClient = async (
+  handler: McpHttpServer.PathwayMcpHandler,
+  protocolVersion = McpHttpServer.MCP_PROTOCOL_VERSION,
+) => {
   const client = new Client(
     { name: "pathway-mcp-test", version: "1.0.0" },
-    { capabilities: {}, versionNegotiation: { mode: { pin: McpHttpServer.MCP_PROTOCOL_VERSION } } },
+    protocolVersion >= "2026-07-28"
+      ? { capabilities: {}, versionNegotiation: { mode: { pin: protocolVersion } } }
+      : {
+          capabilities: {},
+          supportedProtocolVersions: [protocolVersion],
+          versionNegotiation: { mode: "legacy" },
+        },
   );
   const transport = new StreamableHTTPClientTransport(new URL("http://pathway.test/mcp"), {
     fetch: (input, init) => handler.fetch(toWebRequest(input, init), invocation),
@@ -357,32 +366,24 @@ it.effect("rejects invalid modern envelopes with the specified HTTP errors", () 
     );
     expect(unsupportedBody.error.code).toBe(-32022);
     expect(unsupportedBody.error.data?.supported).toEqual([McpHttpServer.MCP_PROTOCOL_VERSION]);
-
-    const initialize = yield* Effect.promise(() =>
-      handler.fetch(
-        new Request("http://pathway.test/mcp", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: encodeJson({
-            jsonrpc: "2.0",
-            id: 3,
-            method: "initialize",
-            params: {
-              protocolVersion: "2025-06-18",
-              capabilities: {},
-              clientInfo: { name: "legacy-test", version: "1.0.0" },
-            },
-          }),
-        }),
-        invocation,
-      ),
-    );
-    const initializeBody = yield* decodeErrorCodeResponse(
-      yield* Effect.promise(() => initialize.json()),
-    );
-    expect(initializeBody.error.code).toBe(-32022);
-    expect(initialize.headers.get("mcp-session-id")).toBeNull();
   }).pipe(Effect.provide(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("serves issue tools through Codex's legacy MCP handshake", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const handler = yield* McpHttpServer.makeAllToolkitsTestHandler;
+      const connected = yield* Effect.acquireRelease(
+        Effect.promise(() => connectClient(handler, "2025-06-18")),
+        ({ close }) => Effect.promise(close).pipe(Effect.orDie),
+      );
+      const tools = yield* Effect.promise(() => connected.client.listTools());
+      const toolNames = tools.tools.map(({ name }) => name);
+      expect(toolNames).toContain("issues_get");
+      expect(toolNames).toContain("issues_update");
+      expect(toolNames).toContain("issues_comment");
+    }),
+  ),
 );
 
 it.effect("acknowledges listen first and emits only opted-in notification types", () =>

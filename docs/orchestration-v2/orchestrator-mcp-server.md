@@ -35,6 +35,8 @@ http://127.0.0.1:<server-port>/mcp
 
 The provider-visible server key is `pathway`. The endpoint registers the complete
 Pathway tool surface: preview, issues, orchestration, worktree, and captured email.
+It serves both the modern `2026-07-28` protocol and the SDK-supported 2025-era
+stateless protocol revisions used by current provider clients such as Codex.
 
 Before `ProviderSessionManager` opens a new V2 provider session, it asks
 `McpSessionRegistry` for a credential scoped to:
