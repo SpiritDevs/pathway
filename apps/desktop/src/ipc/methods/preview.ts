@@ -1,5 +1,6 @@
 import {
   DesktopPreviewAnnotationThemeInputSchema,
+  DesktopPreviewAdoptPopupInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewAutomationClickInputSchema,
   DesktopPreviewAutomationEvaluateInputSchema,
@@ -8,7 +9,9 @@ import {
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
+  DesktopPreviewDiscardPopupInputSchema,
   DesktopPreviewNavigateInputSchema,
+  DesktopPreviewPresentNativeTabInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingReadInputSchema,
   DesktopPreviewRecordingReadResultSchema,
@@ -75,6 +78,36 @@ export const registerWebview = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.registerWebview")(function* ({ tabId, webContentsId }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.registerWebview(tabId, webContentsId);
+  }),
+});
+
+export const adoptPopup = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_ADOPT_POPUP_CHANNEL,
+  payload: DesktopPreviewAdoptPopupInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.adoptPopup")(function* ({ popupId, runtimeTabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.adoptPopup(popupId, runtimeTabId);
+  }),
+});
+
+export const discardPopup = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_DISCARD_POPUP_CHANNEL,
+  payload: DesktopPreviewDiscardPopupInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.discardPopup")(function* ({ popupId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.discardPopup(popupId);
+  }),
+});
+
+export const presentNativeTab = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_PRESENT_NATIVE_TAB_CHANNEL,
+  payload: DesktopPreviewPresentNativeTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.presentNativeTab")(function* ({ runtimeTabId, bounds }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.presentNativeTab(runtimeTabId, bounds);
   }),
 });
 
@@ -370,6 +403,9 @@ export const methods = [
   createTab,
   closeTab,
   registerWebview,
+  adoptPopup,
+  discardPopup,
+  presentNativeTab,
   navigate,
   goBack,
   goForward,

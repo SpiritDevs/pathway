@@ -23,6 +23,7 @@ import {
   type PreviewResizeInput,
   FILL_PREVIEW_VIEWPORT,
   PreviewSessionLookupError,
+  PreviewTabCollisionError,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
 import {
@@ -213,7 +214,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const open: PreviewManager["Service"]["open"] = Effect.fn("PreviewManager.open")(
     function* (input) {
-      const tabId = newPreviewTabId();
+      const tabId = input.requestedTabId ?? newPreviewTabId();
       const updatedAt = yield* currentIsoTimestamp;
       const snapshot = input.url
         ? buildLoadingSnapshot({
@@ -226,6 +227,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         : buildIdleSnapshot({ threadId: input.threadId, tabId, updatedAt });
       yield* SynchronizedRef.modifyEffect(stateRef, (state) =>
         Effect.gen(function* () {
+          if (state.sessions.has(compositeKey(input.threadId, tabId))) {
+            return yield* new PreviewTabCollisionError({ threadId: input.threadId, tabId });
+          }
           const revision = state.revision + 1;
           const sessions = new Map(state.sessions);
           sessions.set(compositeKey(input.threadId, tabId), {
@@ -241,6 +245,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             serverEpoch,
             revision,
             snapshot,
+            activation: input.activation ?? "foreground",
           });
           return [snapshot, { sessions, revision }] as const;
         }),

@@ -18,6 +18,7 @@ import { BrowserDeviceToolbar } from "./BrowserDeviceToolbar";
 import { BrowserViewportResizeHandles } from "./BrowserViewportResizeHandles";
 import { acquireDesktopTab, type AcquiredDesktopTab } from "./desktopTabLifetime";
 import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewStyle";
+import { useNativePreviewPopupStore } from "./nativePreviewPopupStore";
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
 import {
@@ -51,6 +52,7 @@ export function HostedBrowserWebview(props: {
 }) {
   const { threadRef, tabId, runtimeTabId, initialUrl, viewport, zoomFactor } = props;
   const config = usePreviewWebviewConfig(threadRef.environmentId);
+  const nativePopup = useNativePreviewPopupStore((state) => state.tabIds.has(tabId));
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -98,7 +100,7 @@ export function HostedBrowserWebview(props: {
   useEffect(() => {
     const webview = webviewRef.current;
     const bridge = previewBridge;
-    if (!webview || !config || !bridge) return;
+    if (nativePopup || !webview || !config || !bridge) return;
     let disposed = false;
     let recoveryTimeout: ReturnType<typeof setTimeout> | null = null;
     const register = () => {
@@ -144,7 +146,7 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
     };
-  }, [config, initialSrc, runtimeTabId, webviewGeneration]);
+  }, [config, initialSrc, nativePopup, runtimeTabId, webviewGeneration]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;
@@ -204,6 +206,33 @@ export function HostedBrowserWebview(props: {
       ? resolveBrowserViewportLayout(lastRect, fittedSourceViewport, normalizedZoomFactor)
       : viewportLayout;
 
+  useEffect(() => {
+    const bridge = previewBridge;
+    if (!nativePopup || !bridge) return;
+    const bounds =
+      active && lastRect
+        ? {
+            x: Math.round(lastRect.x + layout.viewportX),
+            y: Math.round(lastRect.y + layout.viewportY),
+            width: Math.max(1, Math.round(layout.viewportWidth)),
+            height: Math.max(1, Math.round(layout.viewportHeight)),
+          }
+        : null;
+    void bridge.presentNativeTab(runtimeTabId, bounds).catch(() => undefined);
+    return () => {
+      void bridge.presentNativeTab(runtimeTabId, null).catch(() => undefined);
+    };
+  }, [
+    active,
+    lastRect,
+    layout.viewportHeight,
+    layout.viewportWidth,
+    layout.viewportX,
+    layout.viewportY,
+    nativePopup,
+    runtimeTabId,
+  ]);
+
   const syncContentPresentation = useCallback(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
@@ -256,45 +285,47 @@ export function HostedBrowserWebview(props: {
             onChange={commitViewportChange}
           />
         ) : null}
-        <webview
-          key={webviewGeneration}
-          ref={setWebviewRef}
-          src={webviewGeneration === 0 ? initialSrc : recoverySrc}
-          partition={config.partition}
-          webpreferences={config.webPreferences}
-          {...(config.preloadUrl ? { preload: config.preloadUrl } : {})}
-          data-preview-tab={runtimeTabId}
-          data-preview-server-tab={tabId}
-          data-preview-viewport-mode={effectiveViewport._tag}
-          data-preview-viewport-key={browserViewportSettingKey(effectiveViewport)}
-          data-preview-css-width={
-            fittedSourceViewport
-              ? fittedSourceViewport.width
-              : effectiveViewport._tag === "fill"
-                ? Math.max(1, Math.round(layout.viewportWidth / normalizedZoomFactor))
-                : effectiveViewport.width
-          }
-          data-preview-css-height={
-            fittedSourceViewport
-              ? fittedSourceViewport.height
-              : effectiveViewport._tag === "fill"
-                ? Math.max(1, Math.round(layout.viewportHeight / normalizedZoomFactor))
-                : effectiveViewport.height
-          }
-          aria-hidden={active ? undefined : true}
-          className={cn(
-            "absolute flex overflow-hidden bg-background",
-            active && !layout.fillsPanel && "ring-1 ring-border/70 shadow-sm",
-          )}
-          style={{
-            left: layout.viewportX,
-            top: layout.viewportY,
-            width: layout.viewportWidth / layout.viewportScale,
-            height: layout.viewportHeight / layout.viewportScale,
-            transform: layout.viewportScale < 1 ? `scale(${layout.viewportScale})` : undefined,
-            transformOrigin: "top left",
-          }}
-        />
+        {nativePopup ? null : (
+          <webview
+            key={webviewGeneration}
+            ref={setWebviewRef}
+            src={webviewGeneration === 0 ? initialSrc : recoverySrc}
+            partition={config.partition}
+            webpreferences={config.webPreferences}
+            {...(config.preloadUrl ? { preload: config.preloadUrl } : {})}
+            data-preview-tab={runtimeTabId}
+            data-preview-server-tab={tabId}
+            data-preview-viewport-mode={effectiveViewport._tag}
+            data-preview-viewport-key={browserViewportSettingKey(effectiveViewport)}
+            data-preview-css-width={
+              fittedSourceViewport
+                ? fittedSourceViewport.width
+                : effectiveViewport._tag === "fill"
+                  ? Math.max(1, Math.round(layout.viewportWidth / normalizedZoomFactor))
+                  : effectiveViewport.width
+            }
+            data-preview-css-height={
+              fittedSourceViewport
+                ? fittedSourceViewport.height
+                : effectiveViewport._tag === "fill"
+                  ? Math.max(1, Math.round(layout.viewportHeight / normalizedZoomFactor))
+                  : effectiveViewport.height
+            }
+            aria-hidden={active ? undefined : true}
+            className={cn(
+              "absolute flex overflow-hidden bg-background",
+              active && !layout.fillsPanel && "ring-1 ring-border/70 shadow-sm",
+            )}
+            style={{
+              left: layout.viewportX,
+              top: layout.viewportY,
+              width: layout.viewportWidth / layout.viewportScale,
+              height: layout.viewportHeight / layout.viewportScale,
+              transform: layout.viewportScale < 1 ? `scale(${layout.viewportScale})` : undefined,
+              transformOrigin: "top left",
+            }}
+          />
+        )}
         {active && effectiveViewport._tag !== "fill" && !fittedSourceViewport ? (
           <>
             <BrowserViewportResizeHandles

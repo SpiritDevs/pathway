@@ -1,7 +1,12 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DesktopEnvironmentBootstrapSchema } from "./ipc.ts";
+import {
+  DesktopEnvironmentBootstrapSchema,
+  DesktopPreviewAdoptPopupInputSchema,
+  DesktopPreviewPopupRequestSchema,
+  DesktopPreviewPresentNativeTabInputSchema,
+} from "./ipc.ts";
 
 describe("DesktopEnvironmentBootstrapSchema", () => {
   const decode = Schema.decodeUnknownSync(DesktopEnvironmentBootstrapSchema);
@@ -34,5 +39,49 @@ describe("DesktopEnvironmentBootstrapSchema", () => {
         wsBaseUrl: null,
       }).runningDistro,
     ).toBeNull();
+  });
+});
+
+describe("desktop preview popup schemas", () => {
+  it("decodes the bounded popup rendezvous payloads", () => {
+    expect(
+      Schema.decodeUnknownSync(DesktopPreviewPopupRequestSchema)({
+        sourceRuntimeTabId: "runtime-source",
+        popupId: "popup-1",
+        url: "about:blank",
+        disposition: "foreground-tab",
+        frameName: "editor",
+      }),
+    ).toMatchObject({ popupId: "popup-1", disposition: "foreground-tab" });
+    expect(
+      Schema.decodeUnknownSync(DesktopPreviewAdoptPopupInputSchema)({
+        popupId: "popup-1",
+        runtimeTabId: "runtime-popup",
+      }),
+    ).toEqual({ popupId: "popup-1", runtimeTabId: "runtime-popup" });
+    expect(
+      Schema.decodeUnknownSync(DesktopPreviewPresentNativeTabInputSchema)({
+        runtimeTabId: "runtime-popup",
+        bounds: { x: 10, y: 20, width: 800, height: 600 },
+      }).bounds,
+    ).toEqual({ x: 10, y: 20, width: 800, height: 600 });
+  });
+
+  it("rejects malformed popup dispositions and presentation bounds", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(DesktopPreviewPopupRequestSchema)({
+        sourceRuntimeTabId: "runtime-source",
+        popupId: "popup-1",
+        url: "about:blank",
+        disposition: "popup",
+        frameName: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(DesktopPreviewPresentNativeTabInputSchema)({
+        runtimeTabId: "runtime-popup",
+        bounds: { x: 0, y: 0, width: 0, height: 600 },
+      }),
+    ).toThrow();
   });
 });

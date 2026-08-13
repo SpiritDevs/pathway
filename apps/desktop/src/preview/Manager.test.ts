@@ -63,26 +63,31 @@ const {
   browserWindowConstructor,
   createFromPath,
   fromId,
+  fromWebContents,
   getFocusedWebContents,
   mkdir,
   showItemInFolder,
   webviewSend,
+  webContentsViewConstructor,
   writeFile,
   writeImage,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean } => ({ isEmpty: () => false })),
-  fromId: vi.fn((_id?: number) => null),
-  getFocusedWebContents: vi.fn(() => null),
+  fromId: vi.fn((_id?: number): Electron.WebContents | null => null),
+  fromWebContents: vi.fn((_contents?: Electron.WebContents): Electron.BrowserWindow | null => null),
+  getFocusedWebContents: vi.fn((): Electron.WebContents | null => null),
   mkdir: vi.fn((_path: string) => undefined),
   showItemInFolder: vi.fn(),
   webviewSend: vi.fn(),
+  webContentsViewConstructor: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
   writeImage: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, { fromWebContents }),
+  WebContentsView: webContentsViewConstructor,
   clipboard: {
     writeImage,
   },
@@ -172,6 +177,7 @@ const makeTestPreviewWebContents = (
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
     on: vi.fn(),
+    once: vi.fn(),
     off: vi.fn(),
     ipc: { on: vi.fn(), off: vi.fn() },
     send: webviewSend,
@@ -185,7 +191,7 @@ const makeTestPreviewWebContents = (
       off: vi.fn(),
     },
     capturePage,
-  }) as never;
+  }) as unknown as Electron.WebContents;
 
 const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () => undefined) => {
   const listeners = new Map<string, () => void>();
@@ -221,6 +227,8 @@ describe("PreviewManager", () => {
   beforeEach(() => {
     browserWindowConstructor.mockReset();
     fromId.mockClear();
+    fromWebContents.mockReset();
+    webContentsViewConstructor.mockReset();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
     mkdir.mockClear();
@@ -254,6 +262,216 @@ describe("PreviewManager", () => {
           loading: false,
         });
         expect(fromId).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("allows, adopts, presents, automates, and closes a native popup child", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const session = { id: "preview-session" };
+        const ownerSend = vi.fn();
+        const ownerListeners = new Map<string, () => void>();
+        const ownerWebContents = {
+          isDestroyed: () => false,
+          send: ownerSend,
+          once: vi.fn((event: string, listener: () => void) => ownerListeners.set(event, listener)),
+          off: vi.fn((event: string, listener: () => void) => {
+            if (ownerListeners.get(event) === listener) ownerListeners.delete(event);
+          }),
+        };
+        const sourceLoadURL = vi.fn(async () => undefined);
+        const sourceWindowOpenHandler = vi.fn();
+        const sourceWebContents = {
+          ...makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("source"),
+            getSize: () => ({ width: 800, height: 600 }),
+          })),
+          id: 42,
+          session,
+          hostWebContents: ownerWebContents,
+          loadURL: sourceLoadURL,
+          setWindowOpenHandler: sourceWindowOpenHandler,
+        } as unknown as Electron.WebContents;
+        let childDestroyed = false;
+        const childWindowOpenHandler = vi.fn();
+        const childClose = vi.fn(() => {
+          childDestroyed = true;
+        });
+        const childWebContents = {
+          ...makeTestPreviewWebContents(
+            async () => ({
+              toJPEG: () => Buffer.from("child"),
+              getSize: () => ({ width: 800, height: 600 }),
+            }),
+            84,
+          ),
+          id: 84,
+          session,
+          isDestroyed: () => childDestroyed,
+          close: childClose,
+          setWindowOpenHandler: childWindowOpenHandler,
+        } as unknown as Electron.WebContents;
+        const setBounds = vi.fn();
+        const view = { webContents: childWebContents, setBounds };
+        webContentsViewConstructor.mockImplementation(function () {
+          return view;
+        });
+        const addChildView = vi.fn();
+        const removeChildView = vi.fn();
+        fromWebContents.mockReturnValue({
+          isDestroyed: () => false,
+          contentView: { addChildView, removeChildView },
+        } as never);
+        fromId.mockImplementation((id?: number) =>
+          id === sourceWebContents.id
+            ? sourceWebContents
+            : id === childWebContents.id
+              ? childWebContents
+              : null,
+        );
+
+        yield* manager.createTab("runtime-source");
+        yield* manager.registerWebview("runtime-source", sourceWebContents.id);
+        const handler = sourceWindowOpenHandler.mock.calls[0]?.[0] as (details: {
+          url: string;
+          disposition: "foreground-tab";
+          frameName: string;
+        }) => Electron.WindowOpenHandlerResponse;
+        expect(
+          handler({
+            url: "mailto:test@example.com",
+            disposition: "foreground-tab",
+            frameName: "external",
+          }),
+        ).toEqual({ action: "deny" });
+        const response = handler({
+          url: "https://example.com/destination",
+          disposition: "foreground-tab",
+          frameName: "editor",
+        });
+        expect(response.action).toBe("allow");
+        expect(response.outlivesOpener).toBe(true);
+        expect(sourceLoadURL).not.toHaveBeenCalled();
+        expect(
+          response.createWindow?.({
+            webPreferences: {
+              nodeIntegration: true,
+              partition: "persist:untrusted",
+              spellcheck: false,
+            },
+          } as Electron.BrowserWindowConstructorOptions),
+        ).toBe(childWebContents);
+        expect(webContentsViewConstructor).toHaveBeenCalledWith({
+          webPreferences: expect.objectContaining({
+            session,
+            sandbox: true,
+            nodeIntegration: false,
+            spellcheck: false,
+          }),
+        });
+        expect(webContentsViewConstructor.mock.calls[0]?.[0]?.webPreferences).not.toHaveProperty(
+          "partition",
+        );
+        expect(ownerSend).toHaveBeenCalledOnce();
+        const [channel, request] = ownerSend.mock.calls[0]!;
+        expect(channel).toBe("desktop:preview-popup-request");
+        expect(request).toMatchObject({
+          sourceRuntimeTabId: "runtime-source",
+          url: "https://example.com/destination",
+          disposition: "foreground-tab",
+          frameName: "editor",
+        });
+
+        yield* manager.adoptPopup(request.popupId, "runtime-child");
+        yield* manager.adoptPopup(request.popupId, "runtime-child");
+        expect(childWindowOpenHandler).toHaveBeenCalledOnce();
+        expect(yield* manager.automationStatus("runtime-child")).toMatchObject({
+          available: true,
+          tabId: "runtime-child",
+          url: "https://example.com",
+        });
+
+        const bounds = { x: 10, y: 20, width: 800, height: 600 };
+        yield* manager.presentNativeTab("runtime-child", bounds);
+        expect(setBounds).toHaveBeenCalledWith(bounds);
+        expect(addChildView).toHaveBeenCalledWith(view);
+        yield* manager.presentNativeTab("runtime-child", null);
+        expect(removeChildView).toHaveBeenCalledWith(view);
+
+        yield* manager.closeTab("runtime-child");
+        yield* manager.closeTab("runtime-child");
+        expect(childClose).toHaveBeenCalledOnce();
+      }),
+    ),
+  );
+
+  effectIt.effect("discards an unadopted popup when its source guest closes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const sourceListeners = new Map<string, () => void>();
+        const ownerSend = vi.fn();
+        const ownerWebContents = {
+          isDestroyed: () => false,
+          send: ownerSend,
+          once: vi.fn(),
+          off: vi.fn(),
+        };
+        const sourceWindowOpenHandler = vi.fn();
+        const sourceWebContents = {
+          ...makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("source"),
+            getSize: () => ({ width: 800, height: 600 }),
+          })),
+          id: 42,
+          session: { id: "preview-session" },
+          hostWebContents: ownerWebContents,
+          setWindowOpenHandler: sourceWindowOpenHandler,
+          once: vi.fn((event: string, listener: () => void) => {
+            sourceListeners.set(event, listener);
+          }),
+          off: vi.fn((event: string, listener: () => void) => {
+            if (sourceListeners.get(event) === listener) sourceListeners.delete(event);
+          }),
+        } as unknown as Electron.WebContents;
+        let childDestroyed = false;
+        const childClose = vi.fn(() => {
+          childDestroyed = true;
+        });
+        const childWebContents = {
+          ...makeTestPreviewWebContents(
+            async () => ({
+              toJPEG: () => Buffer.from("child"),
+              getSize: () => ({ width: 800, height: 600 }),
+            }),
+            84,
+          ),
+          isDestroyed: () => childDestroyed,
+          close: childClose,
+        } as unknown as Electron.WebContents;
+        webContentsViewConstructor.mockImplementation(function () {
+          return { webContents: childWebContents, setBounds: vi.fn() };
+        });
+        fromId.mockImplementation((id?: number) => (id === 42 ? sourceWebContents : null));
+
+        yield* manager.createTab("runtime-source");
+        yield* manager.registerWebview("runtime-source", sourceWebContents.id);
+        const handler = sourceWindowOpenHandler.mock.calls[0]?.[0] as (details: {
+          url: string;
+          disposition: "foreground-tab";
+          frameName: string;
+        }) => Electron.WindowOpenHandlerResponse;
+        const response = handler({
+          url: "https://example.com/destination",
+          disposition: "foreground-tab",
+          frameName: "",
+        });
+        response.createWindow?.({});
+        const request = ownerSend.mock.calls[0]?.[1] as { popupId: string };
+
+        sourceListeners.get("destroyed")?.();
+        yield* manager.discardPopup(request.popupId);
+        expect(childClose).toHaveBeenCalledOnce();
       }),
     ),
   );

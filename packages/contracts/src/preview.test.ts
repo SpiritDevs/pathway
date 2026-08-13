@@ -5,6 +5,7 @@ import {
   DiscoveredLocalServer,
   PreviewEvent,
   PreviewNavStatus,
+  PreviewOpenInput,
   PreviewSessionSnapshot,
   PreviewViewportSetting,
 } from "./preview.ts";
@@ -18,6 +19,7 @@ import {
 } from "./previewAutomation.ts";
 
 const decodePreviewEvent = Schema.decodeUnknownSync(PreviewEvent);
+const decodePreviewOpenInput = Schema.decodeUnknownSync(PreviewOpenInput);
 const decodeSnapshot = Schema.decodeUnknownSync(PreviewSessionSnapshot);
 const decodeNavStatus = Schema.decodeUnknownSync(PreviewNavStatus);
 const decodeServer = Schema.decodeUnknownSync(DiscoveredLocalServer);
@@ -91,6 +93,22 @@ describe("PreviewSessionSnapshot", () => {
     });
     expect(snapshot.tabId).toBe("preview-thread-1");
     expect(snapshot.navStatus._tag).toBe("Success");
+  });
+});
+
+describe("PreviewOpenInput", () => {
+  it("accepts a reserved popup tab id and activation hint", () => {
+    expect(
+      decodePreviewOpenInput({
+        threadId: "thread-1",
+        requestedTabId: "popup-1",
+        activation: "background",
+      }),
+    ).toEqual({
+      threadId: "thread-1",
+      requestedTabId: "popup-1",
+      activation: "background",
+    });
   });
 });
 
@@ -238,6 +256,28 @@ describe("PreviewEvent", () => {
       },
     });
     expect(event.type).toBe("opened");
+    if (event.type === "opened") expect(event.activation).toBeUndefined();
+  });
+
+  it("decodes background activation", () => {
+    const event = decodePreviewEvent({
+      type: "opened",
+      threadId: "t",
+      tabId: "popup-t",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      serverEpoch: "server-a",
+      revision: 1,
+      activation: "background",
+      snapshot: {
+        threadId: "t",
+        tabId: "popup-t",
+        navStatus: { _tag: "Idle" },
+        canGoBack: false,
+        canGoForward: false,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    expect(event.type === "opened" ? event.activation : null).toBe("background");
   });
 
   it("decodes failed with code/description", () => {

@@ -15,6 +15,8 @@ import type {
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
   DesktopPreviewScreenshotArtifact,
+  DesktopPreviewPopupRequest,
+  DesktopPreviewPresentationBounds,
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
@@ -29,7 +31,16 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
-import { BrowserWindow, type Session, clipboard, nativeImage, shell, webContents } from "electron";
+import {
+  BrowserWindow,
+  type Session,
+  WebContentsView,
+  clipboard,
+  nativeImage,
+  shell,
+  webContents,
+} from "electron";
+import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -49,7 +60,10 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
+import {
+  PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL,
+  PREVIEW_POPUP_REQUEST_CHANNEL,
+} from "../ipc/channels.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -108,6 +122,7 @@ const DIAGNOSTIC_BUFFER_LIMIT = 200;
 const MAX_ARTIFACT_SITE_SLUG_LENGTH = 80;
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
+const PENDING_POPUP_LIFETIME_MS = 15_000;
 const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const DEFAULT_ANNOTATION_THEME: DesktopPreviewAnnotationTheme = {
   colorScheme: "light",
@@ -343,6 +358,24 @@ interface ManagedListeners {
   readonly scope: Scope.Closeable;
 }
 
+interface PendingPreviewPopup {
+  readonly popupId: string;
+  readonly sourceRuntimeTabId: string;
+  readonly sourceWebContents: Electron.WebContents;
+  readonly view: WebContentsView;
+  readonly ownerWebContents: Electron.WebContents;
+  readonly expires: Fiber.Fiber<void, never>;
+  readonly onSourceDestroyed: () => void;
+  readonly onOwnerDestroyed: () => void;
+}
+
+interface AdoptedPreviewPopup {
+  readonly popupId: string;
+  readonly view: WebContentsView;
+  readonly ownerWebContents: Electron.WebContents;
+  attached: boolean;
+}
+
 type FrameCaptureConsumer = "picture-in-picture" | "recording";
 
 interface FrameCaptureSession {
@@ -415,6 +448,7 @@ export const resolvePreviewReloadShortcut = (
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
   artifactDirectory: string,
   pictureInPicturePreloadPath: string,
+  previewPreloadPath: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
@@ -455,6 +489,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const pictureInPictureAspectRatiosRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const pictureInPictureMutationSemaphore = yield* Semaphore.make(1);
   const closingTabIdsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const pendingPopups = new Map<string, PendingPreviewPopup>();
+  const adoptedPopups = new Map<string, AdoptedPreviewPopup>();
   const tabLifecycleLocks = new Map<
     string,
     { readonly semaphore: Semaphore.Semaphore; users: number }
@@ -1156,6 +1192,130 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return { kind: "Success", url, title };
   };
 
+  const removePopupView = (popup: {
+    readonly view: WebContentsView;
+    readonly ownerWebContents: Electron.WebContents;
+    attached?: boolean;
+  }): void => {
+    const ownerWindow = BrowserWindow.fromWebContents(popup.ownerWebContents);
+    if (popup.attached && ownerWindow && !ownerWindow.isDestroyed()) {
+      ownerWindow.contentView.removeChildView(popup.view);
+    }
+    if (!popup.view.webContents.isDestroyed()) popup.view.webContents.close();
+  };
+
+  const discardPendingPopupSync = (popupId: string): void => {
+    const pending = pendingPopups.get(popupId);
+    if (!pending) return;
+    pendingPopups.delete(popupId);
+    runFork(Fiber.interrupt(pending.expires).pipe(Effect.asVoid));
+    pending.sourceWebContents.off("destroyed", pending.onSourceDestroyed);
+    pending.ownerWebContents.off("destroyed", pending.onOwnerDestroyed);
+    removePopupView(pending);
+  };
+
+  const expirePendingPopupSync = (popupId: string): void => {
+    const pending = pendingPopups.get(popupId);
+    if (!pending) return;
+    pendingPopups.delete(popupId);
+    pending.sourceWebContents.off("destroyed", pending.onSourceDestroyed);
+    pending.ownerWebContents.off("destroyed", pending.onOwnerDestroyed);
+    removePopupView(pending);
+  };
+
+  const discardAdoptedPopupSync = (runtimeTabId: string): void => {
+    const adopted = adoptedPopups.get(runtimeTabId);
+    if (!adopted) return;
+    adoptedPopups.delete(runtimeTabId);
+    removePopupView(adopted);
+  };
+
+  const isRenderablePopupUrl = (rawUrl: string): boolean => {
+    try {
+      const protocol = new URL(rawUrl).protocol;
+      return (
+        protocol === "http:" ||
+        protocol === "https:" ||
+        protocol === "about:" ||
+        protocol === "blob:" ||
+        protocol === "data:"
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  const installWindowOpenHandler = (
+    sourceRuntimeTabId: string,
+    wc: Electron.WebContents,
+    ownerWebContents: Electron.WebContents,
+  ): void => {
+    wc.setWindowOpenHandler(({ url, disposition, frameName }) => {
+      if (!isRenderablePopupUrl(url)) {
+        return { action: "deny" };
+      }
+      const popupId = `popup_${NodeCrypto.randomUUID()}`;
+      return {
+        action: "allow",
+        outlivesOpener: true,
+        createWindow: (options) => {
+          const inheritedWebPreferences = { ...(options.webPreferences ?? {}) };
+          delete inheritedWebPreferences.partition;
+          delete inheritedWebPreferences.preload;
+          delete inheritedWebPreferences.session;
+          const view = new WebContentsView({
+            webPreferences: {
+              ...inheritedWebPreferences,
+              session: wc.session,
+              preload: previewPreloadPath,
+              sandbox: true,
+              contextIsolation: false,
+              nodeIntegration: false,
+              nodeIntegrationInWorker: false,
+              nodeIntegrationInSubFrames: false,
+              webSecurity: true,
+              allowRunningInsecureContent: false,
+              backgroundThrottling: true,
+            },
+          });
+          const onSourceDestroyed = () => discardPendingPopupSync(popupId);
+          const onOwnerDestroyed = () => discardPendingPopupSync(popupId);
+          const expires = runFork(
+            Effect.sleep(PENDING_POPUP_LIFETIME_MS).pipe(
+              Effect.andThen(Effect.sync(() => expirePendingPopupSync(popupId))),
+            ),
+          );
+          const pending: PendingPreviewPopup = {
+            popupId,
+            sourceRuntimeTabId,
+            sourceWebContents: wc,
+            view,
+            ownerWebContents,
+            expires,
+            onSourceDestroyed,
+            onOwnerDestroyed,
+          };
+          pendingPopups.set(popupId, pending);
+          wc.once("destroyed", onSourceDestroyed);
+          ownerWebContents.once("destroyed", onOwnerDestroyed);
+          if (wc.isDestroyed() || ownerWebContents.isDestroyed()) {
+            discardPendingPopupSync(popupId);
+          } else {
+            const request = {
+              sourceRuntimeTabId,
+              popupId,
+              url: url.slice(0, 2048),
+              disposition,
+              frameName: frameName.slice(0, 512),
+            } satisfies DesktopPreviewPopupRequest;
+            ownerWebContents.send(PREVIEW_POPUP_REQUEST_CHANNEL, request);
+          }
+          return view.webContents;
+        },
+      };
+    });
+  };
+
   const attachListeners = Effect.fn("PreviewManager.attachListeners")(function* (
     tabId: string,
     wc: Electron.WebContents,
@@ -1283,14 +1443,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
-        wc.setWindowOpenHandler(({ url }) => {
-          runFork(
-            attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
-              wc.loadURL(url),
-            ).pipe(Effect.ignore),
-          );
-          return { action: "deny" };
-        });
+        const adoptedOwner = adoptedPopups.get(tabId)?.ownerWebContents;
+        const ownerWebContents = adoptedOwner ?? wc.hostWebContents;
+        if (ownerWebContents) installWindowOpenHandler(tabId, wc, ownerWebContents);
         wc.on("before-input-event", beforeInput);
       });
       yield* Ref.update(attachedRef, (attached) =>
@@ -1386,6 +1541,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         { concurrency: 2, discard: true },
       );
     }
+    yield* Effect.sync(() => discardAdoptedPopupSync(tabId));
     const updatedAt = yield* currentIso;
     const closed: PreviewTabState = {
       ...closedTab,
@@ -1559,6 +1715,110 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       tabId,
       registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
     );
+  });
+
+  const adoptPopup = Effect.fn("PreviewManager.adoptPopup")(function* (
+    popupId: string,
+    runtimeTabId: string,
+  ) {
+    return yield* withTabLifecycleLock(
+      runtimeTabId,
+      Effect.gen(function* () {
+        const existing = adoptedPopups.get(runtimeTabId);
+        if (existing?.popupId === popupId && !existing.view.webContents.isDestroyed()) {
+          return;
+        }
+        const pending = pendingPopups.get(popupId);
+        if (!pending || pending.view.webContents.isDestroyed()) {
+          return yield* new PreviewOperationError({
+            operation: "adoptPopup.lookup",
+            tabId: runtimeTabId,
+            cause: new Error("The pending preview popup is unavailable."),
+          });
+        }
+        yield* createTabUnlocked(runtimeTabId);
+        pendingPopups.delete(popupId);
+        yield* Fiber.interrupt(pending.expires).pipe(Effect.asVoid);
+        pending.sourceWebContents.off("destroyed", pending.onSourceDestroyed);
+        pending.ownerWebContents.off("destroyed", pending.onOwnerDestroyed);
+        const adopted: AdoptedPreviewPopup = {
+          popupId,
+          view: pending.view,
+          ownerWebContents: pending.ownerWebContents,
+          attached: false,
+        };
+        adoptedPopups.set(runtimeTabId, adopted);
+        const wc = pending.view.webContents;
+        const annotationTheme = yield* Ref.get(annotationThemeRef);
+        yield* attachListeners(runtimeTabId, wc);
+        const updatedAt = yield* currentIso;
+        const registered = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
+          const current = tabs.get(runtimeTabId);
+          if (!current) return [Option.none<PreviewTabState>(), tabs] as const;
+          const state: PreviewTabState = {
+            ...current,
+            webContentsId: wc.id,
+            navStatus: computeNavStatus(wc),
+            canGoBack: wc.navigationHistory.canGoBack(),
+            canGoForward: wc.navigationHistory.canGoForward(),
+            zoomFactor: wc.getZoomFactor(),
+            updatedAt,
+          };
+          return [
+            Option.some(state),
+            replaceMap(tabs, (copy) => copy.set(runtimeTabId, state)),
+          ] as const;
+        });
+        if (Option.isNone(registered)) {
+          return yield* new PreviewTabNotFoundError({ tabId: runtimeTabId });
+        }
+        runFork(restoreControlSession(runtimeTabId, wc));
+        yield* emit(runtimeTabId, registered.value);
+        yield* attempt(
+          { operation: "adoptPopup.sendTheme", tabId: runtimeTabId, webContentsId: wc.id },
+          () => wc.send(ANNOTATION_THEME_CHANNEL, annotationTheme),
+        );
+      }).pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            discardPendingPopupSync(popupId);
+            discardAdoptedPopupSync(runtimeTabId);
+          }),
+        ),
+      ),
+    );
+  });
+
+  const discardPopup = Effect.fn("PreviewManager.discardPopup")(function* (popupId: string) {
+    yield* Effect.sync(() => discardPendingPopupSync(popupId));
+  });
+
+  const presentNativeTab = Effect.fn("PreviewManager.presentNativeTab")(function* (
+    runtimeTabId: string,
+    bounds: DesktopPreviewPresentationBounds | null,
+  ) {
+    yield* attempt({ operation: "presentNativeTab", tabId: runtimeTabId }, () => {
+      const adopted = adoptedPopups.get(runtimeTabId);
+      if (!adopted || adopted.view.webContents.isDestroyed()) {
+        throw new Error("The adopted preview popup is unavailable.");
+      }
+      const ownerWindow = BrowserWindow.fromWebContents(adopted.ownerWebContents);
+      if (!ownerWindow || ownerWindow.isDestroyed()) {
+        throw new Error("The popup's owning desktop window is unavailable.");
+      }
+      if (bounds === null) {
+        if (adopted.attached) {
+          ownerWindow.contentView.removeChildView(adopted.view);
+          adopted.attached = false;
+        }
+        return;
+      }
+      adopted.view.setBounds(bounds);
+      if (!adopted.attached) {
+        ownerWindow.contentView.addChildView(adopted.view);
+        adopted.attached = true;
+      }
+    });
   });
 
   const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
@@ -3167,6 +3427,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const destroy = Effect.fn("PreviewManager.destroy")(function* () {
     const tabs = yield* SynchronizedRef.get(tabsRef);
     yield* Effect.forEach(tabs.keys(), closeTab, { discard: true });
+    yield* Effect.sync(() => {
+      for (const popupId of [...pendingPopups.keys()]) discardPendingPopupSync(popupId);
+      for (const tabId of [...adoptedPopups.keys()]) discardAdoptedPopupSync(tabId);
+    });
     yield* Effect.all(
       [
         Ref.set(listenersRef, new Set()),
@@ -3193,6 +3457,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     closeTab,
     copyArtifactToClipboard,
     createTab,
+    adoptPopup,
+    discardPopup,
     goBack,
     goForward,
     hardReload,
@@ -3200,6 +3466,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     openPictureInPicture,
     openDevTools,
     pickElement,
+    presentNativeTab,
     refresh,
     registerWebview,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
@@ -3475,6 +3742,15 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       webContentsId: number,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly adoptPopup: (
+      popupId: string,
+      runtimeTabId: string,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly discardPopup: (popupId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly presentNativeTab: (
+      runtimeTabId: string,
+      bounds: DesktopPreviewPresentationBounds | null,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goBack: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goForward: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3571,6 +3847,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const operations = yield* makeNativeOperations(
     environment.browserArtifactsDir,
     environment.path.join(environment.dirname, "preview-pip-preload.cjs"),
+    environment.path.join(environment.dirname, "preview-pick-preload.cjs"),
   );
 
   return PreviewManager.of({
@@ -3588,6 +3865,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     createTab: operations.createTab,
     closeTab: operations.closeTab,
     registerWebview: operations.registerWebview,
+    adoptPopup: operations.adoptPopup,
+    discardPopup: operations.discardPopup,
+    presentNativeTab: operations.presentNativeTab,
     navigate: operations.navigate,
     goBack: operations.goBack,
     goForward: operations.goForward,

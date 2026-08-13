@@ -146,6 +146,10 @@ export const PreviewOpenInput = Schema.Struct({
   threadId: ThreadId,
   /** Omit to create an empty (Idle) tab the user can type into. */
   url: Schema.optional(Url),
+  /** Caller-reserved identity used to rendezvous with a natively created popup guest. */
+  requestedTabId: Schema.optional(PreviewTabId),
+  /** Missing means foreground, preserving behavior for older callers. */
+  activation: Schema.optional(Schema.Literals(["foreground", "background"])),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
 
@@ -213,6 +217,8 @@ const PreviewOpenedEvent = Schema.Struct({
   ...PreviewEventBaseSchema.fields,
   type: Schema.Literal("opened"),
   snapshot: PreviewSessionSnapshot,
+  /** Missing events from older servers are foreground opens. */
+  activation: Schema.optional(Schema.Literals(["foreground", "background"])),
 });
 
 const PreviewNavigatedEvent = Schema.Struct({
@@ -334,5 +340,21 @@ export class PreviewInvalidUrlError extends Schema.TaggedErrorClass<PreviewInval
   }
 }
 
-export const PreviewError = Schema.Union([PreviewSessionLookupError, PreviewInvalidUrlError]);
+export class PreviewTabCollisionError extends Schema.TaggedErrorClass<PreviewTabCollisionError>()(
+  "PreviewTabCollisionError",
+  {
+    threadId: Schema.String,
+    tabId: Schema.String,
+  },
+) {
+  override get message() {
+    return `Preview session already exists: thread=${this.threadId}, tab=${this.tabId}`;
+  }
+}
+
+export const PreviewError = Schema.Union([
+  PreviewSessionLookupError,
+  PreviewInvalidUrlError,
+  PreviewTabCollisionError,
+]);
 export type PreviewError = typeof PreviewError.Type;
