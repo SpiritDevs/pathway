@@ -599,6 +599,26 @@ export function deriveCommittedServerUserMessageIds(
   );
 }
 
+/**
+ * Queued input is server-owned before it has a visible turn item. Treat its
+ * projected conversation message as acknowledgement, while keeping ordinary
+ * and steer input behind the visible-item guard above.
+ */
+export function deriveAcknowledgedOptimisticUserMessageIds(input: {
+  readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent">>;
+  readonly committedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
+  readonly projectedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
+}): ReadonlySet<ChatMessage["id"]> {
+  return new Set(
+    input.optimisticMessages.flatMap((message) =>
+      input.committedServerMessageIds.has(message.id) ||
+      (message.inputIntent === "queued_turn" && input.projectedServerMessageIds.has(message.id))
+        ? [message.id]
+        : [],
+    ),
+  );
+}
+
 export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;

@@ -21,6 +21,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
+  deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -875,5 +876,23 @@ describe("deriveCommittedServerUserMessageIds", () => {
     expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
       new Set([turnStartId, steerId]),
     );
+  });
+});
+
+describe("deriveAcknowledgedOptimisticUserMessageIds", () => {
+  it("acknowledges projection-owned queued input without dropping a projection-only steer", () => {
+    const queuedId = MessageId.make("message-queued");
+    const steerId = MessageId.make("message-steer");
+
+    expect(
+      deriveAcknowledgedOptimisticUserMessageIds({
+        optimisticMessages: [
+          { id: queuedId, inputIntent: "queued_turn" },
+          { id: steerId, inputIntent: "steer" },
+        ],
+        committedServerMessageIds: new Set(),
+        projectedServerMessageIds: new Set([queuedId, steerId]),
+      }),
+    ).toEqual(new Set([queuedId]));
   });
 });

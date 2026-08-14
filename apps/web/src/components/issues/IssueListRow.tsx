@@ -29,6 +29,7 @@ import {
   IssueStatusDot,
 } from "./IssueGlyphs";
 import { IssueLabelsMenu, IssuePriorityMenu, IssueStatusMenu } from "./IssuePropertyMenus";
+import { IssuePullRequestChip } from "./IssuePullRequestChip";
 import {
   formatIssueDueDate,
   isIssueDueDatePast,
@@ -241,6 +242,10 @@ function IssueListRowImpl({
       ) : null}
 
       {investigating ? <IssueInvestigatingChip /> : null}
+
+      {issue.pullRequest == null ? null : (
+        <IssuePullRequestChip compact pullRequest={issue.pullRequest} />
+      )}
 
       {projectTitle === null ? null : (
         <span className="hidden max-w-32 shrink-0 truncate text-xs text-muted-foreground lg:block">

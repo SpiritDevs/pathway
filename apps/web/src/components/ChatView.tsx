@@ -324,6 +324,7 @@ import {
   buildLocalDraftThread,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
+  deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -1376,6 +1377,10 @@ function ChatViewContent(props: ChatViewProps) {
   const committedServerMessageIds = useMemo(
     () => deriveCommittedServerUserMessageIds(serverVisibleTurnItems),
     [serverVisibleTurnItems],
+  );
+  const projectedServerMessageIds = useMemo(
+    () => new Set(serverProjection?.messages.map((message) => message.id) ?? []),
+    [serverProjection?.messages],
   );
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLocalLastVisitedAt = useUiStateStore(
@@ -4411,15 +4416,20 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeMessageCount === 0) {
       return;
     }
+    const acknowledgedMessageIds = deriveAcknowledgedOptimisticUserMessageIds({
+      optimisticMessages: optimisticUserMessages,
+      committedServerMessageIds,
+      projectedServerMessageIds,
+    });
     const removedMessages = optimisticUserMessages.filter((message) =>
-      committedServerMessageIds.has(message.id),
+      acknowledgedMessageIds.has(message.id),
     );
     if (removedMessages.length === 0) {
       return;
     }
     const timer = window.setTimeout(() => {
       setOptimisticUserMessages((existing) =>
-        existing.filter((message) => !committedServerMessageIds.has(message.id)),
+        existing.filter((message) => !acknowledgedMessageIds.has(message.id)),
       );
     }, 0);
     for (const removedMessage of removedMessages) {
@@ -4439,6 +4449,7 @@ function ChatViewContent(props: ChatViewProps) {
     committedServerMessageIds,
     handoffAttachmentPreviews,
     optimisticUserMessages,
+    projectedServerMessageIds,
   ]);
 
   useEffect(() => {

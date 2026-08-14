@@ -43,7 +43,7 @@ import {
   resolveQueuedRunReorder,
   type QueuedThreadRun,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
 import {
   BotIcon,
   CheckIcon,
@@ -163,6 +163,9 @@ export function QueuedRunsControl(props: {
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const edit = useAtomCommand(threadEnvironment.editQueuedRun);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
+  const [dismissedMessageIds, setDismissedMessageIds] = useState<ReadonlySet<MessageId>>(
+    () => new Set(),
+  );
   const [editing, setEditing] = useState<{ runId: RunId; draft: string } | null>(null);
   /**
    * The order a completed drag produced, shown until the projection agrees or
@@ -181,7 +184,11 @@ export function QueuedRunsControl(props: {
     () => (projection ? deriveThreadQueueWorkflowState(projection) : null),
     [projection],
   );
-  const queued = workflow?.queuedRuns ?? EMPTY_QUEUED_RUNS;
+  const projectedQueued = workflow?.queuedRuns ?? EMPTY_QUEUED_RUNS;
+  const queued = useMemo(
+    () => projectedQueued.filter(({ run }) => !dismissedMessageIds.has(run.userMessageId)),
+    [dismissedMessageIds, projectedQueued],
+  );
   const activeRun = workflow?.activeRun ?? null;
   const serverRunIds = useMemo(() => queued.map(({ run }) => run.id), [queued]);
   const ordered = useMemo(
@@ -200,10 +207,19 @@ export function QueuedRunsControl(props: {
     if (stale) setDraggedOrder(null);
   }, [draggedOrder, serverRunIds]);
 
-  const committedQueuedMessageIds = new Set(queued.map(({ run }) => run.userMessageId));
+  useEffect(() => {
+    setDismissedMessageIds(new Set());
+  }, [props.environmentId, props.threadId]);
+
+  const acknowledgedQueuedMessageIds = new Set([
+    ...queued.map(({ run }) => run.userMessageId),
+    ...(projection?.messages.map((message) => message.id) ?? []),
+  ]);
   const optimisticQueued = props.optimisticMessages.filter(
     (message) =>
-      message.inputIntent === "queued_turn" && !committedQueuedMessageIds.has(message.id),
+      message.inputIntent === "queued_turn" &&
+      !acknowledgedQueuedMessageIds.has(message.id) &&
+      !dismissedMessageIds.has(message.id),
   );
   const total = ordered.length + optimisticQueued.length;
   // One reorderable row cannot move, and a provider that cannot reorder its
@@ -254,12 +270,26 @@ export function QueuedRunsControl(props: {
     }
   };
 
-  const remove = async (runId: RunId) => {
+  const remove = async (runId: RunId, messageId: MessageId) => {
+    setDismissedMessageIds((current) => new Set(current).add(messageId));
     setBusyRunId(runId);
     try {
-      await cancel({
+      const result = await cancel({
         environmentId: props.environmentId,
         input: { threadId: props.threadId, runId },
+      });
+      if (result._tag === "Failure") {
+        setDismissedMessageIds((current) => {
+          const next = new Set(current);
+          next.delete(messageId);
+          return next;
+        });
+      }
+    } catch {
+      setDismissedMessageIds((current) => {
+        const next = new Set(current);
+        next.delete(messageId);
+        return next;
       });
     } finally {
       setBusyRunId(null);
@@ -305,6 +335,7 @@ export function QueuedRunsControl(props: {
   /** Everything after the handle and position: the text or its editor, and the row actions. */
   const rowBody = (input: {
     readonly runId: RunId | null;
+    readonly messageId: MessageId;
     readonly text: string;
     readonly createdBy: QueuedThreadRun["createdBy"];
   }) => {
@@ -426,7 +457,7 @@ export function QueuedRunsControl(props: {
           disabled={input.runId === null || busyRunId !== null}
           title="Remove from queue"
           onClick={() => {
-            if (input.runId !== null) void remove(input.runId);
+            if (input.runId !== null) void remove(input.runId, input.messageId);
           }}
         >
           <XIcon className="size-3" />
@@ -446,7 +477,7 @@ export function QueuedRunsControl(props: {
         reducedMotion={reducedMotion}
         runId={run.id}
       >
-        {rowBody({ runId: run.id, text, createdBy })}
+        {rowBody({ runId: run.id, messageId: run.userMessageId, text, createdBy })}
       </SortableQueuedRow>
     ) : (
       <li
@@ -455,7 +486,7 @@ export function QueuedRunsControl(props: {
         key={run.id}
       >
         <QueuedRowPosition position={index + 1} />
-        {rowBody({ runId: run.id, text, createdBy })}
+        {rowBody({ runId: run.id, messageId: run.userMessageId, text, createdBy })}
       </li>
     ),
   );
@@ -477,7 +508,7 @@ export function QueuedRunsControl(props: {
             className="size-4 shrink-0 p-px text-muted-foreground/60"
           />
           <QueuedRowPosition position={ordered.length + index + 1} />
-          {rowBody({ runId: null, text: message.text, createdBy: "user" })}
+          {rowBody({ runId: null, messageId: message.id, text: message.text, createdBy: "user" })}
         </li>
       ))}
     </ol>

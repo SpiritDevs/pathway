@@ -1,6 +1,7 @@
 import {
   IssueAssignee,
   IssueAutomationAssignment,
+  IssuePullRequest,
   IssueSlackSource,
   ModelSelection,
 } from "@t3tools/contracts";
@@ -22,6 +23,7 @@ import {
   RestoreIssueInput,
   SetIssueCycleInput,
   SetIssueMilestoneInput,
+  SetIssuePullRequestInput,
   SetIssueSortOrderInput,
   SoftDeleteIssueInput,
 } from "../Services/Issues.ts";
@@ -31,6 +33,7 @@ const IssueDbRow = IssueRecord.mapFields(
     assignee: Schema.NullOr(Schema.fromJsonString(IssueAssignee)),
     workModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     automationAssignment: Schema.NullOr(Schema.fromJsonString(IssueAutomationAssignment)),
+    pullRequest: Schema.NullOr(Schema.fromJsonString(IssuePullRequest)),
     triage: Schema.BooleanFromBit,
     slackSource: Schema.NullOr(Schema.fromJsonString(IssueSlackSource)),
   }),
@@ -49,6 +52,7 @@ const ISSUE_COLUMNS = `
   assignee_json AS "assignee",
   work_model_selection_json AS "workModelSelection",
   automation_assignment_json AS "automationAssignment",
+  pull_request_json AS "pullRequest",
   project_id AS "projectId",
   milestone_id AS "milestoneId",
   cycle_id AS "cycleId",
@@ -89,6 +93,7 @@ const makeIssueRepository = Effect.gen(function* () {
           assignee_json,
           work_model_selection_json,
           automation_assignment_json,
+          pull_request_json,
           project_id,
           milestone_id,
           cycle_id,
@@ -114,6 +119,7 @@ const makeIssueRepository = Effect.gen(function* () {
           ${row.assignee === null ? null : JSON.stringify(row.assignee)},
           ${row.workModelSelection == null ? null : JSON.stringify(row.workModelSelection)},
           ${row.automationAssignment == null ? null : JSON.stringify(row.automationAssignment)},
+          ${row.pullRequest == null ? null : JSON.stringify(row.pullRequest)},
           ${row.projectId},
           ${row.milestoneId},
           ${row.cycleId},
@@ -139,6 +145,7 @@ const makeIssueRepository = Effect.gen(function* () {
           assignee_json = excluded.assignee_json,
           work_model_selection_json = excluded.work_model_selection_json,
           automation_assignment_json = excluded.automation_assignment_json,
+          pull_request_json = excluded.pull_request_json,
           project_id = excluded.project_id,
           milestone_id = excluded.milestone_id,
           cycle_id = excluded.cycle_id,
@@ -294,6 +301,17 @@ const makeIssueRepository = Effect.gen(function* () {
       ),
   });
 
+  const setIssuePullRequestRow = SqlSchema.void({
+    Request: SetIssuePullRequestInput,
+    execute: ({ issueId, pullRequest, updatedAt }) =>
+      sql`
+        UPDATE issues
+        SET pull_request_json = ${JSON.stringify(pullRequest)},
+            updated_at = ${updatedAt}
+        WHERE id = ${issueId}
+      `,
+  });
+
   const listAll: IssueRepositoryShape["listAll"] = () =>
     listAllIssueRows().pipe(
       Effect.mapError(
@@ -426,6 +444,16 @@ const makeIssueRepository = Effect.gen(function* () {
       ),
     );
 
+  const setPullRequest: IssueRepositoryShape["setPullRequest"] = (input) =>
+    setIssuePullRequestRow(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "IssueRepository.setPullRequest:query",
+          "IssueRepository.setPullRequest:encodeRequest",
+        ),
+      ),
+    );
+
   return {
     listAll,
     listLive,
@@ -440,6 +468,7 @@ const makeIssueRepository = Effect.gen(function* () {
     reassignStatus,
     setMilestone,
     setCycle,
+    setPullRequest,
   } satisfies IssueRepositoryShape;
 });
 

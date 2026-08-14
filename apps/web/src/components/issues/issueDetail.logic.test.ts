@@ -291,6 +291,20 @@ describe("describeIssueEvent", () => {
     ).toBe("updated the description");
   });
 
+  it("describes an automatically discovered pull request", () => {
+    expect(
+      describeIssueEvent(
+        event({
+          kind: "field_changed",
+          field: "pullRequest",
+          before: null,
+          after: "#42 Show PRs on issues",
+          actor: { kind: "system", source: "automation" },
+        }),
+      ),
+    ).toEqual({ actor: "Automation", summary: "linked pull request #42 Show PRs on issues" });
+  });
+
   it("reads a status move as from/to and a first set as to", () => {
     expect(
       describeIssueEvent(

@@ -72,6 +72,7 @@ import {
   type IssueMilestonesReorderInput,
   type IssueMilestonesResult,
   type IssuePatch,
+  type IssuePullRequest,
   type IssueRefInput,
   type IssueRelation,
   type IssueRelationCreateInput,
@@ -602,6 +603,14 @@ export interface IssueTrackerServiceShape {
   readonly getIssueLinksForThread: (
     input: IssueThreadRefInput,
   ) => Effect.Effect<IssueLinksForThreadResult, IssueTrackerError>;
+  /**
+   * Persist the PR found after a linked thread finishes a run. This is an internal observation,
+   * not a public issue edit: it is attributed to Automation and is idempotent for unchanged VCS
+   * status so every turn may report the same branch safely.
+   */
+  readonly recordThreadPullRequest: (
+    input: Omit<IssuePullRequest, "createdAt" | "updatedAt">,
+  ) => Effect.Effect<void, IssueTrackerError>;
   /**
    * Store the Slack bot token, or clear it with an empty string.
    *
@@ -3780,6 +3789,72 @@ export const make = Effect.gen(function* () {
     return { threadId: input.threadId, links };
   });
 
+  const pullRequestEventValue = (pullRequest: IssuePullRequest) =>
+    `#${pullRequest.number} ${pullRequest.title}`;
+
+  const recordThreadPullRequest: IssueTrackerServiceShape["recordThreadPullRequest"] = Effect.fn(
+    "IssueTrackerService.recordThreadPullRequest",
+  )(function* (input) {
+    const links = yield* threadLinkRepository
+      .listByThread({ threadId: input.threadId })
+      .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
+    if (links.length === 0) return;
+
+    for (const link of links) {
+      const record = yield* requireIssueRecord(link.issueId);
+      const previous = record.pullRequest ?? null;
+      if (
+        previous !== null &&
+        previous.threadId === input.threadId &&
+        previous.provider === input.provider &&
+        previous.number === input.number &&
+        previous.title === input.title &&
+        previous.url === input.url &&
+        previous.state === input.state
+      ) {
+        continue;
+      }
+
+      const now = yield* nowIso;
+      const samePullRequest =
+        previous !== null &&
+        previous.provider === input.provider &&
+        previous.number === input.number;
+      const pullRequest: IssuePullRequest = {
+        ...input,
+        createdAt: samePullRequest ? previous.createdAt : now,
+        updatedAt: now,
+      };
+      yield* issueRepository
+        .setPullRequest({ issueId: record.id, pullRequest, updatedAt: now })
+        .pipe(Effect.mapError(storage("Failed to record the issue pull request")));
+
+      // State and title refreshes keep the visible chip truthful without turning every external
+      // host edit into another activity row. A newly discovered PR is the durable milestone.
+      if (!samePullRequest) {
+        yield* appendChangeLog({
+          issueId: record.id,
+          actor: { kind: "system", source: "automation" },
+          createdAt: now,
+          kind: "field_changed",
+          changes: [
+            {
+              field: "pullRequest",
+              before: previous === null ? null : pullRequestEventValue(previous),
+              after: pullRequestEventValue(pullRequest),
+            },
+          ],
+        });
+      }
+
+      const updated = yield* requireIssueRecord(record.id);
+      yield* publish({
+        _tag: "IssueUpserted",
+        issue: { ...updated, labelIds: yield* labelsOf(record.id) },
+      });
+    }
+  });
+
   // ── Slack intake ─────────────────────────────────────────────────────
 
   const secretFailure = (operation: string) => (cause: SecretStoreError) =>
@@ -4492,6 +4567,7 @@ export const make = Effect.gen(function* () {
     unlinkThread,
     getThreadLinks,
     getIssueLinksForThread,
+    recordThreadPullRequest,
     slackSetToken,
     slackGetStatus,
     slackListChannels,

@@ -1,7 +1,9 @@
 import {
   EnvironmentId,
+  ThreadId,
   WS_METHODS,
   type GitActionProgressEvent,
+  type GitRunStackedActionInput,
   type GitRunStackedActionResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -593,9 +595,11 @@ describe("vcsActionState", () => {
           targetKey,
           interruptedActionId,
         );
+        const receivedInputs = new Array<GitRunStackedActionInput>();
         const client = {
-          [WS_METHODS.gitRunStackedAction]: (input: { readonly actionId: string }) =>
-            input.actionId === successfulTransportActionId
+          [WS_METHODS.gitRunStackedAction]: (input: GitRunStackedActionInput) => {
+            receivedInputs.push(input);
+            return input.actionId === successfulTransportActionId
               ? Stream.make(
                   progress({
                     kind: "action_finished",
@@ -616,7 +620,8 @@ describe("vcsActionState", () => {
                       phase: "push",
                       message: "push failed after creating the branch",
                     }),
-                  ),
+                  );
+          },
         } as unknown as WsRpcProtocolClient;
         const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
           target,
@@ -662,10 +667,12 @@ describe("vcsActionState", () => {
           manager.runStackedAction(targetKey).run(registry, {
             actionId: successfulActionId,
             action,
+            threadId: ThreadId.make("thread-pr"),
           }),
         );
 
         expect(AsyncResult.isSuccess(successfulResult)).toBe(true);
+        expect(receivedInputs[0]?.threadId).toBe("thread-pr");
         expect(registry.get(manager.stateAtom(targetKey))).toEqual(EMPTY_VCS_ACTION_STATE);
         expect(registry.get(state).revision).toBe(1);
         expect(removed).toEqual([`${environmentId}:*`]);

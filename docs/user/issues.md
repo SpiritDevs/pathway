@@ -23,6 +23,9 @@ and the whole list stays fast at thousands of rows.
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.
 
+When a linked work thread opens a pull request, its numbered badge appears on both the list row and
+the board card. Select the badge to open the pull request on its source-control host.
+
 Right-click a row or a board card for the same properties in one menu: **Status**, **Priority**,
 **Assignee**, **Labels**, **Project**, **Milestone**, **Cycle**, and a **Due date** with the four
 dates worth one press. Below those sit **Investigate**, **Copy** (issue ID, title, link, or a
@@ -72,6 +75,10 @@ investigation panel, and the activity feed. Every change to an issue is recorded
 who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
 resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
 sheet header to copy it.
+
+A pull request discovered on a linked work thread also appears in the properties rail with its
+title and current open, closed, or merged state. The first discovery is recorded automatically in
+the activity feed as an Automation event.
 
 Use **Add images** in the attachment shelf to choose images from a file or from the clipboard. You
 can also paste an image directly into the description; Pathway moves it into the attachment shelf

@@ -1146,8 +1146,12 @@ export default function GitActionsControl({
   const [pushRecoveryFailure, setPushRecoveryFailure] = useState<string | null>(null);
   const [pushRecoveryPending, setPushRecoveryPending] = useState(false);
   const sourceControlScope = useMemo(
-    () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
-    [activeEnvironmentId, gitCwd],
+    () => ({
+      environmentId: activeEnvironmentId,
+      cwd: gitCwd,
+      ...(activeThreadRef === null ? {} : { threadId: activeThreadRef.threadId }),
+    }),
+    [activeEnvironmentId, activeThreadRef, gitCwd],
   );
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;

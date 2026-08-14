@@ -63,9 +63,14 @@ const renderedRows = (html: string) =>
 
 const setQueue = (input: {
   readonly canReorder?: boolean;
+  readonly projectedMessageIds?: ReadonlyArray<string>;
   readonly queuedRuns: ReadonlyArray<ReturnType<typeof queuedRun>>;
 }) => {
-  state.projection = { projection: { messages: [] } };
+  state.projection = {
+    projection: {
+      messages: (input.projectedMessageIds ?? []).map((id) => ({ id })),
+    },
+  };
   state.workflow = {
     activeRun: { id: "run:active" },
     canPromoteToSteer: true,
@@ -159,6 +164,21 @@ describe("QueuedRunsControl sorting", () => {
       { position: "3", text: "Pending message" },
     ]);
     expect(html).toContain("3 queued messages");
+  });
+
+  it("does not resurrect a cancelled server-owned message as an optimistic save", () => {
+    setQueue({
+      projectedMessageIds: ["message:cancelled"],
+      queuedRuns: [queuedRun("remaining", "Remaining message")],
+    });
+
+    const html = render([
+      { id: "message:cancelled", inputIntent: "queued_turn", text: "Cancelled message" },
+    ]);
+
+    expect(html).not.toContain("Cancelled message");
+    expect(html).not.toContain("Saving queued message");
+    expect(renderedRows(html)).toEqual([{ position: "1", text: "Remaining message" }]);
   });
 });
 

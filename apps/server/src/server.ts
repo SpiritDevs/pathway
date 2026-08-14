@@ -438,10 +438,16 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const RunFinalizationObserverLayerLive = RunFinalizationService.observerLive.pipe(
+  Layer.provide(
+    RunFinalizationService.pullRequestObserverLive.pipe(Layer.provide(IssueTrackerLayerLive)),
+  ),
+);
+
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
-  Layer.provide(RunFinalizationService.observerLive),
+  Layer.provide(RunFinalizationObserverLayerLive),
 );
 
 const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
