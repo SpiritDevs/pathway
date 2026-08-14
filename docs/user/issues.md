@@ -84,6 +84,12 @@ Use **Add images** in the attachment shelf to choose images from a file or from 
 can also paste an image directly into the description; Pathway moves it into the attachment shelf
 instead of inserting it into the description.
 
+Clicking an image — in the shelf or in a comment — opens it full window inside Pathway rather than
+in a browser. The viewer holds every image on the issue, so the arrows, the thumbnail strip, and the
+left and right arrow keys walk the whole set. From there you can zoom (the buttons, `+`, `-`, and
+`0`, or double-click, and drag to pan), download or copy the image, open it in a browser, start a
+new thread about that one image, or comment on it without leaving the viewer. `Esc` closes it.
+
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
 

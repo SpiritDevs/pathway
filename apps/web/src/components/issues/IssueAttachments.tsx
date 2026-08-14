@@ -27,9 +27,11 @@ import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachm
 function AttachmentGallery({
   attachmentIds,
   environmentId,
+  onOpenImage,
 }: {
   attachmentIds: ReadonlyArray<ChatAttachmentId>;
   environmentId: EnvironmentId;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
 }) {
   const resources = useMemo(
     () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
@@ -54,19 +56,18 @@ function AttachmentGallery({
                 src={url}
               />
             ) : (
-              <a
+              <button
                 aria-label={`Open attachment ${index + 1}`}
-                className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={url}
-                rel="noreferrer"
-                target="_blank"
+                className="block cursor-zoom-in rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => onOpenImage(attachmentId)}
+                type="button"
               >
                 <img
                   alt={`Issue attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
                   src={url}
                 />
-              </a>
+              </button>
             )}
           </li>
         );
@@ -78,10 +79,12 @@ function AttachmentGallery({
 export function IssueAttachments({
   comments,
   onCreateComment,
+  onOpenImage,
   drafts,
 }: {
   comments: ReadonlyArray<IssueComment>;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
   drafts: IssueImageAttachmentDraftController;
 }) {
   const environmentId = usePrimaryEnvironmentId();
@@ -196,7 +199,11 @@ export function IssueAttachments({
       </div>
 
       {storedAttachmentIds.length === 0 || environmentId === null ? null : (
-        <AttachmentGallery attachmentIds={storedAttachmentIds} environmentId={environmentId} />
+        <AttachmentGallery
+          attachmentIds={storedAttachmentIds}
+          environmentId={environmentId}
+          onOpenImage={onOpenImage}
+        />
       )}
 
       {attachments.length === 0 ? null : (
