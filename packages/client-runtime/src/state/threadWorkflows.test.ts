@@ -6,6 +6,7 @@ import {
   deriveThreadQueueWorkflowState,
   isQueuedRunOrderStale,
   orderQueuedRuns,
+  resolveLatestForkableRun,
   resolveLatestMergeBackRun,
   resolveQueuedRunReorder,
 } from "./threadWorkflows.ts";
@@ -338,6 +339,29 @@ describe("thread workflows", () => {
     } as never;
 
     expect(resolveLatestMergeBackRun(projection)?.id).toBe("newest-finished");
+  });
+
+  it("forks a side chat from the newest completed run while newer work continues", () => {
+    const projection = {
+      runs: [
+        { id: "newer-active", status: "running", ordinal: 3 },
+        { id: "newest-completed", status: "completed", ordinal: 2 },
+        { id: "older-completed", status: "completed", ordinal: 1 },
+      ],
+    } as never;
+
+    expect(resolveLatestForkableRun(projection)?.id).toBe("newest-completed");
+  });
+
+  it("does not offer a side chat before the conversation has a completed run", () => {
+    const projection = {
+      runs: [
+        { id: "active", status: "running", ordinal: 1 },
+        { id: "queued", status: "queued", ordinal: 2 },
+      ],
+    } as never;
+
+    expect(resolveLatestForkableRun(projection)).toBeNull();
   });
 
   it("does not let a stale completed run later in storage order hide the waiting checkpoint", () => {

@@ -28,3 +28,8 @@ as a tab in the right panel. Additional forks open as peer tabs, and you can clo
 like other right-panel surfaces.
 
 On mobile, the fork opens as a regular full-screen thread.
+
+You can also choose **Side chat** from the web or desktop right panel. Pathway starts it from the
+latest completed response, so it inherits the conversation up to that point without adding its
+questions or answers to the parent thread. If the parent is still working, the side chat uses the
+newest response that had already completed.

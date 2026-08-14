@@ -36,6 +36,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-execution";
 import {
   resolveActiveThreadRun,
+  resolveLatestForkableRun,
   resolveThreadProviderSession,
 } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
@@ -1337,6 +1338,9 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
+  const forkThreadFromRun = useAtomCommand(threadEnvironment.forkFromRun, {
+    reportFailure: false,
+  });
   const launchThreadContinuation = useAtomCommand(threadEnvironment.launchContinuation, {
     reportFailure: false,
   });
@@ -1624,6 +1628,10 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThread = isServerThread ? serverThread : localDraftThread;
   const serverLatestRun = useMemo(
     () => (serverProjection === null ? null : deriveLatestThreadRun(serverProjection)),
+    [serverProjection],
+  );
+  const latestSideChatSourceRun = useMemo(
+    () => (serverProjection === null ? null : resolveLatestForkableRun(serverProjection)),
     [serverProjection],
   );
   const serverActivityRun = useMemo(
@@ -5420,6 +5428,69 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, navigate],
   );
 
+  const sideChatCreateInFlightRef = useRef(false);
+  const createSideChat = useCallback(async () => {
+    if (
+      sideChatCreateInFlightRef.current ||
+      !activeThread ||
+      !latestSideChatSourceRun ||
+      activeEnvironmentUnavailable
+    ) {
+      return;
+    }
+
+    sideChatCreateInFlightRef.current = true;
+    try {
+      const targetThreadId = newThreadId();
+      const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
+      const result = await forkThreadFromRun({
+        environmentId,
+        input: {
+          sourceThreadId: activeThread.id,
+          targetThreadId,
+          runId: latestSideChatSourceRun.id,
+          title: `${activeThread.title} side chat`,
+        },
+      });
+
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Failed to start a side chat.",
+          );
+        }
+        return;
+      }
+
+      const ownerThreadRef = panelOwnerThreadRef ?? activeThreadRef;
+      if (!ownerThreadRef) return;
+      await openForkedThreadSideChatWhenReady({
+        parentThreadRef: ownerThreadRef,
+        targetThreadRef,
+        waitForThreadShell,
+        openThread: (parentRef, childThreadId) => {
+          useRightPanelStore.getState().openThread(parentRef, childThreadId);
+        },
+        onThreadUnavailable: (message) => {
+          setThreadError(activeThread.id, message);
+        },
+      });
+    } finally {
+      sideChatCreateInFlightRef.current = false;
+    }
+  }, [
+    activeEnvironmentUnavailable,
+    activeThread,
+    activeThreadRef,
+    environmentId,
+    forkThreadFromRun,
+    latestSideChatSourceRun,
+    panelOwnerThreadRef,
+    setThreadError,
+  ]);
+
   const [continuationRequest, setContinuationRequest] = useState<
     | {
         readonly kind: "continue";
@@ -7568,12 +7639,16 @@ function ChatViewContent(props: ChatViewProps) {
               onAddFiles={addFilesSurface}
               onAddPullRequest={addPullRequestSurface}
               onAddAgents={addAgentsSurface}
+              onAddSideChat={createSideChat}
               browserAvailable={isPreviewSupportedInRuntime()}
               terminalAvailable={activeProject !== null}
               diffAvailable={isServerThread && isGitRepo}
               filesAvailable={activeProject !== null}
               pullRequestAvailable={pullRequestSurfaceAvailable}
               agentsAvailable
+              sideChatAvailable={
+                isServerThread && latestSideChatSourceRun !== null && !activeEnvironmentUnavailable
+              }
               pullRequestStatuses={pullRequestTabStatuses}
               liveAgentCount={agentPanelModel.liveCount}
             >
@@ -7609,12 +7684,16 @@ function ChatViewContent(props: ChatViewProps) {
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
+            onAddSideChat={createSideChat}
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
+            sideChatAvailable={
+              isServerThread && latestSideChatSourceRun !== null && !activeEnvironmentUnavailable
+            }
             pullRequestStatuses={pullRequestTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
           >
