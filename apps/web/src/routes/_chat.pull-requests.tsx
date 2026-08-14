@@ -1029,13 +1029,15 @@ function PullRequestsRouteView() {
     />
   );
   const openPanelControls = (
-    <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-      <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
+    <div className="workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]">
+      {rightPanelState.isOpen ? (
+        <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
+      ) : null}
       {panelToggleControls}
     </div>
   );
   const poppedOutPanelControls = (
-    <div className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+    <div className="mr-px flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
       <RightPanelPopOutControl poppedOut onToggle={toggleRightPanelPoppedOut} />
       {panelToggleControls}
     </div>
@@ -1182,7 +1184,13 @@ function PullRequestsRouteView() {
     searchInput,
     filtersMenu,
     rightPanelControl:
-      !pullRequestsSupported || rightPanelState.isOpen ? null : panelToggleControls,
+      // Footprint reserve while the panel is closed: the toggle itself stays
+      // mounted at the fixed titlebar inset in both states so it cannot move
+      // on toggle, and this spacer keeps refresh from sliding underneath it
+      // (sized per header padding so refresh ends a normal gap short of it).
+      !pullRequestsSupported || rightPanelState.isOpen ? null : (
+        <span aria-hidden className="w-7 shrink-0 sm:w-5" />
+      ),
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
   };
@@ -1308,11 +1316,12 @@ function PullRequestsRouteView() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
+        {pullRequestsSupported ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
         {!rightPanelUsesSheet ? (
           <InlineRightPanelPortal open={rightPanelVisible}>
-            {renderPullRequestPanel("inline", openPanelControls)}
+            {renderPullRequestPanel("inline", null)}
           </InlineRightPanelPortal>
         ) : null}
         {shouldMountRightPanelSheet({
@@ -1327,7 +1336,7 @@ function PullRequestsRouteView() {
           >
             {renderPullRequestPanel(
               "sheet",
-              desktopRightPanelPoppedOut ? poppedOutPanelControls : panelToggleControls,
+              desktopRightPanelPoppedOut ? poppedOutPanelControls : null,
             )}
           </RightPanelSheet>
         ) : null}
