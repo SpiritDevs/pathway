@@ -123,6 +123,7 @@ import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   filterSidebarV2VisibleThreads,
+  getSidebarForkParentThreadId,
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
@@ -142,6 +143,7 @@ import {
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
+import { useRightPanelStore } from "../rightPanelStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
@@ -266,6 +268,8 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  sideChats,
+  onOpenSideChat,
   onOpenIssue,
 }: {
   thread: SidebarThreadSummary;
@@ -283,6 +287,8 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  sideChats: ReadonlyArray<SidebarThreadSummary>;
+  onOpenSideChat: (threadId: ThreadId) => void;
   onOpenIssue: (issueKey: string) => void;
 }) {
   return (
@@ -293,7 +299,7 @@ function SidebarThreadTooltip({
       variant="glass"
       className={cn(
         "max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0",
-        issue !== null && "pointer-events-auto",
+        (issue !== null || sideChats.length > 0) && "pointer-events-auto",
       )}
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
@@ -375,6 +381,28 @@ function SidebarThreadTooltip({
           ) : null}
         </div>
       </div>
+      {sideChats.length > 0 ? (
+        <div className="border-border/60 border-t">
+          <div className="flex items-center gap-1.5 px-[var(--floating-content-inset)] py-2 text-[10px] font-medium text-muted-foreground">
+            <MessageSquareIcon aria-hidden className="size-3" />
+            <span>Side chats</span>
+            <span className="ml-auto tabular-nums">{sideChats.length}</span>
+          </div>
+          <div className="divide-border/60 divide-y border-border/60 border-t">
+            {sideChats.map((sideChat) => (
+              <button
+                key={sideChat.id}
+                type="button"
+                className="flex w-full cursor-pointer items-center gap-2 px-[var(--floating-content-inset)] py-2 text-left text-xs text-foreground/80 outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                onClick={() => onOpenSideChat(sideChat.id)}
+              >
+                <MessageSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{sideChat.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </TooltipPopup>
   );
 }
@@ -721,6 +749,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   projectFaviconPath: string | null;
   projectTitle: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+  sideChats: ReadonlyArray<SidebarThreadSummary>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
@@ -739,6 +768,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
   onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
   onOpenIssue: (issueKey: string) => void;
+  onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
   const {
     isRenaming,
@@ -922,6 +952,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      sideChats={props.sideChats}
+      onOpenSideChat={(sideChatThreadId) => props.onOpenSideChat(threadRef, sideChatThreadId)}
       onOpenIssue={props.onOpenIssue}
     />
   );
@@ -1557,12 +1589,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   projectTitle: string | null;
   environmentLabel: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
+  sideChats: ReadonlyArray<SidebarThreadSummary>;
   isHighlighted: boolean;
   isRouteActive: boolean;
   resultId: string;
   onHighlight: () => void;
   onSelect: () => void;
   onOpenIssue: (issueKey: string) => void;
+  onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
   const { thread } = props;
   // Same details tooltip as the regular rows: a search hit is still a thread,
@@ -1651,6 +1685,10 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          sideChats={props.sideChats}
+          onOpenSideChat={(sideChatThreadId) =>
+            props.onOpenSideChat(scopeThreadRef(thread.environmentId, thread.id), sideChatThreadId)
+          }
           onOpenIssue={props.onOpenIssue}
         />
       </Tooltip>
@@ -1839,6 +1877,27 @@ export default function Sidebar() {
       ),
     [serverProviders],
   );
+  const sideChatsByParentKey = useMemo(() => {
+    const grouped = new Map<string, EnvironmentThreadShell[]>();
+    for (const thread of threads) {
+      const parentThreadId = getSidebarForkParentThreadId(thread);
+      if (parentThreadId === null || thread.archivedAt !== null) continue;
+      const parentKey = scopedThreadKey(scopeThreadRef(thread.environmentId, parentThreadId));
+      const existing = grouped.get(parentKey);
+      if (existing) {
+        existing.push(thread);
+      } else {
+        grouped.set(parentKey, [thread]);
+      }
+    }
+    for (const sideChats of grouped.values()) {
+      sideChats.sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      );
+    }
+    return grouped;
+  }, [threads]);
   const projectCwdByKey = useMemo(
     () =>
       new Map(
@@ -2316,6 +2375,15 @@ export default function Sidebar() {
       });
     },
     [clearSelection, isMobile, router, setOpenMobile, setSelectionAnchor],
+  );
+  const openSideChat = useCallback(
+    (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => {
+      useRightPanelStore.getState().openThread(parentRef, sideChatThreadId);
+      if (routeThreadKey !== scopedThreadKey(parentRef)) {
+        navigateToThread(parentRef);
+      }
+    },
+    [navigateToThread, routeThreadKey],
   );
 
   const navigateToDraft = useCallback(
@@ -3619,11 +3687,13 @@ export default function Sidebar() {
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         providerEntryByInstanceId={providerEntryByInstanceId}
+                        sideChats={sideChatsByParentKey.get(threadKey) ?? []}
                         isHighlighted={activeSearchResultIndex === index}
                         isRouteActive={routeThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
+                        onOpenSideChat={openSideChat}
                         onOpenIssue={openIssue}
                       />
                     );
@@ -3733,6 +3803,7 @@ export default function Sidebar() {
                           ) ?? null
                         }
                         providerEntryByInstanceId={providerEntryByInstanceId}
+                        sideChats={sideChatsByParentKey.get(threadKey) ?? []}
                         timestampFormat={timestampFormat}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}
@@ -3750,6 +3821,7 @@ export default function Sidebar() {
                         onUnpin={attemptUnpin}
                         onAcknowledgeWoke={acknowledgeWoke}
                         onChangeRequestState={handleChangeRequestState}
+                        onOpenSideChat={openSideChat}
                         onOpenIssue={openIssue}
                       />
                     );

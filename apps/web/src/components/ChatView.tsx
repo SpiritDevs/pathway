@@ -39,7 +39,7 @@ import {
   resolveLatestForkableRun,
   resolveThreadProviderSession,
 } from "@t3tools/client-runtime/state/thread-workflows";
-import { resolveThreadLastVisitedAt } from "./Sidebar.logic";
+import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import {
   parseScopedThreadKey,
@@ -257,6 +257,7 @@ import {
   useProjects,
   useThreadProjection,
   useThreadShell,
+  useThreadShells,
   useThreadRefs,
   useThreadTitlesByKey,
   useThreadVisibleTurnItems,
@@ -1551,6 +1552,7 @@ function ChatViewContent(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const serverThreadRefs = useThreadRefs();
+  const serverThreadShells = useThreadShells();
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftThreadKeys = useMemo(
@@ -1796,14 +1798,22 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [activeThreadRef, serverThreadRefs, threadTitlesByKey],
   );
-  const rightPanelThreadIds = useMemo(
+  const sideChatThreadIds = useMemo(
     () =>
       activeThreadRef
-        ? serverThreadRefs
-            .filter((ref) => ref.environmentId === activeThreadRef.environmentId)
-            .map((ref) => ref.threadId)
+        ? serverThreadShells
+            .filter(
+              (thread) =>
+                thread.environmentId === activeThreadRef.environmentId &&
+                getSidebarForkParentThreadId(thread) === activeThreadRef.threadId,
+            )
+            .toSorted(
+              (left, right) =>
+                left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+            )
+            .map((thread) => thread.id)
         : [],
-    [activeThreadRef, serverThreadRefs],
+    [activeThreadRef, serverThreadShells],
   );
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
@@ -1911,8 +1921,8 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!activeThreadRef || !allEnvironmentShellsBootstrapped) return;
-    useRightPanelStore.getState().reconcileThreadSurfaces(activeThreadRef, rightPanelThreadIds);
-  }, [activeThreadRef, allEnvironmentShellsBootstrapped, rightPanelThreadIds]);
+    useRightPanelStore.getState().reconcileThreadSurfaces(activeThreadRef, sideChatThreadIds);
+  }, [activeThreadRef, allEnvironmentShellsBootstrapped, sideChatThreadIds]);
 
   useEffect(() => {
     if (!activeThreadRef || !activePreviewMiniPlayer) return;
@@ -3793,6 +3803,28 @@ function ChatViewContent(props: ChatViewProps) {
             });
           }
         }
+        if (surface.kind === "thread") {
+          const sideChatRef = scopeThreadRef(activeThreadRef.environmentId, surface.resourceId);
+          void deleteThread({
+            environmentId: sideChatRef.environmentId,
+            input: { threadId: sideChatRef.threadId },
+          }).then((result) => {
+            if (result._tag === "Success") {
+              useRightPanelStore.getState().removeThread(sideChatRef);
+              return;
+            }
+            if (isAtomCommandInterrupted(result)) return;
+            useRightPanelStore.getState().openThread(activeThreadRef, sideChatRef.threadId);
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Failed to delete side chat",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          });
+        }
       }
     },
     [
@@ -3800,6 +3832,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePreviewState.sessions,
       closePreview,
       closeTerminalMutation,
+      deleteThread,
       storeCloseTerminal,
     ],
   );

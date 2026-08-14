@@ -24,8 +24,9 @@ Editing is available only for your latest message and only until that task chang
 
 On web and desktop, open an agent response's actions and select **Fork from this response** to
 continue from that exact point in a side chat. The parent thread stays visible while the fork opens
-as a tab in the right panel. Additional forks open as peer tabs, and you can close or return to them
-like other right-panel surfaces.
+as a tab in the right panel. Side chats stay out of the main thread sidebar; hover the parent thread
+to see and reopen them. Additional forks open as peer tabs, and closing a side-chat tab permanently
+deletes that side chat.
 
 On mobile, the fork opens as a regular full-screen thread.
 

@@ -297,7 +297,7 @@ describe("sidebar thread lineage helpers", () => {
         [root, subagent, fork, archived, pullRequestReview, otherProject],
         new Set([`${environmentId}:${projectId}`]),
       ).map((thread) => thread.id),
-    ).toEqual([parentId, fork.id]);
+    ).toEqual([parentId]);
   });
 
   it("identifies subagent threads so the sidebar can hide them", () => {
