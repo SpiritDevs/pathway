@@ -1,4 +1,21 @@
 import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import type { ContextMenuItem } from "@t3tools/contracts";
+import {
   BotIcon,
   CalendarDaysIcon,
   GitPullRequestIcon,
@@ -11,10 +28,21 @@ import {
   SettingsIcon,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type MouseEvent,
+} from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
+import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { readLocalApi } from "../../localApi";
 import { useEmailUnreadTotal } from "../../state/email";
 import { SidebarProviderUpdatePill } from "../sidebar/SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "../sidebar/SidebarUpdatePill";
@@ -24,7 +52,50 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export const PRIMARY_NAVIGATION_COMPACT_WIDTH = "3.5rem";
 export const PRIMARY_NAVIGATION_EXPANDED_WIDTH = "13rem";
 export const PRIMARY_NAVIGATION_EXPANDED_STORAGE_KEY = "pathway:primary-navigation-expanded";
-const PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT = 6;
+const PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT = 2;
+
+export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
+  "threads",
+  "issues",
+  "pull-requests",
+  "calendar",
+  "email",
+] as const;
+
+export type MovablePrimaryNavigationDestination =
+  (typeof PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS)[number];
+
+export function resolvePrimaryNavigationViewOrder(
+  preference: readonly string[],
+): readonly MovablePrimaryNavigationDestination[] {
+  const movableDestinations = new Set<string>(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS);
+  const seen = new Set<string>();
+  const resolved: MovablePrimaryNavigationDestination[] = [];
+
+  for (const destination of preference) {
+    if (!movableDestinations.has(destination) || seen.has(destination)) continue;
+    seen.add(destination);
+    resolved.push(destination as MovablePrimaryNavigationDestination);
+  }
+
+  for (const destination of PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS) {
+    if (!seen.has(destination)) resolved.push(destination);
+  }
+
+  return resolved;
+}
+
+export function movePrimaryNavigationDestination(
+  order: readonly MovablePrimaryNavigationDestination[],
+  destination: MovablePrimaryNavigationDestination,
+  direction: "up" | "down",
+): readonly MovablePrimaryNavigationDestination[] {
+  const fromIndex = order.indexOf(destination);
+  if (fromIndex < 0) return order;
+  const toIndex = direction === "up" ? fromIndex - 1 : fromIndex + 1;
+  if (toIndex < 0 || toIndex >= order.length) return order;
+  return arrayMove([...order], fromIndex, toIndex);
+}
 
 export function resolvePrimaryNavigationRailWidth(expanded: boolean): string {
   return expanded ? PRIMARY_NAVIGATION_EXPANDED_WIDTH : PRIMARY_NAVIGATION_COMPACT_WIDTH;
@@ -111,9 +182,11 @@ type NavigationRailButtonProps = {
   expanded: boolean;
   icon: LucideIcon;
   label: string;
+  reorderable?: boolean;
   /** Unread work behind this destination; zero renders nothing. */
   badgeCount?: number;
   onClick?: ComponentProps<typeof Button>["onClick"];
+  onContextMenu?: ComponentProps<typeof Button>["onContextMenu"];
 };
 
 type MobileNavigationItem = {
@@ -136,8 +209,10 @@ function NavigationRailButton({
   expanded,
   icon: Icon,
   label,
+  reorderable = false,
   badgeCount = 0,
   onClick,
+  onContextMenu,
 }: NavigationRailButtonProps) {
   const badgeLabel = badgeCount > 0 ? formatNavigationBadgeCount(badgeCount) : null;
 
@@ -151,11 +226,13 @@ function NavigationRailButton({
             className={cn(
               "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
               "hover:[--control-icon-color:var(--sidebar-foreground)]",
+              reorderable && "cursor-grab active:cursor-grabbing",
               expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
               active &&
                 "bg-sidebar-accent text-sidebar-accent-foreground [--control-icon-color:var(--sidebar-accent-foreground)]",
             )}
             onClick={onClick}
+            onContextMenu={onContextMenu}
             size="icon-lg"
             style={{ width: expanded ? "100%" : "2.25rem" }}
             variant="ghost"
@@ -180,8 +257,47 @@ function NavigationRailButton({
       />
       <TooltipPopup side="right" sideOffset={8}>
         {badgeLabel === null ? label : `${label} · ${badgeLabel} unread`}
+        {reorderable ? " · Drag to reorder" : null}
       </TooltipPopup>
     </Tooltip>
+  );
+}
+
+function SortableNavigationRailButton({
+  active,
+  expanded,
+  item,
+  onClick,
+  onContextMenu,
+}: {
+  active: boolean;
+  expanded: boolean;
+  item: MobileNavigationItem & { destination: MovablePrimaryNavigationDestination };
+  onClick: ComponentProps<typeof Button>["onClick"];
+  onContextMenu: ComponentProps<typeof Button>["onContextMenu"];
+}) {
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.destination,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      className={cn("w-full touch-none", isDragging && "z-10 opacity-70")}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      <NavigationRailButton
+        active={active}
+        badgeCount={item.badgeCount ?? 0}
+        expanded={expanded}
+        icon={item.icon}
+        label={item.label}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        reorderable
+      />
+    </div>
   );
 }
 
@@ -288,7 +404,8 @@ export function MobileNavigationToolbar({
         <div className="flex min-w-0 max-w-full items-center justify-[safe_center] gap-0.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {items.map(({ destination, icon: Icon, label, badgeCount = 0, onNavigate }, index) => (
             <div key={destination} className="contents">
-              {index === PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT ? (
+              {items.length > PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT &&
+              index === items.length - PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT ? (
                 <span aria-hidden="true" className="mx-1 h-6 w-px shrink-0 bg-border/80" />
               ) : null}
               <Button
@@ -337,6 +454,18 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const activeDestination = resolvePrimaryNavigationDestination(pathname);
   // Captured mail is the one destination that accumulates unread work while you are elsewhere.
   const emailUnreadCount = useEmailUnreadTotal();
+  const preferredViewOrder = useClientSettings((settings) => settings.primaryNavigationViewOrder);
+  const updateClientSettings = useUpdateClientSettings();
+  const viewOrder = useMemo(
+    () => resolvePrimaryNavigationViewOrder(preferredViewOrder),
+    [preferredViewOrder],
+  );
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+  );
+  const draggedDestinationRef = useRef<MovablePrimaryNavigationDestination | null>(null);
   const rememberedThreadRouteRef = useRef<RememberedThreadRoute | null>(
     resolveRememberedThreadRoute(pathname, null),
   );
@@ -396,57 +525,143 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigateToSettings = useCallback(() => {
     void navigate({ to: "/settings" });
   }, [navigate]);
+  const navigationItemsByDestination = useMemo(
+    () => ({
+      dashboard: {
+        destination: "dashboard",
+        icon: LayoutDashboardIcon,
+        label: "Dashboard",
+        onNavigate: navigateToDashboard,
+      },
+      threads: {
+        destination: "threads",
+        icon: MessagesSquareIcon,
+        label: "Threads",
+        onNavigate: navigateToThreads,
+      },
+      issues: {
+        destination: "issues",
+        icon: ListTodoIcon,
+        label: "Issues",
+        onNavigate: navigateToIssues,
+      },
+      "pull-requests": {
+        destination: "pull-requests",
+        icon: GitPullRequestIcon,
+        label: "Source Control",
+        onNavigate: navigateToPullRequests,
+      },
+      calendar: {
+        destination: "calendar",
+        icon: CalendarDaysIcon,
+        label: "Calendar",
+        onNavigate: navigateToCalendar,
+      },
+      email: {
+        destination: "email",
+        icon: MailIcon,
+        label: "Email",
+        badgeCount: emailUnreadCount,
+        onNavigate: navigateToEmail,
+      },
+      orchestrator: {
+        destination: "orchestrator",
+        icon: BotIcon,
+        label: "Orchestrator AI",
+        onNavigate: navigateToOrchestrator,
+      },
+      settings: {
+        destination: "settings",
+        icon: SettingsIcon,
+        label: "Settings",
+        onNavigate: navigateToSettings,
+      },
+    }),
+    [
+      emailUnreadCount,
+      navigateToCalendar,
+      navigateToDashboard,
+      navigateToEmail,
+      navigateToIssues,
+      navigateToOrchestrator,
+      navigateToPullRequests,
+      navigateToSettings,
+      navigateToThreads,
+    ],
+  ) satisfies Record<PrimaryNavigationDestination, MobileNavigationItem>;
+
+  const movableNavigationItems = viewOrder.map(
+    (destination) => navigationItemsByDestination[destination],
+  );
+  const fixedBottomNavigationItems = [
+    navigationItemsByDestination.orchestrator,
+    navigationItemsByDestination.settings,
+  ];
   const navigationItems = [
-    {
-      destination: "dashboard",
-      icon: LayoutDashboardIcon,
-      label: "Dashboard",
-      onNavigate: navigateToDashboard,
+    navigationItemsByDestination.dashboard,
+    ...movableNavigationItems,
+    ...fixedBottomNavigationItems,
+  ];
+
+  const persistViewOrder = useCallback(
+    (nextOrder: readonly MovablePrimaryNavigationDestination[]) => {
+      updateClientSettings({ primaryNavigationViewOrder: [...nextOrder] });
     },
-    {
-      destination: "threads",
-      icon: MessagesSquareIcon,
-      label: "Threads",
-      onNavigate: navigateToThreads,
+    [updateClientSettings],
+  );
+
+  const clearDraggedDestinationAfterClick = useCallback(() => {
+    window.setTimeout(() => {
+      draggedDestinationRef.current = null;
+    }, 0);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const destination = event.active.id as MovablePrimaryNavigationDestination;
+      const overDestination = event.over?.id as MovablePrimaryNavigationDestination | undefined;
+      if (overDestination && destination !== overDestination) {
+        const fromIndex = viewOrder.indexOf(destination);
+        const toIndex = viewOrder.indexOf(overDestination);
+        if (fromIndex >= 0 && toIndex >= 0) {
+          persistViewOrder(arrayMove([...viewOrder], fromIndex, toIndex));
+        }
+      }
+      clearDraggedDestinationAfterClick();
     },
-    {
-      destination: "issues",
-      icon: ListTodoIcon,
-      label: "Issues",
-      onNavigate: navigateToIssues,
+    [clearDraggedDestinationAfterClick, persistViewOrder, viewOrder],
+  );
+
+  const handleViewContextMenu = useCallback(
+    async (
+      event: MouseEvent<HTMLButtonElement>,
+      destination: MovablePrimaryNavigationDestination,
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const api = readLocalApi();
+      if (!api) return;
+
+      const index = viewOrder.indexOf(destination);
+      const items: readonly ContextMenuItem<"move-up" | "move-down">[] = [
+        { id: "move-up", label: "Move up", disabled: index <= 0 },
+        { id: "move-down", label: "Move down", disabled: index >= viewOrder.length - 1 },
+      ];
+      const action = await api.contextMenu.show(items, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      if (!action) return;
+      persistViewOrder(
+        movePrimaryNavigationDestination(
+          viewOrder,
+          destination,
+          action === "move-up" ? "up" : "down",
+        ),
+      );
     },
-    {
-      destination: "pull-requests",
-      icon: GitPullRequestIcon,
-      label: "Source Control",
-      onNavigate: navigateToPullRequests,
-    },
-    {
-      destination: "calendar",
-      icon: CalendarDaysIcon,
-      label: "Calendar",
-      onNavigate: navigateToCalendar,
-    },
-    {
-      destination: "email",
-      icon: MailIcon,
-      label: "Email",
-      badgeCount: emailUnreadCount,
-      onNavigate: navigateToEmail,
-    },
-    {
-      destination: "orchestrator",
-      icon: BotIcon,
-      label: "Orchestrator AI",
-      onNavigate: navigateToOrchestrator,
-    },
-    {
-      destination: "settings",
-      icon: SettingsIcon,
-      label: "Settings",
-      onNavigate: navigateToSettings,
-    },
-  ] as const satisfies readonly MobileNavigationItem[];
+    [persistViewOrder, viewOrder],
+  );
 
   return (
     <>
@@ -464,19 +679,43 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
             expanded ? "items-stretch" : "items-center",
           )}
         >
-          {navigationItems
-            .slice(0, PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT)
-            .map(({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
-              <NavigationRailButton
-                key={destination}
-                active={activeDestination === destination}
-                badgeCount={badgeCount ?? 0}
-                expanded={expanded}
-                icon={icon}
-                label={label}
-                onClick={onNavigate}
-              />
-            ))}
+          <NavigationRailButton
+            active={activeDestination === "dashboard"}
+            expanded={expanded}
+            icon={navigationItemsByDestination.dashboard.icon}
+            label={navigationItemsByDestination.dashboard.label}
+            onClick={navigationItemsByDestination.dashboard.onNavigate}
+          />
+          <DndContext
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis]}
+            sensors={sensors}
+            onDragCancel={clearDraggedDestinationAfterClick}
+            onDragEnd={handleDragEnd}
+            onDragStart={(event) => {
+              draggedDestinationRef.current = event.active
+                .id as MovablePrimaryNavigationDestination;
+            }}
+          >
+            <SortableContext items={[...viewOrder]} strategy={verticalListSortingStrategy}>
+              {movableNavigationItems.map((item) => (
+                <SortableNavigationRailButton
+                  key={item.destination}
+                  active={activeDestination === item.destination}
+                  expanded={expanded}
+                  item={item}
+                  onClick={(event) => {
+                    if (draggedDestinationRef.current === item.destination) {
+                      event.preventDefault();
+                      return;
+                    }
+                    item.onNavigate();
+                  }}
+                  onContextMenu={(event) => void handleViewContextMenu(event, item.destination)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         </nav>
         <nav
           aria-label="Account and application"
@@ -487,9 +726,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         >
           <SidebarProviderUpdatePill expanded={expanded} />
           <SidebarUpdatePill expanded={expanded} />
-          {navigationItems
-            .slice(PRIMARY_NAVIGATION_WORKSPACE_ITEM_COUNT)
-            .map(({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
+          {fixedBottomNavigationItems.map(
+            ({ destination, icon, label, badgeCount, onNavigate }: MobileNavigationItem) => (
               <NavigationRailButton
                 key={destination}
                 active={activeDestination === destination}
@@ -499,7 +737,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                 label={label}
                 onClick={onNavigate}
               />
-            ))}
+            ),
+          )}
           <div className="mt-1 flex w-full flex-col items-center border-t border-sidebar-border pt-2">
             <NavigationRailButton
               expanded={expanded}
