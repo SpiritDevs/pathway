@@ -31,12 +31,22 @@ import {
   FlagIcon,
   FolderIcon,
   GitBranchIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   PaperclipIcon,
   SignalHighIcon,
   TagIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
@@ -96,6 +106,7 @@ import {
   newIssueAttachmentIntake,
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
+import { canResizeNewIssueDialog } from "./newIssueDialog.logic";
 
 const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
@@ -283,6 +294,7 @@ export function NewIssueDialog({
   const store = useIssuesStore();
   const cycles = useIssueCycles();
   const titleRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -300,6 +312,8 @@ export function NewIssueDialog({
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
   const [attachments, setAttachments] = useState<ReadonlyArray<NewIssueAttachmentDraft>>([]);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [canResize, setCanResize] = useState(true);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -338,6 +352,33 @@ export function NewIssueDialog({
     defaultStatusId,
     open,
   ]);
+
+  useLayoutEffect(() => {
+    if (!open || isMaximized) return;
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+
+    const nextCanResize = canResizeNewIssueDialog({
+      dialogHeight: dialog.getBoundingClientRect().height,
+      viewportHeight: window.innerHeight,
+    });
+    setCanResize((current) => (current === nextCanResize ? current : nextCanResize));
+  }, [attachments.length, isMaximized, open, showMore]);
+
+  useEffect(() => {
+    if (!open || isMaximized) return;
+    const measure = () => {
+      const dialog = dialogRef.current;
+      if (dialog === null) return;
+      const nextCanResize = canResizeNewIssueDialog({
+        dialogHeight: dialog.getBoundingClientRect().height,
+        viewportHeight: window.innerHeight,
+      });
+      setCanResize((current) => (current === nextCanResize ? current : nextCanResize));
+    };
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [isMaximized, open]);
 
   useEffect(
     () => () => {
@@ -527,12 +568,35 @@ export function NewIssueDialog({
       <Dialog
         onOpenChange={(nextOpen) => {
           if (submitting) return;
-          if (!nextOpen) clearAttachments();
+          if (!nextOpen) {
+            clearAttachments();
+            setIsMaximized(false);
+            setCanResize(true);
+          }
           onOpenChange(nextOpen);
         }}
         open={open}
       >
-        <DialogPopup className="min-h-[min(16.25rem,90dvh)] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-h-[90dvh] max-sm:h-[90dvh]">
+        <DialogPopup
+          className={cn(
+            "min-h-[min(16.25rem,90dvh)] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-h-[90dvh] max-sm:h-[90dvh]",
+            isMaximized && "h-[90dvh]",
+          )}
+          ref={dialogRef}
+        >
+          {canResize ? (
+            <Button
+              aria-label={isMaximized ? "Minimize new issue dialog" : "Maximize new issue dialog"}
+              className="absolute end-12 top-2"
+              onClick={() => setIsMaximized((current) => !current)}
+              size="icon"
+              title={isMaximized ? "Minimize" : "Maximize"}
+              type="button"
+              variant="ghost"
+            >
+              {isMaximized ? <Minimize2Icon /> : <Maximize2Icon />}
+            </Button>
+          ) : null}
           <DialogHeader className="flex-row items-center gap-1.5 px-4 py-2.5">
             <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
               {store.config?.keyPrefix ?? "ISS"}
