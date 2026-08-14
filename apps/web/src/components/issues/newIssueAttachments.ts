@@ -18,6 +18,8 @@ export interface NewIssueAttachmentCandidate {
   readonly type: string;
 }
 
+const NEW_ISSUE_ATTACHMENT_RECORD_PREFIX = "<!-- pathway:new-issue-attachments -->\n";
+
 export interface NewIssueAttachmentIntakeResult<F> {
   readonly accepted: ReadonlyArray<F>;
   readonly rejection: string | null;
@@ -84,15 +86,17 @@ export function newIssueAttachmentDataUrlRejection(input: {
 
 /** The metadata comment that owns images added before the issue had an id. */
 export function newIssueAttachmentComment(count: number): string {
-  return count === 1
-    ? "Attached an image when creating this issue."
-    : `Attached ${count} images when creating this issue.`;
+  const description =
+    count === 1
+      ? "Attached an image when creating this issue."
+      : `Attached ${count} images when creating this issue.`;
+  return `${NEW_ISSUE_ATTACHMENT_RECORD_PREFIX}${description}`;
 }
 
 /**
  * Creation-time images need a comment row to keep their attachment ids durable, but that row is
- * attachment metadata rather than part of the discussion. Match both the generated body and its
- * attachment count so an ordinary comment that happens to use similar words remains visible.
+ * attachment metadata rather than part of the discussion. The reserved marker distinguishes it
+ * from an ordinary comment that happens to use the same visible words and attachment count.
  */
 export function isNewIssueAttachmentRecord(
   comment: Pick<IssueComment, "attachmentIds" | "body">,
