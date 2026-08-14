@@ -1,6 +1,7 @@
 "use client";
 
 import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   FILL_PREVIEW_VIEWPORT,
@@ -32,6 +33,7 @@ import {
   updatePreviewServerSnapshot,
 } from "~/previewStateStore";
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { resolveBrowserNavigationTarget } from "~/browser/browserTargetResolver";
 import {
   readActiveBrowserRecordingTargets,
@@ -67,6 +69,10 @@ import {
   waitForNavigationReadiness,
 } from "./previewNavigationReadiness";
 import { createPreviewAutomationRequestConsumerAtom } from "./previewAutomationRequestConsumer";
+import {
+  resolvePreviewAutomationRevealTarget,
+  type PreviewAutomationRevealMode,
+} from "./previewAutomationReveal";
 import { createPreviewAutomationClientId } from "./previewAutomationClientId";
 import {
   needsPreviewAutomationSessionSync,
@@ -77,6 +83,35 @@ import { isPreviewViewportReady } from "./previewViewportReadiness";
 import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
 
 const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
+
+/**
+ * Surface the tab the agent is automating on whichever browser view the user
+ * is watching (panel or mini player), so the agent cursor and page activity
+ * stay visible where the work actually happens.
+ */
+function revealAutomationTab(
+  threadRef: ScopedThreadRef,
+  tabId: string,
+  mode: PreviewAutomationRevealMode,
+): void {
+  const threadKey = scopedThreadKey(threadRef);
+  const panel = useRightPanelStore.getState().byThreadKey[threadKey] ?? null;
+  const miniPlayer = usePreviewMiniPlayerStore.getState().byThreadKey[threadKey] ?? null;
+  const target = resolvePreviewAutomationRevealTarget({
+    mode,
+    tabId,
+    panelOpen: panel?.isOpen ?? false,
+    panelActiveSurfaceId: panel?.activeSurfaceId ?? null,
+    miniPlayerTabId: miniPlayer?.tabId ?? null,
+  });
+  if (target === "panel") {
+    useRightPanelStore.getState().openBrowser(threadRef, tabId);
+    // The tab renders on a single surface; never present it in both places.
+    usePreviewMiniPlayerStore.getState().close(threadRef);
+  } else if (target === "mini-player") {
+    usePreviewMiniPlayerStore.getState().open(threadRef, tabId);
+  }
+}
 
 const waitForPreviewPresentation = async (runtimeTabId: string): Promise<void> => {
   const deadline = Date.now() + PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS;
@@ -334,11 +369,14 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           tabId,
           bridgeAvailable: Boolean(previewBridge),
         };
-        const requireReadyTab = async () => {
+        const requireReadyTab = async (options?: { readonly follow?: boolean }) => {
           const bridge = previewBridge;
           const readyTabId = tabId;
           if (!bridge || !readyTabId) {
             throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+          }
+          if (options?.follow) {
+            revealAutomationTab(threadRef, readyTabId, "follow");
           }
           const readyState = readThreadPreviewState(threadRef);
           const runtimeTabId = previewRuntimeTabId(threadRef, readyState.serverEpoch, readyTabId);
@@ -433,7 +471,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             }
             const shouldPresentPreview = shouldOpenPreviewMiniPlayer(input);
             if (shouldPresentPreview) {
-              usePreviewMiniPlayerStore.getState().open(threadRef, activeTabId);
+              revealAutomationTab(threadRef, activeTabId, "present");
             }
             if (activeSnapshot && previewAutomationOpenNeedsOverlay(input, activeSnapshot)) {
               await waitForDesktopOverlay(
@@ -468,7 +506,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             return await currentStatus(threadRef, activeTabId);
           }
           case "navigate": {
-            const ready = await requireReadyTab();
+            const ready = await requireReadyTab({ follow: true });
             const input = request.input as PreviewAutomationNavigateInput;
             const resolution = resolveBrowserNavigationTarget(
               environmentId,
@@ -583,28 +621,28 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             return await ready.bridge.automation.snapshot(ready.runtimeTabId);
           }
           case "click": {
-            const ready = await requireReadyTab();
+            const ready = await requireReadyTab({ follow: true });
             return await ready.bridge.automation.click(
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.click>[1],
             );
           }
           case "type": {
-            const ready = await requireReadyTab();
+            const ready = await requireReadyTab({ follow: true });
             return await ready.bridge.automation.type(
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.type>[1],
             );
           }
           case "press": {
-            const ready = await requireReadyTab();
+            const ready = await requireReadyTab({ follow: true });
             return await ready.bridge.automation.press(
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.press>[1],
             );
           }
           case "scroll": {
-            const ready = await requireReadyTab();
+            const ready = await requireReadyTab({ follow: true });
             return await ready.bridge.automation.scroll(
               ready.runtimeTabId,
               request.input as Parameters<typeof ready.bridge.automation.scroll>[1],
