@@ -18,8 +18,16 @@ const serviceRole: RoleDefinition = {
 };
 
 describe("tokenProofKeyThumbprint", () => {
+  it("reads Convex's flattened custom-JWT confirmation claim", () => {
+    expect(tokenProofKeyThumbprint({ "cnf.jkt": "thumb-flat" })).toBe("thumb-flat");
+  });
+
   it("reads the confirmation claim the relay bound the token to", () => {
     expect(tokenProofKeyThumbprint({ cnf: { jkt: "thumb-a" } })).toBe("thumb-a");
+  });
+
+  it("does not fall back when the flattened claim is malformed", () => {
+    expect(tokenProofKeyThumbprint({ "cnf.jkt": 7, cnf: { jkt: "thumb-a" } })).toBeNull();
   });
 
   it("treats a token with no usable confirmation claim as unbound", () => {

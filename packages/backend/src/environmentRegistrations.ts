@@ -17,6 +17,14 @@ import type { RoleAssignmentScope } from "./permissions.ts";
  * usable one. A token without it is treated as unbound and refused rather than trusted.
  */
 export function tokenProofKeyThumbprint(claims: Record<string, unknown>): string | null {
+  // Convex flattens nested custom-JWT claims into dot-delimited identity keys, so
+  // `{ cnf: { jkt: "..." } }` arrives from `getUserIdentity()` as `identity["cnf.jkt"]`.
+  // Prefer that runtime representation when it is present; retaining the nested fallback keeps
+  // this helper usable with decoded relay claims outside Convex.
+  if ("cnf.jkt" in claims) {
+    const flattenedJkt = claims["cnf.jkt"];
+    return typeof flattenedJkt === "string" && flattenedJkt.length > 0 ? flattenedJkt : null;
+  }
   const cnf = claims["cnf"];
   if (typeof cnf !== "object" || cnf === null) return null;
   const jkt = (cnf as Record<string, unknown>)["jkt"];
