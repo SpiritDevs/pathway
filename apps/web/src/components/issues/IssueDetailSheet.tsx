@@ -155,7 +155,7 @@ import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
-import { issueAttachmentIds, isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { issueAttachmentIds } from "./issueCommentAttachments";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -191,6 +191,7 @@ import {
   buildIssueTalkPrompt,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
+  loadIssueStartWorkImages,
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
@@ -974,18 +975,17 @@ function IssueDetailBody({
         purpose === "talk"
           ? buildIssueTalkPrompt(promptContext)
           : buildIssueStartWorkPrompt(promptContext);
-      const files: File[] = [];
-      for (const [index, url] of (imageUrls ?? startWorkAttachmentUrls).entries()) {
-        if (url === null) throw new Error("The issue images are still loading. Try again.");
-        if (isIssueVideoAttachmentUrl(url)) continue;
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("An issue image could not be loaded.");
-        const blob = await response.blob();
-        if (!blob.type.startsWith("image/")) {
-          throw new Error("An issue attachment is not an image.");
-        }
-        files.push(new File([blob], `${issue.key}-attachment-${index + 1}`, { type: blob.type }));
+      const selectedUrls = imageUrls ?? startWorkAttachmentUrls;
+      if (selectedUrls.some((url) => url === null)) {
+        throw new Error("The issue images are still loading. Try again.");
       }
+      const loadedImages = await loadIssueStartWorkImages(
+        selectedUrls.filter((url): url is string => url !== null),
+      );
+      const files = loadedImages.map(
+        ({ blob, sourceIndex }) =>
+          new File([blob], `${issue.key}-attachment-${sourceIndex + 1}`, { type: blob.type }),
+      );
 
       const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
         branch: workspacePlan.branch,
@@ -1419,6 +1419,20 @@ function IssueDetailBody({
                 drafts={attachmentDrafts}
                 onCreateComment={handleCreateComment}
                 onOpenImage={setViewedAttachmentId}
+                onRemoveAttachment={(commentId, attachmentId) => {
+                  const comment = comments.find((candidate) => candidate.id === commentId);
+                  if (comment === undefined) return;
+                  runWrite("Failed to remove the image", () =>
+                    updateComment({
+                      commentId,
+                      patch: {
+                        attachmentIds: comment.attachmentIds.filter(
+                          (candidate) => candidate !== attachmentId,
+                        ),
+                      },
+                    }),
+                  );
+                }}
               />
 
               <IssueDetailTabs

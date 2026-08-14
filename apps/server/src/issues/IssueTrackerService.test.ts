@@ -1163,9 +1163,13 @@ describe("IssueTrackerService", () => {
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
       const { issue } = yield* tracker.create({ title: "Discussed" }, ACTOR);
+      const attachmentId = `iss_${issue.id}-00000000-0000-4000-8000-000000000001`;
 
       const mine = yield* tracker.commentCreate({ issueId: issue.id, body: "Mine" }, ACTOR);
-      const theirs = yield* tracker.commentCreate({ issueId: issue.id, body: "Theirs" }, AGENT);
+      const theirs = yield* tracker.commentCreate(
+        { issueId: issue.id, body: "Theirs", attachmentIds: [attachmentId] },
+        AGENT,
+      );
       assert.deepStrictEqual(theirs.comment.author, AGENT);
       assert.isNull(mine.comment.editedAt);
 
@@ -1182,6 +1186,12 @@ describe("IssueTrackerService", () => {
         .commentUpdate({ commentId: theirs.comment.id, patch: { body: "Rewritten" } }, ACTOR)
         .pipe(Effect.flip);
       assert.strictEqual(notMine.reason, "invalid");
+      const detached = yield* tracker.commentUpdate(
+        { commentId: theirs.comment.id, patch: { attachmentIds: [] } },
+        ACTOR,
+      );
+      assert.deepStrictEqual(detached.comment.attachmentIds, []);
+      assert.strictEqual(detached.comment.body, "Theirs");
       const agentDeletingMine = yield* tracker
         .commentDelete({ commentId: mine.comment.id }, AGENT)
         .pipe(Effect.flip);

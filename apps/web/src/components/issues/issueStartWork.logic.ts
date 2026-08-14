@@ -25,7 +25,7 @@ import { createModelSelection, resolveSelectableModel } from "@t3tools/shared/mo
 import type { ProviderInstanceEntry } from "~/providerInstances";
 import { resolveSelectableProviderInstanceEntry } from "~/providerInstances";
 import type { ModelEsque } from "../chat/providerIconUtils";
-import { issueAttachmentIds } from "./issueCommentAttachments";
+import { isIssueVideoAttachmentUrl, issueAttachmentIds } from "./issueCommentAttachments";
 
 export type IssueStartWorkWorkspaceMode = "current_checkout" | "new_worktree";
 
@@ -252,4 +252,41 @@ export function issueStartWorkAttachmentIds(
   comments: ReadonlyArray<IssueComment>,
 ): ReadonlyArray<ChatAttachmentId> {
   return issueAttachmentIds(comments).slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS);
+}
+
+export interface IssueStartWorkImage {
+  readonly blob: Blob;
+  readonly sourceIndex: number;
+}
+
+interface IssueStartWorkImageResponse {
+  readonly ok: boolean;
+  readonly blob: () => Promise<Blob>;
+}
+
+/**
+ * Best-effort image context for a new issue thread.
+ *
+ * An attachment is supporting context, not a prerequisite for doing the work. A missing,
+ * unreadable, or mislabeled image is therefore omitted individually while the remaining images
+ * keep their issue order. Videos stay on the issue and never enter an image-only provider turn.
+ */
+export async function loadIssueStartWorkImages(
+  urls: ReadonlyArray<string>,
+  request: (url: string) => Promise<IssueStartWorkImageResponse> = fetch,
+): Promise<ReadonlyArray<IssueStartWorkImage>> {
+  const images: IssueStartWorkImage[] = [];
+  for (const [sourceIndex, url] of urls.entries()) {
+    if (isIssueVideoAttachmentUrl(url)) continue;
+    try {
+      const response = await request(url);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      if (!blob.type.startsWith("image/")) continue;
+      images.push({ blob, sourceIndex });
+    } catch {
+      // The issue still has enough context to create a thread without this attachment.
+    }
+  }
+  return images;
 }

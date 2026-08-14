@@ -133,7 +133,7 @@ function IssueListRowImpl({
     <div
       aria-selected={selected}
       className={cn(
-        "group flex h-9 w-full items-center gap-2 border-b border-border/25 px-3 text-sm outline-none sm:px-5",
+        "group flex h-9 w-full cursor-pointer items-center gap-2 border-b border-border/25 px-3 text-sm outline-none sm:px-5",
         selected ? "bg-accent/60" : "hover:bg-accent/30",
         active && "ring-1 ring-inset ring-ring/60",
       )}

@@ -1,10 +1,16 @@
-import type { ChatAttachmentId, EnvironmentId, IssueComment } from "@t3tools/contracts";
+import type {
+  ChatAttachmentId,
+  EnvironmentId,
+  IssueComment,
+  IssueCommentId,
+} from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ClipboardPasteIcon,
   FileImageIcon,
   ImagePlusIcon,
   ImagesIcon,
+  XIcon,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
@@ -17,35 +23,38 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { issueClipboardImageFiles } from "./issueAttachmentClipboard";
 import {
   issueAttachmentComment,
-  issueAttachmentIds,
+  issueAttachmentReferences,
   issueCommentAttachmentIds,
   isIssueVideoAttachmentUrl,
+  type IssueAttachmentReference,
 } from "./issueCommentAttachments";
 import { PendingIssueImageAttachment } from "./useIssueImageAttachmentDrafts";
 import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachmentDrafts";
 
 function AttachmentGallery({
-  attachmentIds,
+  attachments,
   environmentId,
   onOpenImage,
+  onRemoveAttachment,
 }: {
-  attachmentIds: ReadonlyArray<ChatAttachmentId>;
+  attachments: ReadonlyArray<IssueAttachmentReference>;
   environmentId: EnvironmentId;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
+  onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
 }) {
   const resources = useMemo(
-    () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
-    [attachmentIds],
+    () => attachments.map(({ attachmentId }) => ({ _tag: "attachment" as const, attachmentId })),
+    [attachments],
   );
   const urls = useAssetUrls(environmentId, resources);
 
   return (
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
-      {attachmentIds.map((attachmentId, index) => {
+      {attachments.map(({ attachmentId, commentId }, index) => {
         const url = urls[index] ?? null;
         if (url === null) return null;
         return (
-          <li className="shrink-0" key={attachmentId}>
+          <li className="group relative shrink-0" key={attachmentId}>
             {isIssueVideoAttachmentUrl(url) ? (
               <video
                 aria-label={`Issue recording ${index + 1}`}
@@ -69,6 +78,16 @@ function AttachmentGallery({
                 />
               </button>
             )}
+            <Button
+              aria-label={`Remove issue attachment ${index + 1}`}
+              className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 motion-reduce:transition-none"
+              onClick={() => onRemoveAttachment(commentId, attachmentId)}
+              size="icon-xs"
+              title="Remove image"
+              variant="ghost"
+            >
+              <XIcon />
+            </Button>
           </li>
         );
       })}
@@ -80,18 +99,20 @@ export function IssueAttachments({
   comments,
   onCreateComment,
   onOpenImage,
+  onRemoveAttachment,
   drafts,
 }: {
   comments: ReadonlyArray<IssueComment>;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
+  onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
   drafts: IssueImageAttachmentDraftController;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const { attachments, addFiles, removeAttachment, clearAttachments } = drafts;
-  const storedAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
+  const storedAttachments = useMemo(() => issueAttachmentReferences(comments), [comments]);
   const pendingIds = issueCommentAttachmentIds(attachments);
   const uploading = attachments.some((attachment) => attachment.status === "uploading");
 
@@ -159,9 +180,9 @@ export function IssueAttachments({
       <div className="flex min-h-7 items-center gap-1.5 text-xs text-muted-foreground">
         <ImagesIcon className="size-3.5" />
         <span>Attachments</span>
-        {storedAttachmentIds.length === 0 ? null : (
+        {storedAttachments.length === 0 ? null : (
           <span className="text-[10px] tabular-nums text-muted-foreground/70">
-            {storedAttachmentIds.length}
+            {storedAttachments.length}
           </span>
         )}
         <Menu>
@@ -198,11 +219,12 @@ export function IssueAttachments({
         />
       </div>
 
-      {storedAttachmentIds.length === 0 || environmentId === null ? null : (
+      {storedAttachments.length === 0 || environmentId === null ? null : (
         <AttachmentGallery
-          attachmentIds={storedAttachmentIds}
+          attachments={storedAttachments}
           environmentId={environmentId}
           onOpenImage={onOpenImage}
+          onRemoveAttachment={onRemoveAttachment}
         />
       )}
 

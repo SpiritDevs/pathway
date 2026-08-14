@@ -20,6 +20,7 @@ import {
   issueDetailPath,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
+  loadIssueStartWorkImages,
   issueStartWorkWorkspaceModeLabel,
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
@@ -337,6 +338,47 @@ describe("issueStartWorkAttachmentIds", () => {
     ];
 
     expect(issueStartWorkAttachmentIds(comments)).toEqual(attachmentIds.slice(0, 8));
+  });
+});
+
+describe("loadIssueStartWorkImages", () => {
+  it("keeps readable images in order and skips broken, non-image, and video attachments", async () => {
+    const requested: string[] = [];
+    const images = await loadIssueStartWorkImages(
+      [
+        "https://pathway.test/first.png",
+        "https://pathway.test/missing.png",
+        "https://pathway.test/notes.txt",
+        "https://pathway.test/recording.webm",
+        "https://pathway.test/last.jpg",
+      ],
+      async (url) => {
+        requested.push(url);
+        if (url.endsWith("/missing.png")) throw new Error("network failure");
+        return {
+          ok: true,
+          blob: async () =>
+            new Blob([url], { type: url.endsWith("/notes.txt") ? "text/plain" : "image/png" }),
+        };
+      },
+    );
+
+    expect(requested).toEqual([
+      "https://pathway.test/first.png",
+      "https://pathway.test/missing.png",
+      "https://pathway.test/notes.txt",
+      "https://pathway.test/last.jpg",
+    ]);
+    expect(images.map(({ sourceIndex }) => sourceIndex)).toEqual([0, 4]);
+  });
+
+  it("returns no images instead of failing when every response is unreadable", async () => {
+    await expect(
+      loadIssueStartWorkImages(["broken.png"], async () => ({
+        ok: false,
+        blob: async () => new Blob([], { type: "image/png" }),
+      })),
+    ).resolves.toEqual([]);
   });
 });
 

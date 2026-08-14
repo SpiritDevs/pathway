@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   issueAttachmentComment,
   issueAttachmentIds,
+  issueAttachmentReferences,
   isIssueVideoAttachmentUrl,
   issueCommentAttachmentDataUrlRejection,
   issueCommentAttachmentIds,
@@ -150,6 +151,17 @@ describe("issue attachment shelf", () => {
     expect(issueAttachmentIds([comment("c1", [first]), comment("c2", [first, second])])).toEqual([
       first,
       second,
+    ]);
+  });
+
+  it("keeps the owning comment for each removable image", () => {
+    const first = ChatAttachmentId.make("iss_first");
+    const second = ChatAttachmentId.make("iss_second");
+    expect(
+      issueAttachmentReferences([comment("c1", [first]), comment("c2", [first, second])]),
+    ).toEqual([
+      { attachmentId: first, commentId: "c1" },
+      { attachmentId: second, commentId: "c2" },
     ]);
   });
 
