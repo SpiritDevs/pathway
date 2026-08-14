@@ -110,8 +110,11 @@ function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean })
   }, [keybindings, toggleSidebar]);
 
   return (
+    // The right-side layout controls carry mr-px (border compensation inside
+    // the panel), so the trigger mirrors it: both clusters sit one extra pixel
+    // off their edge and the titlebar reads symmetric.
     <div
-      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[calc(var(--workspace-controls-top)+2.75rem)] z-50 flex h-[var(--workspace-topbar-height)] items-center transition-[left] duration-200 ease-linear motion-reduce:transition-none md:top-11 md:left-[calc(var(--primary-navigation-rail-width)+var(--workspace-controls-left))]"
+      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[calc(var(--workspace-controls-top)+2.75rem)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center transition-[left] duration-200 ease-linear motion-reduce:transition-none md:top-11 md:left-[calc(var(--primary-navigation-rail-width)+var(--workspace-controls-left))]"
       data-sidebar-control=""
     >
       <Tooltip>
