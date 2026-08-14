@@ -4,6 +4,7 @@ import type { PreviewViewportSetting, ScopedThreadRef } from "@t3tools/contracts
 import { useShallow } from "zustand/react/shallow";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AgentBrowserCursor } from "~/components/preview/AgentBrowserCursor";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { cn } from "~/lib/utils";
@@ -295,6 +296,15 @@ export function HostedBrowserWebview(props: {
             transformOrigin: "top left",
           }}
         />
+        {active ? (
+          <AgentBrowserCursor
+            tabId={runtimeTabId}
+            zoomFactor={normalizedZoomFactor}
+            scale={layout.viewportScale}
+            offsetX={layout.viewportX}
+            offsetY={layout.viewportY}
+          />
+        ) : null}
         {active && effectiveViewport._tag !== "fill" && !fittedSourceViewport ? (
           <>
             <BrowserViewportResizeHandles

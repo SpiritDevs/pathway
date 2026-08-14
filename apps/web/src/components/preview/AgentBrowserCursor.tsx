@@ -5,36 +5,53 @@ import { MousePointer2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
-import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 
 import {
   AGENT_CURSOR_GLIDE_MS,
   agentBrowserCursorGlidePosition,
   agentBrowserCursorOpacity,
-  agentBrowserCursorSurfaceOffset,
-  type AgentBrowserCursorContent,
 } from "./agentBrowserCursorLogic";
 
 const CURSOR_ACTIVE_MS = 700;
 
-export function AgentBrowserCursor(props: { readonly tabId: string; readonly zoomFactor: number }) {
-  const { tabId, zoomFactor } = props;
+/**
+ * Rendered inside the hosted webview's wrapper (a sibling of the `<webview>`
+ * element) so it always paints above the guest page, wherever the surface is
+ * presented. Coordinates are wrapper-local: `offsetX`/`offsetY` position the
+ * guest viewport and the pointer event glides within it.
+ */
+export function AgentBrowserCursor(props: {
+  readonly tabId: string;
+  readonly zoomFactor: number;
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+}) {
+  const { tabId, zoomFactor, scale, offsetX, offsetY } = props;
   const event = useBrowserPointerStore((state) => state.byTabId[tabId] ?? null);
-  const content = useBrowserSurfaceStore((state) => state.byTabId[tabId]?.content ?? null);
 
   if (!event) return null;
 
   return (
-    <AgentBrowserCursorEvent key={tabId} event={event} content={content} zoomFactor={zoomFactor} />
+    <AgentBrowserCursorEvent
+      key={tabId}
+      event={event}
+      zoomFactor={zoomFactor}
+      scale={scale}
+      offsetX={offsetX}
+      offsetY={offsetY}
+    />
   );
 }
 
 function AgentBrowserCursorEvent(props: {
   readonly event: DesktopPreviewPointerEvent;
-  readonly content: AgentBrowserCursorContent | null;
   readonly zoomFactor: number;
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
 }) {
-  const { event, content, zoomFactor } = props;
+  const { event, zoomFactor, scale, offsetX, offsetY } = props;
   const [active, setActive] = useState(true);
 
   useEffect(() => {
@@ -43,14 +60,13 @@ function AgentBrowserCursorEvent(props: {
     return () => window.clearTimeout(timeout);
   }, [event.sequence]);
 
-  const offset = agentBrowserCursorSurfaceOffset(content);
-  const glide = agentBrowserCursorGlidePosition(event, zoomFactor, content);
+  const glide = agentBrowserCursorGlidePosition(event, zoomFactor, scale);
   const pressed = active && event.phase === "click";
 
   return (
     <div
       className="pointer-events-none absolute left-0 top-0 z-40"
-      style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
+      style={{ transform: `translate3d(${offsetX}px, ${offsetY}px, 0)` }}
       aria-hidden="true"
       data-agent-browser-cursor
     >

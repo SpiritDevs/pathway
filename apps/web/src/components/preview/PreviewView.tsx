@@ -53,7 +53,6 @@ import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import { useLoadingProgress } from "./useLoadingProgress";
 import { usePreviewSession } from "./usePreviewSession";
 import { ZoomIndicator } from "./ZoomIndicator";
-import { AgentBrowserCursor } from "./AgentBrowserCursor";
 import {
   findActiveBrowserRecordingRuntimeTabId,
   startBrowserRecording,
@@ -719,9 +718,6 @@ export function PreviewView({
         ) : null}
         {snapshot && desktopOverlay ? (
           <ZoomIndicator zoomFactor={desktopOverlay.zoomFactor} />
-        ) : null}
-        {runtimeTabId && desktopOverlay && !showEmptyState && !isUnreachable ? (
-          <AgentBrowserCursor tabId={runtimeTabId} zoomFactor={desktopOverlay.zoomFactor} />
         ) : null}
         {navStatus._tag === "LoadFailed" ? (
           <div className="absolute inset-0 z-10 bg-background">
