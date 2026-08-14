@@ -12,6 +12,7 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { buildOrchestrationErrorFixPrompt } from "@t3tools/shared/orchestrationV2Timeline";
 import {
   createContext,
   Fragment,
@@ -1768,6 +1769,12 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               onOpenThread={ctx.onOpenThread}
               onOpenTurnDiff={ctx.onOpenTurnDiff}
               onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+            />
+          </div>
+          <div className="mt-2 flex justify-end border-t border-border/45 pt-2">
+            <MessageCopyButton
+              text={buildOrchestrationErrorFixPrompt(item)}
+              label="Copy message to AI"
             />
           </div>
         </div>

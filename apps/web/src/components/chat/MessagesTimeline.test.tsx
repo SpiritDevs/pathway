@@ -1397,6 +1397,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("<summary");
     expect(markup).toContain("Provider error");
     expect(markup).toContain("Invalid reasoning effort.");
+    expect(markup).toContain("Copy message to AI");
   });
 
   it("keeps inherited V2 work provenance on the rendered row", async () => {

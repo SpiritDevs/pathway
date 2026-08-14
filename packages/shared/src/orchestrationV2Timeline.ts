@@ -11,6 +11,12 @@ type TimelineTurnItem = Pick<OrchestrationV2TurnItem, "type" | "runId" | "nodeId
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
 };
 
+export function buildOrchestrationErrorFixPrompt(
+  item: Extract<OrchestrationV2TurnItem, { readonly type: "error" }>,
+): string {
+  return `Please investigate and fix this error.\n\nError context:\n${JSON.stringify(item, null, 2)}`;
+}
+
 export function isOrchestrationV2SupersededInterrupt(input: {
   readonly item: TimelineTurnItem;
   readonly attempts: ReadonlyArray<TimelineRunAttempt>;

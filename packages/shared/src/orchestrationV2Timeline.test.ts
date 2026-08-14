@@ -1,10 +1,45 @@
 import { NodeId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isOrchestrationV2TurnItemVisible } from "./orchestrationV2Timeline.ts";
+import {
+  buildOrchestrationErrorFixPrompt,
+  isOrchestrationV2TurnItemVisible,
+} from "./orchestrationV2Timeline.ts";
 
 const runId = RunId.make("run:timeline-visibility");
 const nodeId = NodeId.make("node:timeline-visibility");
+
+describe("buildOrchestrationErrorFixPrompt", () => {
+  it("places a short fix request before the structured error context", () => {
+    const prompt = buildOrchestrationErrorFixPrompt({
+      id: "error-1",
+      threadId: "thread-1",
+      runId,
+      nodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "failed",
+      title: "Workspace preparation failed",
+      startedAt: null,
+      completedAt: null,
+      updatedAt: null,
+      type: "error",
+      failure: {
+        class: "validation_error",
+        message: "Git command exited with a non-zero status.",
+        code: null,
+        retryable: false,
+      },
+    } as never);
+
+    expect(prompt).toMatch(/^Please investigate and fix this error\.\n\nError context:\n{/);
+    expect(prompt).toContain('"title": "Workspace preparation failed"');
+    expect(prompt).toContain('"message": "Git command exited with a non-zero status."');
+  });
+});
 
 describe("isOrchestrationV2TurnItemVisible", () => {
   it("hides unpaired interruption results from superseded attempts", () => {
