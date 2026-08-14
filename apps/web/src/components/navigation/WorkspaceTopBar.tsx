@@ -1,4 +1,4 @@
-import { useCanGoBack, useRouter } from "@tanstack/react-router";
+import { type RouterHistory, useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
@@ -6,23 +6,42 @@ import { cn, isMacPlatform } from "../../lib/utils";
 import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import {
+  createForwardHistoryTracker,
+  recordForwardHistoryNavigation,
+  type ForwardHistoryTracker,
+} from "./workspaceHistory.logic";
 
 const NOOP = () => {};
 
-// TanStack Router has no forward-facing counterpart to useCanGoBack, so track a
-// high-water mark of the history index: a PUSH truncates the browser's forward
-// stack and resets the mark, anything else only moves within it.
+const forwardHistoryTrackers = new WeakMap<RouterHistory, ForwardHistoryTracker>();
+
+function forwardHistoryTracker(history: RouterHistory): ForwardHistoryTracker {
+  const existing = forwardHistoryTrackers.get(history);
+  if (existing) return existing;
+  const tracker = createForwardHistoryTracker(history.location.state.__TSR_index);
+  forwardHistoryTrackers.set(history, tracker);
+  return tracker;
+}
+
+// TanStack Router has no forward-facing counterpart to useCanGoBack. Keep the
+// high-water mark with the history instance so a route-driven remount does not
+// forget the forward entries that Back just exposed.
 function useCanGoForward() {
   const router = useRouter();
-  const [canGoForward, setCanGoForward] = useState(false);
+  const history = router.history;
+  const tracker = forwardHistoryTracker(history);
+  const [canGoForward, setCanGoForward] = useState(() =>
+    recordForwardHistoryNavigation(tracker, history.location.state.__TSR_index),
+  );
   useEffect(() => {
-    let maxIndex = router.history.location.state.__TSR_index;
-    return router.history.subscribe(({ location, action }) => {
-      const index = location.state.__TSR_index;
-      maxIndex = action.type === "PUSH" ? index : Math.max(maxIndex, index);
-      setCanGoForward(index < maxIndex);
+    setCanGoForward(recordForwardHistoryNavigation(tracker, history.location.state.__TSR_index));
+    return history.subscribe(({ location, action }) => {
+      setCanGoForward(
+        recordForwardHistoryNavigation(tracker, location.state.__TSR_index, action.type),
+      );
     });
-  }, [router]);
+  }, [history, tracker]);
   return canGoForward;
 }
 
