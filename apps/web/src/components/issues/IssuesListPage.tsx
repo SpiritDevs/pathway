@@ -190,6 +190,7 @@ function IssuesListView({
 
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
+  const [bulkSelectionActive, setBulkSelectionActive] = useState(false);
   /** The right-click menu's target, or null while it is shut. One menu for every row and card. */
   const [contextMenu, setContextMenu] = useState<IssueContextMenuTarget | null>(null);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
@@ -245,6 +246,14 @@ function IssuesListView({
   // One subscription for the whole list. The set only changes identity when its membership does,
   // so a transcript arriving four times a second re-renders nothing.
   const investigatingIssueIds = useInvestigatingIssueIds();
+  const investigationProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          project.environmentId === primaryEnvironmentId && project.workspaceRoot != null,
+      ),
+    [primaryEnvironmentId, projects],
+  );
 
   // A row can leave the list under a live stream or a filter change; a bulk write against rows
   // nobody can see is the one outcome the selection must never allow.
@@ -312,6 +321,7 @@ function IssuesListView({
     event.preventDefault();
     if (action._tag === "clear") {
       setSelection(EMPTY_ISSUES_SELECTION);
+      setBulkSelectionActive(false);
       return;
     }
     if (action._tag === "open") {
@@ -350,7 +360,20 @@ function IssuesListView({
   const handleRowClick = (issue: Issue, event: MouseEvent) => {
     const mode = issueSelectModeForModifiers(event);
     setSelection((current) => selectIssueRow(current, { ids, issueId: issue.id, mode }));
-    if (mode === "replace") openIssue(issue);
+    if (mode === "replace") {
+      setBulkSelectionActive(false);
+      openIssue(issue);
+    } else {
+      setBulkSelectionActive(true);
+    }
+  };
+
+  const handleRowSelected = (issue: Issue, selected: boolean) => {
+    setBulkSelectionActive(true);
+    setSelection((current) => {
+      if (current.ids.has(issue.id) === selected) return current;
+      return selectIssueRow(current, { ids, issueId: issue.id, mode: "toggle" });
+    });
   };
 
   // Nothing here is optimistic: a refused write leaves the row exactly as it was, which reads as a
@@ -460,6 +483,37 @@ function IssuesListView({
   const bulkDelete = () => {
     deleteIssues(selectedIssues);
     setSelection(EMPTY_ISSUES_SELECTION);
+    setBulkSelectionActive(false);
+  };
+
+  const bulkInvestigateDisabledReason =
+    storeStatus === "disconnected"
+      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+      : investigationProjects.length === 0
+        ? "Connect a workspace to a project before investigating."
+        : selectedIssues.every(
+              (issue) => issue.deletedAt !== null || investigatingIssueIds.has(issue.id),
+            )
+          ? "Every selected issue is deleted or already being investigated."
+          : null;
+
+  const bulkInvestigate = (projectId: ProjectId) => {
+    void (async () => {
+      for (const issue of selectedIssues) {
+        if (issue.deletedAt !== null || investigatingIssueIds.has(issue.id)) continue;
+        if (issue.projectId !== projectId) {
+          const assignmentFailed = reportIssueWriteFailure(
+            `Failed to assign ${issue.key} to the project`,
+            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          );
+          if (assignmentFailed) continue;
+        }
+        reportIssueWriteFailure(
+          `Failed to investigate ${issue.key}`,
+          await startEnrichment({ issueId: issue.id }),
+        );
+      }
+    })();
   };
 
   // One write for both halves of a kanban drag: the contract carries `statusId` alongside the key
@@ -521,6 +575,7 @@ function IssuesListView({
     // A right-click outside the selection moves the cursor onto the row under the pointer, so what
     // is highlighted and what the menu is about are the same rows. Inside it, the selection stands.
     if (targets.length === 1) {
+      setBulkSelectionActive(false);
       setSelection((current) =>
         selectIssueRow(current, { ids, issueId: issue.id, mode: "replace" }),
       );
@@ -598,6 +653,7 @@ function IssuesListView({
         onOpen={openIssue}
         onPriority={setIssuePriority}
         onRowClick={handleRowClick}
+        onSelectedChange={handleRowSelected}
         onStatus={setIssueStatus}
         onToggleLabel={toggleIssueLabel}
         parentTitle={
@@ -811,15 +867,21 @@ function IssuesListView({
             />
           )}
 
-          {selectedIssues.length > 1 ? (
+          {bulkSelectionActive && selectedIssues.length > 0 ? (
             <IssuesBulkBar
               issues={selectedIssues}
               labels={labels}
-              onClear={() => setSelection(EMPTY_ISSUES_SELECTION)}
+              onClear={() => {
+                setSelection(EMPTY_ISSUES_SELECTION);
+                setBulkSelectionActive(false);
+              }}
               onDelete={bulkDelete}
               onPriority={bulkPriority}
               onStatus={bulkStatus}
               onToggleLabel={bulkToggleLabel}
+              investigateDisabledReason={bulkInvestigateDisabledReason}
+              onInvestigate={bulkInvestigate}
+              projects={investigationProjects}
               statuses={statuses}
             />
           ) : null}

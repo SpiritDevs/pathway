@@ -106,15 +106,7 @@ export const Route = createRootRoute({
 
 function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
-
-  // Fail closed: accounts are mandatory (docs/internals/decisions/0001). A
-  // build without a Clerk publishable key is a misconfiguration, not an open
-  // app.
-  return hasClerkPublicConfig() ? (
-    <ConfiguredClerkAuthGate pathname={pathname} />
-  ) : (
-    <MissingAuthConfigScreen />
-  );
+  return <RootRouteContent pathname={pathname} />;
 }
 
 function MissingAuthConfigScreen() {

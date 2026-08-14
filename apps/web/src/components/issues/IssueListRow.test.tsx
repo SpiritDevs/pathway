@@ -40,6 +40,7 @@ function renderRow(investigating: boolean, rowIssue: Issue = issue) {
       onOpen={() => {}}
       onPriority={() => {}}
       onRowClick={() => {}}
+      onSelectedChange={() => {}}
       onStatus={() => {}}
       onToggleLabel={() => {}}
       parentTitle={null}
@@ -53,6 +54,13 @@ function renderRow(investigating: boolean, rowIssue: Issue = issue) {
 }
 
 describe("IssueListRow investigation badge", () => {
+  it("exposes a hover checkbox for selecting the row", () => {
+    const html = renderRow(false);
+
+    expect(html).toContain('aria-label="Select PAT-1"');
+    expect(html).toContain("group-hover:opacity-100");
+  });
+
   it("shows the labelled badge in the trailing metadata when investigation is active", () => {
     const html = renderRow(true);
 

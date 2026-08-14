@@ -20,6 +20,7 @@ import { memo, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import type { IssueChildRollup } from "~/state/issues";
+import { Checkbox } from "../ui/checkbox";
 import {
   IssueAssigneeGlyph,
   IssueInvestigatingChip,
@@ -28,7 +29,12 @@ import {
   IssueProgressRing,
   IssueStatusDot,
 } from "./IssueGlyphs";
-import { IssueLabelsMenu, IssuePriorityMenu, IssueStatusMenu } from "./IssuePropertyMenus";
+import {
+  IssueLabelsMenu,
+  IssuePriorityMenu,
+  IssuePropertyGuard,
+  IssueStatusMenu,
+} from "./IssuePropertyMenus";
 import { IssuePullRequestChip } from "./IssuePullRequestChip";
 import {
   formatIssueDueDate,
@@ -93,6 +99,8 @@ export interface IssueListRowProps {
   /** `YYYY-MM-DD`; passed in so every row agrees on what "today" is and stays pure. */
   readonly today: string;
   readonly onRowClick: (issue: Issue, event: MouseEvent) => void;
+  /** Present on selectable lists. The checkbox stays visible once selected. */
+  readonly onSelectedChange?: (issue: Issue, selected: boolean) => void;
   readonly onOpen: (issue: Issue) => void;
   /**
    * The right-click. It fires from anywhere in the row, inline property buttons included: the guard
@@ -120,6 +128,7 @@ function IssueListRowImpl({
   active,
   today,
   onRowClick,
+  onSelectedChange,
   onOpen,
   onContextMenu,
   onStatus,
@@ -145,6 +154,20 @@ function IssueListRowImpl({
       onDoubleClick={() => onOpen(issue)}
       role="option"
     >
+      {onSelectedChange === undefined ? null : (
+        <IssuePropertyGuard>
+          <Checkbox
+            aria-label={`Select ${issue.key}`}
+            checked={selected}
+            className={cn(
+              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+              selected && "opacity-100",
+            )}
+            onCheckedChange={(checked) => onSelectedChange(issue, checked)}
+          />
+        </IssuePropertyGuard>
+      )}
+
       <IssuePriorityMenu
         onSelect={(priority) => onPriority(issue, priority)}
         trigger={

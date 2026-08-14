@@ -532,7 +532,7 @@ export function NewIssueDialog({
         }}
         open={open}
       >
-        <DialogPopup className="h-[min(16.25rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-sm:h-[calc(100vh-3rem)]">
+        <DialogPopup className="min-h-[min(16.25rem,90dvh)] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-h-[90dvh] max-sm:h-[90dvh]">
           <DialogHeader className="flex-row items-center gap-1.5 px-4 py-2.5">
             <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
               {store.config?.keyPrefix ?? "ISS"}

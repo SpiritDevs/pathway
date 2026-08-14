@@ -11,6 +11,7 @@ import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   ISSUE_COMMENT_ATTACHMENT_MAX_DATA_URL_CHARS,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
+  type IssueComment,
 } from "@t3tools/contracts";
 
 export interface NewIssueAttachmentCandidate {
@@ -81,9 +82,23 @@ export function newIssueAttachmentDataUrlRejection(input: {
     : null;
 }
 
-/** The visible comment that owns images added before the issue had an id. */
+/** The metadata comment that owns images added before the issue had an id. */
 export function newIssueAttachmentComment(count: number): string {
   return count === 1
     ? "Attached an image when creating this issue."
     : `Attached ${count} images when creating this issue.`;
+}
+
+/**
+ * Creation-time images need a comment row to keep their attachment ids durable, but that row is
+ * attachment metadata rather than part of the discussion. Match both the generated body and its
+ * attachment count so an ordinary comment that happens to use similar words remains visible.
+ */
+export function isNewIssueAttachmentRecord(
+  comment: Pick<IssueComment, "attachmentIds" | "body">,
+): boolean {
+  return (
+    comment.attachmentIds.length > 0 &&
+    comment.body === newIssueAttachmentComment(comment.attachmentIds.length)
+  );
 }

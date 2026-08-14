@@ -10,8 +10,17 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
+  ProjectId,
 } from "@t3tools/contracts";
-import { CircleDotIcon, SignalHighIcon, TagIcon, Trash2Icon, XIcon } from "lucide-react";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+import {
+  CircleDotIcon,
+  SignalHighIcon,
+  TagIcon,
+  Trash2Icon,
+  WandSparklesIcon,
+  XIcon,
+} from "lucide-react";
 
 import { Button } from "../ui/button";
 import {
@@ -20,6 +29,7 @@ import {
   IssuePriorityMenu,
   IssueStatusMenu,
 } from "./IssuePropertyMenus";
+import { IssueInvestigateProjectMenu } from "./IssueInvestigateProjectMenu";
 
 export function IssuesBulkBar({
   issues,
@@ -30,6 +40,9 @@ export function IssuesBulkBar({
   onToggleLabel,
   onDelete,
   onClear,
+  projects,
+  investigateDisabledReason,
+  onInvestigate,
 }: {
   issues: ReadonlyArray<Issue>;
   statuses: ReadonlyArray<IssueStatus>;
@@ -39,6 +52,9 @@ export function IssuesBulkBar({
   onToggleLabel: (labelId: IssueLabelId, add: boolean) => void;
   onDelete: () => void;
   onClear: () => void;
+  projects: ReadonlyArray<EnvironmentProject>;
+  investigateDisabledReason: string | null;
+  onInvestigate: (projectId: ProjectId) => void;
 }) {
   // A shared value shows as the current one; a mixed selection shows nothing checked rather than
   // pretending the first row speaks for the rest.
@@ -90,6 +106,17 @@ export function IssuesBulkBar({
             </Button>
           }
         />
+        <IssueInvestigateProjectMenu
+          align="center"
+          currentProjectId={sharedValue(issues.map((issue) => issue.projectId))}
+          disabledReason={investigateDisabledReason}
+          onSelect={onInvestigate}
+          projects={projects}
+          side="top"
+        >
+          <WandSparklesIcon />
+          Investigate
+        </IssueInvestigateProjectMenu>
         <IssueDeleteMenu
           count={issues.length}
           onConfirm={onDelete}
