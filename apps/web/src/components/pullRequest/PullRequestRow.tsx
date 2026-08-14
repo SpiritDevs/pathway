@@ -1,4 +1,5 @@
 import type { PullRequestListEntry } from "@t3tools/contracts";
+import { BotIcon } from "lucide-react";
 
 import { memo } from "react";
 
@@ -20,6 +21,7 @@ function PullRequestRowImpl({
   showProjectTitle,
   showProvider,
   matchedElsewhere,
+  agentReviewActive,
   onSelect,
 }: {
   entry: PullRequestListEntry;
@@ -32,6 +34,8 @@ function PullRequestRowImpl({
    * commit message. Saying so is the difference between a result and an apparently random row.
    */
   matchedElsewhere?: boolean;
+  /** A Pathway review thread for this pull request currently has active agent work. */
+  agentReviewActive: boolean;
   onSelect: (entry: PullRequestListEntry) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
@@ -81,9 +85,25 @@ function PullRequestRowImpl({
           ) : null}
         </PullRequestMetaLine>
       </span>
-      <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground/70 tabular-nums">
-        <span>{formatRelativeTimeLabel(entry.updatedAt)}</span>
-        <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+      <span className="flex shrink-0 items-center gap-2">
+        {agentReviewActive ? (
+          <span
+            aria-label={`Agent reviewing pull request #${entry.number}`}
+            className="relative flex size-6 shrink-0 items-center justify-center rounded-full bg-info/8 text-info-foreground"
+            role="status"
+            title="Agent reviewing"
+          >
+            <span
+              aria-hidden
+              className="absolute inset-0 animate-spin rounded-full border-2 border-info/20 border-t-info motion-reduce:animate-none"
+            />
+            <BotIcon aria-hidden className="size-3" />
+          </span>
+        ) : null}
+        <span className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground/70 tabular-nums">
+          <span>{formatRelativeTimeLabel(entry.updatedAt)}</span>
+          <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+        </span>
       </span>
     </button>
   );

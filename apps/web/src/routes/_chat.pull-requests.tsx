@@ -39,6 +39,7 @@ import {
   type PullRequestDiffStats,
   type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
+import { pullRequestReviewActivityKey } from "../lib/pullRequestReviewActivity";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
@@ -73,7 +74,7 @@ import {
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
-import { pullRequestEnvironment } from "../state/pullRequests";
+import { pullRequestEnvironment, useActivePullRequestReviewKeys } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
@@ -171,6 +172,7 @@ function PullRequestsRouteView() {
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const pullRequestEnvironmentId = pullRequestsSupported ? environmentId : null;
+  const activeReviewKeys = useActivePullRequestReviewKeys(environmentId);
   const allProjects = useProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
@@ -1012,6 +1014,7 @@ function PullRequestsRouteView() {
                   // them for later takes whatever has arrived since, and draws without them
                   // until it does.
                   entry={withDiffStat(entry, statsByRow)}
+                  agentReviewActive={activeReviewKeys.has(pullRequestReviewActivityKey(entry))}
                   showProjectTitle
                   showProvider={showProvider}
                   // Ten is the floor the ranking gives a row whose own fields say nothing
