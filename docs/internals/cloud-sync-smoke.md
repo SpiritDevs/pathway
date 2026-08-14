@@ -13,6 +13,24 @@ invoked via `apps/server/src/cloud/convexSmokeHooks.ts`. Everything it seeds is 
 reserved smoke company (`00000000-0000-7000-8000-736d6f6b6501`) and deleted afterwards, even on
 failure.
 
+The authenticated sync calls exercise the issue-domain apply handlers for real, not just
+authentication. In order:
+
+1. `sync.latestVersion` — the head the later cursors anchor on.
+2. `sync.applyOperations` with an `issueLabel.create` (the smallest issue-domain entity: one row,
+   no audit event, exactly one feed change) — the receipt must be **accepted**, which also proves
+   the seeded smoke role authorizes a company-scoped `workflow.manage` write.
+3. `sync.listChanges` drained from the pre-create head — the label's `upsert` must surface, with
+   matching entity kind and id.
+4. `sync.bootstrap` paged to completion — the label must appear in the snapshot, and the returned
+   `version` is kept as the resume position.
+5. `sync.applyOperations` with an `issueLabel.delete`, then `sync.listChanges` resumed from the
+   bootstrap `version` — the tombstone written after the snapshot must be the change the resumed
+   feed yields, proving the snapshot→feed handoff is gap-free.
+
+The tombstoned `issueLabels` row is the one authoritative row the run leaves behind; it is removed
+with the company by `smoke:cleanup`.
+
 ## Prerequisites
 
 - **Pathway Connect CLI credential** on this machine: run `pathway connect login` first. The harness
@@ -27,6 +45,11 @@ failure.
 - **Target Convex deployment configuration**: `PATHWAY_CLOUD_SYNC=enabled` and
   `PATHWAY_RELAY_JWT_ISSUER` set to the relay issuer, or every authenticated call fails with
   `cloud-sync-disabled`.
+- **A deployment carrying the issue-domain apply handlers** (`convex/lib/issueApply.ts` registered
+  in `convex/sync.ts`) and a smoke role granting `workflow.manage` — `smoke:seed` converges the
+  role's permissions from `smokeServiceRolePermissions()` on every run, so redeploying the backend
+  and rerunning is enough after a permission change. Without the write permission the
+  `issueLabel.create` step fails with an exact `permission-denied` receipt in the report.
 
 ## Environment variables
 
@@ -65,11 +88,14 @@ steps fail. Cleanup treats "already gone" as success, and intent is recorded **b
 mutating request goes out, so a link or seed whose response was lost is still cleaned up.
 
 One deliberate exception: if the reserved smoke company holds rows in any table the smoke flow
-never writes (memberships, issues, …), `smoke:cleanup` throws `smoke-cleanup-refused` instead of
+never writes (memberships, teams, …), `smoke:cleanup` throws `smoke-cleanup-refused` instead of
 deleting the company — and since a thrown Convex error rolls back the whole mutation, its
 registration deletes are undone too, leaving the company fully intact for a human to inspect. The
 cleanup step (and the run) then fails, and the recovery state file is kept so every subsequent run
-keeps failing loudly until an operator resolves it by hand.
+keeps failing loudly until an operator resolves it by hand. Tables the smoke flow _can_ write —
+change-feed rows, operation receipts, issue-key leases, commands, settings, and the issue-domain
+rows the sync surface writes on its behalf (the run's tombstoned `issueLabels` row) — are swept,
+not treated as foreign.
 
 ## Crash recovery
 

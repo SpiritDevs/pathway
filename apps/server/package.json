@@ -47,6 +47,7 @@
     "@effect/vitest": "catalog:",
     "@modelcontextprotocol/client": "^2.0.0",
     "@spiritdevs/backend": "workspace:*",
+    "@spiritdevs/client-runtime": "workspace:*",
     "@spiritdevs/contracts": "workspace:*",
     "@spiritdevs/shared": "workspace:*",
     "@spiritdevs/tailscale": "workspace:*",

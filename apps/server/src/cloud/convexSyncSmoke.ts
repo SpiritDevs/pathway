@@ -6,7 +6,10 @@
  * relay and Convex deployment: stored Pathway Connect CLI credential → link
  * challenge → publish-only environment link (fresh throwaway Ed25519 key) →
  * environment credential → DPoP + key-binding token exchange → `pathway-convex`
- * service token → authenticated Convex sync calls → negative cases → cleanup.
+ * service token → authenticated Convex sync calls (a real `issueLabel`
+ * create/tombstone through the domain apply handlers, the change-feed drain,
+ * and a paginated `sync.bootstrap` snapshot with a gap-free feed resume) →
+ * negative cases → cleanup.
  *
  * Nothing here talks to the network at import time or in the pure helpers; the
  * pure pieces (payload construction, DPoP proof signing, claim checks, report
@@ -526,6 +529,114 @@ export function convexErrorCode(error: unknown): string | null {
   }
   const code = (data as Record<string, unknown>)["code"];
   return typeof code === "string" ? code : null;
+}
+
+// --------------------------------------------------------------------------
+// Domain-write helpers (pure)
+// --------------------------------------------------------------------------
+
+/**
+ * The one entity kind the smoke run writes through the issue-domain apply
+ * handlers. `issueLabel.create` is the smallest accepted operation — a single
+ * row, no audit event, exactly one feed change — and `issueLabel.delete` is a
+ * tombstone, so the whole round trip (create → feed upsert → bootstrap
+ * snapshot → delete → feed tombstone) is observable with two operations. A
+ * company-scoped label gates on `workflow.manage`, which the seeded smoke role
+ * must therefore carry (see `smokeServiceRolePermissions` in
+ * `@spiritdevs/backend/smokeSeed`).
+ */
+export const SMOKE_LABEL_ENTITY_KIND = "issueLabel";
+
+/**
+ * Arguments for the smoke `issueLabel.create`. Hand-held within the backend
+ * parser's bounds (`parseIssueLabelCreateArgs` in
+ * `packages/backend/src/sync/issueOps.ts`): a trimmed non-empty name of at
+ * most 512 chars and a `#rrggbb` color; `teamId` omitted, so the label is
+ * company-scoped and rides feed rows with an empty team list.
+ */
+export const SMOKE_LABEL_CREATE_ARGS = {
+  name: "convex-sync-smoke",
+  color: "#0ea5e9",
+} as const;
+
+/** One client id per throwaway environment, so receipts and feed rows are attributable to the run. */
+export function smokeSyncClientId(environmentId: EnvironmentId): string {
+  return `convex-sync-smoke-${environmentId}`;
+}
+
+export interface SmokeSyncOperationInput {
+  readonly operationId: string;
+  readonly companyId: string;
+  readonly environmentId: EnvironmentId;
+  readonly localSequence: number;
+  /** Company version the client had confirmed when it authored this. Never a clock reading. */
+  readonly baseVersion: number;
+  readonly kind: string;
+  readonly entityId: string;
+  readonly args: unknown;
+}
+
+/**
+ * A `SyncOperationEnvelope` (as `sync.applyOperations` validates it) authored
+ * by the smoke environment actor. The asserted `actor` is attribution only —
+ * Convex re-derives the authoritative actor from the service token — but it
+ * must still be the truth.
+ */
+export function buildSmokeSyncOperation(input: SmokeSyncOperationInput): {
+  readonly protocolVersion: number;
+  readonly operationId: string;
+  readonly companyId: string;
+  readonly clientId: string;
+  readonly environmentId: string;
+  readonly actor: { readonly kind: "environment"; readonly environmentId: string };
+  readonly localSequence: number;
+  readonly baseVersion: number;
+  readonly kind: string;
+  readonly entityId: string;
+  readonly args: unknown;
+  /** Mutable array type because the Convex argument validator's inferred type is mutable. */
+  readonly dependsOn: string[];
+} {
+  return {
+    protocolVersion: SYNC_PROTOCOL_VERSION,
+    operationId: input.operationId,
+    companyId: input.companyId,
+    clientId: smokeSyncClientId(input.environmentId),
+    environmentId: input.environmentId as string,
+    actor: { kind: "environment", environmentId: input.environmentId as string },
+    localSequence: input.localSequence,
+    baseVersion: input.baseVersion,
+    kind: input.kind,
+    entityId: input.entityId,
+    args: input.args,
+    dependsOn: [],
+  };
+}
+
+/** The common shape of a `listChanges` change and a `bootstrap` entity envelope. */
+export interface SyncChangeSummary {
+  readonly version: number;
+  readonly entityKind: string;
+  readonly entityId: string;
+  readonly changeKind: "upsert" | "tombstone";
+}
+
+/**
+ * The highest-versioned change for one entity, or `undefined` when none match.
+ * Latest wins because a drain that spans both a create and its delete must
+ * report the entity as tombstoned, not resurrect it from the earlier upsert.
+ */
+export function latestSyncChange<C extends SyncChangeSummary>(
+  changes: readonly C[],
+  entityKind: string,
+  entityId: string,
+): C | undefined {
+  let latest: C | undefined;
+  for (const change of changes) {
+    if (change.entityKind !== entityKind || change.entityId !== entityId) continue;
+    if (latest === undefined || change.version > latest.version) latest = change;
+  }
+  return latest;
 }
 
 // --------------------------------------------------------------------------
@@ -1137,61 +1248,33 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
     );
     const baseVersion = Option.isSome(latest) ? latest.value.version : 0;
 
-    yield* step(
-      "convex.sync.applyOperations",
-      Effect.gen(function* () {
-        const operationId = NodeCrypto.randomUUID();
-        const result = yield* convexCall(() =>
-          convexClient.mutation(api.sync.applyOperations, {
-            companyId: config.companyId,
-            operations: [
-              {
-                protocolVersion: SYNC_PROTOCOL_VERSION,
-                operationId,
-                companyId: config.companyId,
-                clientId: `convex-sync-smoke-${config.environmentId}`,
-                environmentId: config.environmentId as string,
-                actor: {
-                  kind: "environment" as const,
-                  environmentId: config.environmentId as string,
-                },
-                localSequence: 1,
-                baseVersion,
-                kind: "issue.update",
-                entityId: `smoke-${NodeCrypto.randomUUID()}`,
-                args: {},
-                dependsOn: [],
-              },
-            ],
-          }),
-        );
-        const receipt = result.receipts.find((entry) => entry.operationId === operationId);
-        if (receipt === undefined) {
-          return yield* new ConvexSyncSmokeError({
-            reason: `applyOperations returned ${result.receipts.length} receipt(s), none for operation ${operationId}`,
-          });
-        }
-        // `sync.ts` registers no DOMAIN_APPLY handlers yet (phase 4), so the
-        // one honest outcome today is this exact receipt. When domain handlers
-        // land, this assertion must flip: expect an accepted receipt AND the
-        // resulting change to be visible in the listChanges drain below.
-        const code = "code" in receipt && typeof receipt.code === "string" ? receipt.code : null;
-        if (receipt.status !== "rejected" || code !== "unknown-operation") {
-          return yield* new ConvexSyncSmokeError({
-            reason: `expected the exact receipt rejected/unknown-operation (no domain handlers are registered yet — if they landed, update this assertion), got status '${receipt.status}'${
-              code === null ? "" : ` (${code})`
-            }`,
-          });
-        }
-        return "receipted rejected/unknown-operation — the operation authenticated and was receipted, but no domain handler exists yet to apply it";
-      }),
-      (detail) => detail,
-    );
+    /** Submits one domain operation and yields its receipt, matched by operation id. */
+    const applyOne = (operation: ReturnType<typeof buildSmokeSyncOperation>) =>
+      convexCall(() =>
+        convexClient.mutation(api.sync.applyOperations, {
+          companyId: config.companyId,
+          operations: [operation],
+        }),
+      ).pipe(
+        Effect.flatMap((result) => {
+          const receipt = result.receipts.find(
+            (entry) => entry.operationId === operation.operationId,
+          );
+          return receipt === undefined
+            ? Effect.fail(
+                new ConvexSyncSmokeError({
+                  reason: `applyOperations returned ${result.receipts.length} receipt(s), none for operation ${operation.operationId}`,
+                }),
+              )
+            : Effect.succeed(receipt);
+        }),
+      );
 
-    yield* step(
-      "convex.sync.listChanges",
+    /** Pages `listChanges` forward from `from` until `hasMore` clears, collecting every change. */
+    const drainChanges = (from: number) =>
       Effect.gen(function* () {
-        let cursor = baseVersion;
+        const changes: SyncChangeSummary[] = [];
+        let cursor = from;
         for (let page = 1; page <= 10; page += 1) {
           const result = yield* convexCall(() =>
             convexClient.query(api.sync.listChanges, {
@@ -1201,21 +1284,195 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
           );
           if (result._tag === "CursorExpired") {
             return yield* new ConvexSyncSmokeError({
-              reason: `listChanges reported CursorExpired at head ${result.latestVersion} for a cursor taken from latestVersion moments ago — retention cannot have pruned it, so the cursor accounting is broken`,
+              reason: `listChanges reported CursorExpired at head ${result.latestVersion} for cursor ${cursor}, taken from this run's own calls moments ago — retention cannot have pruned it, so the cursor accounting is broken`,
             });
           }
-          if (!result.hasMore) {
-            return `drained ${page} page(s) to cursor ${result.cursor}`;
-          }
+          changes.push(...result.changes);
           cursor = result.cursor;
+          if (!result.hasMore) {
+            return { pages: page, cursor, changes: changes as readonly SyncChangeSummary[] };
+          }
         }
         return yield* new ConvexSyncSmokeError({
           reason:
             "listChanges still reported hasMore after 10 pages — the smoke company's feed should drain in far fewer",
         });
+      });
+
+    // (f2) A real write through the issue-domain apply handlers. `issueLabel`
+    // is the smallest round-trippable entity (see SMOKE_LABEL_ENTITY_KIND);
+    // the accepted receipt proves authorization (the smoke role's
+    // `workflow.manage`) and the version stamp anchors the feed and bootstrap
+    // assertions below.
+    const labelEntityId = NodeCrypto.randomUUID();
+    const created = yield* step(
+      "convex.sync.applyOperations.createLabel",
+      Effect.gen(function* () {
+        const receipt = yield* applyOne(
+          buildSmokeSyncOperation({
+            operationId: NodeCrypto.randomUUID(),
+            companyId: config.companyId,
+            environmentId: config.environmentId,
+            localSequence: 1,
+            baseVersion,
+            kind: "issueLabel.create",
+            entityId: labelEntityId,
+            args: SMOKE_LABEL_CREATE_ARGS,
+          }),
+        );
+        if (receipt.status !== "accepted") {
+          return yield* new ConvexSyncSmokeError({
+            reason: `expected issueLabel.create to be accepted (the domain handlers are registered and the smoke role must grant workflow.manage), got rejected '${receipt.code}': ${receipt.message}`,
+          });
+        }
+        if (receipt.lastVersion <= baseVersion) {
+          return yield* new ConvexSyncSmokeError({
+            reason: `the accepted create reports lastVersion ${receipt.lastVersion}, not past the base ${baseVersion} — no feed change can carry it`,
+          });
+        }
+        return { headAfterCreate: receipt.lastVersion };
+      }),
+      (value) => `issueLabel ${labelEntityId} accepted, head at ${value.headAfterCreate}`,
+    );
+
+    yield* step(
+      "convex.sync.listChanges",
+      Effect.gen(function* () {
+        const drained = yield* drainChanges(baseVersion);
+        if (Option.isNone(created)) {
+          return `drained ${drained.pages} page(s) to cursor ${drained.cursor} (no accepted create to look for)`;
+        }
+        const change = latestSyncChange(drained.changes, SMOKE_LABEL_ENTITY_KIND, labelEntityId);
+        if (change === undefined) {
+          return yield* new ConvexSyncSmokeError({
+            reason: `the accepted issueLabel.create never surfaced in the feed: no ${SMOKE_LABEL_ENTITY_KIND} change for ${labelEntityId} among ${drained.changes.length} drained change(s)`,
+          });
+        }
+        if (change.changeKind !== "upsert") {
+          return yield* new ConvexSyncSmokeError({
+            reason: `the label's feed change at version ${change.version} is a ${change.changeKind}, expected the create's upsert`,
+          });
+        }
+        return `drained ${drained.pages} page(s) to cursor ${drained.cursor}; issueLabel upsert visible at version ${change.version}`;
       }),
       (detail) => detail,
     );
+
+    // (f3) Full snapshot seed. The returned `version` is the resume position a
+    // fresh client would hand to listChanges, so it anchors the gap-free check
+    // after the delete below.
+    const bootstrapped = yield* step(
+      "convex.sync.bootstrap",
+      Effect.gen(function* () {
+        const entities: SyncChangeSummary[] = [];
+        let cursor: string | null = null;
+        let version = 0;
+        for (let page = 1; page <= 10; page += 1) {
+          const result = yield* convexCall(() =>
+            convexClient.query(api.sync.bootstrap, { companyId: config.companyId, cursor }),
+          );
+          version = result.version;
+          entities.push(...result.entities);
+          if (result.isDone) {
+            if (Option.isSome(created)) {
+              const entity = latestSyncChange(entities, SMOKE_LABEL_ENTITY_KIND, labelEntityId);
+              if (entity === undefined) {
+                return yield* new ConvexSyncSmokeError({
+                  reason: `the issueLabel accepted above is missing from the bootstrap snapshot (${entities.length} entities over ${page} page(s))`,
+                });
+              }
+            }
+            return { version, pages: page, entityCount: entities.length };
+          }
+          if (result.cursor === null) {
+            return yield* new ConvexSyncSmokeError({
+              reason: "bootstrap reported isDone false with a null cursor — the walk cannot resume",
+            });
+          }
+          cursor = result.cursor;
+        }
+        return yield* new ConvexSyncSmokeError({
+          reason:
+            "bootstrap still not done after 10 pages — the smoke company's snapshot should complete in far fewer",
+        });
+      }),
+      (value) =>
+        `snapshot at version ${value.version}: ${value.entityCount} entities over ${value.pages} page(s)`,
+    );
+
+    // (f4) Tombstone the label and prove the bootstrap resume position is
+    // gap-free: a change written after the snapshot must surface when
+    // listChanges resumes from the snapshot's version. This is also as much
+    // cleanup as the sync surface offers — the authoritative row stays behind
+    // as a tombstone until `smoke:cleanup` deletes the company.
+    if (Option.isSome(created) && Option.isSome(bootstrapped)) {
+      const snapshotVersion = bootstrapped.value.version;
+      const deleted = yield* step(
+        "convex.sync.applyOperations.deleteLabel",
+        Effect.gen(function* () {
+          const receipt = yield* applyOne(
+            buildSmokeSyncOperation({
+              operationId: NodeCrypto.randomUUID(),
+              companyId: config.companyId,
+              environmentId: config.environmentId,
+              localSequence: 2,
+              baseVersion: created.value.headAfterCreate,
+              kind: "issueLabel.delete",
+              entityId: labelEntityId,
+              args: {},
+            }),
+          );
+          if (receipt.status !== "accepted") {
+            return yield* new ConvexSyncSmokeError({
+              reason: `expected issueLabel.delete to be accepted, got rejected '${receipt.code}': ${receipt.message}`,
+            });
+          }
+          if (receipt.lastVersion <= snapshotVersion) {
+            return yield* new ConvexSyncSmokeError({
+              reason: `the delete's version ${receipt.lastVersion} is not past the bootstrap snapshot ${snapshotVersion} — the resume check below would prove nothing`,
+            });
+          }
+          return { tombstoneVersion: receipt.lastVersion };
+        }),
+        (value) => `issueLabel ${labelEntityId} tombstoned at version ${value.tombstoneVersion}`,
+      );
+      if (Option.isSome(deleted)) {
+        yield* step(
+          "convex.sync.resumeAfterBootstrap",
+          Effect.gen(function* () {
+            const drained = yield* drainChanges(snapshotVersion);
+            const change = latestSyncChange(
+              drained.changes,
+              SMOKE_LABEL_ENTITY_KIND,
+              labelEntityId,
+            );
+            if (change === undefined) {
+              return yield* new ConvexSyncSmokeError({
+                reason: `resuming listChanges from the bootstrap version ${snapshotVersion} never surfaced the tombstone written at ${deleted.value.tombstoneVersion} — the snapshot→feed handoff has a gap`,
+              });
+            }
+            if (
+              change.changeKind !== "tombstone" ||
+              change.version !== deleted.value.tombstoneVersion
+            ) {
+              return yield* new ConvexSyncSmokeError({
+                reason: `expected the ${SMOKE_LABEL_ENTITY_KIND} tombstone at version ${deleted.value.tombstoneVersion}, got a ${change.changeKind} at ${change.version}`,
+              });
+            }
+            return `listChanges from snapshot version ${snapshotVersion} yields the tombstone at ${change.version} — handoff is gap-free`;
+          }),
+          (detail) => detail,
+        );
+      } else {
+        skip("convex.sync.resumeAfterBootstrap", "issueLabel.delete was not accepted");
+      }
+    } else {
+      skip(
+        "convex.sync.applyOperations.deleteLabel",
+        "no accepted create and bootstrap to build on",
+      );
+      skip("convex.sync.resumeAfterBootstrap", "no accepted create and bootstrap to build on");
+    }
 
     // Commands surface is authorization-complete but not implemented yet, so a
     // typed refusal after auth also proves the token works.

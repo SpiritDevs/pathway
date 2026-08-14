@@ -17,6 +17,14 @@ import { v } from "convex/values";
 
 import { reserveIssueKeyBlock, ISSUE_KEY_BLOCK_SIZE, formatIssueKey } from "../src/issueKeys.ts";
 import {
+  bootstrapKindAfter,
+  decodeBootstrapCursor,
+  encodeBootstrapCursor,
+  initialBootstrapState,
+  type BootstrapCursorState,
+  type BootstrapEntityKind,
+} from "../src/sync/bootstrap.ts";
+import {
   changeRetainUntil,
   clampPageLimit,
   measureSerializedBytes,
@@ -32,6 +40,7 @@ import {
   type SyncOperationEnvelope,
 } from "../src/sync/operations.ts";
 import {
+  SYNC_BOOTSTRAP_PAGE_SIZE,
   SYNC_MAX_CHANGE_PAGE_BYTES,
   SYNC_MAX_CHANGES_PER_PAGE,
   type SyncChangeKind,
@@ -40,12 +49,13 @@ import {
   type SyncRejectionCode,
 } from "../src/sync/protocol.ts";
 import { isChangeVisible } from "../src/sync/visibility.ts";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { requireCloudSyncEnabled } from "./lib/capability.ts";
-import { backendError, notImplemented } from "./lib/errors.ts";
+import { backendError } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor, type CompanyActor } from "./lib/identity.ts";
+import { emptyBootstrapCache, readBootstrapRows, ISSUE_DOMAIN_APPLY } from "./lib/issueApply.ts";
 import {
   domainIdArg,
   operationReceiptResult,
@@ -182,8 +192,15 @@ export const listChanges = query({
  * Full paginated seed for a client with no usable cursor — a new device, or one whose cursor
  * predates the retained feed.
  *
- * TODO(phase 3): page the authorized entity tables in a stable order under the row/byte ceilings
- * and return the version the snapshot is consistent at.
+ * The walk order and cursor token live in `src/sync/bootstrap`; the row readers and payload
+ * encoders are shared with the apply handlers in `lib/issueApply`, so a bootstrapped entity is
+ * byte-for-byte what an incremental upsert of it would carry.
+ *
+ * `version` is the company head captured on the *first* page and carried in the cursor token: a
+ * write landing mid-seed bears a higher version, so an incremental drain from that head re-delivers
+ * it as an idempotent upsert (or a tombstone for a row the seed still included) — no gap, no
+ * double-apply hazard. Deleted and unreadable rows consume walk budget without being delivered,
+ * exactly as `listChanges` advances its cursor over rows the caller may not read.
  */
 export const bootstrap = query({
   args: {
@@ -200,8 +217,91 @@ export const bootstrap = query({
   }),
   handler: async (ctx, args) => {
     requireCloudSyncEnabled();
-    await requireCompanyActor(ctx, args.companyId);
-    return notImplemented("sync.bootstrap");
+    const actor = await requireCompanyActor(ctx, args.companyId);
+
+    let state: BootstrapCursorState;
+    if (args.cursor === null) {
+      state = initialBootstrapState(actor.company.syncVersion);
+    } else {
+      const decoded = decodeBootstrapCursor(args.cursor);
+      // A token this build cannot read — tampered, or minted by a deployment with a different
+      // walk — must restart the seed, not resume from a position that means something else now.
+      if (decoded === null) {
+        throw backendError("invalid-arguments", "Unrecognized bootstrap cursor.");
+      }
+      state = decoded;
+    }
+
+    const pageSize = clampPageLimit(args.pageSize, SYNC_BOOTSTRAP_PAGE_SIZE);
+    const cache = emptyBootstrapCache();
+    const entities: {
+      version: number;
+      entityKind: string;
+      entityId: string;
+      changeKind: SyncChangeKind;
+      payload: unknown;
+    }[] = [];
+    let bytes = 0;
+
+    let kind: BootstrapEntityKind | null = state.entityKind;
+    let afterId = state.afterId;
+    // Every scanned row — delivered, deleted, or unreadable — costs one unit, so a call's total
+    // reads are bounded by the page size no matter how much of a table filtering hides.
+    let budget = pageSize;
+    let pageFull = false;
+
+    while (kind !== null && !pageFull && budget > 0) {
+      const limit = budget;
+      const rows = await readBootstrapRows(ctx, actor.company, kind, afterId, limit, cache);
+      for (const row of rows) {
+        if (
+          !row.deleted &&
+          isChangeVisible(actor.permissions, { entityKind: kind, teamIds: row.teamIds })
+        ) {
+          const envelope = {
+            version: row.version,
+            entityKind: kind as string,
+            entityId: row.id,
+            changeKind: "upsert" as const,
+            payload: row.payload,
+          };
+          const size = measureSerializedBytes(envelope);
+          // The first entity ships regardless of size — a row bigger than a whole page must still
+          // be deliverable, alone — but is not consumed here if the page already holds anything,
+          // so the next call re-reads it at the top of its page.
+          if (entities.length > 0 && bytes + size > SYNC_MAX_CHANGE_PAGE_BYTES) {
+            pageFull = true;
+            break;
+          }
+          entities.push(envelope);
+          bytes += size;
+        }
+        afterId = row.id;
+        budget -= 1;
+      }
+      // A short read means the table is exhausted; move to the next kind from its top.
+      if (!pageFull && rows.length < limit) {
+        kind = bootstrapKindAfter(kind);
+        afterId = "";
+      }
+    }
+
+    // Snapshot the walk position as consts so the null check narrows for the cursor encoding.
+    const restKind = kind;
+    return {
+      version: state.snapshotVersion,
+      authorizationEpoch: actor.company.authorizationEpoch,
+      entities,
+      cursor:
+        restKind === null
+          ? null
+          : encodeBootstrapCursor({
+              snapshotVersion: state.snapshotVersion,
+              entityKind: restKind,
+              afterId,
+            }),
+      isDone: restKind === null,
+    };
   },
 });
 
@@ -256,6 +356,21 @@ export const reserveIssueKeys = mutation({
 // Operation application
 // ---------------------------------------------------------------------------
 
+/** The tables whose rows carry a `version` column the change feed stamps. */
+type VersionedTable =
+  | "issues"
+  | "issueStatuses"
+  | "issueLabels"
+  | "issueMilestones"
+  | "issueCycles"
+  | "issueTodos"
+  | "issueRelations"
+  | "issueComments"
+  | "issueAttachments"
+  | "issueViews"
+  | "issueThreadLinks"
+  | "issueAuditEvents";
+
 /** One authoritative entity write, ready to become a change-feed row once versions are assigned. */
 export interface DomainChange {
   readonly entityKind: SyncEntityKind;
@@ -263,6 +378,11 @@ export interface DomainChange {
   readonly changeKind: SyncChangeKind;
   /** Empty means company-wide; any listed team exposes the whole payload. */
   readonly teamIds: readonly string[];
+  /**
+   * The written row, so the batch can stamp its `version` column once the run is assigned — that
+   * stamp is what `bootstrap` hands out as the row's version, closing the seed→drain handoff.
+   */
+  readonly versionDocId: Id<VersionedTable> | null;
   readonly payload: unknown;
 }
 
@@ -282,15 +402,11 @@ export type DomainApply = (
 ) => Promise<DomainOutcome>;
 
 /**
- * TODO(phase 4): register one handler per {@link SyncOperationKind} — issue create/update/delete/
- * restore/reorder/workflow-owner/teams, statuses, labels, milestones, cycles, todos, relations,
- * comments, views, and thread links — each of which validates domain invariants, writes the
- * authoritative rows, and appends its issue audit events.
- *
- * Until then every operation is refused as unknown, which is the correct behavior while the
- * cloud-sync capability is disabled.
+ * One handler per issue-domain {@link SyncOperationKind}, from `lib/issueApply`. Kinds outside the
+ * issue domain have no handler yet and are refused as `unknown-operation`, which receipts per
+ * operation instead of failing the batch.
  */
-const DOMAIN_APPLY: Partial<Record<SyncOperationKind, DomainApply>> = {};
+const DOMAIN_APPLY: Partial<Record<SyncOperationKind, DomainApply>> = ISSUE_DOMAIN_APPLY;
 
 async function applyDomainOperation(
   ctx: MutationCtx,
@@ -410,6 +526,11 @@ export const applyOperations = mutation({
       for (const change of entry.changes) {
         const version = assignment.versions[cursor];
         if (version === undefined) break;
+        // Stamp the authoritative row with the version its feed entry carries, so the
+        // `by_company_and_version` indexes and the bootstrap consistency argument stay true.
+        if (change.versionDocId !== null) {
+          await ctx.db.patch(change.versionDocId, { version });
+        }
         await ctx.db.insert("syncChanges", {
           companyId: actor.company._id,
           version,

@@ -16,7 +16,7 @@ import {
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe("smokeServiceRolePermissions", () => {
-  it("grants exactly the read gates the sync feed filters on, plus the remote-agent switches", () => {
+  it("grants exactly the read gates the sync feed filters on, the workflow write switch, and the remote-agent switches", () => {
     expect([...smokeServiceRolePermissions()].sort()).toEqual(
       [
         "company.read",
@@ -27,6 +27,7 @@ describe("smokeServiceRolePermissions", () => {
         "environments.read",
         "issues.read",
         "audit.read",
+        "workflow.manage",
         "remoteAgents.dispatch",
         "remoteAgents.control",
       ].sort(),

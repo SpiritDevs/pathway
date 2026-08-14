@@ -290,8 +290,9 @@ export const setThumbprint = internalMutation({
 /**
  * Tables the smoke flow cannot write, each carrying a `companyId`-prefixed index. `seed` only ever
  * inserts the company, one role, and registrations; the environment actor's sync surface can add
- * change-feed rows, receipts, key leases, commands, and settings — all of which `cleanup` sweeps —
- * but nothing here. A row in any of these means the reserved company has been mixed with data of
+ * change-feed rows, receipts, key leases, commands, settings, and issue-domain rows (see
+ * {@link SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID}) — all of which `cleanup` sweeps — but
+ * nothing here. A row in any of these means the reserved company has been mixed with data of
  * unknown provenance, and `cleanup` must refuse to delete the company rather than delete blind.
  *
  * Enumerated from `schema.ts`, split by which company-scoped index each table carries.
@@ -307,7 +308,21 @@ const FOREIGN_TABLES_BY_COMPANY = [
   "environmentBindings",
 ] as const;
 
-const FOREIGN_TABLES_BY_COMPANY_AND_DOMAIN_ID = [
+/**
+ * `issueAttachments` is the one issue-domain table with no sync operation kind (attachments stay
+ * server-authored), so the environment actor cannot have written it and a row still means foreign
+ * data.
+ */
+const FOREIGN_TABLES_BY_COMPANY_AND_DOMAIN_ID = ["issueAttachments"] as const;
+
+/**
+ * Every issue-domain table `sync.applyOperations` can write for an environment actor — the
+ * insert targets of `convex/lib/issueApply.ts`, including the server-authored `issueAuditEvents`
+ * rows its handlers emit as side effects. The smoke harness's `issueLabel.create`/`delete` round
+ * trip leaves a tombstoned `issueLabels` row behind, so `cleanup` sweeps these with the company
+ * instead of refusing over the smoke run's own writes.
+ */
+const SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID = [
   "issues",
   "issueStatuses",
   "issueLabels",
@@ -316,7 +331,6 @@ const FOREIGN_TABLES_BY_COMPANY_AND_DOMAIN_ID = [
   "issueTodos",
   "issueRelations",
   "issueComments",
-  "issueAttachments",
   "issueViews",
   "issueAuditEvents",
   "issueThreadLinks",
@@ -356,6 +370,8 @@ const cleanupCounts = v.object({
   issueKeyReservations: v.number(),
   environmentCommands: v.number(),
   companySettings: v.number(),
+  /** Rows deleted across {@link SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID}, summed. */
+  issueDomainRows: v.number(),
 });
 
 /**
@@ -363,7 +379,9 @@ const cleanupCounts = v.object({
  * environment id carries {@link SMOKE_ENVIRONMENT_ID_PREFIX} (synthetic by construction, so an
  * interrupted earlier run cannot hold the company open forever), and then — once no registrations
  * remain at all — deletes the company itself plus everything the smoke flow can have written under
- * it: roles, change-feed rows, operation receipts, issue-key leases, commands, and settings.
+ * it: roles, change-feed rows, operation receipts, issue-key leases, commands, settings, and the
+ * issue-domain rows the sync surface wrote on the environment actor's behalf (the harness's
+ * tombstoned `issueLabels` row and the audit events issue operations emit).
  *
  * Every delete is scoped to the smoke company's `_id`, so nothing else is reachable. And before
  * the company goes, every table the smoke flow cannot write is checked: if any holds a row for
@@ -385,6 +403,7 @@ export const cleanup = internalMutation({
       issueKeyReservations: 0,
       environmentCommands: 0,
       companySettings: 0,
+      issueDomainRows: 0,
     };
 
     const company = await findSmokeCompany(ctx);
@@ -475,6 +494,17 @@ export const cleanup = internalMutation({
     for (const setting of settings) {
       await ctx.db.delete(setting._id);
       counts.companySettings += 1;
+    }
+
+    for (const table of SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID) {
+      const rows = await ctx.db
+        .query(table)
+        .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", company._id))
+        .collect();
+      for (const row of rows) {
+        await ctx.db.delete(row._id);
+        counts.issueDomainRows += 1;
+      }
     }
 
     await ctx.db.delete(company._id);

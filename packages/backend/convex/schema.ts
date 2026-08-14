@@ -717,6 +717,8 @@ export default defineSchema({
     workModelSelection: v.union(v.any(), v.null()),
     /** `IssueAutomationAssignment` from `contracts/issues`. */
     automationAssignment: v.union(v.any(), v.null()),
+    /** `IssuePullRequest` from `contracts/issues`; a struct `v.*` cannot express (`PositiveInt`). */
+    pullRequest: v.union(v.any(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),

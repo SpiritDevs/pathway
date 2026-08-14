@@ -65,10 +65,15 @@ export function isSmokeCompanyDomainId(companyDomainId: string): boolean {
  * rather than restated, and stays exact when the map changes. `environmentCommands.list` needs
  * `environments.read`, which the map already carries; `claim`/`renewClaim`/`reportStatus` gate on
  * the actor alone.
+ *
+ * `workflow.manage` is the one write switch: the harness's `issueLabel.create`/`delete` round trip
+ * (`convexSyncSmoke.ts`) gates on it in `convex/lib/issueApply.ts`. It is deliberately not in
+ * `COMPANY_ADMINISTRATION_PERMISSIONS`, so a plain role grant suffices.
  */
 export function smokeServiceRolePermissions(): readonly PermissionKey[] {
   const permissions = new Set<PermissionKey>();
   for (const kind of SYNC_ENTITY_KINDS) permissions.add(readPermissionForEntityKind(kind));
+  permissions.add("workflow.manage");
   permissions.add("remoteAgents.dispatch");
   permissions.add("remoteAgents.control");
   return [...permissions];

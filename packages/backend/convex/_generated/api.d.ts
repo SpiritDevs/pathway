@@ -14,6 +14,7 @@ import type * as invitations from "../invitations.js";
 import type * as lib_capability from "../lib/capability.js";
 import type * as lib_errors from "../lib/errors.js";
 import type * as lib_identity from "../lib/identity.js";
+import type * as lib_issueApply from "../lib/issueApply.js";
 import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as memberships from "../memberships.js";
@@ -32,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   "lib/capability": typeof lib_capability;
   "lib/errors": typeof lib_errors;
   "lib/identity": typeof lib_identity;
+  "lib/issueApply": typeof lib_issueApply;
   "lib/relayIdentity": typeof lib_relayIdentity;
   "lib/validators": typeof lib_validators;
   memberships: typeof memberships;

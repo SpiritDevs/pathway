@@ -238,11 +238,41 @@ describe("smoke.cleanup", () => {
       publicKeyThumbprint: THUMB_B,
     });
 
-    // An environment-actor write the cleanup must sweep up afterwards.
+    // Environment-actor writes the cleanup must sweep up afterwards: a key lease, plus the
+    // issue-domain round trip the smoke harness performs (an `issueLabel` created then tombstoned
+    // through `sync.applyOperations`, exactly as `convexSyncSmoke.ts` sends it).
     await asEnvironment(t, "environment-one", THUMB_A).mutation(api.sync.reserveIssueKeys, {
       companyId: SMOKE_COMPANY_DOMAIN_ID,
       clientId: "smoke-client",
     });
+    const labelId = "0198f7f0-3333-7333-8333-000000000001";
+    const labelOp = (suffix: string, sequence: number, kind: string, args: unknown) => ({
+      protocolVersion: 1,
+      operationId: `0198f7f0-3333-7333-8333-00000000${suffix}`,
+      companyId: SMOKE_COMPANY_DOMAIN_ID,
+      clientId: "smoke-client",
+      environmentId: "environment-one",
+      actor: { kind: "environment" as const, environmentId: "environment-one" },
+      localSequence: sequence,
+      baseVersion: 0,
+      kind,
+      entityId: labelId,
+      args,
+      dependsOn: [],
+    });
+    const applied = await asEnvironment(t, "environment-one", THUMB_A).mutation(
+      api.sync.applyOperations,
+      {
+        companyId: SMOKE_COMPANY_DOMAIN_ID,
+        operations: [
+          labelOp("1001", 1, "issueLabel.create", { name: "smoke-label", color: "#0ea5e9" }),
+          labelOp("1002", 2, "issueLabel.delete", {}),
+        ],
+      },
+    );
+    // The seeded service role's `workflow.manage` grant is what admits these; a rejection here
+    // means the smoke role and the sync surface's write gate have drifted apart.
+    expect(applied.receipts.map((receipt) => receipt.status)).toEqual(["accepted", "accepted"]);
 
     const first = await t.mutation(internal.smoke.cleanup, { environmentId: "environment-one" });
     // "environment-two" lacks the synthetic prefix, so the sweep must leave it alone.
@@ -264,6 +294,8 @@ describe("smoke.cleanup", () => {
       companies: 1,
       roles: 1,
       issueKeyReservations: 1,
+      // The tombstoned label row; label operations emit no audit events.
+      issueDomainRows: 1,
     });
 
     await t.run(async (ctx) => {
@@ -271,6 +303,9 @@ describe("smoke.cleanup", () => {
       expect(await ctx.db.query("roles").collect()).toHaveLength(0);
       expect(await ctx.db.query("environmentRegistrations").collect()).toHaveLength(0);
       expect(await ctx.db.query("issueKeyReservations").collect()).toHaveLength(0);
+      expect(await ctx.db.query("issueLabels").collect()).toHaveLength(0);
+      expect(await ctx.db.query("syncChanges").collect()).toHaveLength(0);
+      expect(await ctx.db.query("syncOperationReceipts").collect()).toHaveLength(0);
     });
 
     // A cleanup against nothing is a no-op, and the world is reseedable afterwards.
@@ -425,6 +460,44 @@ describe("smoke.cleanup", () => {
       expect(await ctx.db.query("roles").collect()).toHaveLength(1);
       expect(await ctx.db.query("memberships").collect()).toHaveLength(1);
     });
+  });
+
+  it("still refuses over issueAttachments, the one issue-domain table the sync surface cannot write", async () => {
+    const t = harness();
+    await t.mutation(internal.smoke.seed, {
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMB_A,
+    });
+
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", SMOKE_COMPANY_DOMAIN_ID))
+        .unique();
+      if (company === null) throw new Error("seed did not create the smoke company");
+      await ctx.db.insert("issueAttachments", {
+        id: "0198f7f0-4444-7444-8444-000000000001",
+        companyId: company._id,
+        issueId: "0198f7f0-4444-7444-8444-000000000002",
+        commentId: null,
+        storageId: null,
+        fileName: "foreign.txt",
+        mimeType: "text/plain",
+        byteSize: 1,
+        checksum: "sha256:0",
+        uploadedByMembershipId: null,
+        state: "pending",
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        version: 0,
+      });
+    });
+
+    await expect(
+      t.mutation(internal.smoke.cleanup, { environmentId: ENVIRONMENT_ID }),
+    ).rejects.toThrow("issueAttachments");
   });
 });
 

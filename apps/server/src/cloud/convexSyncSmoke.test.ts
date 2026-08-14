@@ -11,6 +11,8 @@ import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import { parseIssueLabelCreateArgs } from "@spiritdevs/backend/sync/issueOps";
+import { SYNC_PROTOCOL_VERSION } from "@spiritdevs/contracts/cloudSync";
 import {
   RELAY_CONVEX_KEY_BINDING_TYP,
   RelayConvexKeyBindingPayload,
@@ -26,10 +28,12 @@ import * as Schema from "effect/Schema";
 import {
   buildKeyBindingPayload,
   buildLinkProofPayload,
+  buildSmokeSyncOperation,
   checkConvexServiceTokenClaims,
   convexErrorCode,
   generateDpopKeyPair,
   generateEnvironmentLinkKeyPair,
+  latestSyncChange,
   listSmokeStateFiles,
   makeSmokeEnvironmentId,
   manualCleanupInstructions,
@@ -39,11 +43,15 @@ import {
   removeSmokeRunStateFile,
   renderConvexSyncSmokeReport,
   signDpopProof,
+  SMOKE_LABEL_CREATE_ARGS,
+  SMOKE_LABEL_ENTITY_KIND,
   smokeDescriptor,
   smokeStateFilePath,
+  smokeSyncClientId,
   verifyServiceTokenSignature,
   writeSmokeRunStateFile,
   type SmokeRunStateFile,
+  type SyncChangeSummary,
 } from "./convexSyncSmoke.ts";
 
 const NOW = 1_700_000_000;
@@ -440,6 +448,74 @@ describe("smoke run state files", () => {
       "curl -X DELETE https://relay.example/v1/client/environment-links/env-smoke-fff -H 'Authorization: Bearer <pathway connect CLI access token>'",
     );
     assert.equal(commands.stateFile, smokeStateFilePath("/tmp/x", "env-smoke-fff"));
+  });
+});
+
+describe("smoke domain operations", () => {
+  it("builds an envelope whose attribution matches the smoke environment actor", () => {
+    const environmentId = makeSmokeEnvironmentId();
+    const operation = buildSmokeSyncOperation({
+      operationId: "op-1",
+      companyId: "00000000-0000-7000-8000-736d6f6b6501",
+      environmentId,
+      localSequence: 1,
+      baseVersion: 7,
+      kind: "issueLabel.create",
+      entityId: "label-1",
+      args: SMOKE_LABEL_CREATE_ARGS,
+    });
+    assert.equal(operation.protocolVersion, SYNC_PROTOCOL_VERSION);
+    assert.equal(operation.operationId, "op-1");
+    assert.equal(operation.companyId, "00000000-0000-7000-8000-736d6f6b6501");
+    assert.equal(operation.clientId, smokeSyncClientId(environmentId));
+    // The envelope's environmentId, actor, and clientId must all name the same
+    // environment: Convex re-derives the actor from the token and refuses a
+    // batch whose asserted attribution disagrees with it.
+    assert.equal(operation.environmentId, environmentId);
+    assert.deepEqual(operation.actor, { kind: "environment", environmentId });
+    assert.equal(operation.localSequence, 1);
+    assert.equal(operation.baseVersion, 7);
+    assert.equal(operation.kind, "issueLabel.create");
+    assert.equal(operation.entityId, "label-1");
+    assert.strictEqual(operation.args, SMOKE_LABEL_CREATE_ARGS);
+    assert.deepEqual([...operation.dependsOn], []);
+  });
+
+  it("uses label args the backend parser accepts as a company-scoped label", () => {
+    // The exact decoder Convex runs before applying `issueLabel.create`.
+    const parsed = parseIssueLabelCreateArgs(SMOKE_LABEL_CREATE_ARGS);
+    assert.isTrue(parsed.ok);
+    // No teamId: the label is company-scoped, so its feed rows carry an empty
+    // team list and the write gates on company-scope `workflow.manage`.
+    assert.notProperty(SMOKE_LABEL_CREATE_ARGS, "teamId");
+    assert.equal(SMOKE_LABEL_ENTITY_KIND, "issueLabel");
+  });
+});
+
+describe("latestSyncChange", () => {
+  const changes: readonly SyncChangeSummary[] = [
+    { version: 3, entityKind: "issueLabel", entityId: "a", changeKind: "upsert" },
+    { version: 5, entityKind: "issueLabel", entityId: "a", changeKind: "tombstone" },
+    { version: 4, entityKind: "issue", entityId: "a", changeKind: "upsert" },
+    { version: 6, entityKind: "issueLabel", entityId: "b", changeKind: "upsert" },
+  ];
+
+  it("returns the highest-versioned change for the entity, not the first", () => {
+    // A drain spanning create and delete must report the tombstone.
+    assert.deepEqual(latestSyncChange(changes, "issueLabel", "a"), {
+      version: 5,
+      entityKind: "issueLabel",
+      entityId: "a",
+      changeKind: "tombstone",
+    });
+    assert.equal(latestSyncChange(changes, "issueLabel", "b")?.version, 6);
+  });
+
+  it("matches on both entity kind and id", () => {
+    assert.equal(latestSyncChange(changes, "issue", "a")?.version, 4);
+    assert.isUndefined(latestSyncChange(changes, "issueStatus", "a"));
+    assert.isUndefined(latestSyncChange(changes, "issueLabel", "missing"));
+    assert.isUndefined(latestSyncChange([], "issueLabel", "a"));
   });
 });
 

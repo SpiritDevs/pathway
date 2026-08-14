@@ -35,6 +35,10 @@
       "types": "./src/sync/changeFeed.ts",
       "import": "./src/sync/changeFeed.ts"
     },
+    "./sync/issueOps": {
+      "types": "./src/sync/issueOps.ts",
+      "import": "./src/sync/issueOps.ts"
+    },
     "./sync/operations": {
       "types": "./src/sync/operations.ts",
       "import": "./src/sync/operations.ts"

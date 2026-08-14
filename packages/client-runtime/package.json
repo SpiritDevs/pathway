@@ -47,6 +47,10 @@
       "types": "./src/sync/index.ts",
       "default": "./src/sync/index.ts"
     },
+    "./sync/indexeddb": {
+      "types": "./src/sync/indexedDbStore.ts",
+      "default": "./src/sync/indexedDbStore.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
@@ -199,6 +203,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "fake-indexeddb": "^6.2.5",
     "vite-plus": "catalog:"
   }
 }
