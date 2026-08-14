@@ -45,6 +45,13 @@ export function shortcutScopeOwnsEvent(
   return (scope === "side-chat") === eventFromSideChat;
 }
 
+export function resolvePanelSurfaceOwnerThreadRef(
+  activeThreadRef: ScopedThreadRef | null,
+  panelOwnerThreadRef?: ScopedThreadRef,
+): ScopedThreadRef | null {
+  return panelOwnerThreadRef ?? activeThreadRef;
+}
+
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {

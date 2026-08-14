@@ -347,6 +347,7 @@ import {
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveEditableV2UserMessageId,
+  resolvePanelSurfaceOwnerThreadRef,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   shortcutScopeOwnsEvent,
@@ -3584,11 +3585,15 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeProject, activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string, line?: number) => {
-      if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath, line);
-      revealPanelThreadAsPage();
+      if (!activeProject) return;
+      const ownerThreadRef = resolvePanelSurfaceOwnerThreadRef(
+        activeThreadRef,
+        panelOwnerThreadRef,
+      );
+      if (!ownerThreadRef) return;
+      useRightPanelStore.getState().openFile(ownerThreadRef, relativePath, line);
     },
-    [activeProject, activeThreadRef, revealPanelThreadAsPage],
+    [activeProject, activeThreadRef, panelOwnerThreadRef],
   );
   // The thread's own change request, placed against the project it belongs to. Without a
   // project there is nothing to resolve it against, so the caller falls back to the browser.
