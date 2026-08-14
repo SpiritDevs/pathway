@@ -5,10 +5,6 @@
  */
 export const AGENT_CURSOR_GLIDE_MS = 160;
 
-export function agentBrowserCursorOpacity(active: boolean): number {
-  return active ? 1 : 0.35;
-}
-
 export interface AgentBrowserCursorPoint {
   readonly x: number;
   readonly y: number;
