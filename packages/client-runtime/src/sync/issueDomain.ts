@@ -637,6 +637,18 @@ export function defaultIssueSortOrder(keyNumber: number): string {
  */
 export const ISSUE_SYNC_PENDING_TIMESTAMP = 0;
 
+/**
+ * Position an optimistic row carries when the operation left the slot to the server.
+ *
+ * A create that names no position appends after the last row of its group, and finding that row
+ * takes a scan of the whole group — `apply` sees one entity, so the true index is not knowable
+ * locally. Sorting the pending row last is the choice that converges: the server appends too, so
+ * the accepted position replaces the sentinel without the card moving. Two unsent creates tie here
+ * and separate as each is accepted. `issueStatus` says the same thing with `null`, which its
+ * server row allows and which sorts last by the same rule; a milestone's position never is null.
+ */
+export const ISSUE_SYNC_APPEND_POSITION = Number.MAX_SAFE_INTEGER;
+
 export interface IssueSyncAdapterOptions {
   /**
    * Who is writing. Used only for optimistic attribution — comment authorship and saved-view
@@ -892,8 +904,9 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
           description: args.description ?? null,
           startDate: args.startDate ?? null,
           targetDate: args.targetDate ?? null,
-          // Absent appends after the project's last milestone; the server owns that scan.
-          position: args.position ?? 0,
+          // Absent appends after the project's last milestone; the server owns that scan, so the
+          // pending row sorts last until the accepted change says which index it took.
+          position: args.position ?? ISSUE_SYNC_APPEND_POSITION,
           createdAt: now,
           updatedAt: now,
         });

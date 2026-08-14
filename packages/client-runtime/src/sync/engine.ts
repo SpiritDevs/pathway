@@ -8,7 +8,8 @@
  * sequence. Both are idempotent, so a dropped connection costs a retry and nothing else.
  *
  * `sync` never fails on a transport error — it records the error in the state and answers with a
- * receipt. Callers (and tests) wait on that receipt instead of on a timer.
+ * receipt. Callers (and tests) wait on that receipt instead of on a timer, and `run` reads the same
+ * receipt to decide whether the cycle has to be re-armed on a backoff.
  *
  * @module sync/engine
  */
@@ -28,9 +29,11 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { EnvironmentId } from "@spiritdevs/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -138,7 +141,10 @@ export interface SyncEngine<Entity, Operation> {
   }) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
   /** One full cycle: drain the feed, flush the outbox, drain again to confirm. */
   readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
-  /** Subscribes to `sync.latestVersion` and syncs whenever the company head moves. */
+  /**
+   * Subscribes to `sync.latestVersion` and syncs whenever the company head moves, re-arming a
+   * cycle that ended in retryable trouble on a backoff rather than waiting for the next move.
+   */
   readonly run: Effect.Effect<void, SyncStoreError>;
   /** Dismisses rejected operations from the recovery panel. */
   readonly discardRejected: (
@@ -184,6 +190,18 @@ export function clampSyncBound(requested: number | undefined, max: number): numb
   const whole = Math.trunc(requested);
   return whole < 1 ? 1 : Math.min(whole, max);
 }
+
+/** How long {@link SyncEngine.run} waits before re-arming the first time a cycle does not settle. */
+export const SYNC_RETRY_MIN_DELAY = Duration.seconds(1);
+
+/** The ceiling the backoff doubles up to: a long outage costs one cycle every half minute. */
+export const SYNC_RETRY_MAX_DELAY = Duration.seconds(30);
+
+const SYNC_RETRY_SCHEDULE = Schedule.exponential(SYNC_RETRY_MIN_DELAY).pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, SYNC_RETRY_MAX_DELAY)),
+  ),
+);
 
 export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Operation>(
   options: SyncEngineOptions<Entity, Operation>,
@@ -612,10 +630,30 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     yield* publish;
   });
 
+  /**
+   * One cycle, re-armed on a backoff for as long as it keeps ending in retryable trouble.
+   *
+   * The head stream says "the company moved"; it cannot say "your last cycle did not finish", and
+   * no transport re-announces a version it has already emitted — they all deduplicate, because a
+   * head that has not moved is not news. So a cycle killed by a blip mid-bootstrap or mid-flush
+   * would otherwise leave the replica short and the outbox unsent until some *other* client wrote,
+   * which on a quiet company is never. The engine owns this retry because the engine is the only
+   * party that knows a cycle failed: `sync` answers with a receipt instead of failing, so the
+   * stream sees nothing wrong.
+   *
+   * Only `offline` is re-armed — the outcome behind every retryable reason. `failed` is an
+   * authorization or capability answer that the same call cannot talk its way out of, and looping
+   * on it would spin against the deployment; it waits for a real head move like before.
+   */
+  const syncUntilSettled: Effect.Effect<SyncCycleReceipt, SyncStoreError> = Effect.repeat(sync, {
+    schedule: SYNC_RETRY_SCHEDULE,
+    while: (receipt) => receipt.outcome === "offline",
+  });
+
   const run: Effect.Effect<void, SyncStoreError> = Effect.suspend(() =>
     whenCloudSyncEnabled(
       transport.latestVersion({ companyId }).pipe(
-        Stream.runForEach(() => sync),
+        Stream.runForEach(() => syncUntilSettled),
         Effect.catch((error: SyncTransportError | SyncStoreError) =>
           error._tag === "SyncStoreError"
             ? Effect.fail(error)

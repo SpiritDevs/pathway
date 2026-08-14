@@ -23,6 +23,38 @@ export interface PathwayPublicConfig {
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
+/**
+ * The one value both halves of cloud sync agree on.
+ *
+ * The deployment half is gated on this literal exactly — Convex's `requireCloudSyncEnabled` and the
+ * server daemon both compare against `"enabled"` — while the web build reads its flag through a
+ * boolean parser that also takes `1|true|on|yes`. Since a single knob is projected to both names
+ * below, an un-normalized value can only ever satisfy one of them: `enabled` would leave the
+ * browser dark, `true` would leave the daemon and the deployment off.
+ */
+const CLOUD_SYNC_ENABLED_VALUE = "enabled";
+
+const CLOUD_SYNC_ON_VALUES: ReadonlySet<string> = new Set([
+  CLOUD_SYNC_ENABLED_VALUE,
+  "1",
+  "true",
+  "on",
+  "yes",
+]);
+
+/**
+ * Collapses every affirmative spelling of the cloud-sync knob onto
+ * {@link CLOUD_SYNC_ENABLED_VALUE}, so one operator value enables the deployment, the server
+ * daemon, and the web build together. Anything that is not an affirmative is passed through
+ * untouched: both consumers read it as off, and the operator's own wording is worth keeping in the
+ * environment they will read back.
+ */
+export function normalizeCloudSyncFlag(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return CLOUD_SYNC_ON_VALUES.has(normalized) ? CLOUD_SYNC_ENABLED_VALUE : value?.trim();
+}
+
 const REPO_ROOT = NodePath.dirname(
   NodePath.dirname(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url))),
 );
@@ -37,6 +69,7 @@ export function loadRepoEnv({
   const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
   const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
+  const cloudSync = normalizeCloudSyncFlag(config.cloudSync);
 
   return {
     ...rootEnv,
@@ -68,10 +101,10 @@ export function loadRepoEnv({
           VITE_PATHWAY_RELAY_URL: config.relayUrl,
         }
       : {}),
-    ...(config.cloudSync
+    ...(cloudSync
       ? {
-          PATHWAY_CLOUD_SYNC: config.cloudSync,
-          VITE_PATHWAY_CLOUD_SYNC: config.cloudSync,
+          PATHWAY_CLOUD_SYNC: cloudSync,
+          VITE_PATHWAY_CLOUD_SYNC: cloudSync,
         }
       : {}),
     ...(config.convexUrl

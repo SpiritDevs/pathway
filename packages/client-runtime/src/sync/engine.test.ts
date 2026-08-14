@@ -19,9 +19,15 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import { CloudSyncCapability } from "./capability.ts";
-import { clampSyncBound, makeSyncEngine, type SyncEngineState } from "./engine.ts";
+import {
+  clampSyncBound,
+  makeSyncEngine,
+  SYNC_RETRY_MIN_DELAY,
+  type SyncEngineState,
+} from "./engine.ts";
 import { makeMemorySyncStore } from "./memoryStore.ts";
 import { syncEntityKey } from "./model.ts";
 import { syncOrderKeyAfter } from "./orderKey.ts";
@@ -474,6 +480,49 @@ describe("SyncEngine", () => {
         );
 
         expect(confirmedNote(arrived, NOTE_A)?.title).toBe("from-another-client");
+        yield* Fiber.interrupt(driver);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("re-arms a cycle that failed, without waiting for the head to move again", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      yield* Effect.gen(function* () {
+        // The change is on the server *before* the engine subscribes, so the one head the stream
+        // announces is the head the failing cycle already saw. Nothing will announce it again: a
+        // transport only reports a version that moved, and on a quiet company it never does.
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "from-another-client", body: "" }),
+          operationId("op-remote-create"),
+        );
+        const head = yield* harness.server.head;
+        yield* harness.server.setOffline(true);
+
+        const engine = yield* openEngine("client-a");
+        const driver = yield* Effect.forkChild(engine.run);
+        const failed = yield* SubscriptionRef.changes(engine.state).pipe(
+          Stream.filter((state) => state.lastError !== null),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+        expect(failed.presentation.status).toBe("offline");
+        expect(confirmedNote(failed, NOTE_A)).toBeNull();
+
+        // The blip is over, but the head is exactly where it was when the cycle died.
+        yield* harness.server.setOffline(false);
+        yield* TestClock.adjust(SYNC_RETRY_MIN_DELAY);
+        const recovered = yield* SubscriptionRef.changes(engine.state).pipe(
+          Stream.filter((state) => confirmedNote(state, NOTE_A) !== null),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+
+        expect(confirmedNote(recovered, NOTE_A)?.title).toBe("from-another-client");
+        expect(recovered.presentation.status).toBe("live");
+        // The retry brought the replica forward, not a new version: the head never moved.
+        expect(yield* harness.server.head).toEqual(head);
         yield* Fiber.interrupt(driver);
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
     }),

@@ -20,7 +20,12 @@ import { checkOwnershipChange } from "../src/ownership.ts";
 import { mutation, query } from "./_generated/server.js";
 import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { backendError, notImplemented } from "./lib/errors.ts";
-import { currentUser, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  currentUser,
+  requireCompanyActor,
+  requireIdentity,
+  requirePermission,
+} from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
 const companySummary = v.object({
@@ -41,12 +46,23 @@ const companySummary = v.object({
   isOwner: v.boolean(),
 });
 
-/** Every company the signed-in user still has an active membership in. */
+/**
+ * Every company the signed-in user still has an active membership in.
+ *
+ * An identity is required rather than assumed: this listing is what a client reconciles its sync
+ * engines against, and an empty array is a meaningful answer — "you are a member of nothing, stop
+ * everything". Answering it to a caller with no identity at all (a token that never arrived, one
+ * Convex refused, a socket that authenticated after the first subscribe) would make an
+ * authentication problem indistinguishable from a legitimately empty membership list, and would
+ * quietly tear every engine down. A signed-in identity with no `users` row yet is different: that
+ * person really has no companies, and gets the empty listing.
+ */
 export const listMine = query({
   args: {},
   returns: v.array(companySummary),
   handler: async (ctx) => {
     requireCloudSyncEnabled();
+    await requireIdentity(ctx);
     const user = await currentUser(ctx);
     if (user === null) return [];
 

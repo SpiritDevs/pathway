@@ -47,6 +47,24 @@ export function parsePublicFlag(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
 }
 
+/**
+ * The literal the *deployment* side of cloud sync is gated on: Convex's `requireCloudSyncEnabled`
+ * and the server daemon both demand exactly `PATHWAY_CLOUD_SYNC=enabled`, and it is the only value
+ * any documentation names. One operator knob feeds both halves (see `scripts/lib/public-config.ts`,
+ * which projects it to `VITE_PATHWAY_CLOUD_SYNC` as well), so the web gate has to accept it too —
+ * otherwise the documented value turns Convex and the daemon on while every browser stays dark.
+ */
+export const CLOUD_SYNC_ENABLED_VALUE = "enabled";
+
+/**
+ * The cloud-sync opt-in, which answers to one more spelling than the other public flags: the
+ * canonical {@link CLOUD_SYNC_ENABLED_VALUE} the deployment gates on, alongside the ordinary
+ * affirmatives. Anything else — absent, empty, `"0"`, a typo — is off, as everywhere else.
+ */
+export function parseCloudSyncFlag(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === CLOUD_SYNC_ENABLED_VALUE || parsePublicFlag(value);
+}
+
 function normalizeSecureUrl(value: string): string | null {
   try {
     const url = new URL(value);
@@ -99,7 +117,7 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
       tracesToken: trimNonEmpty(import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN as string | undefined),
     },
     cloudSync: {
-      enabled: parsePublicFlag(import.meta.env.VITE_PATHWAY_CLOUD_SYNC as string | undefined),
+      enabled: parseCloudSyncFlag(import.meta.env.VITE_PATHWAY_CLOUD_SYNC as string | undefined),
       convexUrl: normalizeConvexDeploymentUrl(
         (import.meta.env.VITE_PATHWAY_CONVEX_URL as string | undefined) ?? "",
       ),

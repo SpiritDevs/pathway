@@ -149,6 +149,31 @@ const UPGRADE_REQUIRED_CODES = new Set([
   "not-implemented",
 ]);
 
+/**
+ * Codes `sync.applyOperations` throws when it refuses a *whole batch* before applying anything.
+ *
+ * `validateOperationBatch` (`@spiritdevs/backend`'s `src/sync/operations.ts`) checks the shape of a
+ * batch — its size, the bytes its arguments weigh, that every operation names the company that was
+ * asked for, that no operation id repeats — and a failure there throws instead of answering with
+ * per-operation receipts. None of that is a property of the connection: the outbox rebuilds the
+ * same batch from the same first entries in local sequence every cycle, so a retry can only be
+ * refused again while every operation queued behind it waits forever. They are therefore terminal,
+ * and reported as `upgrade-required` — the reason that stops the engine and puts the deployment's
+ * own message in front of the user rather than hiding a permanent stall behind a retry loop.
+ *
+ * `invalid-arguments` is deliberately *not* here even though the same validator can produce it:
+ * `sync.bootstrap` also answers `invalid-arguments` for a page cursor it cannot decode, and
+ * `decodeBootstrapCursor` says in as many words that the client is meant to restart its seed —
+ * which is what the next cycle does, from a `null` cursor. Retrying is the recovery there.
+ */
+const BATCH_REFUSED_CODES = new Set([
+  "batch-empty",
+  "batch-too-large",
+  "batch-args-too-large",
+  "batch-duplicate-operation-id",
+  "company-mismatch",
+]);
+
 const OFFLINE_PATTERN =
   /failed to fetch|load failed|networkerror|network error|network request failed|err_internet_disconnected|err_network|connection (refused|reset|closed)|websocket|offline|fetch failed/iu;
 
@@ -193,7 +218,7 @@ export function classifyConvexSyncTransportError(error: unknown): SyncTransportE
   const message = errorMessage(error);
   const code = convexSyncErrorCode(error);
   if (code !== null) {
-    if (UPGRADE_REQUIRED_CODES.has(code)) {
+    if (UPGRADE_REQUIRED_CODES.has(code) || BATCH_REFUSED_CODES.has(code)) {
       return new SyncTransportError({ reason: "upgrade-required", message });
     }
     return new SyncTransportError({

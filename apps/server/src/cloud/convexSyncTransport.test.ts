@@ -461,6 +461,34 @@ describe("classifyConvexFailure", () => {
     }
   });
 
+  it("maps a whole-batch refusal to upgrade-required rather than a retryable reason", () => {
+    // The outbox rebuilds the same batch from the same entries every cycle, so a `transport` here
+    // would resend a batch the deployment can only refuse again — forever, with every operation
+    // queued behind it, and nothing said to the user.
+    for (const code of [
+      "batch-empty",
+      "batch-too-large",
+      "batch-args-too-large",
+      "batch-duplicate-operation-id",
+      "company-mismatch",
+    ]) {
+      assert.equal(
+        classifyConvexFailure(new ConvexError({ code, message: "refused" })),
+        "upgrade-required",
+        code,
+      );
+    }
+  });
+
+  it("keeps invalid-arguments retryable, because a refused bootstrap cursor is retryable", () => {
+    // `sync.bootstrap` answers `invalid-arguments` for a cursor it cannot decode, and the recovery
+    // it asks for is a fresh seed — which is exactly what the engine's next cycle does.
+    assert.equal(
+      classifyConvexFailure(new ConvexError({ code: "invalid-arguments", message: "bad cursor" })),
+      "transport",
+    );
+  });
+
   it("maps an HTTP 401 from Convex's own auth layer to unauthorized", () => {
     // Thrown before any handler runs, so there is no `ConvexError` to read a code from.
     assert.equal(
@@ -664,6 +692,33 @@ describe("convex sync transport", () => {
       );
 
       assert.equal(error.reason, "offline");
+      assert.lengthOf(fake.calls, 1);
+    }),
+  );
+
+  it.effect("reports a batch the deployment refused whole as terminal, once", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeConvexClient(
+        () =>
+          new ConvexError({
+            code: "batch-args-too-large",
+            message: "Operation arguments exceed 524288 bytes.",
+          }),
+      );
+      const transport = yield* makeConvexSyncTransport({
+        convexUrl: CONVEX_URL,
+        tokens: staticTokenProvider(["service-token-a", "service-token-b"]),
+        client: fake.client,
+      });
+
+      const error = yield* Effect.flip(
+        transport.applyOperations({ companyId: COMPANY_ID, operations: [operationEnvelope()] }),
+      );
+
+      // Terminal, so the engine stops and shows the deployment's message instead of resending a
+      // batch it can only refuse again.
+      assert.equal(error.reason, "upgrade-required");
+      assert.include(error.message, "524288");
       assert.lengthOf(fake.calls, 1);
     }),
   );

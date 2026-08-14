@@ -16,7 +16,6 @@
  * @module cloud/syncRuntime
  */
 import { useAuth } from "@clerk/react";
-import { useAtomValue } from "@effect/atom-react";
 import {
   managedRelaySessionAtom,
   type ManagedRelaySession,
@@ -50,10 +49,12 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
 import {
   classifyConvexSyncTransportError,
@@ -303,12 +304,39 @@ interface RunningEngine {
   readonly scope: Scope.Closeable;
 }
 
+/**
+ * Everything a leader tab needs from the network: the transport its engines speak, and the live
+ * membership listing that says which engines to run. Both come from one Convex connection.
+ */
+export interface CloudSyncConnection {
+  readonly transport: SyncTransport["Service"];
+  readonly companies: Stream.Stream<ReadonlyArray<CloudSyncCompany>, SyncTransportError>;
+}
+
 export interface CloudSyncEnginesOptions {
   readonly clientId: SyncClientId;
   readonly election: WebLeaderElection;
-  readonly companies: Stream.Stream<ReadonlyArray<CloudSyncCompany>, SyncTransportError>;
+  /**
+   * Opens the Convex connection. Run *inside* the leadership body and released with it, because a
+   * follower tab has no work for a socket to do: it would sit authenticated and subscription-less
+   * for the life of the tab, and every tab of the account would independently drive Clerk's token
+   * refresh. Reclaiming leadership opens a fresh connection, which is also how a tab recovers from
+   * a client that has given up on authenticating.
+   */
+  readonly connect: Effect.Effect<CloudSyncConnection, never, Scope.Scope>;
   /** Overridable so a test does not have to wait out the real backoff. */
   readonly restartDelay?: Duration.Input;
+}
+
+/**
+ * Why a company's engine stopped, and whether starting it again could change anything.
+ *
+ * `engine.run` does not fail on a transport error — it records the phase and returns — so the
+ * reason has to be read back off the engine's published state rather than caught.
+ */
+interface CloudSyncEngineStop {
+  readonly retryable: boolean;
+  readonly error: SyncTransportError | null;
 }
 
 /**
@@ -334,6 +362,14 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
   const clock = yield* Clock.clockWith(Effect.succeed);
   const restartDelay = options.restartDelay ?? ENGINE_RESTART_DELAY;
 
+  /**
+   * Runs one engine to a stop and reports why it stopped.
+   *
+   * `engine.run` ends normally when the change feed drops — the engine records the phase and the
+   * error on its state and returns — so the reason is read back off {@link SyncEngine.state} rather
+   * than caught. No error at all (an interrupted subscription, a clean end) counts as retryable:
+   * that is the ordinary "socket went away" ending this loop exists for.
+   */
   const engineProgram = (company: CloudSyncCompany) =>
     Effect.gen(function* () {
       const engine = yield* makeSyncEngine({
@@ -346,13 +382,27 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
         }),
       });
       yield* engine.run;
+      const { lastError } = yield* SubscriptionRef.get(engine.state);
+      return {
+        retryable: lastError === null || isRetryableTransportError(lastError),
+        error: lastError,
+      } satisfies CloudSyncEngineStop;
     });
 
   /**
-   * `engine.run` ends normally when the change-feed subscription drops (the engine records the
-   * phase and returns), so both that and a typed failure mean "try again shortly" rather than
-   * "give up", and one company's trouble must not stop the others. Only typed failures are caught:
-   * a defect still kills the fiber, and an interrupt still ends the loop.
+   * Restarts a company's engine for as long as restarting it could change the answer, and one
+   * company's trouble never stops the others.
+   *
+   * A dropped socket or an offline device is worth another try shortly. An `unauthorized` or
+   * `upgrade-required` answer is not: the same token and the same build would be refused again, so
+   * a timer would only reproduce the refusal every {@link restartDelay} for the life of the tab
+   * while hiding the one thing the operator needs to see. Those stop, loudly and once — the engine
+   * keeps its `failed` phase for the UI, and the next reload (or the next leadership pass, which
+   * rebuilds the engine set) is what retries.
+   *
+   * Only typed failures are caught: a defect still kills the fiber, and an interrupt still ends the
+   * loop. A store failure is treated as retryable — it is the local replica, not a verdict from the
+   * server.
    */
   const superviseCompany = (company: CloudSyncCompany) =>
     engineProgram(company).pipe(
@@ -360,14 +410,27 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
         Effect.logWarning("Cloud sync engine stopped; retrying.", {
           companyId: company.companyId,
           error,
-        }),
+        }).pipe(Effect.as({ retryable: true, error: null } satisfies CloudSyncEngineStop)),
       ),
-      Effect.repeat(Schedule.spaced(restartDelay)),
+      Effect.tap((stop) =>
+        stop.retryable
+          ? Effect.void
+          : Effect.logError("Cloud sync engine stopped and will not retry.", {
+              companyId: company.companyId,
+              reason: stop.error?.reason,
+              error: stop.error,
+            }),
+      ),
+      Effect.repeat({
+        schedule: Schedule.spaced(restartDelay),
+        while: (stop: CloudSyncEngineStop) => stop.retryable,
+      }),
       Effect.withSpan("web.cloudSync.company", { attributes: { companyId: company.companyId } }),
     );
 
-  /** One pass of leadership: the engine set, reconciled against the membership listing. */
+  /** One pass of leadership: the connection, and the engine set reconciled against its listing. */
   const leadershipBody = Effect.gen(function* () {
+    const connection = yield* options.connect;
     const running = yield* Ref.make(new Map<CompanyId, RunningEngine>());
 
     const stopCompany = Effect.fn("web.cloudSync.stopCompany")(function* (companyId: CompanyId) {
@@ -386,7 +449,10 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       company: CloudSyncCompany,
     ) {
       const scope = yield* Scope.make();
-      yield* superviseCompany(company).pipe(Effect.forkIn(scope));
+      yield* superviseCompany(company).pipe(
+        Effect.provideService(SyncTransport, connection.transport),
+        Effect.forkIn(scope),
+      );
       yield* Ref.update(running, (current) =>
         new Map(current).set(company.companyId, { company, scope }),
       );
@@ -415,7 +481,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       ),
     );
 
-    yield* Stream.runForEach(options.companies, reconcile);
+    yield* Stream.runForEach(connection.companies, reconcile);
   }).pipe(Effect.scoped, Effect.provideService(CloudSyncCapability, { enabled: true }));
 
   /**
@@ -456,27 +522,20 @@ function isRetryableTransportError(error: SyncTransportError): boolean {
 }
 
 /**
- * The complete browser runtime: one Convex connection, one IndexedDB store, one leader election,
- * and an engine per company, all owned by the surrounding scope.
+ * The complete browser runtime: one leader election, one IndexedDB store, and — only once this tab
+ * is the leader — one Convex connection with an engine per company, all owned by the surrounding
+ * scope.
  *
  * The Convex client is constructed here rather than left to the transport so the same socket
- * carries both the sync functions and the membership subscription; closing the scope closes it.
+ * carries both the sync functions and the membership subscription. It is constructed *lazily*,
+ * inside the leadership body: `new ConvexClient(url)` opens a WebSocket in its constructor and
+ * `setAuth` immediately mints a Clerk token, so building it eagerly would have every open tab hold
+ * an authenticated, subscription-less socket. An injected client (a test) is shared across
+ * leadership passes and left for its owner to close.
  */
 export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   options: CloudSyncRuntimeOptions,
 ) {
-  const client =
-    options.client ??
-    (yield* Effect.acquireRelease(
-      Effect.sync(() => new ConvexClient(options.convexUrl) as ConvexClientLike),
-      (owned) => Effect.tryPromise(() => owned.close()).pipe(Effect.ignore),
-    ));
-
-  const transport = yield* makeConvexSyncTransport({
-    convexUrl: options.convexUrl,
-    fetchToken: options.fetchToken,
-    client,
-  });
   const store = yield* makeIndexedDbSyncStore({
     scope: options.scope,
     ...(options.indexedDb === undefined ? {} : { factory: options.indexedDb }),
@@ -485,15 +544,27 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   const election = yield* makeWebLeaderElection({ scope: options.scope });
   const clientId = options.clientId ?? readCloudSyncClientId({ scope: options.scope });
 
+  const connect = Effect.gen(function* () {
+    const client =
+      options.client ??
+      (yield* Effect.acquireRelease(
+        Effect.sync(() => new ConvexClient(options.convexUrl) as ConvexClientLike),
+        (owned) => Effect.tryPromise(() => owned.close()).pipe(Effect.ignore),
+      ));
+    const transport = yield* makeConvexSyncTransport({
+      convexUrl: options.convexUrl,
+      fetchToken: options.fetchToken,
+      client,
+    });
+    return { transport, companies: cloudSyncCompaniesStream(client) } satisfies CloudSyncConnection;
+  });
+
   const engines = runCloudSyncEngines({
     clientId,
     election,
-    companies: cloudSyncCompaniesStream(client),
+    connect,
     ...(options.restartDelay === undefined ? {} : { restartDelay: options.restartDelay }),
-  }).pipe(
-    Effect.provideService(SyncTransport, transport),
-    Effect.provideService(SyncStore, store.service),
-  );
+  }).pipe(Effect.provideService(SyncStore, store.service));
 
   const reconnecting = Effect.retry(
     engines.pipe(
@@ -563,26 +634,65 @@ const CLOUD_SYNC_IDLE_ATOM = Atom.make(AsyncResult.success<void>(undefined)).pip
 );
 
 /**
+ * Reads an atom from the app's own {@link appAtomRegistry}, rather than from whichever registry
+ * happens to be in React context above the caller.
+ *
+ * The managed-relay session is *written* imperatively into `appAtomRegistry` by
+ * `cloud/managedAuth.tsx` (`setManagedRelaySession(appAtomRegistry, …)`), so it is only visible to
+ * a reader that names the same registry. `useAtomValue` resolves its registry from
+ * `RegistryContext`, whose default value is a private registry the app never writes to — a reader
+ * mounted outside `AppAtomRegistryProvider` would therefore sit on a permanently empty session and
+ * never start sync, silently. Naming the registry makes the answer independent of where this hook
+ * is mounted, which matters because the runtime deliberately mounts high in the tree (inside the
+ * auth provider, above the app's registry provider).
+ *
+ * The subscription is what keeps the atom's node alive, so the runtime atom's lifetime is still the
+ * mounted lifetime of the component that reads it.
+ */
+function useAppAtomValue<A>(atom: Atom.Atom<A>): A {
+  const store = useMemo(
+    () => ({
+      subscribe: (onStoreChange: () => void) => appAtomRegistry.subscribe(atom, onStoreChange),
+      snapshot: () => appAtomRegistry.get(atom),
+      serverSnapshot: () => Atom.getServerValue(atom, appAtomRegistry),
+    }),
+    [atom],
+  );
+  return useSyncExternalStore(store.subscribe, store.snapshot, store.serverSnapshot);
+}
+
+/**
+ * The storage scope cloud sync would run under right now: the signed-in account, or `null`. Read
+ * from the app's registry, which is where `ManagedRelayAuthProvider` publishes the session.
+ */
+export function useCloudSyncScope(): string | null {
+  return cloudSyncScope(useAppAtomValue(managedRelaySessionAtom));
+}
+
+/**
  * Starts cloud sync for the signed-in account while the calling component is mounted, and stops it
  * on sign-out. With the flag off (or no session) this subscribes to an inert atom: no Convex
  * client is constructed, no database is opened, and no lock is taken.
  */
 export function useCloudSyncRuntime(): void {
-  const session = useAtomValue(managedRelaySessionAtom);
-  const scope = cloudSyncScope(session);
+  const scope = useCloudSyncScope();
   const atom =
     scope !== null && hasCloudSyncPublicConfig()
       ? cloudSyncRuntimeAtom(scope)
       : CLOUD_SYNC_IDLE_ATOM;
-  useAtomValue(atom);
+  useAppAtomValue(atom);
 }
 
 /**
  * Mounts the runtime and supplies its token source. Belongs inside `ManagedRelayAuthProvider`,
  * which is itself inside `ClerkProvider` — this component calls `useAuth`, and reads the session
  * that provider publishes.
+ *
+ * It renders nothing and takes no children on purpose: the whole module (this file, the engine, and
+ * `convex/browser`) is loaded lazily by `main.tsx`, and a wrapper would have had the app tree
+ * unmount and remount as the chunk resolved.
  */
-export function CloudSyncRuntimeProvider({ children }: { readonly children: ReactNode }) {
+export function CloudSyncRuntime(): null {
   const { getToken } = useAuth();
 
   useEffect(() => {
@@ -594,5 +704,5 @@ export function CloudSyncRuntimeProvider({ children }: { readonly children: Reac
 
   useCloudSyncRuntime();
 
-  return children;
+  return null;
 }

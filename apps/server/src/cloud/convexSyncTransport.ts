@@ -113,6 +113,31 @@ const UPGRADE_REQUIRED_CODES: ReadonlySet<string> = new Set([
   "upgrade-required",
 ]);
 
+/**
+ * Codes `sync.applyOperations` throws when it refuses a *whole batch* before applying anything.
+ *
+ * `validateOperationBatch` (`@spiritdevs/backend`'s `src/sync/operations.ts`) checks the shape of a
+ * batch — its size, the bytes its arguments weigh, that every operation names the company that was
+ * asked for, that no operation id repeats — and a failure there throws instead of answering with
+ * per-operation receipts. None of that is a property of the connection: the outbox rebuilds the
+ * same batch from the same first entries in local sequence every cycle, so a retry can only be
+ * refused again while every operation queued behind it waits forever. They are therefore terminal,
+ * and reported as `upgrade-required` — the reason that stops the engine and puts the deployment's
+ * own message in front of the user rather than hiding a permanent stall behind "offline".
+ *
+ * `invalid-arguments` is deliberately *not* here even though the same validator can produce it:
+ * `sync.bootstrap` also answers `invalid-arguments` for a page cursor it cannot decode, and
+ * `decodeBootstrapCursor` says in as many words that the client is meant to restart its seed —
+ * which is what the next cycle does, from a `null` cursor. Retrying is the recovery there.
+ */
+const BATCH_REFUSED_CODES: ReadonlySet<string> = new Set([
+  "batch-empty",
+  "batch-too-large",
+  "batch-args-too-large",
+  "batch-duplicate-operation-id",
+  "company-mismatch",
+]);
+
 /** Node/undici error codes that mean the request never reached the deployment. */
 const OFFLINE_SYSTEM_CODES: ReadonlySet<string> = new Set([
   "ECONNREFUSED",
@@ -156,11 +181,17 @@ function errorMessage(error: unknown): string {
  * failure of the pipe: a name that would not resolve or a socket that would not open is `offline`
  * (retryable, the replica is intact), an HTTP 401/403 from Convex's own auth layer — before any
  * handler ran — is `unauthorized`, and everything left is `transport`.
+ *
+ * `transport` is the retryable default on purpose: a code this build has never heard of is still a
+ * decision, and the deployment is the one that changes. The code sets above are what pulls a code
+ * out of that default, and they are hand-maintained — a backend code that becomes permanent has to
+ * be named there, which is why each set says what makes its members permanent.
  */
 export function classifyConvexFailure(error: unknown): SyncTransportError["reason"] {
   const code = convexErrorCode(error);
   if (code !== null) {
     if (UPGRADE_REQUIRED_CODES.has(code)) return "upgrade-required";
+    if (BATCH_REFUSED_CODES.has(code)) return "upgrade-required";
     if (UNAUTHORIZED_CODES.has(code)) return "unauthorized";
     return "transport";
   }

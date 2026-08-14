@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  CLOUD_SYNC_ENABLED_VALUE,
   CloudPublicConfigMissingError,
   hasClerkPublicConfig,
   hasCloudPublicConfig,
   hasCloudSyncPublicConfig,
   normalizeConvexDeploymentUrl,
+  parseCloudSyncFlag,
   parsePublicFlag,
   resolveCloudSyncConvexUrl,
   resolveRelayClerkTokenOptions,
@@ -58,6 +60,21 @@ describe("parsePublicFlag", () => {
   });
 });
 
+describe("parseCloudSyncFlag", () => {
+  it("takes the literal the deployment gate demands, as well as the ordinary affirmatives", () => {
+    // Convex's requireCloudSyncEnabled and the server daemon both compare against exactly this
+    // string, and one operator knob feeds all three; a web parser that refused it would leave the
+    // browser dark on the only value the documentation names.
+    expect(CLOUD_SYNC_ENABLED_VALUE).toBe("enabled");
+    for (const on of [CLOUD_SYNC_ENABLED_VALUE, " ENABLED ", "1", "true", "on", "yes"]) {
+      expect(parseCloudSyncFlag(on)).toBe(true);
+    }
+    for (const off of [undefined, "", "0", "false", "off", "no", "maybe", "disabled"]) {
+      expect(parseCloudSyncFlag(off)).toBe(false);
+    }
+  });
+});
+
 describe("normalizeConvexDeploymentUrl", () => {
   it("keeps an https deployment origin and drops its path", () => {
     expect(normalizeConvexDeploymentUrl("https://example.convex.cloud/")).toBe(
@@ -103,6 +120,15 @@ describe("hasCloudSyncPublicConfig", () => {
     expect(hasCloudSyncPublicConfig()).toBe(false);
 
     vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    expect(hasCloudSyncPublicConfig()).toBe(true);
+    expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
+  });
+
+  it("turns on for the same value that turns the deployment on", () => {
+    stubCloud();
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", CLOUD_SYNC_ENABLED_VALUE);
+
     expect(hasCloudSyncPublicConfig()).toBe(true);
     expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
   });

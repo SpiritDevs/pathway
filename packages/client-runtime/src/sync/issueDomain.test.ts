@@ -20,7 +20,13 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
-import { EnvironmentId, IssueId, IssueStatusId, type IssueViewConfig } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  IssueId,
+  IssueMilestoneId,
+  IssueStatusId,
+  type IssueViewConfig,
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -32,6 +38,7 @@ import type { SyncApplyOutcome } from "./adapter.ts";
 import { CloudSyncCapability } from "./capability.ts";
 import { makeSyncEngine } from "./engine.ts";
 import {
+  ISSUE_SYNC_APPEND_POSITION,
   ISSUE_SYNC_ENTITY_KINDS,
   decodeIssueSyncOperation,
   defaultIssueSortOrder,
@@ -750,7 +757,7 @@ const applyCases: ReadonlyArray<ApplyCase> = [
       const milestone = appliedOf(outcome, "issueMilestone");
       expect(milestone.cloudProjectId).toBe(PROJECT);
       expect(milestone.description).toBeNull();
-      expect(milestone.position).toBe(0);
+      expect(milestone.position).toBe(ISSUE_SYNC_APPEND_POSITION);
     },
   },
   {
@@ -1083,6 +1090,48 @@ describe("issue apply", () => {
     expect(issue.keyNumber).toBe(0);
     expect(issueKeyNumber(ISSUE_KEY_DRAFT_PLACEHOLDER)).toBe(0);
     expect(issueKeyNumber("PAT-221")).toBe(221);
+  });
+
+  it("places an unpositioned milestone where the server's append will place it", () => {
+    // `issueMilestoneCreate` (convex/lib/issueApply.ts) appends: the project's highest position
+    // plus one. The reducer sees one entity, so it cannot read that index — what it can do is sort
+    // the pending row last, which is where the append lands it. The two placements must agree, or
+    // the card moves when the accepted change arrives.
+    const timeline = [0, 1, 2].map((position) => ({
+      ...MILESTONE,
+      id: IssueMilestoneId.make(`milestone-at-${position}`),
+      position,
+    }));
+    const create = issueSyncOperation({
+      kind: "issueMilestone.create",
+      entityId: MILESTONE_ID,
+      args: { cloudProjectId: PROJECT, name: "GA" },
+    });
+    const optimistic = appliedOf(applyTo(null, create), "issueMilestone");
+    const confirmed = {
+      ...optimistic,
+      position: Math.max(...timeline.map((row) => row.position)) + 1,
+    };
+    const placement = (row: typeof confirmed) =>
+      [...timeline, row]
+        .sort((a, b) => a.position - b.position)
+        .findIndex((candidate) => candidate.id === row.id);
+
+    expect(placement(optimistic)).toBe(timeline.length);
+    expect(placement(optimistic)).toBe(placement(confirmed));
+    // An explicit position is still the caller's to choose, as it is on the server.
+    const positioned = appliedOf(
+      applyTo(
+        null,
+        issueSyncOperation({
+          kind: "issueMilestone.create",
+          entityId: MILESTONE_ID,
+          args: { cloudProjectId: PROJECT, name: "GA", position: 1 },
+        }),
+      ),
+      "issueMilestone",
+    );
+    expect(positioned.position).toBe(1);
   });
 
   it("merges two offline edits to different fields", () => {

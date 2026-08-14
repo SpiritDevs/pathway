@@ -186,6 +186,22 @@ describe("classifyConvexSyncTransportError", () => {
     expect(refusal("invalid-arguments")).toBe("transport");
   });
 
+  it("reports a batch the deployment refused whole as terminal, not as retryable transport", () => {
+    // The outbox rebuilds the identical batch every cycle, so retrying one of these can only be
+    // refused again while every queued operation behind it waits forever. They must stop the
+    // engine the way the server transport's BATCH_REFUSED_CODES already do.
+    const refusal = (code: string) =>
+      classifyConvexSyncTransportError(new ConvexError({ code, message: "refused" })).reason;
+    expect(refusal("batch-empty")).toBe("upgrade-required");
+    expect(refusal("batch-too-large")).toBe("upgrade-required");
+    expect(refusal("batch-args-too-large")).toBe("upgrade-required");
+    expect(refusal("batch-duplicate-operation-id")).toBe("upgrade-required");
+    expect(refusal("company-mismatch")).toBe("upgrade-required");
+    // A cursor the backend cannot decode also answers invalid-arguments, and the recovery there is
+    // the next cycle's fresh seed — so it stays retryable on purpose.
+    expect(refusal("invalid-arguments")).toBe("transport");
+  });
+
   it("treats a ConvexError without a code as transport trouble, not as offline", () => {
     const error = classifyConvexSyncTransportError(new ConvexError("something failed to fetch"));
     expect(error.reason).toBe("transport");
