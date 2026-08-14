@@ -23,6 +23,7 @@ import {
   isBrowserTakeoverBannerDismissedForSession,
   isBrowserTakeoverSettled,
   resolveBrowserTakeoverBanner,
+  resolveBrowserTakeoverTabToReveal,
   shouldShowBrowserTakeoverCallout,
 } from "./browserTakeoverBanner";
 
@@ -107,9 +108,9 @@ describe("shouldShowBrowserTakeoverCallout", () => {
 
   it("hides when the activity belongs to a run that already finished", () => {
     expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: null })).toBe(false);
-    expect(
-      shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: "run-2" as RunId }),
-    ).toBe(false);
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: "run-2" as RunId })).toBe(
+      false,
+    );
     expect(
       shouldShowBrowserTakeoverCallout({
         ...eligible,
@@ -135,9 +136,9 @@ describe("shouldShowBrowserTakeoverCallout", () => {
   });
 
   it("hides on a desktop that does not own this thread's browser", () => {
-    expect(
-      shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: null }),
-    ).toBe(false);
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: null })).toBe(
+      false,
+    );
     expect(
       shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: "other-desktop" }),
     ).toBe(false);
@@ -192,6 +193,47 @@ describe("isBrowserTakeoverSettled", () => {
     expect(isBrowserTakeoverSettled("failed")).toBe(false);
     expect(isBrowserTakeoverSettled(null)).toBe(false);
     expect(isBrowserTakeoverSettled(undefined)).toBe(false);
+  });
+});
+
+describe("resolveBrowserTakeoverTabToReveal", () => {
+  it("waits for an active takeover and its exact local tab", () => {
+    const availableTabIds = new Set(["tab-1"]);
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover({ status: "pausing" }),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds: new Set(),
+      }),
+    ).toBeNull();
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds,
+      }),
+    ).toBe("tab-1");
+  });
+
+  it("only reveals the tab on the desktop that hosts it", () => {
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: "another-host",
+        availableTabIds: new Set(["tab-1"]),
+      }),
+    ).toBeNull();
   });
 });
 

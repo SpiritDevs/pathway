@@ -311,6 +311,7 @@ import {
   browserTakeoverBannerItem,
   dismissBrowserTakeoverBannerForSession,
   resolveBrowserTakeoverBanner,
+  resolveBrowserTakeoverTabToReveal,
 } from "./chat/browserTakeoverBanner";
 import {
   selectPreviewAutomationHostClientId,
@@ -4899,6 +4900,7 @@ function ChatViewContent(props: ChatViewProps) {
   // a fresh run on every stream tick, and the memo below must not churn with it.
   const activeBrowserTakeoverRunId = activeBrowserTakeoverRun?.id ?? null;
   const activeBrowserTakeoverRunStatus = activeBrowserTakeoverRun?.status ?? null;
+  const browserTakeoverPreviewActivity = serverProjection?.thread.previewActivity ?? null;
   // Re-read every render (a cheap map lookup) rather than inside the memo: the
   // answer flips when the first projection lands, which need not move any other
   // dependency of the memo below.
@@ -4909,7 +4911,7 @@ function ChatViewContent(props: ChatViewProps) {
     return resolveBrowserTakeoverBanner({
       threadKey: activeThreadKey,
       takeover: projectedBrowserTakeover,
-      previewActivity: serverProjection?.thread.previewActivity ?? null,
+      previewActivity: browserTakeoverPreviewActivity,
       activeRunId: activeBrowserTakeoverRunId,
       activeRunStatus: activeBrowserTakeoverRunStatus,
       previewSupported: isPreviewSupportedInRuntime(),
@@ -4928,29 +4930,35 @@ function ChatViewContent(props: ChatViewProps) {
     browserTakeoverHostClientId,
     browserTakeoverRequestThreadKey,
     projectedBrowserTakeover,
-    serverProjection?.thread.previewActivity,
+    browserTakeoverPreviewActivity,
     supportsBrowserTakeover,
     browserTakeoverDismissTick,
   ]);
   // Focus the browser once per takeover: keyed by takeover id so re-renders,
   // navigation away and back, or a later status change never re-open the panel.
+  // Wait for the local session too; otherwise browser-surface reconciliation
+  // can remove the new panel before the host's session snapshot reaches us.
   const focusedBrowserTakeoverIdRef = useRef<CommandId | null>(null);
   useEffect(() => {
     const takeover = projectedBrowserTakeover;
-    if (!takeover || takeover.status !== "active" || !activeThreadRef) return;
+    if (!takeover || !activeThreadRef) return;
     if (focusedBrowserTakeoverIdRef.current === takeover.id) return;
-    // Only the desktop hosting the agent's browser can hand the user the page.
-    if (
-      browserTakeoverHostClientId === null ||
-      browserTakeoverHostClientId !== takeover.hostClientId
-    ) {
-      return;
-    }
+    const tabId = resolveBrowserTakeoverTabToReveal({
+      takeover,
+      previewSupported: isPreviewSupportedInRuntime(),
+      automationHostClientId: browserTakeoverHostClientId,
+      availableTabIds: new Set(Object.keys(activePreviewState.sessions)),
+    });
+    if (tabId === null) return;
+    useRightPanelStore.getState().openBrowser(activeThreadRef, tabId);
+    setActivePreviewTab(activeThreadRef, tabId);
     focusedBrowserTakeoverIdRef.current = takeover.id;
-    if (takeover.tabId === null || !isPreviewSupportedInRuntime()) return;
-    useRightPanelStore.getState().openBrowser(activeThreadRef, takeover.tabId);
-    setActivePreviewTab(activeThreadRef, takeover.tabId);
-  }, [activeThreadRef, browserTakeoverHostClientId, projectedBrowserTakeover]);
+  }, [
+    activePreviewState.sessions,
+    activeThreadRef,
+    browserTakeoverHostClientId,
+    projectedBrowserTakeover,
+  ]);
   const handleRequestBrowserTakeover = useCallback(async () => {
     if (!activeThreadRef) return;
     const threadKey = scopedThreadKey(activeThreadRef);

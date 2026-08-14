@@ -570,6 +570,23 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("reveals an existing browser tab when the panel is closed or showing another surface", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().close(refA);
+
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:tab-a",
+      surfaces: [
+        { id: "browser:tab-a", kind: "preview", resourceId: "tab-a" },
+        { id: "agents", kind: "agents" },
+      ],
+    });
+  });
+
   it("tracks one surface per pull request", () => {
     const first = { projectId: "project-a", repository: "coreybain/pathway", number: 4909 };
     const second = { projectId: "project-a", repository: "coreybain/pathway", number: 4910 };
