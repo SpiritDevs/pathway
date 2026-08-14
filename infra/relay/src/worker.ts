@@ -333,13 +333,15 @@ export const ApiLive = Api.make(
         ),
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         relayDocsRedirectRoute,
-        ConvexJwks.route.pipe(Layer.provide(runtimeLayer)),
+        ConvexJwks.route,
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
       withoutCapturedParentSpan,
-      Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, relayTraceLayer)),
+      Effect.flatMap((httpEffect) =>
+        traceRelayHttpRequestWith(httpEffect.pipe(Effect.provide(runtimeLayer)), relayTraceLayer),
+      ),
     );
 
     return { fetch };

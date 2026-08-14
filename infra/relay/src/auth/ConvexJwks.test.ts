@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
 import * as RelayConfiguration from "../Config.ts";
 import * as ConvexJwks from "./ConvexJwks.ts";
@@ -67,4 +68,29 @@ describe("ConvexJwks", () => {
       }
     }).pipe(Effect.provide(ConvexJwks.layer.pipe(Layer.provide(RelayConfiguration.layer(config))))),
   );
+
+  it("serves the JWKS document when route requirements are provided to the request", async () => {
+    const { dispose, handler } = HttpRouter.toWebHandler(ConvexJwks.route, {
+      disableLogger: true,
+      middleware: (effect) =>
+        effect.pipe(
+          Effect.provide(ConvexJwks.layer.pipe(Layer.provide(RelayConfiguration.layer(config)))),
+        ),
+    });
+
+    try {
+      const response = await handler(
+        new Request("https://relay.example.test/.well-known/jwks.json"),
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        keys: [
+          { alg: "ES256", kid: "pathway-convex-current" },
+          { alg: "ES256", kid: "pathway-convex-previous" },
+        ],
+      });
+    } finally {
+      await dispose();
+    }
+  });
 });
