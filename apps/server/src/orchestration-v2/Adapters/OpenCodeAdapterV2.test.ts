@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  type ModelSelection,
   NodeId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -14,6 +15,7 @@ import * as Schema from "effect/Schema";
 
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
+import { subagentChildModelSelection } from "../SubagentProjection.ts";
 
 import {
   openCodeBoundaryAfterProviderTurn,
@@ -264,5 +266,33 @@ describe("OpenCodeAdapterV2", () => {
       "msg-user-3",
     );
     assert.isUndefined(openCodeBoundaryAfterProviderTurn([first, synthetic, third], third.id));
+  });
+
+  // OpenCode reports the task's model on the tool part but never its options,
+  // so the parent's selections only carry over on the parent's own model. Both
+  // the subagent record and its child thread read this one selection.
+  it("keeps the parent's option selections only for a same-model task", () => {
+    const parentSelection = {
+      instanceId: ProviderInstanceId.make("opencode"),
+      model: "openai/gpt-5.4-mini",
+      options: [{ id: "agent", value: "build" }],
+    } satisfies ModelSelection;
+
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: "openai/gpt-5.4-mini" }),
+      parentSelection,
+    );
+    assert.deepEqual(
+      subagentChildModelSelection({
+        parentSelection,
+        reportedModel: "anthropic/claude-sonnet-4-5",
+      }),
+      { instanceId: parentSelection.instanceId, model: "anthropic/claude-sonnet-4-5" },
+    );
+    // An unreported model means the task stayed on the parent's.
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: null }),
+      parentSelection,
+    );
   });
 });

@@ -25,6 +25,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import type { RuntimeSubagent } from "@t3tools/client-runtime/state/subagentRuntime";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
@@ -532,6 +533,78 @@ interface ComposerDraftStoreState {
 export interface EffectiveComposerModelState {
   selectedModel: string;
   modelOptions: ProviderOptionSelectionsByProvider | null;
+  modelSelectionSource: EffectiveComposerModelSelectionSource;
+}
+
+export type EffectiveComposerModelSelectionSource =
+  | "draft"
+  | "subagent_roster"
+  | "thread"
+  | "project"
+  | "default";
+
+export function deriveComposerControlsLocked(input: {
+  relationshipToParent: "fork" | "subagent" | null;
+  matchedSubagentOrigin: RuntimeSubagent["origin"] | null | undefined;
+}): boolean {
+  return (
+    input.relationshipToParent === "subagent" && input.matchedSubagentOrigin === "provider_native"
+  );
+}
+
+export function deriveSubagentComposerModelSelection(input: {
+  threadId: ThreadId;
+  relationshipToParent: "fork" | "subagent" | null;
+  providerInstanceId: ProviderInstanceId;
+  threadModelSelection: ModelSelection | null | undefined;
+  parentThreadModelSelection: ModelSelection | null | undefined;
+  runtimeSubagents: ReadonlyArray<
+    Pick<RuntimeSubagent, "childThreadId" | "driver" | "model" | "effort" | "options">
+  >;
+}): ModelSelection | null {
+  if (input.relationshipToParent !== "subagent") {
+    return null;
+  }
+  // A child is stamped with its parent's selection when it is created. A
+  // different child selection therefore represents a later, authoritative
+  // handoff or user choice, and must not be replaced by stale roster data.
+  if (!Equal.equals(input.threadModelSelection ?? null, input.parentThreadModelSelection ?? null)) {
+    return null;
+  }
+  const subagent = input.runtimeSubagents.find(
+    (candidate) => candidate.childThreadId === input.threadId,
+  );
+  if (!subagent) {
+    return null;
+  }
+  const effortOptionId =
+    subagent.driver === "codex"
+      ? "reasoningEffort"
+      : subagent.driver === "claudeAgent"
+        ? "effort"
+        : subagent.driver === "cursor"
+          ? "reasoning"
+          : null;
+  const options =
+    subagent.options ??
+    (subagent.effort && effortOptionId
+      ? [{ id: effortOptionId, value: subagent.effort }]
+      : undefined);
+  if (subagent.model === null && options === undefined) {
+    return null;
+  }
+  const model = subagent.model ?? input.threadModelSelection?.model;
+  if (!model) {
+    return null;
+  }
+  return createModelSelection(input.providerInstanceId, model, options);
+}
+
+export function derivePersistableComposerModelSelection(input: {
+  modelSelection: ModelSelection;
+  source: EffectiveComposerModelSelectionSource;
+}): ModelSelection | undefined {
+  return input.source === "draft" ? input.modelSelection : undefined;
 }
 
 interface ComposerDraftModelState {
@@ -997,12 +1070,16 @@ export function deriveEffectiveComposerModelState(input: {
    * collapsing to the default Codex bucket.
    */
   selectedInstanceId?: ProviderInstanceId | null | undefined;
+  subagentModelSelection?: ModelSelection | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const baseModelCandidate =
-    input.threadModelSelection?.model ?? input.projectModelSelection?.model ?? null;
+    input.subagentModelSelection?.model ??
+    input.threadModelSelection?.model ??
+    input.projectModelSelection?.model ??
+    null;
   const baseModel =
     (input.selectedInstanceId
       ? resolveAppModelSelectionForInstance(
@@ -1047,15 +1124,30 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       ))
     : baseModel;
-  const modelOptions =
-    modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
-    providerSelectionsFromModelSelection(input.threadModelSelection) ??
-    providerSelectionsFromModelSelection(input.projectModelSelection) ??
-    null;
+  const draftModelOptions = modelSelectionByProviderToOptions(
+    input.draft?.modelSelectionByProvider,
+  );
+  const modelOptions = activeSelection
+    ? draftModelOptions
+    : (draftModelOptions ??
+      providerSelectionsFromModelSelection(input.subagentModelSelection) ??
+      providerSelectionsFromModelSelection(input.threadModelSelection) ??
+      providerSelectionsFromModelSelection(input.projectModelSelection) ??
+      null);
+  const modelSelectionSource: EffectiveComposerModelSelectionSource = activeSelection
+    ? "draft"
+    : input.subagentModelSelection
+      ? "subagent_roster"
+      : input.threadModelSelection
+        ? "thread"
+        : input.projectModelSelection
+          ? "project"
+          : "default";
 
   return {
     selectedModel,
     modelOptions,
+    modelSelectionSource,
   };
 }
 
@@ -3599,6 +3691,7 @@ export function useEffectiveComposerModelState(input: {
    * instance reads its own model, not the default Codex's.
    */
   selectedInstanceId?: ProviderInstanceId | null | undefined;
+  subagentModelSelection?: ModelSelection | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   settings: UnifiedSettings;
@@ -3612,6 +3705,7 @@ export function useEffectiveComposerModelState(input: {
         providers: input.providers,
         selectedProvider: input.selectedProvider,
         selectedInstanceId: input.selectedInstanceId,
+        subagentModelSelection: input.subagentModelSelection,
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
         settings: input.settings,
@@ -3623,6 +3717,7 @@ export function useEffectiveComposerModelState(input: {
       input.projectModelSelection,
       input.selectedInstanceId,
       input.selectedProvider,
+      input.subagentModelSelection,
       input.threadModelSelection,
     ],
   );

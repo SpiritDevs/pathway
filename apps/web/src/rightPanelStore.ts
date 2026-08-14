@@ -702,10 +702,21 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
         set((state) =>
           updateThread(state, ref, (current) => {
             const validIds = new Set(threadIds.map(threadSurfaceId));
-            const surfaces = current.surfaces.filter(
+            const retainedSurfaces = current.surfaces.filter(
               (surface) => surface.kind !== "thread" || validIds.has(surface.id),
             );
-            if (surfaces.length === current.surfaces.length) return current;
+            const retainedIds = new Set(retainedSurfaces.map((surface) => surface.id));
+            const addedSurfaces = threadIds.flatMap((threadId) => {
+              const surface = threadSurface(threadId);
+              return retainedIds.has(surface.id) ? [] : [surface];
+            });
+            const surfaces = [...retainedSurfaces, ...addedSurfaces];
+            if (
+              surfaces.length === current.surfaces.length &&
+              surfaces.every((surface, index) => surface.id === current.surfaces[index]?.id)
+            ) {
+              return current;
+            }
             const activeStillExists = surfaces.some(
               (surface) => surface.id === current.activeSurfaceId,
             );
@@ -715,7 +726,9 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               surfaces,
               activeSurfaceId: activeStillExists
                 ? current.activeSurfaceId
-                : (surfaces.at(-1)?.id ?? null),
+                : (surfaces.find((surface) => surface.kind === "thread")?.id ??
+                  surfaces.at(-1)?.id ??
+                  null),
             };
           }),
         ),

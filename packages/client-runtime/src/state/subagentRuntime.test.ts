@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { classifyTaskAgentKind, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import {
+  classifyTaskAgentKind,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -8,6 +15,7 @@ import {
   isAgentAttributedToolActivity,
   isSubagentActivityKind,
   isTimelineBypassActivity,
+  projectedSubagentsToRuntime,
   workflowCardMembers,
 } from "./subagentRuntime.ts";
 
@@ -572,6 +580,43 @@ describe("model and effort attribution", () => {
     expect(formatSubagentModelLabel("claude-opus-4-20250514", null)).toBe("opus-4");
     expect(formatSubagentModelLabel("gpt-5.6-sol", "low")).toBe("gpt-5.6-sol · low");
     expect(formatSubagentModelLabel(null, "high")).toBeNull();
+  });
+
+  it("preserves child linkage and provider options from projected subagents", () => {
+    const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+    const [subagent] = projectedSubagentsToRuntime([
+      {
+        id: "node-subagent",
+        origin: "provider_native",
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex_work"),
+        childThreadId: ThreadId.make("thread-child"),
+        title: null,
+        prompt: "Inspect the composer",
+        model: "gpt-5.6-sol",
+        options: [
+          { id: "reasoningEffort", value: "xhigh" },
+          { id: "serviceTier", value: "fast" },
+        ],
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    ]);
+
+    expect(subagent).toMatchObject({
+      origin: "provider_native",
+      providerInstanceId: "codex_work",
+      childThreadId: "thread-child",
+      model: "gpt-5.6-sol",
+      effort: "xhigh",
+      options: [
+        { id: "reasoningEffort", value: "xhigh" },
+        { id: "serviceTier", value: "fast" },
+      ],
+    });
   });
 });
 

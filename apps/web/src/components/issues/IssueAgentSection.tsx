@@ -43,6 +43,7 @@ import {
   issueStartWorkWorkspaceModeLabel,
   type IssueStartWorkWorkspaceMode,
 } from "./issueStartWork.logic";
+import { IssuePullRequestChip } from "./IssuePullRequestChip";
 
 const ignorePromptChange = (_prompt: string): void => undefined;
 
@@ -361,7 +362,7 @@ export function IssueAgentSection({
   onUnlinkThread: (threadId: ThreadId) => void;
 }) {
   const startWorkLabel = issueStartWorkLabel(issue);
-  if (startWorkLabel === null && links.length === 0) return null;
+  if (startWorkLabel === null && links.length === 0 && issue.pullRequest == null) return null;
 
   return (
     <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
@@ -381,6 +382,13 @@ export function IssueAgentSection({
           starting={starting}
           startWorkBlockReason={startWorkBlockReason}
         />
+      )}
+
+      {issue.pullRequest == null ? null : (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Pull request</span>
+          <IssuePullRequestChip pullRequest={issue.pullRequest} />
+        </div>
       )}
 
       {links.length === 0 ? null : (

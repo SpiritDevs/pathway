@@ -15,6 +15,7 @@ import {
   IssueKey,
   IssueMilestoneId,
   IssuePriority,
+  IssuePullRequest,
   IssueSlackSource,
   IssueStatusId,
   IssueAssignee,
@@ -40,6 +41,7 @@ export const IssueRecord = Schema.Struct({
   assignee: Schema.NullOr(IssueAssignee),
   workModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   automationAssignment: Schema.optionalKey(Schema.NullOr(IssueAutomationAssignment)),
+  pullRequest: Schema.optionalKey(Schema.NullOr(IssuePullRequest)),
   projectId: Schema.NullOr(ProjectId),
   milestoneId: Schema.NullOr(IssueMilestoneId),
   cycleId: Schema.NullOr(IssueCycleId),
@@ -109,6 +111,13 @@ export const SetIssueCycleInput = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type SetIssueCycleInput = typeof SetIssueCycleInput.Type;
+
+export const SetIssuePullRequestInput = Schema.Struct({
+  issueId: IssueId,
+  pullRequest: IssuePullRequest,
+  updatedAt: IsoDateTime,
+});
+export type SetIssuePullRequestInput = typeof SetIssuePullRequestInput.Type;
 
 /**
  * IssueRepositoryShape - Service API for issue rows.
@@ -208,6 +217,11 @@ export interface IssueRepositoryShape {
    */
   readonly setCycle: (
     input: SetIssueCycleInput,
+  ) => Effect.Effect<void, IssueTrackerRepositoryError>;
+
+  /** Attach VCS discovery without rewriting a concurrently edited issue row. */
+  readonly setPullRequest: (
+    input: SetIssuePullRequestInput,
   ) => Effect.Effect<void, IssueTrackerRepositoryError>;
 }
 

@@ -18,7 +18,7 @@ import {
 import type { WebSearchOutput } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
+import { applyClaudePromptEffortPrefix, getProviderOptionDescriptors } from "@t3tools/shared/model";
 import {
   type ChatAttachment,
   ClaudeSettings,
@@ -40,6 +40,7 @@ import {
   type ProviderApprovalDecision,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderOptionSelections,
   type ProviderRequestKind,
   type ProviderThreadId,
   type ThreadId,
@@ -66,6 +67,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
+import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
@@ -1623,6 +1625,60 @@ function claudeSubagentAsyncLaunchAck(
     : null;
 }
 
+// The Agent tool input carries a family alias ("opus"), never a catalog slug.
+// A parent already on that family keeps its exact generation; anything else
+// resolves to the family's current slug.
+const CLAUDE_SUBAGENT_MODEL_ALIASES = new Map<string, string>([
+  ["fable", "claude-fable-5"],
+  ["haiku", "claude-haiku-4-5"],
+  ["opus", "claude-opus-5"],
+  ["sonnet", "claude-sonnet-5"],
+]);
+
+/** Per-native-thread ceiling on unclaimed Agent model overrides. */
+const MAX_CLAUDE_PENDING_SUBAGENT_MODEL_ALIASES = 64;
+
+function claudeSubagentModelAlias(input: ClaudeNativeToolInput): string | undefined {
+  const alias = firstStringInputField(input, ["model"])?.toLowerCase();
+  return alias !== undefined && CLAUDE_SUBAGENT_MODEL_ALIASES.has(alias) ? alias : undefined;
+}
+
+function claudeSubagentModel(alias: string | undefined, parentModel: string): string {
+  const canonical = alias === undefined ? undefined : CLAUDE_SUBAGENT_MODEL_ALIASES.get(alias);
+  if (canonical === undefined) {
+    return parentModel;
+  }
+  return parentModel.startsWith(`claude-${alias}-`) ? parentModel : canonical;
+}
+
+/**
+ * Option selections a Claude subagent runs with. Effort and the Claude Code
+ * settings are session-scoped, so a subagent on the parent's model inherits the
+ * parent's selections verbatim. A subagent that named a different model keeps
+ * only the selections that model advertises: `compileClaudeModelSelection`
+ * discards the rest at the provider boundary, so stamping them would misreport
+ * what the child thread actually runs with.
+ */
+function claudeSubagentOptionSelections(input: {
+  readonly parentSelection: ModelSelection;
+  readonly model: string;
+}): ProviderOptionSelections | undefined {
+  const parentOptions = input.parentSelection.options;
+  if (parentOptions === undefined || parentOptions.length === 0) {
+    return undefined;
+  }
+  if (input.model === input.parentSelection.model) {
+    return parentOptions;
+  }
+  const descriptors = getProviderOptionDescriptors({
+    caps: getClaudeModelCapabilities(input.model),
+  });
+  const supported = parentOptions.filter((selection) =>
+    descriptors.some((descriptor) => descriptor.id === selection.id),
+  );
+  return supported.length > 0 ? supported : undefined;
+}
+
 function webSearchPatternsFromClaudeTool(input: {
   readonly toolInput: ClaudeNativeToolInput;
   readonly output: ClaudeNativeToolOutput;
@@ -2215,6 +2271,15 @@ export function makeClaudeAdapterV2(
         // ended, and its task_notification must both count as wake evidence
         // and hydrate the original subagent node instead of being dropped.
         const sessionSubagentsByTaskId = yield* Ref.make(new Map<string, ActiveClaudeSubagent>());
+        // Agent model overrides ride the tool_use that precedes task_started,
+        // and the two can straddle a turn boundary: a delayed task_started
+        // buffers while no turn is active and drains into a continuation turn
+        // whose turn-local maps are empty. Aliases therefore live on the
+        // session, keyed by native thread so concurrent provider threads on
+        // one runtime cannot read each other's launches.
+        const subagentModelAliasesByNativeThread = yield* Ref.make(
+          new Map<string, Map<string, string>>(),
+        );
         const wakeBuffers = yield* Ref.make(
           new Map<
             string,
@@ -2520,10 +2585,67 @@ export function makeClaudeAdapterV2(
             return updated;
           });
 
+        // An Agent launch whose task_started never arrives (denied tool call,
+        // failed turn) would otherwise pin its alias for the session's life;
+        // evict oldest-first so a long-running thread stays bounded.
+        const rememberSubagentModelAlias = (input: {
+          readonly nativeThreadId: string;
+          readonly toolUseId: string;
+          readonly alias: string;
+        }) =>
+          Ref.update(subagentModelAliasesByNativeThread, (current) => {
+            const aliases = new Map(current.get(input.nativeThreadId) ?? []);
+            aliases.delete(input.toolUseId);
+            aliases.set(input.toolUseId, input.alias);
+            while (aliases.size > MAX_CLAUDE_PENDING_SUBAGENT_MODEL_ALIASES) {
+              const oldest = aliases.keys().next();
+              if (oldest.done === true) {
+                break;
+              }
+              aliases.delete(oldest.value);
+            }
+            return new Map(current).set(input.nativeThreadId, aliases);
+          });
+
+        // Aliases are single-use: the task_started that stamps the child
+        // thread consumes the entry so a later resume (which reuses the
+        // resuming tool call's id) cannot re-apply a stale override.
+        const takeSubagentModelAlias = (input: {
+          readonly nativeThreadId: string;
+          readonly toolUseId: string | undefined;
+        }) =>
+          Ref.modify(subagentModelAliasesByNativeThread, (current) => {
+            const toolUseId = input.toolUseId;
+            const aliases = current.get(input.nativeThreadId);
+            const alias = toolUseId === undefined ? undefined : aliases?.get(toolUseId);
+            if (aliases === undefined || toolUseId === undefined || alias === undefined) {
+              return [undefined, current] as const;
+            }
+            const next = new Map(aliases);
+            next.delete(toolUseId);
+            const updated = new Map(current);
+            if (next.size === 0) {
+              updated.delete(input.nativeThreadId);
+            } else {
+              updated.set(input.nativeThreadId, next);
+            }
+            return [alias, updated] as const;
+          });
+
         // Drop idle wake traffic for a dead native process so it cannot pin
         // session-wide pending work after sibling query replacement.
         const clearWakeStateForNativeThread = (nativeThreadId: string) =>
           Effect.gen(function* () {
+            // Pending aliases describe launches whose buffered lifecycle
+            // frames are being dropped just below; they can never be claimed.
+            yield* Ref.update(subagentModelAliasesByNativeThread, (current) => {
+              if (!current.has(nativeThreadId)) {
+                return current;
+              }
+              const updated = new Map(current);
+              updated.delete(nativeThreadId);
+              return updated;
+            });
             yield* Ref.update(wakeBuffers, (current) => {
               if (!current.has(nativeThreadId)) {
                 return current;
@@ -2808,6 +2930,7 @@ export function makeClaudeAdapterV2(
 
         const updateClaudeSubagentNode = Effect.fnUntraced(function* (input: {
           readonly context: ActiveClaudeTurnContext;
+          readonly nativeThreadId: string;
           readonly taskId: string;
           readonly toolUseId?: string;
           readonly prompt?: string;
@@ -2895,6 +3018,25 @@ export function makeClaudeAdapterV2(
                     existingSubagent.task,
                   )
                 : existingSubagent.task;
+          // Effort stays the parent's: the CLI applies one session-scoped
+          // effort level to subagents too, and no task frame reports theirs.
+          // Only the launch that creates the node claims the alias; later
+          // frames for the same task keep the model already stamped.
+          const subagentAlias =
+            existingSubagent === undefined
+              ? yield* takeSubagentModelAlias({
+                  nativeThreadId: input.nativeThreadId,
+                  toolUseId: input.toolUseId,
+                })
+              : undefined;
+          const subagentModel = claudeSubagentModel(
+            subagentAlias,
+            input.context.input.modelSelection.model,
+          );
+          const subagentOptions = claudeSubagentOptionSelections({
+            parentSelection: input.context.input.modelSelection,
+            model: subagentModel,
+          });
           const task = {
             ...(priorTask ?? {
               id: nodeId,
@@ -2914,7 +3056,8 @@ export function makeClaudeAdapterV2(
               },
               prompt: input.prompt ?? "",
               title: input.title ?? null,
-              model: input.context.input.modelSelection.model,
+              model: subagentModel,
+              ...(subagentOptions === undefined ? {} : { options: subagentOptions }),
               result: null,
               startedAt: now,
             }),
@@ -2987,7 +3130,11 @@ export function makeClaudeAdapterV2(
               parentNodeId: nodeId,
               activeProviderThreadId: null,
               providerInstanceId: input.context.input.modelSelection.instanceId,
-              modelSelection: input.context.input.modelSelection,
+              modelSelection: {
+                instanceId: input.context.input.modelSelection.instanceId,
+                model: task.model ?? input.context.input.modelSelection.model,
+                ...(task.options === undefined ? {} : { options: task.options }),
+              },
               title: subagentThreadTitle({
                 parentTitle: input.context.input.appThread.title,
                 prompt: task.prompt,
@@ -4053,6 +4200,7 @@ export function makeClaudeAdapterV2(
             } else {
               yield* updateClaudeSubagentNode({
                 context,
+                nativeThreadId: liveQuery.nativeThreadId,
                 taskId: message.task_id,
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
@@ -4086,6 +4234,7 @@ export function makeClaudeAdapterV2(
             ) {
               yield* updateClaudeSubagentNode({
                 context,
+                nativeThreadId: liveQuery.nativeThreadId,
                 taskId: message.task_id,
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 progress,
@@ -4114,6 +4263,7 @@ export function makeClaudeAdapterV2(
               yield* subagentTranscriptMirror.stop(message.task_id);
               yield* updateClaudeSubagentNode({
                 context,
+                nativeThreadId: liveQuery.nativeThreadId,
                 taskId: message.task_id,
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 result: message.summary,
@@ -4137,6 +4287,16 @@ export function makeClaudeAdapterV2(
 
           for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
             if (toolUse.name === "Agent") {
+              const alias = claudeSubagentModelAlias(
+                claudeNativeToolInputFromUnknown(toolUse.input),
+              );
+              if (alias !== undefined) {
+                yield* rememberSubagentModelAlias({
+                  nativeThreadId: liveQuery.nativeThreadId,
+                  toolUseId: toolUse.id,
+                  alias,
+                });
+              }
               continue;
             }
             yield* ensureToolCallStarted({
@@ -4176,6 +4336,7 @@ export function makeClaudeAdapterV2(
               const result = claudeSubagentResultText(output);
               yield* updateClaudeSubagentNode({
                 context,
+                nativeThreadId: liveQuery.nativeThreadId,
                 taskId: subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id),
                 toolUseId: toolResult.tool_use_id,
                 ...(result.length === 0 ? {} : { result }),
@@ -4348,7 +4509,17 @@ export function makeClaudeAdapterV2(
 
           const nativeRequestId = callbackOptions.toolUseID;
           const nativeToolInput = claudeNativeToolInputFromRecord(toolInput);
-          if (toolName !== "Agent") {
+          if (toolName === "Agent") {
+            const alias = claudeSubagentModelAlias(nativeToolInput);
+            const liveQuery = yield* Ref.get(queryContext);
+            if (alias !== undefined && liveQuery !== null) {
+              yield* rememberSubagentModelAlias({
+                nativeThreadId: liveQuery.nativeThreadId,
+                toolUseId: nativeRequestId,
+                alias,
+              });
+            }
+          } else {
             yield* ensureToolCallStarted({
               context,
               nativeItemId: nativeRequestId,

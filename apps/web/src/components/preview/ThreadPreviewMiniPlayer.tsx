@@ -12,6 +12,7 @@ import { useThreadPreviewState } from "~/previewStateStore";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
+import { AgentBrowserCursor } from "./AgentBrowserCursor";
 import { previewBridge } from "./previewBridge";
 import {
   clampPreviewMiniPlayerPosition,
@@ -315,6 +316,11 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
           className="absolute inset-0"
         />
         <div className="pointer-events-none absolute inset-0 z-[31] rounded-xl ring-1 ring-inset ring-border/80" />
+        {desktopOverlay?.hasWebContents ? (
+          <div className="pointer-events-none absolute inset-0 z-[32] overflow-hidden rounded-xl">
+            <AgentBrowserCursor tabId={runtimeTabId} zoomFactor={desktopOverlay.zoomFactor} />
+          </div>
+        ) : null}
         {!desktopOverlay?.hasWebContents ? (
           <div className="pointer-events-none absolute inset-0 z-[32] flex items-center justify-center rounded-xl bg-muted text-xs text-muted-foreground">
             Reconnecting preview…

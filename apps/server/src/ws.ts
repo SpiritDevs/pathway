@@ -76,6 +76,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ContinuationLaunchService from "./orchestration-v2/ContinuationLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
@@ -608,6 +609,19 @@ const makeWsRpcLayer = (
         vcsStatusBroadcaster
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+
+      const refreshGitStatusForThread = (threadId: ThreadId, cwd: string) =>
+        vcsStatusBroadcaster.refreshStatus(cwd).pipe(
+          Effect.tap((status) => {
+            const pullRequest = issuePullRequestFromStatus(threadId, status);
+            return pullRequest === null
+              ? Effect.void
+              : issueTracker.recordThreadPullRequest(pullRequest);
+          }),
+          Effect.ignoreCause({ log: true }),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
 
       const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
         function* (input: {
@@ -1816,9 +1830,10 @@ const makeWsRpcLayer = (
                   Effect.matchCauseEffect({
                     onFailure: (cause) => Queue.failCause(queue, cause),
                     onSuccess: () =>
-                      refreshGitStatus(input.cwd).pipe(
-                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
-                      ),
+                      (input.threadId === undefined
+                        ? refreshGitStatus(input.cwd)
+                        : refreshGitStatusForThread(input.threadId, input.cwd)
+                      ).pipe(Effect.andThen(Queue.end(queue).pipe(Effect.asVoid))),
                   }),
                 ),
             ),

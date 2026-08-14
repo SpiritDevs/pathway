@@ -372,6 +372,26 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("discovers side chats created outside the local panel state", () => {
+    const childA = ThreadId.make("child-A");
+    const childB = ThreadId.make("child-B");
+    const store = useRightPanelStore.getState();
+    store.open(refA, "diff");
+    store.close(refA);
+
+    store.reconcileThreadSurfaces(refA, [childA, childB]);
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: false,
+      activeSurfaceId: "diff",
+      surfaces: [
+        { id: "diff", kind: "diff" },
+        { id: "thread:child-A", kind: "thread", resourceId: childA },
+        { id: "thread:child-B", kind: "thread", resourceId: childB },
+      ],
+    });
+  });
+
   it("reopening an inactive singleton activates its existing surface", () => {
     useRightPanelStore.getState().open(refA, "diff");
     useRightPanelStore.getState().open(refA, "agents");

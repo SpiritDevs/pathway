@@ -1,6 +1,7 @@
 "use client";
 
 import type { PreviewAnnotationPayload, ScopedThreadRef } from "@t3tools/contracts";
+import type { ReactNode } from "react";
 
 import type { ComposerImageAttachment } from "~/composerDraftStore";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
@@ -14,6 +15,8 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  /** Content docked below the browser viewport while this Preview surface is visible. */
+  footer?: ReactNode;
   onSendAnnotation?: (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -26,6 +29,7 @@ export function PreviewPanel({
   tabId,
   configuredUrls,
   visible,
+  footer,
   onSendAnnotation,
 }: Props) {
   if (!isPreviewSupportedInRuntime()) {
@@ -49,6 +53,11 @@ export function PreviewPanel({
         visible={visible}
         {...(onSendAnnotation ? { onSendAnnotation } : {})}
       />
+      {footer ? (
+        <div className="shrink-0" data-preview-panel-footer>
+          {footer}
+        </div>
+      ) : null}
     </PreviewPanelShell>
   );
 }

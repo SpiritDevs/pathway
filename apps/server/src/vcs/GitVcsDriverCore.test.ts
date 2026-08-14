@@ -1561,6 +1561,45 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("refetches a remote branch when its tracking ref cannot be resolved", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+        yield* git(cwd, ["push", "-u", "origin", initialBranch]);
+        const remoteHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* git(cwd, ["update-ref", "-d", `refs/remotes/origin/${initialBranch}`]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const resolvedBase = yield* driver.resolveRemoteTrackingCommit({
+          cwd,
+          refName: initialBranch,
+          fallbackRemoteName: "origin",
+        });
+
+        assert.deepEqual(resolvedBase, {
+          commitSha: remoteHead,
+          remoteRefName: `origin/${initialBranch}`,
+        });
+        assert.equal(
+          yield* git(cwd, ["rev-parse", `refs/remotes/origin/${initialBranch}`]),
+          remoteHead,
+        );
+
+        yield* git(cwd, ["update-ref", "-d", `refs/remotes/origin/${initialBranch}`]);
+        assert.deepEqual(
+          yield* driver.resolveRemoteTrackingCommit({
+            cwd,
+            refName: `origin/${initialBranch}`,
+            fallbackRemoteName: "origin",
+          }),
+          resolvedBase,
+        );
+      }),
+    );
+
     it.effect("pushes with upstream setup and skips when already up to date", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

@@ -21,6 +21,7 @@ import {
 import { ChatAttachmentId, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { isProviderDriverKind, ProviderDriverKind } from "./providerInstance.ts";
+import { ChangeRequestState, SourceControlProviderKind } from "./sourceControl.ts";
 
 export const ISSUES_WS_METHODS = {
   getSnapshot: "issues.getSnapshot",
@@ -442,6 +443,25 @@ export const IssueAutomationAssignment = Schema.Struct({
 });
 export type IssueAutomationAssignment = typeof IssueAutomationAssignment.Type;
 
+/**
+ * The change request discovered on a thread working this issue.
+ *
+ * Kept on the issue row because the list and board need it on their first paint. The thread id is
+ * provenance: if a later linked thread opens another change request, the newer discovery replaces
+ * this one and the activity feed records that handoff.
+ */
+export const IssuePullRequest = Schema.Struct({
+  threadId: ThreadId,
+  provider: SourceControlProviderKind,
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: Schema.String,
+  state: ChangeRequestState,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type IssuePullRequest = typeof IssuePullRequest.Type;
+
 export const Issue = Schema.Struct({
   id: IssueId,
   key: IssueKey,
@@ -455,6 +475,8 @@ export const Issue = Schema.Struct({
   workModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   /** Human-readable provenance for an automatic assignment. Absent on older and manual issues. */
   automationAssignment: Schema.optionalKey(Schema.NullOr(IssueAutomationAssignment)),
+  /** Filled automatically when a linked work thread finishes a run on a branch with a PR. */
+  pullRequest: Schema.optionalKey(Schema.NullOr(IssuePullRequest)),
   projectId: Schema.NullOr(ProjectId),
   /** A milestone belongs to a project, so this is only meaningful alongside that project. */
   milestoneId: Schema.NullOr(IssueMilestoneId),

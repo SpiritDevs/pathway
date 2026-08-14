@@ -1626,6 +1626,58 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("records a linked thread's pull request once and keeps later status fresh", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Show the shipped work" }, ACTOR);
+      const threadId = ThreadId.make("thread-pr");
+      yield* tracker.linkThread({ issueId: issue.id, threadId, origin: "start-work" }, ACTOR);
+
+      const discovered = {
+        threadId,
+        provider: "github" as const,
+        number: 42,
+        title: "Show PRs on issues",
+        url: "https://github.com/t3dotgg/pathway/pull/42",
+        state: "open" as const,
+      };
+      yield* tracker.recordThreadPullRequest(discovered);
+      // End-of-run refreshes may report the same PR repeatedly; those are true no-ops.
+      yield* tracker.recordThreadPullRequest(discovered);
+
+      let current = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      const recorded = current?.pullRequest;
+      assert.ok(recorded);
+      assert.deepStrictEqual(recorded, {
+        ...discovered,
+        createdAt: recorded.createdAt,
+        updatedAt: recorded.updatedAt,
+      });
+      const createdAt = recorded.createdAt;
+
+      yield* tracker.recordThreadPullRequest({ ...discovered, state: "merged" });
+      current = (yield* tracker.getSnapshot()).issues.find(
+        (candidate) => candidate.id === issue.id,
+      );
+      assert.strictEqual(current?.pullRequest?.state, "merged");
+      assert.strictEqual(current?.pullRequest?.createdAt, createdAt);
+
+      const { events } = yield* tracker.getEvents({ issueId: issue.id });
+      const pullRequestEvents = events.filter((event) => event.field === "pullRequest");
+      assert.strictEqual(pullRequestEvents.length, 1);
+      assert.deepStrictEqual(pullRequestEvents[0]?.actor, {
+        kind: "system",
+        source: "automation",
+      });
+      assert.deepStrictEqual(
+        [pullRequestEvents[0]?.before, pullRequestEvents[0]?.after],
+        [null, "#42 Show PRs on issues"],
+      );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
   it.effect("upgrades a mention link when somebody attaches the same thread by hand", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;

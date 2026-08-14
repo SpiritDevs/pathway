@@ -64,6 +64,23 @@ export interface ProviderInstanceEntry {
   readonly models: ReadonlyArray<ServerProviderModel>;
 }
 
+/**
+ * Provider icons need an instance badge when color carries instance identity,
+ * or when two instances of the same driver would otherwise look identical.
+ */
+export function shouldShowProviderInstanceBadge(
+  entry: ProviderInstanceEntry,
+  entries: Iterable<ProviderInstanceEntry>,
+): boolean {
+  if (entry.accentColor) return true;
+  for (const candidate of entries) {
+    if (candidate.instanceId !== entry.instanceId && candidate.driverKind === entry.driverKind) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type ProviderCatalogAvailability = "loading" | "ready" | "unavailable" | "unconfigured";
 
 /**

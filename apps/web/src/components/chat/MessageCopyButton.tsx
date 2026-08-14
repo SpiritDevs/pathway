@@ -40,11 +40,13 @@ const onCopyError = (ref: React.RefObject<HTMLButtonElement | null>, error: Erro
 
 export const MessageCopyButton = memo(function MessageCopyButton({
   text,
+  label,
   size = "xs",
   variant = "outline",
   className,
 }: {
   text: string;
+  label?: string;
   size?: "xs" | "icon-xs";
   variant?: "outline" | "ghost";
   className?: string;
@@ -61,7 +63,7 @@ export const MessageCopyButton = memo(function MessageCopyButton({
       <TooltipTrigger
         render={
           <Button
-            aria-label="Copy link"
+            aria-label={label ?? "Copy link"}
             disabled={isCopied}
             onClick={() => copyToClipboard(text)}
             ref={ref}
@@ -73,9 +75,10 @@ export const MessageCopyButton = memo(function MessageCopyButton({
         }
       >
         {isCopied ? <CheckIcon className="size-3 text-primary" /> : <CopyIcon className="size-3" />}
+        {label ? (isCopied ? "Copied" : label) : null}
       </TooltipTrigger>
       <TooltipPopup>
-        <p>Copy to clipboard</p>
+        <p>{label ?? "Copy to clipboard"}</p>
       </TooltipPopup>
     </Tooltip>
   );

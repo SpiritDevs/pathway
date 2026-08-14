@@ -12,14 +12,17 @@ import {
   X,
 } from "lucide-react";
 import {
+  createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { isElectron } from "~/env";
 import type { RightPanelSurface } from "~/rightPanelStore";
@@ -62,12 +65,14 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddSideChat: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  sideChatAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -82,6 +87,14 @@ export interface PullRequestTabStatus {
   isDraft: boolean;
 }
 
+const RightPanelTabBarActionsContext = createContext<HTMLElement | null>(null);
+
+/** Mounts controls owned by the active surface into the right-panel tab bar. */
+export function RightPanelTabBarActions({ children }: { children: ReactNode }) {
+  const host = useContext(RightPanelTabBarActionsContext);
+  return host ? createPortal(children, host) : null;
+}
+
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the Pathway desktop app.",
   terminal: "Terminal surfaces are only available from a project thread.",
@@ -89,6 +102,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  sideChat: "Side chats need a connected thread with at least one completed response.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -128,12 +142,14 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddSideChat: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  sideChatAvailable: boolean;
   liveAgentCount: number;
 }) {
   const actions = [
@@ -190,6 +206,15 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
+    },
+    {
+      label: "Side chat",
+      description: "Ask with this conversation's context.",
+      icon: MessageSquare,
+      available: props.sideChatAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.sideChat,
+      onClick: props.onAddSideChat,
+      badgeCount: 0,
     },
   ] as const;
 
@@ -366,6 +391,7 @@ function SurfaceIcon({
 }
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
+  const [tabBarActionsHost, setTabBarActionsHost] = useState<HTMLDivElement | null>(null);
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -592,11 +618,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Bot />
                     Agents
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.sideChatAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.sideChat}
+                    onClick={props.onAddSideChat}
+                  >
+                    <MessageSquare />
+                    Side chat
+                  </SurfaceMenuItem>
                 </MenuPopup>
               </Menu>
             ) : null}
           </div>
         </ScrollArea>
+        <div ref={setTabBarActionsHost} className="flex shrink-0 items-center" />
         {props.layoutControls}
       </div>
       <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
@@ -608,16 +643,20 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
+            onAddSideChat={props.onAddSideChat}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
+            sideChatAvailable={props.sideChatAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (
-          props.children
+          <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>
+            {props.children}
+          </RightPanelTabBarActionsContext.Provider>
         )}
       </div>
     </PreviewPanelShell>

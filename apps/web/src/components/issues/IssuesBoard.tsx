@@ -63,6 +63,7 @@ import {
   type IssuesBoardDrop,
 } from "./issuesBoard.logic";
 import { formatIssueDueDate, isIssueDueDatePast, resolveIssueRowLabels } from "./issuesList.logic";
+import { IssuePullRequestChip } from "./IssuePullRequestChip";
 
 /** Below this a card's title wraps to three lines and the board stops reading as columns. */
 const COLUMN_WIDTH_CLASS = "w-72";
@@ -420,10 +421,14 @@ function IssueBoardCardImpl({
             {childRollup.done}/{childRollup.total}
           </span>
         )}
+        {issue.pullRequest == null ? null : (
+          <IssuePullRequestChip className="ms-auto" compact pullRequest={issue.pullRequest} />
+        )}
         {issue.dueDate === null ? null : (
           <span
             className={cn(
-              "ms-auto shrink-0 text-[11px] tabular-nums",
+              "shrink-0 text-[11px] tabular-nums",
+              issue.pullRequest == null && "ms-auto",
               overdue ? "text-destructive-foreground" : "text-muted-foreground",
             )}
             title={issue.dueDate}

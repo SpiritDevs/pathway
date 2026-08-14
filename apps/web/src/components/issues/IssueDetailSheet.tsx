@@ -56,6 +56,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type KeyboardEvent,
@@ -436,6 +437,13 @@ function IssueDetailBody({
   const cycles = useIssueCycles();
   const milestones = useIssueMilestonesForProject(issue.projectId);
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
+  const lastPullRequestEventRefresh = useRef(issue.pullRequest?.updatedAt ?? null);
+  useEffect(() => {
+    const updatedAt = issue.pullRequest?.updatedAt ?? null;
+    if (updatedAt === null || updatedAt === lastPullRequestEventRefresh.current) return;
+    lastPullRequestEventRefresh.current = updatedAt;
+    refreshEvents();
+  }, [issue.pullRequest?.updatedAt, refreshEvents]);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
   const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id);
   const childRollup = useIssueChildRollup(issue.id);

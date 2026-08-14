@@ -21,6 +21,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
+  deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -28,6 +29,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   openForkedThreadSideChatWhenReady,
+  resolvePanelSurfaceOwnerThreadRef,
   shortcutScopeOwnsEvent,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
@@ -127,6 +129,21 @@ describe("shortcutScopeOwnsEvent", () => {
     expect(shortcutScopeOwnsEvent("page", true)).toBe(false);
     expect(shortcutScopeOwnsEvent("side-chat", false)).toBe(false);
     expect(shortcutScopeOwnsEvent("side-chat", true)).toBe(true);
+  });
+});
+
+describe("resolvePanelSurfaceOwnerThreadRef", () => {
+  it("uses the owning thread so side-chat file links become peer panel tabs", () => {
+    const sideChatRef = { environmentId, threadId: ThreadId.make("thread-side-chat") };
+    const ownerThreadRef = { environmentId, threadId };
+
+    expect(resolvePanelSurfaceOwnerThreadRef(sideChatRef, ownerThreadRef)).toEqual(ownerThreadRef);
+  });
+
+  it("uses the active thread for a page-level chat", () => {
+    const activeThreadRef = { environmentId, threadId };
+
+    expect(resolvePanelSurfaceOwnerThreadRef(activeThreadRef)).toEqual(activeThreadRef);
   });
 });
 
@@ -875,5 +892,23 @@ describe("deriveCommittedServerUserMessageIds", () => {
     expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
       new Set([turnStartId, steerId]),
     );
+  });
+});
+
+describe("deriveAcknowledgedOptimisticUserMessageIds", () => {
+  it("acknowledges projection-owned queued input without dropping a projection-only steer", () => {
+    const queuedId = MessageId.make("message-queued");
+    const steerId = MessageId.make("message-steer");
+
+    expect(
+      deriveAcknowledgedOptimisticUserMessageIds({
+        optimisticMessages: [
+          { id: queuedId, inputIntent: "queued_turn" },
+          { id: steerId, inputIntent: "steer" },
+        ],
+        committedServerMessageIds: new Set(),
+        projectedServerMessageIds: new Set([queuedId, steerId]),
+      }),
+    ).toEqual(new Set([queuedId]));
   });
 });

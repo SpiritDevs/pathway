@@ -45,6 +45,13 @@ export function shortcutScopeOwnsEvent(
   return (scope === "side-chat") === eventFromSideChat;
 }
 
+export function resolvePanelSurfaceOwnerThreadRef(
+  activeThreadRef: ScopedThreadRef | null,
+  panelOwnerThreadRef?: ScopedThreadRef,
+): ScopedThreadRef | null {
+  return panelOwnerThreadRef ?? activeThreadRef;
+}
+
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
@@ -595,6 +602,26 @@ export function deriveCommittedServerUserMessageIds(
   return new Set(
     visibleTurnItems.flatMap((row) =>
       row.item.type === "user_message" ? [row.item.messageId] : [],
+    ),
+  );
+}
+
+/**
+ * Queued input is server-owned before it has a visible turn item. Treat its
+ * projected conversation message as acknowledgement, while keeping ordinary
+ * and steer input behind the visible-item guard above.
+ */
+export function deriveAcknowledgedOptimisticUserMessageIds(input: {
+  readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent">>;
+  readonly committedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
+  readonly projectedServerMessageIds: ReadonlySet<ChatMessage["id"]>;
+}): ReadonlySet<ChatMessage["id"]> {
+  return new Set(
+    input.optimisticMessages.flatMap((message) =>
+      input.committedServerMessageIds.has(message.id) ||
+      (message.inputIntent === "queued_turn" && input.projectedServerMessageIds.has(message.id))
+        ? [message.id]
+        : [],
     ),
   );
 }

@@ -63,6 +63,21 @@ export function resolveLatestMergeBackRun(projection: Projection): Run | null {
   return hasNewerActiveRun ? null : latestProviderFinishedRun;
 }
 
+/**
+ * Returns the newest stable point that can seed an isolated side chat.
+ * Active and queued work stays in the parent while the fork inherits the
+ * conversation through the latest completed run.
+ */
+export function resolveLatestForkableRun(projection: Projection): Run | null {
+  return projection.runs.reduce<Run | null>(
+    (latest, run) =>
+      run.status === "completed" && (latest === null || run.ordinal > latest.ordinal)
+        ? run
+        : latest,
+    null,
+  );
+}
+
 export function resolveThreadProviderSession(projection: Projection): ProviderSession | null {
   const activeRun = resolveActiveThreadRun(projection);
   const providerThreadId = activeRun?.providerThreadId ?? projection.thread.activeProviderThreadId;

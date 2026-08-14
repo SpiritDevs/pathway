@@ -1,7 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type ModelSelection,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { subagentChildModelSelection } from "../SubagentProjection.ts";
 import {
   CursorProviderCapabilitiesV2,
   cursorMcpServers,
@@ -190,6 +196,34 @@ describe("CursorAdapterV2", () => {
           },
         },
       },
+    );
+  });
+
+  // The task tool reports the subagent's model but never its options, so the
+  // parent's selections only carry over on the parent's own model. Both the
+  // subagent record and its child thread read this one selection.
+  it("keeps the parent's option selections only for a same-model task", () => {
+    const parentSelection = {
+      instanceId: ProviderInstanceId.make("cursor"),
+      model: "composer-2.5",
+      options: [
+        { id: "thinking", value: "high" },
+        { id: "fastMode", value: true },
+      ],
+    } satisfies ModelSelection;
+
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: "composer-2.5" }),
+      parentSelection,
+    );
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: "claude-4.5-sonnet" }),
+      { instanceId: parentSelection.instanceId, model: "claude-4.5-sonnet" },
+    );
+    // `args.model` is absent whenever the task stayed on the parent's model.
+    assert.deepEqual(
+      subagentChildModelSelection({ parentSelection, reportedModel: undefined }),
+      parentSelection,
     );
   });
 });

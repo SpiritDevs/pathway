@@ -100,7 +100,11 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "../ProviderAdapterDriver.ts";
-import { makeSubagentChildThread, subagentThreadTitle } from "../SubagentProjection.ts";
+import {
+  makeSubagentChildThread,
+  subagentChildModelSelection,
+  subagentThreadTitle,
+} from "../SubagentProjection.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DRIVER_KIND = OPENCODE_PROVIDER;
@@ -1116,10 +1120,10 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
               nativeThreadId: childSessionId,
             });
             subagentsByChildSessionId.set(childSessionId, context);
-            const childModelSelection: ModelSelection = {
-              instanceId: options.instanceId,
-              model: context.model ?? turn.modelSelection.model,
-            };
+            const childModelSelection: ModelSelection = subagentChildModelSelection({
+              parentSelection: turn.modelSelection,
+              reportedModel: context.model,
+            });
             const childThread = makeSubagentChildThread({
               parentThread: turn.appThread,
               childThreadId: context.childThreadId,
@@ -1209,6 +1213,13 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 : status.item === "pending"
                   ? "pending"
                   : "running";
+          // OpenCode reports the subagent's model but never its options: this
+          // repeats the selection the child thread was stamped with above, so
+          // the task record and the child thread always agree.
+          const childSelection = subagentChildModelSelection({
+            parentSelection: turn.modelSelection,
+            reportedModel: context.model,
+          });
           const subagent: OrchestrationV2Subagent = {
             id: nodeId,
             threadId: turn.threadId,
@@ -1224,6 +1235,7 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
             prompt,
             title,
             model: context.model,
+            ...(childSelection.options === undefined ? {} : { options: childSelection.options }),
             status: subagentStatus,
             result: context.result,
             startedAt: context.startedAt,

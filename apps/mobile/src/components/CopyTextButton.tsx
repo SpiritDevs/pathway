@@ -2,12 +2,14 @@ import { SymbolView } from "../components/AppSymbol";
 import { memo, useEffect, useRef, useState } from "react";
 import { Pressable, type ColorValue } from "react-native";
 
+import { AppText as Text } from "./AppText";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 
 const COPY_FEEDBACK_DURATION_MS = 1200;
 
 export const CopyTextButton = memo(function CopyTextButton(props: {
   readonly accessibilityLabel: string;
+  readonly label?: string;
   readonly text: string;
   readonly tintColor: ColorValue;
   readonly copiedTintColor?: ColorValue;
@@ -46,10 +48,13 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
         }, COPY_FEEDBACK_DURATION_MS);
       }}
       style={({ pressed }) => ({
-        width: props.buttonSize ?? 30,
+        width: props.label ? undefined : (props.buttonSize ?? 30),
         height: props.buttonSize ?? 30,
+        flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
+        gap: props.label ? 6 : 0,
+        paddingHorizontal: props.label ? 10 : 0,
         borderRadius: 9,
         borderWidth: props.borderColor ? 1 : 0,
         borderColor: props.borderColor,
@@ -67,6 +72,11 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
         tintColor={copied ? (props.copiedTintColor ?? props.tintColor) : props.tintColor}
         type="monochrome"
       />
+      {props.label ? (
+        <Text className="font-t3-medium text-2xs" style={{ color: props.tintColor }}>
+          {copied ? "Copied" : props.label}
+        </Text>
+      ) : null}
     </Pressable>
   );
 });

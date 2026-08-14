@@ -1,4 +1,4 @@
-import { IssueId, IssueStatusId, type Issue } from "@t3tools/contracts";
+import { IssueId, IssueStatusId, ThreadId, type Issue } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -28,13 +28,13 @@ const issue: Issue = {
   deletedAt: null,
 };
 
-function renderRow(investigating: boolean) {
+function renderRow(investigating: boolean, rowIssue: Issue = issue) {
   return renderToStaticMarkup(
     <IssueListRow
       active={false}
       childRollup={null}
       investigating={investigating}
-      issue={issue}
+      issue={rowIssue}
       labels={[]}
       labelsById={new Map()}
       onOpen={() => {}}
@@ -63,5 +63,25 @@ describe("IssueListRow investigation badge", () => {
 
   it("omits the badge when there is no active investigation", () => {
     expect(renderRow(false)).not.toContain("Investigating");
+  });
+
+  it("links the pull request from the trailing row metadata", () => {
+    const html = renderRow(false, {
+      ...issue,
+      pullRequest: {
+        threadId: ThreadId.make("thread-1"),
+        provider: "github",
+        number: 42,
+        title: "Show PRs on issues",
+        url: "https://github.com/t3dotgg/pathway/pull/42",
+        state: "open",
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    });
+
+    expect(html).toContain("PR #42");
+    expect(html).toContain('href="https://github.com/t3dotgg/pathway/pull/42"');
+    expect(html.indexOf("PR #42")).toBeGreaterThan(html.indexOf(issue.title));
   });
 });

@@ -25,6 +25,7 @@ __screenshots__/
 squashfs-root/
 .vercel
 .gstack/
+.claude/worktrees/
 dist-electron/
 .electron-runtime/
 .showcase/

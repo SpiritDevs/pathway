@@ -344,6 +344,12 @@ function describeFieldChange(event: IssueEvent, naming: IssueEventNaming): strin
       if (after !== null) return `added the relation ${quote(after)}`;
       return before === null ? "changed the relations" : `removed the relation ${quote(before)}`;
     }
+    case "pullRequest":
+      return after === null
+        ? "cleared the linked pull request"
+        : before === null
+          ? `linked pull request ${after}`
+          : `replaced pull request ${before} with ${after}`;
     case "triage":
       return after === "yes" ? "moved this into triage" : "accepted this out of triage";
     case "labels": {

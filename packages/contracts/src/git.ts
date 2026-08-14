@@ -112,6 +112,8 @@ export type VcsPullInput = typeof VcsPullInput.Type;
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
+  /** Present when the action belongs to a thread, so a created PR can be attached to its issues. */
+  threadId: Schema.optional(ThreadId),
   action: GitStackedAction,
   commitMessage: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
   featureBranch: Schema.optional(Schema.Boolean),
