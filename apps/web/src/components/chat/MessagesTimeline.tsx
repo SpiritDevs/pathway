@@ -115,7 +115,12 @@ import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { V2ItemInspector } from "./V2ItemInspector";
-import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";
+import {
+  isV2LifecycleItem,
+  V2LifecycleRow,
+  type HandoffTimelineRun,
+  type SubagentTimelineModel,
+} from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import {
@@ -151,6 +156,8 @@ interface TimelineRowSharedState {
   providerStatuses: ReadonlyArray<ServerProvider>;
   /** Projection runs, for recovering handoff models on legacy items. */
   runs: ReadonlyArray<HandoffTimelineRun>;
+  /** Projection subagents, for labelling subagent cards with their model. */
+  subagents: ReadonlyArray<SubagentTimelineModel>;
   activeThreadEnvironmentId: EnvironmentId;
   editableUserMessageId: MessageId | null;
   editingUserMessageId: MessageId | null;
@@ -199,6 +206,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 } as const;
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const EMPTY_TIMELINE_SUBAGENTS: ReadonlyArray<SubagentTimelineModel> = [];
 const NOOP_OPEN_FILE_PREVIEW = (_relativePath: string, _line?: number) => undefined;
 const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 
@@ -248,6 +256,7 @@ interface MessagesTimelineProps {
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses?: ReadonlyArray<ServerProvider>;
   runs?: ReadonlyArray<HandoffTimelineRun>;
+  subagents?: ReadonlyArray<SubagentTimelineModel>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -304,6 +313,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   skills = EMPTY_TIMELINE_SKILLS,
   providerStatuses = EMPTY_TIMELINE_PROVIDERS,
   runs: runsProp = EMPTY_TIMELINE_RUNS,
+  subagents: subagentsProp = EMPTY_TIMELINE_SUBAGENTS,
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
@@ -502,6 +512,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
+  const subagents = useStableSubagentModels(subagentsProp);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
@@ -617,6 +628,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       providerStatuses,
       runs,
+      subagents,
       activeThreadEnvironmentId,
       editableUserMessageId,
       editingUserMessageId,
@@ -647,6 +659,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       providerStatuses,
       runs,
+      subagents,
       activeThreadEnvironmentId,
       editableUserMessageId,
       editingUserMessageId,
@@ -1688,6 +1701,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         timestampFormat={ctx.timestampFormat}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
+        subagents={ctx.subagents}
         onOpenThread={ctx.onOpenThread}
       />
     );
@@ -2560,6 +2574,30 @@ function useStableHandoffRuns(
     prev.current = { signature, value };
     return value;
   }, [runs]);
+}
+
+/** Content-stable projection of the subagent models the subagent cards read.
+ *  The projection's subagent records churn on every progress/result chunk, but
+ *  a subagent's model is fixed at creation — so this reference only changes
+ *  when a subagent appears, keeping TimelineRowCtx stable mid-run. */
+function useStableSubagentModels(
+  subagents: ReadonlyArray<SubagentTimelineModel>,
+): ReadonlyArray<SubagentTimelineModel> {
+  const prev = useRef<{
+    signature: string;
+    value: ReadonlyArray<SubagentTimelineModel>;
+  }>({ signature: "", value: EMPTY_TIMELINE_SUBAGENTS });
+  return useMemo(() => {
+    const signature = subagents
+      .map((subagent) => `${subagent.id}\0${subagent.model ?? ""}`)
+      .join("\n");
+    if (signature === prev.current.signature) {
+      return prev.current.value;
+    }
+    const value = subagents.map((subagent) => ({ id: subagent.id, model: subagent.model }));
+    prev.current = { signature, value };
+    return value;
+  }, [subagents]);
 }
 
 /** Returns a structurally-shared copy of `rows`: for each row whose content

@@ -1027,7 +1027,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-v2-item-type="thread_created"');
     expect(markup).toContain('aria-label="Open Claude research thread"');
     expect(markup).toContain("Claude research thread");
-    expect(markup).toContain("claude-default · claude-sonnet-4-6");
+    expect(markup).toContain("claude-sonnet-4-6");
+    expect(markup).not.toContain("claude-default · claude-sonnet-4-6");
     expect(markup).not.toContain("Work Log");
   });
 
@@ -1083,6 +1084,132 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Inspect the package");
     expect(markup).not.toContain('data-v2-subagent-result-disclosure="true"');
     expect(markup).not.toContain("Work Log");
+  });
+
+  it("labels subagent cards with the target provider icon and model", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const providerStatuses = [
+      {
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: {},
+        checkedAt: MESSAGE_CREATED_AT,
+        models: [
+          {
+            slug: "claude-fable-5",
+            name: "Claude Fable 5",
+            shortName: "Fable 5",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      },
+    ] as never;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        providerStatuses={providerStatuses}
+        subagents={[{ id: "node-subagent-1", model: "claude-fable-5" }] as never}
+        timelineEntries={[
+          {
+            id: "subagent-model",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "subagent-model",
+              item: {
+                id: "subagent-model",
+                threadId: "thread-1",
+                runId: "run-1",
+                nodeId: "node-subagent-1",
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Package audit",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "subagent",
+                subagentId: "node-subagent-1",
+                origin: "app_owned",
+                driver: "claudeAgent",
+                providerInstanceId: "claudeAgent",
+                childThreadId: "thread-subagent-1",
+                prompt: "Inspect the package",
+                progress: "Reading src/index.ts",
+                result: null,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Fable 5");
+    // The Claude brand mark, from the instance the subagent runs on.
+    expect(markup).toContain("fill-[#d97757]");
+  });
+
+  it("falls back to the instance name when a subagent has no recorded model", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "subagent-no-model",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "subagent-no-model",
+              item: {
+                id: "subagent-no-model",
+                threadId: "thread-1",
+                runId: "run-1",
+                nodeId: "node-subagent-1",
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Package audit",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "subagent",
+                subagentId: "node-subagent-1",
+                origin: "provider_native",
+                driver: "claudeAgent",
+                providerInstanceId: "claude_personal",
+                childThreadId: "thread-subagent-1",
+                prompt: "Inspect the package",
+                progress: "Reading src/index.ts",
+                result: null,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-v2-item-type="subagent"');
+    expect(markup).toContain("claude_personal");
   });
 
   it("discloses the full Codex subagent result without projecting child events", async () => {
