@@ -148,11 +148,12 @@ import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
 import { IssueDetailProperties } from "./IssueDetailProperties";
 import { IssueDetailTabs, type IssueDetailTab } from "./IssueDetailTabs";
 import { IssueEnrichmentPanel } from "./IssueEnrichmentPanel";
+import { IssueImageViewer } from "./IssueImageViewer";
 import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
-import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { issueAttachmentIds, isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -572,6 +573,8 @@ function IssueDetailBody({
   const [showRelations, setShowRelations] = useState(false);
   const [relationOpenRequest, setRelationOpenRequest] = useState(0);
   const [investigationRequested, setInvestigationRequested] = useState(false);
+  /** The image the in-app viewer is opened on; `null` keeps it closed. */
+  const [viewedAttachmentId, setViewedAttachmentId] = useState<ChatAttachmentId | null>(null);
 
   /**
    * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
@@ -870,6 +873,8 @@ function IssueDetailBody({
       workspaceMode: IssueStartWorkWorkspaceMode,
       baseBranch: string | null,
       purpose: "start-work" | "talk" = "start-work",
+      /** Narrows the draft to one image — the viewer starts a thread about a single attachment. */
+      imageUrls: ReadonlyArray<string> | null = null,
     ) => {
       if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
         throw new Error("The issue thread could not be prepared.");
@@ -912,7 +917,7 @@ function IssueDetailBody({
           ? buildIssueTalkPrompt(promptContext)
           : buildIssueStartWorkPrompt(promptContext);
       const files: File[] = [];
-      for (const [index, url] of startWorkAttachmentUrls.entries()) {
+      for (const [index, url] of (imageUrls ?? startWorkAttachmentUrls).entries()) {
         if (url === null) throw new Error("The issue images are still loading. Try again.");
         if (isIssueVideoAttachmentUrl(url)) continue;
         const response = await fetch(url);
@@ -1136,44 +1141,65 @@ function IssueDetailBody({
     [prepareIssueThreadDraft, startingWork],
   );
 
-  /** Opens a current-checkout draft so the user's first message can steer the discussion. */
-  const handleTalkAboutIssue = useCallback(() => {
-    if (startingWork) return;
-    setStartingWork(true);
-    void (async () => {
-      try {
-        const prepared = await prepareIssueThreadDraft("current_checkout", null, "talk");
-        if (prepared === null) return;
-        const draftStore = useComposerDraftStore.getState();
-        draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
-        draftStore.addImages(
-          prepared.opened.draftId,
-          prepared.files.map(
-            (file) =>
-              ({
-                type: "image",
-                id: randomUUID(),
-                name: file.name,
-                mimeType: file.type,
-                sizeBytes: file.size,
-                previewUrl: URL.createObjectURL(file),
-                file,
-              }) satisfies ComposerImageAttachment,
-          ),
-        );
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to create issue discussion",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      } finally {
-        setStartingWork(false);
-      }
-    })();
-  }, [prepareIssueThreadDraft, startingWork]);
+  /**
+   * Opens a current-checkout draft so the user's first message can steer the discussion.
+   * `imageUrls` narrows the attached images; `null` carries every image on the issue.
+   */
+  const openIssueDiscussionDraft = useCallback(
+    (imageUrls: ReadonlyArray<string> | null) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(
+            "current_checkout",
+            null,
+            "talk",
+            imageUrls,
+          );
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create issue discussion",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
+  );
+
+  const handleTalkAboutIssue = useCallback(
+    () => openIssueDiscussionDraft(null),
+    [openIssueDiscussionDraft],
+  );
+
+  const handleStartThreadWithImage = useCallback(
+    (src: string) => openIssueDiscussionDraft([src]),
+    [openIssueDiscussionDraft],
+  );
 
   useEffect(() => {
     if (
@@ -1230,6 +1256,19 @@ function IssueDetailBody({
   }, [store]);
   const todos = detail?.todos ?? EMPTY_TODOS;
   const comments = detail?.comments ?? EMPTY_COMMENTS;
+  // The viewer spans every image on the issue, so the shelf and a comment's images open the
+  // same gallery and the arrows keep working across both.
+  const galleryAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
+  const talkAboutIssueBlockReason =
+    project?.workspaceRoot == null
+      ? "Assign this issue to a project with a connected workspace before starting a discussion."
+      : storeStatus === "disconnected"
+        ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+        : !startWorkAttachmentsReady
+          ? "Issue images are still loading."
+          : startingWork
+            ? "Another issue thread is being prepared."
+            : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1297,6 +1336,7 @@ function IssueDetailBody({
                 comments={comments}
                 drafts={attachmentDrafts}
                 onCreateComment={handleCreateComment}
+                onOpenImage={setViewedAttachmentId}
               />
 
               <IssueDetailTabs
@@ -1392,6 +1432,7 @@ function IssueDetailBody({
                     modelOptionsByInstance={startWorkModelOptionsByInstance}
                     onCancelAgentRun={handleCancelCommentAgentRun}
                     onCreate={handleCreateComment}
+                    onOpenImage={setViewedAttachmentId}
                     onRetryAgentRun={handleRetryCommentAgentRun}
                     onDelete={(commentId: IssueCommentId) =>
                       runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
@@ -1536,22 +1577,23 @@ function IssueDetailBody({
                 onAddSubIssue={handleAddSubIssue}
                 onAddTodo={handleAddTodo}
                 onTalkAboutIssue={handleTalkAboutIssue}
-                talkAboutIssueBlockReason={
-                  project?.workspaceRoot == null
-                    ? "Assign this issue to a project with a connected workspace before starting a discussion."
-                    : storeStatus === "disconnected"
-                      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
-                      : !startWorkAttachmentsReady
-                        ? "Issue images are still loading."
-                        : startingWork
-                          ? "Another issue thread is being prepared."
-                          : null
-                }
+                talkAboutIssueBlockReason={talkAboutIssueBlockReason}
               />
             </aside>
           </div>
         </ScrollArea>
       </div>
+      {viewedAttachmentId === null || primaryEnvironmentId === null ? null : (
+        <IssueImageViewer
+          attachmentIds={galleryAttachmentIds}
+          environmentId={primaryEnvironmentId}
+          onClose={() => setViewedAttachmentId(null)}
+          onComment={(body, attachmentId) => handleCreateComment(body, [attachmentId])}
+          onStartThread={handleStartThreadWithImage}
+          selectedAttachmentId={viewedAttachmentId}
+          startThreadDisabled={talkAboutIssueBlockReason !== null}
+        />
+      )}
     </div>
   );
 }

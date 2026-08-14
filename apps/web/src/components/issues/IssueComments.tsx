@@ -151,9 +151,11 @@ function CommentAgentRun({
 function CommentAttachments({
   environmentId,
   attachmentIds,
+  onOpenImage,
 }: {
   environmentId: EnvironmentId;
-  attachmentIds: ReadonlyArray<string>;
+  attachmentIds: ReadonlyArray<ChatAttachmentId>;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
 }) {
   const resources = useMemo(
     () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
@@ -177,12 +179,19 @@ function CommentAttachments({
             src={url}
           />
         ) : (
-          <img
-            alt="Comment attachment"
-            className="max-h-40 rounded-lg border border-border/60"
+          <button
+            aria-label="Open comment attachment"
+            className="cursor-zoom-in rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
             key={attachmentId}
-            src={url}
-          />
+            onClick={() => onOpenImage(attachmentId)}
+            type="button"
+          >
+            <img
+              alt="Comment attachment"
+              className="max-h-40 rounded-lg border border-border/60 transition-opacity hover:opacity-80"
+              src={url}
+            />
+          </button>
         );
       })}
     </div>
@@ -195,6 +204,7 @@ function CommentRow({
   onEdit,
   onDelete,
   onCancelAgentRun,
+  onOpenImage,
   onRetryAgentRun,
 }: {
   comment: IssueComment;
@@ -202,6 +212,7 @@ function CommentRow({
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
   onCancelAgentRun: (commentId: IssueCommentId) => void;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
   onRetryAgentRun: (commentId: IssueCommentId) => void;
 }) {
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
@@ -310,6 +321,7 @@ function CommentRow({
               <CommentAttachments
                 attachmentIds={comment.attachmentIds}
                 environmentId={environmentId}
+                onOpenImage={onOpenImage}
               />
             )}
             {comment.agentRun == null ? null : (
@@ -334,6 +346,7 @@ export function IssueComments({
   onEdit,
   onDelete,
   onCancelAgentRun,
+  onOpenImage,
   onRetryAgentRun,
   instanceEntries = EMPTY_INSTANCE_ENTRIES,
   modelOptionsByInstance = EMPTY_MODEL_OPTIONS,
@@ -352,6 +365,8 @@ export function IssueComments({
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
   onCancelAgentRun: (commentId: IssueCommentId) => void;
+  /** Opens the shared image viewer on a comment's image instead of a browser tab. */
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
   onRetryAgentRun: (commentId: IssueCommentId) => void;
   /** Every configured instance, not just the assignee's: a mention may name anybody. */
   instanceEntries?: ReadonlyArray<ProviderInstanceEntry>;
@@ -460,6 +475,7 @@ export function IssueComments({
               onCancelAgentRun={onCancelAgentRun}
               onDelete={onDelete}
               onEdit={onEdit}
+              onOpenImage={onOpenImage}
               onRetryAgentRun={onRetryAgentRun}
             />
           ))}

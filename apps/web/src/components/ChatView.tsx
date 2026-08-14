@@ -271,7 +271,7 @@ import {
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
-import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
+import { ImageLightbox } from "./media/ImageLightbox";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ContinuationDialog, type ContinuationWorkspaceTarget } from "./chat/ContinuationDialog";
@@ -7759,9 +7759,10 @@ function ChatViewContent(props: ChatViewProps) {
         </RightPanelSheet>
       ) : null}
       {expandedImage && (
-        <ExpandedImageDialog
+        <ImageLightbox
           key={`${expandedImage.images[expandedImage.index]?.src ?? "image"}:${expandedImage.index}`}
-          preview={expandedImage}
+          images={expandedImage.images}
+          initialIndex={expandedImage.index}
           onClose={closeExpandedImage}
         />
       )}
