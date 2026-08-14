@@ -1428,11 +1428,50 @@ it.effect("fences one thread without touching another thread in the same environ
   ),
 );
 
+it.effect("does not publish activity when preview status reports an existing tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const records: PreviewActivityRecord[] = [];
+      const { broker } = yield* makeBrokerWithFence.pipe(
+        Effect.provideService(PreviewAutomationActivitySink, {
+          record: (record) =>
+            Effect.sync(() => {
+              records.push(record);
+            }),
+        }),
+      );
+      const existingTabId = PreviewTabId.make("tab-existing");
+      const requests = requestsFrom(yield* broker.connect(makeHost()));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: { tabId: existingTabId },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const result = yield* broker.invoke<{ readonly tabId: PreviewTabId }>({
+        scope,
+        operation: "status",
+        input: {},
+      });
+      yield* Effect.yieldNow;
+
+      expect(result.tabId).toBe(existingTabId);
+      expect(records).toEqual([]);
+    }),
+  ),
+);
+
 // The broker cannot see the run behind an invoke, and provider session, host,
-// and pinned tab all survive across runs on a thread. Suppressing repeats here
-// would mute the takeover marker for every run after the first, so every
-// routed invoke publishes and the decider does the run-aware deduping.
-it.effect("publishes preview activity for every automation request it routes", () =>
+// and pinned tab all survive across runs on a thread. Suppressing repeat browser
+// operations here would mute the takeover marker for every run after the first,
+// so the decider does the run-aware deduping. Status is different: it is only a
+// capability probe and must not make unrelated Pathway MCP work offer takeover.
+it.effect("publishes activity for browser use but not preview status probes", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const records: PreviewActivityRecord[] = [];
@@ -1459,34 +1498,25 @@ it.effect("publishes preview activity for every automation request it routes", (
 
       yield* broker.invoke({ scope, operation: "status", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toEqual([
-        {
-          environmentId: scope.environmentId,
-          threadId: scope.threadId,
-          providerSessionId: scope.providerSessionId,
-          tabId: null,
-          hostClientId: "client-1",
-        },
-      ]);
+      expect(records).toEqual([]);
 
-      // Same host, same (absent) tab, same provider session: still published.
+      // Repeating the capability probe is still not browser activity.
       yield* broker.invoke({ scope, operation: "status", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(2);
-      expect(records.at(-1)).toMatchObject({ tabId: null, hostClientId: "client-1" });
+      expect(records).toEqual([]);
 
       // Opening a tab publishes on the way out and again once the response
       // moves the thread onto the tab it just opened.
       yield* broker.invoke({ scope, operation: "open", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(4);
+      expect(records).toHaveLength(2);
       expect(records.at(-2)).toMatchObject({ tabId: null });
       expect(records.at(-1)).toMatchObject({ tabId: openedTabId, hostClientId: "client-1" });
 
       // A later request inherits the pinned tab, so one record, not a correction.
       yield* broker.invoke({ scope, operation: "snapshot", input: {} });
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(5);
+      expect(records).toHaveLength(3);
       expect(records.at(-1)).toMatchObject({ tabId: openedTabId, hostClientId: "client-1" });
 
       // Fenced automation never ran, so it leaves no trace.
@@ -1500,7 +1530,7 @@ it.effect("publishes preview activity for every automation request it routes", (
         .pipe(Effect.flip);
       expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
       yield* Effect.yieldNow;
-      expect(records).toHaveLength(5);
+      expect(records).toHaveLength(3);
     }),
   ),
 );
