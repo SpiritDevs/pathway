@@ -2,7 +2,7 @@ import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
-import { cn } from "../../lib/utils";
+import { cn, isMacPlatform } from "../../lib/utils";
 import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -73,10 +73,14 @@ function WorkspaceHistoryControls() {
 }
 
 export function WorkspaceTopBar() {
+  const isMacDesktop =
+    isElectron && typeof navigator !== "undefined" && isMacPlatform(navigator.platform);
+
   return (
     <header
       className={cn(
-        "hidden min-h-11 shrink-0 items-center justify-between bg-sidebar pl-2 pr-4 md:flex",
+        "hidden min-h-11 shrink-0 items-center justify-between bg-sidebar pr-4 md:flex",
+        isMacDesktop ? "pl-8" : "pl-2",
         isElectron && "drag-region",
       )}
       aria-label="Workspace top bar"
