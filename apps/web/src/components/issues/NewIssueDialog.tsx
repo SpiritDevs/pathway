@@ -324,7 +324,11 @@ export function NewIssueDialog({
   // left behind. "More" opens expanded when something arrived in it — a sub-issue create, a
   // milestone-filtered list — so the field that is already set is visible.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setIsMaximized(false);
+      setCanResize(true);
+      return;
+    }
     setTitle("");
     setDescription("");
     setStatusId(defaultStatusId);
