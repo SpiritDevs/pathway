@@ -139,7 +139,6 @@ import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { IssueActivityFeed } from "./IssueActivityFeed";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { IssueActionPanel } from "./IssueActionPanel";
@@ -155,7 +154,9 @@ import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
+import { IssueInvestigateProjectMenu } from "./IssueInvestigateProjectMenu";
 import { issueAttachmentIds } from "./issueCommentAttachments";
+import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -184,7 +185,6 @@ import {
   issueApplyPriorityPatch,
   issueApplyTitlePatch,
   issueInvestigateBlock,
-  type IssueInvestigateBlock,
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
@@ -820,17 +820,47 @@ function IssueDetailBody({
     hasRunInFlight: investigating,
   });
 
-  const handleInvestigate = useCallback(() => {
-    setActiveTab("investigation");
-    setInvestigationRequested(true);
-    void (async () => {
-      const failed = reportFailure(
-        "Failed to start the investigation",
-        await startEnrichment({ issueId: issue.id }),
-      );
-      if (failed) setInvestigationRequested(false);
-    })();
-  }, [issue.id, startEnrichment]);
+  const investigationProjects = useMemo(
+    () =>
+      projects.filter(
+        (candidate) =>
+          candidate.environmentId === primaryEnvironmentId && candidate.workspaceRoot != null,
+      ),
+    [primaryEnvironmentId, projects],
+  );
+  const investigateMenuBlock =
+    investigationProjects.length === 0
+      ? "Connect a workspace to a project before investigating."
+      : investigateBlock === "no-project" || investigateBlock === "rootless-project"
+        ? null
+        : investigateBlock === null
+          ? null
+          : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock];
+
+  const handleInvestigate = useCallback(
+    (projectId: ProjectId) => {
+      setActiveTab("investigation");
+      setInvestigationRequested(true);
+      void (async () => {
+        if (issue.projectId !== projectId) {
+          const assignmentFailed = reportFailure(
+            "Failed to assign the issue to the project",
+            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          );
+          if (assignmentFailed) {
+            setInvestigationRequested(false);
+            return;
+          }
+        }
+        const failed = reportFailure(
+          "Failed to start the investigation",
+          await startEnrichment({ issueId: issue.id }),
+        );
+        if (failed) setInvestigationRequested(false);
+      })();
+    },
+    [issue.id, issue.projectId, startEnrichment, updateIssue],
+  );
 
   const handleAddTodo = useCallback(() => {
     setActiveTab("details");
@@ -1314,6 +1344,10 @@ function IssueDetailBody({
   }, [store]);
   const todos = detail?.todos ?? EMPTY_TODOS;
   const comments = detail?.comments ?? EMPTY_COMMENTS;
+  const discussionComments = useMemo(
+    () => comments.filter((comment) => !isNewIssueAttachmentRecord(comment)),
+    [comments],
+  );
   // The viewer spans every image on the issue, so the shelf and a comment's images open the
   // same gallery and the arrows keep working across both.
   const galleryAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
@@ -1361,10 +1395,15 @@ function IssueDetailBody({
         }
       >
         {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
-          <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
+          <IssueInvestigateProjectMenu
+            currentProjectId={issue.projectId}
+            disabledReason={investigateMenuBlock}
+            onSelect={handleInvestigate}
+            projects={investigationProjects}
+          >
             <WandSparklesIcon />
             Investigate
-          </IssueInvestigateButton>
+          </IssueInvestigateProjectMenu>
         ) : null}
         <IssueDeleteMenu
           count={1}
@@ -1437,7 +1476,7 @@ function IssueDetailBody({
 
               <IssueDetailTabs
                 activityCount={events.length}
-                commentCount={comments.length}
+                commentCount={discussionComments.length}
                 investigating={investigating}
                 investigationCount={enrichmentRuns.length}
                 onChange={setActiveTab}
@@ -1521,7 +1560,7 @@ function IssueDetailBody({
               ) : activeTab === "comments" ? (
                 <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
-                    comments={comments}
+                    comments={discussionComments}
                     instanceEntries={providerInstanceEntries}
                     isPending={detailPending}
                     issueId={issue.id}
@@ -1558,14 +1597,19 @@ function IssueDetailBody({
                         Read-only analysis. Finished runs are also left in Comments.
                       </p>
                     </div>
-                    <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
+                    <IssueInvestigateProjectMenu
+                      currentProjectId={issue.projectId}
+                      disabledReason={investigateMenuBlock}
+                      onSelect={handleInvestigate}
+                      projects={investigationProjects}
+                    >
                       {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
                       {!investigating
                         ? enrichmentRuns.length === 0
                           ? "Investigate"
                           : "Investigate again"
                         : "Investigating"}
-                    </IssueInvestigateButton>
+                    </IssueInvestigateProjectMenu>
                   </div>
                   <IssueEnrichmentPanel
                     error={runsError}
@@ -1691,34 +1735,6 @@ function IssueDetailBody({
         />
       )}
     </div>
-  );
-}
-
-function IssueInvestigateButton({
-  block,
-  children,
-  onClick,
-}: {
-  block: IssueInvestigateBlock | null;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  const disabled = block !== null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span className={cn("inline-flex", disabled && "cursor-not-allowed")} />}
-      >
-        <Button disabled={disabled} onClick={onClick} size="xs" variant="outline">
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipPopup>
-        {disabled
-          ? ISSUE_INVESTIGATE_BLOCK_REASONS[block]
-          : "Run a read-only investigation of this issue's repository."}
-      </TooltipPopup>
-    </Tooltip>
   );
 }
 

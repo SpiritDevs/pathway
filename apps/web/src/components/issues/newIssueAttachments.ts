@@ -11,11 +11,14 @@ import {
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   ISSUE_COMMENT_ATTACHMENT_MAX_DATA_URL_CHARS,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
+  type IssueComment,
 } from "@t3tools/contracts";
 
 export interface NewIssueAttachmentCandidate {
   readonly type: string;
 }
+
+const NEW_ISSUE_ATTACHMENT_RECORD_PREFIX = "<!-- pathway:new-issue-attachments -->\n";
 
 export interface NewIssueAttachmentIntakeResult<F> {
   readonly accepted: ReadonlyArray<F>;
@@ -81,9 +84,25 @@ export function newIssueAttachmentDataUrlRejection(input: {
     : null;
 }
 
-/** The visible comment that owns images added before the issue had an id. */
+/** The metadata comment that owns images added before the issue had an id. */
 export function newIssueAttachmentComment(count: number): string {
-  return count === 1
-    ? "Attached an image when creating this issue."
-    : `Attached ${count} images when creating this issue.`;
+  const description =
+    count === 1
+      ? "Attached an image when creating this issue."
+      : `Attached ${count} images when creating this issue.`;
+  return `${NEW_ISSUE_ATTACHMENT_RECORD_PREFIX}${description}`;
+}
+
+/**
+ * Creation-time images need a comment row to keep their attachment ids durable, but that row is
+ * attachment metadata rather than part of the discussion. The reserved marker distinguishes it
+ * from an ordinary comment that happens to use the same visible words and attachment count.
+ */
+export function isNewIssueAttachmentRecord(
+  comment: Pick<IssueComment, "attachmentIds" | "body">,
+): boolean {
+  return (
+    comment.attachmentIds.length > 0 &&
+    comment.body === newIssueAttachmentComment(comment.attachmentIds.length)
+  );
 }

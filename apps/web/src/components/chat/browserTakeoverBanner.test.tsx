@@ -245,6 +245,9 @@ describe("resolveBrowserTakeoverBanner", () => {
     });
     expect(idle?.tone).toBe("callout");
     expect(idle?.title).toBe("Take over to assist agent");
+    expect(idle?.description).toBe(
+      "Pause the agent and drive its Preview browser yourself, then hand it back.",
+    );
     expect(idle?.actions.map((action) => action.kind)).toEqual(["take-over"]);
     expect(idle?.actions[0]?.busy).toBe(false);
     expect(idle?.dismissKey).not.toBeNull();
