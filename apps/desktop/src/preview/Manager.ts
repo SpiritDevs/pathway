@@ -8,6 +8,7 @@
 import type {
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
+  DesktopPreviewOpenInNewTabEvent,
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
   PreviewAnnotationRect,
@@ -382,6 +383,7 @@ interface BrowserDiagnostics {
 }
 
 type PointerEventListener = (event: DesktopPreviewPointerEvent) => Effect.Effect<void>;
+type OpenInNewTabListener = (event: DesktopPreviewOpenInNewTabEvent) => Effect.Effect<void>;
 
 const APP_FORWARDED_SHORTCUTS: ReadonlyArray<{
   key: string;
@@ -436,6 +438,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
+  const openInNewTabListenersRef = yield* Ref.make<ReadonlySet<OpenInNewTabListener>>(new Set());
   const recordingFrameListenersRef = yield* Ref.make<ReadonlySet<RecordingFrameListener>>(
     new Set(),
   );
@@ -547,7 +550,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const deliverEvent = (
-    eventKind: "state-change" | "recording-frame" | "pointer-event",
+    eventKind: "state-change" | "recording-frame" | "pointer-event" | "open-in-new-tab",
     tabId: string,
     delivery: () => Effect.Effect<void>,
   ) =>
@@ -1159,6 +1162,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return { kind: "Success", url, title };
   };
 
+  const emitOpenInNewTab = Effect.fn("PreviewManager.emitOpenInNewTab")(function* (
+    event: DesktopPreviewOpenInNewTabEvent,
+  ) {
+    const listeners = yield* Ref.get(openInNewTabListenersRef);
+    yield* Effect.forEach(
+      listeners,
+      (listener) => deliverEvent("open-in-new-tab", event.tabId, () => listener(event)),
+      { discard: true },
+    );
+  });
+
   const attachListeners = Effect.fn("PreviewManager.attachListeners")(function* (
     tabId: string,
     wc: Electron.WebContents,
@@ -1287,11 +1301,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
         wc.setWindowOpenHandler(({ url }) => {
-          runFork(
-            attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
-              wc.loadURL(url),
-            ).pipe(Effect.ignore),
-          );
+          // A popup with no destination (`window.open("")`) has nothing we can
+          // route into a tab; deny it outright.
+          if (url !== "" && url !== "about:blank") {
+            runFork(emitOpenInNewTab({ tabId, url }).pipe(Effect.ignore));
+          }
           return { action: "deny" };
         });
         wc.on("before-input-event", beforeInput);
@@ -3174,6 +3188,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       [
         Ref.set(listenersRef, new Set()),
         Ref.set(pointerEventListenersRef, new Set()),
+        Ref.set(openInNewTabListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
       ],
       { discard: true },
@@ -3217,6 +3232,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     stopRecording,
     subscribePointerEvents: (listener: PointerEventListener) =>
       subscribe(pointerEventListenersRef, listener),
+    subscribeOpenInNewTab: (listener: OpenInNewTabListener) =>
+      subscribe(openInNewTabListenersRef, listener),
     subscribeRecordingFrames: (listener: RecordingFrameListener) =>
       subscribe(recordingFrameListenersRef, listener),
     subscribeStateChanges: (listener: Listener) => subscribe(listenersRef, listener),
@@ -3562,6 +3579,9 @@ export class PreviewManager extends Context.Service<
     readonly subscribePointerEvents: (
       listener: PointerEventListener,
     ) => Effect.Effect<void, never, Scope.Scope>;
+    readonly subscribeOpenInNewTab: (
+      listener: OpenInNewTabListener,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribeRecordingFrames: (
       listener: RecordingFrameListener,
     ) => Effect.Effect<void, never, Scope.Scope>;
@@ -3648,6 +3668,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     automationWaitFor: operations.automationWaitFor,
     subscribeStateChanges: operations.subscribeStateChanges,
     subscribePointerEvents: operations.subscribePointerEvents,
+    subscribeOpenInNewTab: operations.subscribeOpenInNewTab,
     subscribeRecordingFrames: operations.subscribeRecordingFrames,
   });
 }).pipe(Effect.withSpan("PreviewManager.make"));

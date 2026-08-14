@@ -376,6 +376,60 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("routes guest popup requests to open-in-new-tab events", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const setWindowOpenHandler = vi.fn();
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler,
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand: vi.fn(async () => undefined),
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+        const events: Array<{ tabId: string; url: string }> = [];
+        yield* manager.subscribeOpenInNewTab((event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        );
+
+        yield* manager.createTab("tab_popup");
+        yield* manager.registerWebview("tab_popup", 42);
+
+        const handler = setWindowOpenHandler.mock.calls[0]?.[0] as (details: { url: string }) => {
+          action: string;
+        };
+        expect(handler).toBeTypeOf("function");
+
+        expect(handler({ url: "https://example.com/documents/1" })).toEqual({ action: "deny" });
+        yield* Effect.yieldNow;
+        expect(events).toEqual([{ tabId: "tab_popup", url: "https://example.com/documents/1" }]);
+
+        expect(handler({ url: "about:blank" })).toEqual({ action: "deny" });
+        expect(handler({ url: "" })).toEqual({ action: "deny" });
+        yield* Effect.yieldNow;
+        expect(events).toHaveLength(1);
+      }),
+    ),
+  );
+
   effectIt.effect("mirrors Electron's effective zoom across registration and navigation", () =>
     withManager((manager) =>
       Effect.gen(function* () {

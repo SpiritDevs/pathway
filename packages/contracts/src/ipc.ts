@@ -593,6 +593,23 @@ export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointe
   });
 
 /**
+ * A guest page asked for a new window (`window.open` / `target="_blank"`).
+ * The desktop denies the native popup and forwards the request so the
+ * renderer can open the URL as a sibling browser tab.
+ */
+export interface DesktopPreviewOpenInNewTabEvent {
+  /** The tab whose guest page requested the popup. */
+  tabId: string;
+  url: string;
+}
+
+export const DesktopPreviewOpenInNewTabEventSchema: Schema.Codec<DesktopPreviewOpenInNewTabEvent> =
+  Schema.Struct({
+    tabId: DesktopPreviewTabIdSchema,
+    url: Schema.String,
+  });
+
+/**
  * Static config a renderer needs to mount a preview `<webview>`. Returned
  * atomically by `DesktopPreviewBridge.getPreviewConfig()` so the renderer
  * doesn't have to wait on three separate IPC round-trips before the webview
@@ -1152,6 +1169,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onOpenInNewTab: (listener: (event: DesktopPreviewOpenInNewTabEvent) => void) => () => void;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";

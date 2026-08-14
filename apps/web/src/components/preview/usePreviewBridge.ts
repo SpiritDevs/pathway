@@ -9,6 +9,8 @@ import type {
 import { useEffect, useRef } from "react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
+import { openUrlInPreview } from "~/browser/openFileInPreview";
+import { recordVisitForThread } from "~/browserHistoryStore";
 import { applyPreviewDesktopState, type DesktopPreviewOverlay } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -63,6 +65,19 @@ export function usePreviewBridge(input: {
     });
     return unsubscribe;
   }, [bridge, clearBrowserPointer, reportStatus, runtimeTabId, tabId, threadRef]);
+
+  // Popups the guest page requested (window.open / target="_blank"). The
+  // desktop denies the native window and forwards the URL; open it as a new
+  // sibling tab, matching what a regular browser would do.
+  const openPreview = useAtomCommand(previewEnvironment.open, "preview popup new tab");
+  useEffect(() => {
+    if (!bridge || typeof window === "undefined") return;
+    return bridge.onOpenInNewTab((event) => {
+      if (event.tabId !== runtimeTabId) return;
+      recordVisitForThread(threadRef, event.url);
+      void openUrlInPreview({ threadRef, url: event.url, openPreview });
+    });
+  }, [bridge, openPreview, runtimeTabId, threadRef]);
 }
 
 function shouldClearBrowserPointer(
