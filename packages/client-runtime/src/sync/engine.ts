@@ -35,7 +35,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import type { SyncDomainAdapter } from "./adapter.ts";
+import { decodeSyncOperation, type SyncDomainAdapter } from "./adapter.ts";
 import { whenCloudSyncEnabled } from "./capability.ts";
 import {
   SYNC_DOCUMENT_SCHEMA_VERSION,
@@ -664,7 +664,7 @@ function decodeRejections<Entity, Operation>(input: {
 }): ReadonlyArray<RejectedSyncOperation<Operation>> {
   const decoded: Array<RejectedSyncOperation<Operation>> = [];
   for (const rejection of input.rejections) {
-    const operation = input.adapter.operationCodec.decode(rejection.envelope.args);
+    const operation = decodeSyncOperation(input.adapter, rejection.envelope);
     if (Option.isNone(operation)) continue;
     decoded.push({
       operation: toSyncOperation(rejection.envelope, operation.value),

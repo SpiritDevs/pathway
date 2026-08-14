@@ -25,6 +25,13 @@ import { domainIdArg } from "./lib/validators.ts";
 
 const companySummary = v.object({
   id: domainIdArg,
+  /**
+   * The caller's own membership in this company. A client cannot derive it — it holds a Clerk
+   * identity, not a membership — and it is what a client-authored operation carries as its
+   * `actor`, so a summary without it cannot start a sync engine. Attribution only: Convex still
+   * re-derives the authoritative actor from the token on every write.
+   */
+  membershipId: domainIdArg,
   name: v.string(),
   issueKeyPrefix: v.string(),
   lifecycleState: v.union(v.literal("active"), v.literal("deletionScheduled"), v.literal("purged")),
@@ -61,6 +68,7 @@ export const listMine = query({
         .unique();
       summaries.push({
         id: company.id,
+        membershipId: membership.id,
         name: company.name,
         issueKeyPrefix: company.issueKeyPrefix,
         lifecycleState: company.lifecycleState,

@@ -38,6 +38,7 @@
     "@tanstack/react-pacer": "^0.19.4",
     "@tanstack/react-router": "^1.160.2",
     "class-variance-authority": "^0.7.1",
+    "convex": "^1.16.0",
     "culori": "^4.0.2",
     "effect": "catalog:",
     "jose": "catalog:",

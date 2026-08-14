@@ -18,6 +18,10 @@ describe("connectCliAuth", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", TEST_PUBLISHABLE_KEY);
     vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "pathway-relay");
     vi.stubEnv("VITE_PATHWAY_RELAY_URL", "https://relay.example.com");
+    // Stubbed explicitly rather than assumed absent: Vite exposes every VITE_*
+    // key from the developer's repo `.env` on import.meta.env, so a machine that
+    // has a real CLI OAuth client id configured would otherwise skip this branch.
+    vi.stubEnv("VITE_CLERK_CLI_OAUTH_CLIENT_ID", undefined);
     expect(hasConnectCliAuthConfig()).toBe(false);
 
     vi.stubEnv("VITE_CLERK_CLI_OAUTH_CLIENT_ID", "oauthapp_123");
@@ -48,6 +52,7 @@ describe("connectCliAuth", () => {
 
   it("returns null when the CLI OAuth client id is not configured", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", TEST_PUBLISHABLE_KEY);
+    vi.stubEnv("VITE_CLERK_CLI_OAUTH_CLIENT_ID", undefined);
     expect(
       buildConnectCliClerkAuthorizeUrl({ state: "state-1", challenge: "challenge-1" }),
     ).toBeNull();

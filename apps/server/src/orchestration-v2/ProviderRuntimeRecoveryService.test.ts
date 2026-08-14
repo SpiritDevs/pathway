@@ -559,6 +559,9 @@ it.effect(
         "provider-turn.restart",
         "provider-thread.rollback-and-start",
         "runtime-request.respond",
+        "browser-takeover.establish",
+        "browser-takeover.proceed",
+        "browser-takeover.release",
       ]);
       const events = committedInput?.events ?? [];
       assert.deepEqual(

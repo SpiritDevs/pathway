@@ -765,7 +765,10 @@ it.effect(
         assert.isDefined(token);
         const resolved = yield* registry.resolve(token!);
         assert.equal(resolved?.threadId, threadId);
-        assert.deepEqual(resolved?.capabilities, new Set(["preview", "orchestration", "worktree"]));
+        assert.deepEqual(
+          resolved?.capabilities,
+          new Set(["preview", "orchestration", "worktree", "email"]),
+        );
 
         yield* manager.close(providerSessionId);
         assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));

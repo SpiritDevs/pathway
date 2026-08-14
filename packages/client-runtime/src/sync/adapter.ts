@@ -11,9 +11,11 @@
  */
 import type {
   SyncEntityKind,
+  SyncOperationEnvelope,
   SyncOperationId,
   SyncOperationKind,
 } from "@spiritdevs/contracts/cloudSync";
+import * as Option from "effect/Option";
 
 import type { SyncCodec } from "./codec.ts";
 import type { SyncEntityKey } from "./model.ts";
@@ -49,6 +51,16 @@ export interface SyncDomainAdapter<Entity, Operation> {
   readonly entityCodec: (entityKind: SyncEntityKind) => SyncCodec<Entity> | null;
   readonly operationCodec: SyncCodec<Operation>;
   /**
+   * Recovers a whole operation from a stored or returned envelope.
+   *
+   * `operationCodec.decode` only ever sees `envelope.args`, and a domain whose operation identity
+   * lives in `envelope.kind` cannot recover it from arguments alone — the issue domain's ten
+   * entity-only verbs all encode to `{}`, as does every patch that happens to touch no field.
+   * Supplying this is how such a domain keeps a pending delete readable across a restart instead
+   * of quarantining it. Absent, the engine falls back to the arguments codec.
+   */
+  readonly decodeOperation?: (envelope: SyncOperationEnvelope) => Option.Option<Operation>;
+  /**
    * Protocol kind stamped on the envelope. Convex dispatches on it, so the domain — not the engine
    * — decides which of the contract's operation kinds an operation is.
    */
@@ -75,4 +87,17 @@ export interface SyncDomainAdapter<Entity, Operation> {
     readonly current: Entity | null;
     readonly incoming: Entity;
   }) => Entity;
+}
+
+/**
+ * The one way the engine turns a stored envelope back into an operation: the domain's own
+ * {@link SyncDomainAdapter.decodeOperation} when it has one, its arguments codec otherwise.
+ */
+export function decodeSyncOperation<Entity, Operation>(
+  adapter: SyncDomainAdapter<Entity, Operation>,
+  envelope: SyncOperationEnvelope,
+): Option.Option<Operation> {
+  return adapter.decodeOperation === undefined
+    ? adapter.operationCodec.decode(envelope.args)
+    : adapter.decodeOperation(envelope);
 }

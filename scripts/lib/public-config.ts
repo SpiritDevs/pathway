@@ -9,6 +9,10 @@ export interface PathwayPublicConfig {
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
   readonly relayUrl: string | undefined;
+  /** Opt-in flag for cloud sync; absent means off, which is every deployment until it is set. */
+  readonly cloudSync: string | undefined;
+  /** Convex deployment the cloud-sync engine talks to; only read when {@link cloudSync} is on. */
+  readonly convexUrl: string | undefined;
   readonly mobileOtlpTracesUrl: string | undefined;
   readonly mobileOtlpTracesDataset: string | undefined;
   readonly mobileOtlpTracesToken: string | undefined;
@@ -62,6 +66,18 @@ export function loadRepoEnv({
       ? {
           PATHWAY_RELAY_URL: config.relayUrl,
           VITE_PATHWAY_RELAY_URL: config.relayUrl,
+        }
+      : {}),
+    ...(config.cloudSync
+      ? {
+          PATHWAY_CLOUD_SYNC: config.cloudSync,
+          VITE_PATHWAY_CLOUD_SYNC: config.cloudSync,
+        }
+      : {}),
+    ...(config.convexUrl
+      ? {
+          PATHWAY_CONVEX_URL: config.convexUrl,
+          VITE_PATHWAY_CONVEX_URL: config.convexUrl,
         }
       : {}),
     ...(config.mobileOtlpTracesUrl
@@ -123,6 +139,8 @@ export function resolvePublicConfig(...sources: readonly Environment[]): Pathway
       "VITE_CLERK_CLI_OAUTH_CLIENT_ID",
     ),
     relayUrl: firstNonEmpty(sources, "PATHWAY_RELAY_URL", "VITE_PATHWAY_RELAY_URL"),
+    cloudSync: firstNonEmpty(sources, "PATHWAY_CLOUD_SYNC", "VITE_PATHWAY_CLOUD_SYNC"),
+    convexUrl: firstNonEmpty(sources, "PATHWAY_CONVEX_URL", "VITE_PATHWAY_CONVEX_URL"),
     mobileOtlpTracesUrl: firstNonEmpty(
       sources,
       "PATHWAY_MOBILE_OTLP_TRACES_URL",

@@ -46,6 +46,7 @@ export default mergeConfig(
       define: {
         __PATHWAY_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __PATHWAY_BUILD_RELAY_URL__: JSON.stringify(repoEnv.PATHWAY_RELAY_URL?.trim() ?? ""),
+        __PATHWAY_BUILD_CONVEX_URL__: JSON.stringify(repoEnv.PATHWAY_CONVEX_URL?.trim() ?? ""),
         __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.PATHWAY_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
         ),

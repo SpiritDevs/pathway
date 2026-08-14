@@ -29,33 +29,23 @@ import * as NodePath from "node:path";
 
 import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
 import {
-  RELAY_CONVEX_KEY_BINDING_TYP,
-  RelayAccessTokenType,
   RelayConvexAudience,
   RelayConvexServiceTokenResponse,
-  RelayDpopTokenExchangeGrantType,
-  RelayEnvironmentCredentialTokenType,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
   RelayOkResponse,
-  type RelayConvexKeyBindingPayload,
   type RelayEnvironmentLinkProofPayload,
 } from "@spiritdevs/contracts/relay";
-import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@spiritdevs/shared/dpop";
-import { normalizeDpopHtu } from "@spiritdevs/shared/dpopCommon";
 import {
-  decodeRelayJwt,
   normalizeRelayIssuer,
   RELAY_LINK_PROOF_TYP,
   signRelayJwt,
 } from "@spiritdevs/shared/relayJwt";
 import { ConvexHttpClient } from "convex/browser";
-import { ConvexError } from "convex/values";
 import { api } from "@spiritdevs/backend/convexApi";
 import { SMOKE_ENVIRONMENT_ID_PREFIX } from "@spiritdevs/backend/smokeSeed";
 import { SYNC_PROTOCOL_VERSION } from "@spiritdevs/contracts/cloudSync";
 import * as Cause from "effect/Cause";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -63,6 +53,35 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as CliTokenManager from "./CliTokenManager.ts";
+import {
+  checkConvexServiceTokenClaims,
+  convexErrorCode,
+  convexTokenExchangeUrl,
+  exchangeConvexServiceToken,
+  generateDpopKeyPair,
+  nowEpochSeconds,
+  relayAuthErrorReason,
+  verifyServiceTokenSignature,
+  type DpopKeyPair,
+} from "./convexServiceToken.ts";
+
+/**
+ * The signed-artifact and token-inspection primitives now live in `./convexServiceToken.ts`, which
+ * the running server's sync transport shares with this harness so the two cannot drift. They are
+ * re-exported here because the harness's documented surface — and the CI tests that check its
+ * artifacts against the relay's own verifiers — is this module.
+ */
+export {
+  buildKeyBindingPayload,
+  checkConvexServiceTokenClaims,
+  convexErrorCode,
+  generateDpopKeyPair,
+  relayAuthErrorReason,
+  serviceTokenExpiryEpochSeconds,
+  signDpopProof,
+  verifyServiceTokenSignature,
+  type DpopKeyPair,
+} from "./convexServiceToken.ts";
 
 // --------------------------------------------------------------------------
 // Errors
@@ -243,27 +262,6 @@ export function generateEnvironmentLinkKeyPair(): EnvironmentLinkKeyPair {
   return { privateKey: keyPair.privateKey, publicKey: keyPair.publicKey };
 }
 
-export interface DpopKeyPair {
-  readonly privateKey: NodeCrypto.KeyObject;
-  readonly publicJwk: DpopPublicJwk;
-  /** RFC 7638 thumbprint of the public JWK. */
-  readonly thumbprint: string;
-}
-
-export function generateDpopKeyPair(): DpopKeyPair {
-  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", {
-    namedCurve: "P-256",
-  });
-  const exported = publicKey.export({ format: "jwk" });
-  const publicJwk: DpopPublicJwk = {
-    kty: "EC",
-    crv: "P-256",
-    x: String(exported.x),
-    y: String(exported.y),
-  };
-  return { privateKey, publicJwk, thumbprint: computeDpopJwkThumbprint(publicJwk) };
-}
-
 /**
  * The exact payload `EnvironmentLinker.link` verifies: `iss`/`sub`/`environmentId`
  * agree, `descriptor.environmentId` matches, `aud` is the normalized relay
@@ -293,243 +291,6 @@ export function buildLinkProofPayload(input: {
     origin: SMOKE_LINK_ORIGIN,
     scopes: [],
   } satisfies RelayEnvironmentLinkProofPayload;
-}
-
-/**
- * The environment-signed assertion that ties a DPoP proof key to the linked
- * environment. The relay verifies it with the stored link public key and
- * requires `sub === environmentId`.
- */
-export function buildKeyBindingPayload(input: {
-  readonly environmentId: EnvironmentId;
-  readonly relayIssuer: string;
-  readonly jkt: string;
-  readonly jti: string;
-  readonly nowEpochSeconds: number;
-}): RelayConvexKeyBindingPayload {
-  return {
-    iss: `t3-env:${input.environmentId}`,
-    aud: normalizeRelayIssuer(input.relayIssuer),
-    sub: input.environmentId,
-    jti: input.jti,
-    iat: input.nowEpochSeconds,
-    exp: input.nowEpochSeconds + 300,
-    environmentId: input.environmentId,
-    jkt: input.jkt,
-  } satisfies RelayConvexKeyBindingPayload;
-}
-
-/**
- * Compact ES256 DPoP proof in the exact shape `verifyDpopProof` accepts:
- * `typ: dpop+jwt` header carrying the public JWK, `htm`/`htu`/`jti`/`iat`
- * payload, ieee-p1363 signature over `header.payload`.
- */
-export function signDpopProof(input: {
-  readonly privateKey: NodeCrypto.KeyObject;
-  readonly publicJwk: DpopPublicJwk;
-  readonly method: string;
-  readonly url: string;
-  readonly jti: string;
-  readonly iatEpochSeconds: number;
-}): string {
-  const header = Buffer.from(
-    JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk: input.publicJwk }),
-  ).toString("base64url");
-  const payload = Buffer.from(
-    JSON.stringify({
-      htm: input.method,
-      htu: input.url,
-      jti: input.jti,
-      iat: input.iatEpochSeconds,
-    }),
-  ).toString("base64url");
-  const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
-    key: input.privateKey,
-    dsaEncoding: "ieee-p1363",
-  }).toString("base64url");
-  return `${header}.${payload}.${signature}`;
-}
-
-/** Decodes the JOSE header of a compact JWT, or `null` when it is not one. */
-function decodeJwtHeaderSegment(token: string): Record<string, unknown> | null {
-  const segment = token.split(".")[0] ?? "";
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
-    return typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Tolerance for clock disagreement between this machine and the relay. */
-const TOKEN_CLOCK_SKEW_SECONDS = 60;
-
-/**
- * Checks the header and claims of a minted service token: the shape Convex
- * authorizes on (`aud`/`sub`/`environmentId`/`cnf.jkt`), the issuer, and that
- * the header/lifetime are what the relay's ES256 signing path produces. Returns
- * `null` when everything holds, otherwise a description of the first mismatch.
- *
- * Purely structural — signature verification against the relay's live JWKS is
- * {@link verifyServiceTokenSignature}, kept separate so this stays unit
- * testable without a network.
- */
-export function checkConvexServiceTokenClaims(input: {
-  readonly token: string;
-  readonly environmentId: EnvironmentId;
-  readonly expectedJkt: string;
-  /** The relay base URL the token was requested from. */
-  readonly expectedIssuer: string;
-  /** `expires_in` from the exchange response; bounds the token's lifetime. */
-  readonly expiresInSeconds: number;
-  readonly nowEpochSeconds: number;
-}): string | null {
-  const header = decodeJwtHeaderSegment(input.token);
-  if (header === null) {
-    return "service token header is not decodable JOSE JSON";
-  }
-  if (header["alg"] !== "ES256") {
-    return `header alg is ${JSON.stringify(header["alg"])}, expected "ES256"`;
-  }
-  if (typeof header["kid"] !== "string" || header["kid"].length === 0) {
-    return "header has no kid — Convex cannot select the relay's JWKS key without one";
-  }
-  let claims: Record<string, unknown>;
-  try {
-    claims = decodeRelayJwt(input.token) as Record<string, unknown>;
-  } catch (error) {
-    return `service token is not a decodable JWT: ${String(error)}`;
-  }
-  const expectedIssuer = normalizeRelayIssuer(input.expectedIssuer);
-  if (claims["iss"] !== expectedIssuer) {
-    return `iss is ${JSON.stringify(claims["iss"])}, expected "${expectedIssuer}"`;
-  }
-  if (claims["aud"] !== RelayConvexAudience) {
-    return `aud is ${JSON.stringify(claims["aud"])}, expected "${RelayConvexAudience}"`;
-  }
-  if (claims["sub"] !== input.environmentId) {
-    return `sub is ${JSON.stringify(claims["sub"])}, expected "${input.environmentId}"`;
-  }
-  if (claims["environmentId"] !== input.environmentId) {
-    return `environmentId is ${JSON.stringify(claims["environmentId"])}, expected "${input.environmentId}"`;
-  }
-  if (typeof claims["jti"] !== "string" || claims["jti"].length === 0) {
-    return `jti is ${JSON.stringify(claims["jti"])}, expected a non-empty string`;
-  }
-  const iat = claims["iat"];
-  const exp = claims["exp"];
-  if (typeof iat !== "number" || typeof exp !== "number") {
-    return `iat/exp are ${JSON.stringify(iat)}/${JSON.stringify(exp)}, expected numbers`;
-  }
-  if (exp <= iat) {
-    return `exp ${exp} is not after iat ${iat}`;
-  }
-  if (exp - iat > input.expiresInSeconds + TOKEN_CLOCK_SKEW_SECONDS) {
-    return `token lifetime is ${exp - iat}s, expected at most expires_in ${input.expiresInSeconds}s (+${TOKEN_CLOCK_SKEW_SECONDS}s skew)`;
-  }
-  if (iat > input.nowEpochSeconds + TOKEN_CLOCK_SKEW_SECONDS) {
-    return `iat ${iat} is in the future (now ${input.nowEpochSeconds})`;
-  }
-  if (exp < input.nowEpochSeconds - TOKEN_CLOCK_SKEW_SECONDS) {
-    return `token already expired at ${exp} (now ${input.nowEpochSeconds})`;
-  }
-  const cnf = claims["cnf"];
-  const jkt =
-    typeof cnf === "object" && cnf !== null ? (cnf as Record<string, unknown>)["jkt"] : undefined;
-  if (jkt !== input.expectedJkt) {
-    return `cnf.jkt is ${JSON.stringify(jkt)}, expected the DPoP key thumbprint "${input.expectedJkt}"`;
-  }
-  return null;
-}
-
-/**
- * Verifies the token's ES256 signature against a JWKS document (as served at
- * the relay's `/.well-known/jwks.json`). Returns `null` when the signature
- * verifies with the key the header's `kid` names, otherwise a description of
- * what failed. Pure given the JWKS — the live run fetches the document over
- * the injected HttpClient and hands it in.
- */
-export function verifyServiceTokenSignature(input: {
-  readonly token: string;
-  readonly jwks: unknown;
-}): string | null {
-  const segments = input.token.split(".");
-  if (segments.length !== 3) {
-    return "service token is not a three-segment compact JWT";
-  }
-  const header = decodeJwtHeaderSegment(input.token);
-  if (header === null) {
-    return "service token header is not decodable JOSE JSON";
-  }
-  const kid = header["kid"];
-  if (typeof kid !== "string" || kid.length === 0) {
-    return "service token header has no kid to select a JWKS key with";
-  }
-  const keys =
-    typeof input.jwks === "object" && input.jwks !== null
-      ? (input.jwks as Record<string, unknown>)["keys"]
-      : undefined;
-  if (!Array.isArray(keys)) {
-    return "relay JWKS document has no keys array";
-  }
-  const jwk = keys.find(
-    (key: unknown) =>
-      typeof key === "object" && key !== null && (key as Record<string, unknown>)["kid"] === kid,
-  );
-  if (jwk === undefined) {
-    return `relay JWKS serves no key with kid "${kid}" (${keys.length} key(s) present)`;
-  }
-  let publicKey: NodeCrypto.KeyObject;
-  try {
-    publicKey = NodeCrypto.createPublicKey({ key: jwk as NodeCrypto.JsonWebKey, format: "jwk" });
-  } catch (error) {
-    return `relay JWKS key "${kid}" is not importable: ${String(error)}`;
-  }
-  const valid = NodeCrypto.verify(
-    "sha256",
-    Buffer.from(`${segments[0]}.${segments[1]}`),
-    { key: publicKey, dsaEncoding: "ieee-p1363" },
-    Buffer.from(segments[2] ?? "", "base64url"),
-  );
-  return valid ? null : `service token signature does not verify against JWKS key "${kid}"`;
-}
-
-/**
- * The `reason` of a relay `auth_invalid` error body, or `null` when the body is
- * not one. The negative cases assert the exact reason so a refusal for the
- * wrong cause (say, a concurrently invalidated credential) cannot pass as the
- * refusal under test.
- */
-export function relayAuthErrorReason(body: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
-  if (record["code"] !== "auth_invalid") {
-    return null;
-  }
-  return typeof record["reason"] === "string" ? record["reason"] : null;
-}
-
-/** Extracts the backend error `code` from a thrown Convex `ConvexError`, if that is what `error` is. */
-export function convexErrorCode(error: unknown): string | null {
-  if (!(error instanceof ConvexError)) {
-    return null;
-  }
-  const data: unknown = error.data;
-  if (typeof data !== "object" || data === null) {
-    return null;
-  }
-  const code = (data as Record<string, unknown>)["code"];
-  return typeof code === "string" ? code : null;
 }
 
 // --------------------------------------------------------------------------
@@ -941,10 +702,6 @@ export function manualCleanupInstructions(
 // The smoke program
 // --------------------------------------------------------------------------
 
-const nowEpochSeconds = Clock.currentTimeMillis.pipe(
-  Effect.map((millis) => Math.floor(millis / 1_000)),
-);
-
 const convexCall = <A>(run: () => Promise<A>): Effect.Effect<A, ConvexSyncSmokeConvexCallError> =>
   Effect.tryPromise({ try: run, catch: (cause) => new ConvexSyncSmokeConvexCallError({ cause }) });
 
@@ -961,8 +718,7 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
   const httpClient = yield* HttpClient.HttpClient;
   const tokens = yield* CliTokenManager.CloudCliTokenManager;
   const relayBaseUrl = normalizeRelayIssuer(config.relayBaseUrl);
-  const exchangeUrl = `${relayBaseUrl}/v1/environment/convex-token`;
-  const exchangeHtu = normalizeDpopHtu(exchangeUrl) ?? exchangeUrl;
+  const exchangeUrl = convexTokenExchangeUrl(relayBaseUrl);
 
   const steps: Array<ConvexSyncSmokeStepResult> = [];
   // Attempt flags flip BEFORE the corresponding mutating request goes out: a
@@ -1021,7 +777,9 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
 
   /**
    * Raw token exchange: the negative cases need the un-filtered response to
-   * assert the exact status code, so this returns status + body text.
+   * assert the exact status code, so this returns status + body text. The
+   * request itself is the shared {@link exchangeConvexServiceToken} the running
+   * server uses, so a harness pass proves the production path.
    */
   const exchangeConvexTokenRaw = (input: {
     readonly environmentCredential: string;
@@ -1029,42 +787,14 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
     readonly bindingJkt: string;
     readonly dpopKeys: DpopKeyPair;
   }) =>
-    Effect.gen(function* () {
-      const now = yield* nowEpochSeconds;
-      const keyBinding = yield* signRelayJwt({
-        privateKey: input.bindingPrivateKey,
-        typ: RELAY_CONVEX_KEY_BINDING_TYP,
-        payload: buildKeyBindingPayload({
-          environmentId: config.environmentId,
-          relayIssuer: relayBaseUrl,
-          jkt: input.bindingJkt,
-          jti: NodeCrypto.randomUUID(),
-          nowEpochSeconds: now,
-        }),
-      });
-      const dpopProof = signDpopProof({
-        privateKey: input.dpopKeys.privateKey,
-        publicJwk: input.dpopKeys.publicJwk,
-        method: "POST",
-        url: exchangeHtu,
-        jti: NodeCrypto.randomUUID(),
-        iatEpochSeconds: now,
-      });
-      const response = yield* HttpClientRequest.post(exchangeUrl).pipe(
-        HttpClientRequest.setHeader("dpop", dpopProof),
-        HttpClientRequest.bodyUrlParams({
-          grant_type: RelayDpopTokenExchangeGrantType,
-          subject_token: input.environmentCredential,
-          subject_token_type: RelayEnvironmentCredentialTokenType,
-          requested_token_type: RelayAccessTokenType,
-          audience: RelayConvexAudience,
-          key_binding: keyBinding,
-        }),
-        httpClient.execute,
-      );
-      const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
-      return { status: response.status, body };
-    });
+    exchangeConvexServiceToken({
+      environmentId: config.environmentId,
+      relayBaseUrl,
+      environmentCredential: input.environmentCredential,
+      linkPrivateKey: input.bindingPrivateKey,
+      bindingJkt: input.bindingJkt,
+      dpopKeys: input.dpopKeys,
+    }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
 
   /**
    * A negative case must be refused for its OWN reason: the relay maps a bad

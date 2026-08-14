@@ -35,6 +35,9 @@ const configuredRelayUrl = repoEnv.VITE_PATHWAY_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
 const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
 const configuredClerkCliOAuthClientId = repoEnv.VITE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || "";
+// Cloud sync is default-off: an unset flag bakes as "" and the app constructs no Convex client.
+const configuredCloudSyncFlag = repoEnv.VITE_PATHWAY_CLOUD_SYNC?.trim() || "";
+const configuredConvexUrl = repoEnv.VITE_PATHWAY_CONVEX_URL?.trim() || "";
 const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || "";
 const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
@@ -194,6 +197,8 @@ export default defineConfig(() => {
       "import.meta.env.VITE_CLERK_CLI_OAUTH_CLIENT_ID": JSON.stringify(
         configuredClerkCliOAuthClientId,
       ),
+      "import.meta.env.VITE_PATHWAY_CLOUD_SYNC": JSON.stringify(configuredCloudSyncFlag),
+      "import.meta.env.VITE_PATHWAY_CONVEX_URL": JSON.stringify(configuredConvexUrl),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_URL": JSON.stringify(configuredRelayTracingUrl),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_DATASET": JSON.stringify(
         configuredRelayTracingDataset,

@@ -115,6 +115,7 @@ import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -813,6 +814,12 @@ export const makeServerLayer = Layer.unwrap(
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
+      // Default-off. Every gate is read inside the layer (see `cloud/syncDaemon.ts`), so on a
+      // server without `PATHWAY_CLOUD_SYNC=enabled` this contributes one debug log and nothing
+      // else — no replica tables, no Convex client, no forked fiber. It sits here rather than in
+      // the runtime chain because this is where the `SqlClient` behind every repository, the
+      // secret store, the environment, and the HTTP client are all in scope at once.
+      cloudSyncDaemonLayer(),
     );
 
     return serverApplicationLayer.pipe(

@@ -10,6 +10,7 @@ import "./index.css";
 import { isElectron } from "./env";
 import { ManagedRelayAuthProvider } from "./cloud/managedAuth";
 import { hasClerkPublicConfig, hasCloudPublicConfig } from "./cloud/publicConfig";
+import { CloudSyncRuntimeProvider } from "./cloud/syncRuntime";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
@@ -30,8 +31,13 @@ if (isElectron) {
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
 const app = <AppRoot router={router} />;
+// Cloud sync sits inside the relay auth provider because it needs the session that provider
+// publishes; it is a second, stricter gate (`VITE_PATHWAY_CLOUD_SYNC` plus a Convex URL), so with
+// the flag off this mounts nothing but its children.
 const configuredApp = hasCloudPublicConfig() ? (
-  <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
+  <ManagedRelayAuthProvider>
+    <CloudSyncRuntimeProvider>{app}</CloudSyncRuntimeProvider>
+  </ManagedRelayAuthProvider>
 ) : (
   app
 );

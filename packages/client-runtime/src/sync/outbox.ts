@@ -18,7 +18,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import * as Option from "effect/Option";
 
-import type { SyncDomainAdapter } from "./adapter.ts";
+import { decodeSyncOperation, type SyncDomainAdapter } from "./adapter.ts";
 import type {
   StoredOutboxEntry,
   StoredOutboxStatus,
@@ -55,7 +55,7 @@ export function decodeOutbox<Entity, Operation>(input: {
   const entries: Array<OutboxEntry<Operation>> = [];
   const quarantined: Array<StoredSyncQuarantine> = [];
   for (const row of input.rows) {
-    const decoded = input.adapter.operationCodec.decode(row.envelope.args);
+    const decoded = decodeSyncOperation(input.adapter, row.envelope);
     if (Option.isNone(decoded)) {
       quarantined.push({
         envelope: row.envelope,

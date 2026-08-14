@@ -15,6 +15,7 @@ export * from "./capability.ts";
 export * from "./codec.ts";
 export * from "./document.ts";
 export * from "./engine.ts";
+export * from "./issueDomain.ts";
 export * from "./memoryStore.ts";
 export * from "./model.ts";
 export * from "./orderKey.ts";

@@ -120,6 +120,7 @@ const makeIssue = (overrides: Partial<IssueRecord> = {}): IssueRecord => ({
   dueDate: null,
   triage: false,
   slackSource: null,
+  pullRequest: null,
   createdAt: "2026-08-12T00:00:00.000Z",
   updatedAt: "2026-08-12T00:00:00.000Z",
   deletedAt: null,

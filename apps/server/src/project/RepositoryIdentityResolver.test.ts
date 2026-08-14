@@ -43,7 +43,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       });
 
       yield* git(cwd, ["init"]);
-      yield* git(cwd, ["remote", "add", "origin", "git@github.com:T3Tools/pathway.git"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:CoreyBain/pathway.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const identity = yield* resolver.resolve(cwd);
@@ -56,7 +56,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(normalizeResolvedPath(resolvedIdentityRoot)).toBe(normalizeResolvedPath(resolvedCwd));
       expect(identity?.displayName).toBe("coreybain/pathway");
       expect(identity?.provider).toBe("github");
-      expect(identity?.owner).toBe("spiritdevs");
+      expect(identity?.owner).toBe("coreybain");
       expect(identity?.name).toBe("pathway");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
@@ -72,7 +72,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
 
       yield* fileSystem.makeDirectory(nestedWorkspace, { recursive: true });
       yield* git(repoRoot, ["init"]);
-      yield* git(repoRoot, ["remote", "add", "origin", "git@github.com:T3Tools/pathway.git"]);
+      yield* git(repoRoot, ["remote", "add", "origin", "git@github.com:CoreyBain/pathway.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const identity = yield* resolver.resolve(nestedWorkspace);
@@ -118,7 +118,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
 
       yield* git(cwd, ["init"]);
       yield* git(cwd, ["remote", "add", "origin", "git@github.com:julius/pathway.git"]);
-      yield* git(cwd, ["remote", "add", "upstream", "git@github.com:T3Tools/pathway.git"]);
+      yield* git(cwd, ["remote", "add", "upstream", "git@github.com:CoreyBain/pathway.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const identity = yield* resolver.resolve(cwd);
@@ -138,15 +138,15 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       });
 
       yield* git(cwd, ["init"]);
-      yield* git(cwd, ["remote", "add", "origin", "git@gitlab.com:T3Tools/platform/pathway.git"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@gitlab.com:CoreyBain/platform/pathway.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const identity = yield* resolver.resolve(cwd);
 
       expect(identity).not.toBeNull();
-      expect(identity?.canonicalKey).toBe("gitlab.com/spiritdevs/platform/pathway");
-      expect(identity?.displayName).toBe("spiritdevs/platform/pathway");
-      expect(identity?.owner).toBe("spiritdevs");
+      expect(identity?.canonicalKey).toBe("gitlab.com/coreybain/platform/pathway");
+      expect(identity?.displayName).toBe("coreybain/platform/pathway");
+      expect(identity?.owner).toBe("coreybain");
       expect(identity?.name).toBe("pathway");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
@@ -166,7 +166,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
         const initialIdentity = yield* resolver.resolve(cwd);
         expect(initialIdentity).toBeNull();
 
-        yield* git(cwd, ["remote", "add", "origin", "git@github.com:T3Tools/pathway.git"]);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:CoreyBain/pathway.git"]);
 
         for (const _attempt of [1, 2, 3]) {
           const cachedIdentity = yield* resolver.resolve(cwd);
@@ -200,14 +200,14 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       });
 
       yield* git(cwd, ["init"]);
-      yield* git(cwd, ["remote", "add", "origin", "git@github.com:T3Tools/pathway.git"]);
+      yield* git(cwd, ["remote", "add", "origin", "git@github.com:CoreyBain/pathway.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const initialIdentity = yield* resolver.resolve(cwd);
       expect(initialIdentity).not.toBeNull();
       expect(initialIdentity?.canonicalKey).toBe("github.com/coreybain/pathway");
 
-      yield* git(cwd, ["remote", "set-url", "origin", "git@github.com:T3Tools/pathway-next.git"]);
+      yield* git(cwd, ["remote", "set-url", "origin", "git@github.com:CoreyBain/pathway-next.git"]);
 
       const cachedIdentity = yield* resolver.resolve(cwd);
       expect(cachedIdentity).not.toBeNull();
