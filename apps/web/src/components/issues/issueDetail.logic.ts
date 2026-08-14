@@ -75,6 +75,36 @@ export function resolveIssueDetailState(input: {
   return input.settled ? "not-found" : "loading";
 }
 
+/** The visits made inside one open issue sheet. External selections start a fresh stack. */
+export interface IssueSheetHistory {
+  readonly entries: ReadonlyArray<string>;
+  readonly index: number;
+}
+
+export function issueSheetHistory(issueKey: string | null): IssueSheetHistory {
+  return issueKey === null ? { entries: [], index: -1 } : { entries: [issueKey], index: 0 };
+}
+
+/** A new in-sheet visit behaves like a browser push: anything ahead of it is discarded. */
+export function pushIssueSheetHistory(
+  history: IssueSheetHistory,
+  issueKey: string,
+): IssueSheetHistory {
+  if (history.entries[history.index] === issueKey) return history;
+  return {
+    entries: [...history.entries.slice(0, history.index + 1), issueKey],
+    index: history.index + 1,
+  };
+}
+
+export function moveIssueSheetHistory(
+  history: IssueSheetHistory,
+  offset: -1 | 1,
+): IssueSheetHistory {
+  const index = history.index + offset;
+  return index < 0 || index >= history.entries.length ? history : { ...history, index };
+}
+
 // ── Assignee ───────────────────────────────────────────────────────────
 
 /** The empty option's value; a `<MenuRadioGroup>` cannot carry null. */

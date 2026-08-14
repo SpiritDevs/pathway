@@ -74,7 +74,8 @@ The sheet holds the description, the properties rail, todos, sub-issues, relatio
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with
 who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
 resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
-sheet header to copy it.
+sheet header to copy it. When you follow a sub-issue or relation inside the sheet, use the back and
+forward buttons beside the issue key to move through the issues you visited.
 
 A pull request discovered on a linked work thread also appears in the properties rail with its
 title and current open, closed, or merged state. The first discovery is recorded automatically in

@@ -51,6 +51,7 @@ import {
   issueRelationChoice,
   issueRelationCreateInput,
   issueStatusPatch,
+  issueSheetHistory,
   issueSubtreeHeight,
   issueTitlePatch,
   issueTodoCreateText,
@@ -58,6 +59,8 @@ import {
   issueTodoTextPatch,
   issueTodoTogglePatch,
   nextIssueLabelColor,
+  moveIssueSheetHistory,
+  pushIssueSheetHistory,
   reorderedIssueTodoIds,
   resolveIssueDetailState,
   sameIssueAssignee,
@@ -109,6 +112,33 @@ const PROVIDER_LABELS = new Map([
   ["codex", "Codex"],
   ["claudeAgent", "Claude"],
 ]);
+
+describe("issue sheet history", () => {
+  it("walks backward and forward through in-sheet visits", () => {
+    const visited = pushIssueSheetHistory(
+      pushIssueSheetHistory(issueSheetHistory("PAT-1"), "PAT-2"),
+      "PAT-3",
+    );
+
+    const back = moveIssueSheetHistory(visited, -1);
+    expect(back.entries[back.index]).toBe("PAT-2");
+    const forward = moveIssueSheetHistory(back, 1);
+    expect(forward.entries[forward.index]).toBe("PAT-3");
+  });
+
+  it("discards the forward path after visiting a different issue", () => {
+    const visited = pushIssueSheetHistory(
+      pushIssueSheetHistory(issueSheetHistory("PAT-1"), "PAT-2"),
+      "PAT-3",
+    );
+    const back = moveIssueSheetHistory(visited, -1);
+
+    expect(pushIssueSheetHistory(back, "PAT-4")).toEqual({
+      entries: ["PAT-1", "PAT-2", "PAT-4"],
+      index: 2,
+    });
+  });
+});
 
 describe("resolveIssueDetailState", () => {
   it("is ready whenever the issue resolved, whatever the connection is doing", () => {

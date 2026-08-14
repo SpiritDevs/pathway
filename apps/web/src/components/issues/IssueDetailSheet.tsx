@@ -45,6 +45,8 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   ArrowUpRightIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CopyIcon,
   SearchXIcon,
   Trash2Icon,
@@ -164,11 +166,14 @@ import {
   issueDueDatePatch,
   issueLabelTogglePatch,
   issueMilestonePatch,
+  issueSheetHistory,
   issueParentPatch,
   issuePriorityPatch,
   issueProjectPatch,
   issueStatusPatch,
   issueTitlePatch,
+  moveIssueSheetHistory,
+  pushIssueSheetHistory,
   resolveIssueDetailState,
 } from "./issueDetail.logic";
 import {
@@ -262,6 +267,44 @@ export function IssueDetailSheet({
 
   const storeStatus = useIssuesStoreStatus();
   const issue = useIssue(issueKey);
+  const [history, setHistory] = useState(() => issueSheetHistory(issueKey));
+  const pendingHistoryNavigation = useRef<{
+    readonly from: string | null;
+    readonly to: string;
+  } | null>(null);
+
+  // Route/list navigation is a new sheet context. In-sheet navigation updates the stack before it
+  // changes the key. Keep that update while the route catches up; any other selection resets it.
+  useEffect(() => {
+    const pending = pendingHistoryNavigation.current;
+    if (pending !== null) {
+      if (issueKey === pending.from) return;
+      pendingHistoryNavigation.current = null;
+      if (issueKey === pending.to) return;
+    }
+    if (history.entries[history.index] !== issueKey) setHistory(issueSheetHistory(issueKey));
+  }, [history.entries, history.index, issueKey]);
+
+  const openFromSheet = useCallback(
+    (key: string) => {
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory((current) => pushIssueSheetHistory(current, key));
+      onOpenIssueKey(key);
+    },
+    [issueKey, onOpenIssueKey],
+  );
+  const moveThroughHistory = useCallback(
+    (offset: -1 | 1) => {
+      const next = moveIssueSheetHistory(history, offset);
+      const key = next.entries[next.index];
+      if (next === history || key === undefined) return;
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory(next);
+      onOpenIssueKey(key);
+    },
+    [history, issueKey, onOpenIssueKey],
+  );
+  const historyMatchesIssue = history.entries[history.index] === issueKey;
 
   // The grace period restarts on every key, so walking the list with `j` never trips it.
   const [settled, setSettled] = useState(false);
@@ -309,9 +352,13 @@ export function IssueDetailSheet({
           <IssueDetailBody
             issue={issue}
             key={issue.id}
+            canGoBack={historyMatchesIssue && history.index > 0}
+            canGoForward={historyMatchesIssue && history.index < history.entries.length - 1}
+            onBack={() => moveThroughHistory(-1)}
             onClose={onClose}
             onOpenInIssues={onOpenInIssues}
-            onOpenIssueKey={onOpenIssueKey}
+            onForward={() => moveThroughHistory(1)}
+            onOpenIssueKey={openFromSheet}
             onStartWorkRequestHandled={onStartWorkRequestHandled}
             propertiesMaxWidth={propertiesMaxWidth}
             propertiesSize={propertiesSize}
@@ -327,41 +374,44 @@ export function IssueDetailSheet({
 function SheetHeaderBar({
   title,
   children,
+  titleAccessory,
   onTitleClick,
   titleActionLabel,
   titleActionComplete = false,
 }: {
   title: string;
   children?: ReactNode;
+  titleAccessory?: ReactNode;
   onTitleClick?: () => void;
   titleActionLabel?: string;
   titleActionComplete?: boolean;
 }) {
   return (
     <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
-      {onTitleClick === undefined ? (
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-          {title}
-        </span>
-      ) : (
-        <button
-          aria-label={titleActionLabel}
-          className="group/title flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onTitleClick}
-          title={titleActionLabel}
-          type="button"
-        >
-          <span className="truncate">{title}</span>
-          {titleActionComplete ? (
-            <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-          ) : (
-            <CopyIcon
-              aria-hidden="true"
-              className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
-            />
-          )}
-        </button>
-      )}
+      <div className="flex min-w-0 flex-1 items-center gap-0.5">
+        {onTitleClick === undefined ? (
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{title}</span>
+        ) : (
+          <button
+            aria-label={titleActionLabel}
+            className="group/title flex min-w-0 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onTitleClick}
+            title={titleActionLabel}
+            type="button"
+          >
+            <span className="truncate">{title}</span>
+            {titleActionComplete ? (
+              <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+            ) : (
+              <CopyIcon
+                aria-hidden="true"
+                className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
+              />
+            )}
+          </button>
+        )}
+        {titleAccessory}
+      </div>
       {children}
       <SheetClose
         aria-label="Close issue"
@@ -411,9 +461,13 @@ function IssueDetailPlaceholder({
 
 function IssueDetailBody({
   issue,
+  canGoBack,
+  canGoForward,
+  onBack,
   onClose,
   onOpenInIssues,
   onOpenIssueKey,
+  onForward,
   propertiesMaxWidth,
   propertiesSize,
   startWorkRequestProvider,
@@ -421,9 +475,13 @@ function IssueDetailBody({
   onStartWorkRequestHandled,
 }: {
   issue: Issue;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onBack: () => void;
   onClose: () => void;
   onOpenInIssues: ((key: string) => void) | undefined;
   onOpenIssueKey: (key: string) => void;
+  onForward: () => void;
   propertiesMaxWidth: number;
   propertiesSize: ReturnType<typeof useResizableWidth>;
   startWorkRequestProvider: ProviderDriverKind | null;
@@ -1277,6 +1335,30 @@ function IssueDetailBody({
         title={issue.key}
         titleActionComplete={issueKeyCopied}
         titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
+        titleAccessory={
+          <div className="flex shrink-0 items-center">
+            <Button
+              aria-label="Go to previous issue"
+              disabled={!canGoBack}
+              onClick={onBack}
+              size="icon-xs"
+              title="Previous issue"
+              variant="ghost"
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <Button
+              aria-label="Go to next issue"
+              disabled={!canGoForward}
+              onClick={onForward}
+              size="icon-xs"
+              title="Next issue"
+              variant="ghost"
+            >
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        }
       >
         {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
           <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
