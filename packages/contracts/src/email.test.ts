@@ -124,6 +124,12 @@ describe("CapturedEmailMessage", () => {
     expect(() => decodeCapturedEmailMessage({ ...MESSAGE_JSON, detectedCode: "123" })).toThrow();
   });
 
+  it("accepts a dashed detected code longer than eight characters", () => {
+    expect(
+      decodeCapturedEmailMessage({ ...MESSAGE_JSON, detectedCode: "ABCD-EFGH" }).detectedCode,
+    ).toBe("ABCD-EFGH");
+  });
+
   it.each([
     "auth-username",
     "auth-password",

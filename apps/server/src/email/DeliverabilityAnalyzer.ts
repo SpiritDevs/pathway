@@ -293,7 +293,7 @@ const decodeBasicHtmlEntities = (value: string): string =>
       decodeNumericEntity(digits, 16, entity),
     );
 
-const visibleHtmlText = (html: string): string =>
+export const visibleHtmlText = (html: string): string =>
   decodeBasicHtmlEntities(
     html
       .replace(/<!--[\s\S]*?-->/g, " ")
