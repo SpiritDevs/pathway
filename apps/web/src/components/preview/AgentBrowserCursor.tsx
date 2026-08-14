@@ -7,7 +7,13 @@ import { useEffect, useState } from "react";
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 
-import { agentBrowserCursorOpacity } from "./agentBrowserCursorLogic";
+import {
+  AGENT_CURSOR_GLIDE_MS,
+  agentBrowserCursorGlidePosition,
+  agentBrowserCursorOpacity,
+  agentBrowserCursorSurfaceOffset,
+  type AgentBrowserCursorContent,
+} from "./agentBrowserCursorLogic";
 
 const CURSOR_ACTIVE_MS = 700;
 
@@ -19,54 +25,62 @@ export function AgentBrowserCursor(props: { readonly tabId: string; readonly zoo
   if (!event) return null;
 
   return (
-    <AgentBrowserCursorEvent
-      key={event.sequence}
-      event={event}
-      content={content}
-      zoomFactor={zoomFactor}
-    />
+    <AgentBrowserCursorEvent key={tabId} event={event} content={content} zoomFactor={zoomFactor} />
   );
 }
 
 function AgentBrowserCursorEvent(props: {
   readonly event: DesktopPreviewPointerEvent;
-  readonly content: {
-    readonly x: number;
-    readonly y: number;
-    readonly scale: number;
-    readonly scrollLeft: number;
-    readonly scrollTop: number;
-  } | null;
+  readonly content: AgentBrowserCursorContent | null;
   readonly zoomFactor: number;
 }) {
   const { event, content, zoomFactor } = props;
   const [active, setActive] = useState(true);
 
   useEffect(() => {
+    setActive(true);
     const timeout = window.setTimeout(() => setActive(false), CURSOR_ACTIVE_MS);
     return () => window.clearTimeout(timeout);
-  }, []);
+  }, [event.sequence]);
+
+  const offset = agentBrowserCursorSurfaceOffset(content);
+  const glide = agentBrowserCursorGlidePosition(event, zoomFactor, content);
+  const pressed = active && event.phase === "click";
 
   return (
     <div
-      className="pointer-events-none absolute left-0 top-0 z-40 transition-[transform,opacity] duration-150 ease-out motion-reduce:transition-none"
-      style={{
-        opacity: agentBrowserCursorOpacity(active),
-        transform: `translate3d(${event.x * zoomFactor * (content?.scale ?? 1) + (content?.x ?? 0) - (content?.scrollLeft ?? 0)}px, ${event.y * zoomFactor * (content?.scale ?? 1) + (content?.y ?? 0) - (content?.scrollTop ?? 0)}px, 0)`,
-      }}
+      className="pointer-events-none absolute left-0 top-0 z-40"
+      style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
       aria-hidden="true"
       data-agent-browser-cursor
     >
-      {event.phase === "click" ? (
-        <span
-          key={event.sequence}
-          className="absolute left-0.5 top-0.5 size-4 animate-status-ping rounded-full bg-primary/25 motion-reduce:animate-none"
-        />
-      ) : null}
-      <MousePointer2
-        className="relative size-5 -translate-x-0.5 -translate-y-0.5 fill-background text-primary drop-shadow-sm"
-        strokeWidth={2}
-      />
+      <div
+        className="transition-[transform,opacity] ease-out motion-reduce:transition-none"
+        style={{
+          opacity: agentBrowserCursorOpacity(active),
+          transform: `translate3d(${glide.x}px, ${glide.y}px, 0)`,
+          transitionDuration: `${AGENT_CURSOR_GLIDE_MS}ms`,
+        }}
+      >
+        {event.phase === "click" ? (
+          <span
+            key={event.sequence}
+            className="absolute -left-3 -top-3 size-6 animate-status-ping rounded-full border border-primary/60 bg-primary/25 motion-reduce:animate-none"
+          />
+        ) : null}
+        <span className="absolute -left-2 -top-2 size-8 rounded-full bg-primary/15 blur-sm" />
+        <div
+          className={`relative transition-transform duration-100 ease-out motion-reduce:transition-none ${pressed ? "scale-90" : "scale-100"}`}
+        >
+          <MousePointer2
+            className="size-5 -translate-x-0.5 -translate-y-0.5 fill-primary stroke-background drop-shadow-md"
+            strokeWidth={1.5}
+          />
+          <span className="absolute left-4 top-4 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground shadow-sm">
+            AI
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
