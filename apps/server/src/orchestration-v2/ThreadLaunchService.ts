@@ -249,14 +249,24 @@ export const make = Effect.gen(function* () {
       }
       let startRef = input.workspaceStrategy.baseRef;
       if (input.workspaceStrategy.startFromOrigin === true) {
+        const primaryRemoteName = yield* git
+          .resolvePrimaryRemoteName(projectWorkspaceRoot)
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        const remoteName = yield* git
+          .resolveRemoteNameForRef({
+            cwd: projectWorkspaceRoot,
+            refName: input.workspaceStrategy.baseRef,
+            fallbackRemoteName: primaryRemoteName,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         yield* git
-          .fetchRemote({ cwd: projectWorkspaceRoot, remoteName: "origin" })
+          .fetchRemote({ cwd: projectWorkspaceRoot, remoteName })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         startRef = yield* git
           .resolveRemoteTrackingCommit({
             cwd: projectWorkspaceRoot,
             refName: input.workspaceStrategy.baseRef,
-            fallbackRemoteName: "origin",
+            fallbackRemoteName: remoteName,
           })
           .pipe(
             Effect.map((resolved) => resolved.commitSha),

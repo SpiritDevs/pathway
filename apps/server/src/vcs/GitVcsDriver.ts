@@ -215,6 +215,12 @@ export interface GitResolveRemoteTrackingCommitInput {
   fallbackRemoteName: string;
 }
 
+export interface GitResolveRemoteNameForRefInput {
+  cwd: string;
+  refName: string;
+  fallbackRemoteName: string;
+}
+
 export interface GitResolveRemoteTrackingCommitResult {
   commitSha: string;
   remoteRefName: string;
@@ -294,6 +300,9 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<GitRefreshCheckedOutBranchResult, GitCommandError>;
     readonly ensureRemote: (input: GitEnsureRemoteInput) => Effect.Effect<string, GitCommandError>;
     readonly resolvePrimaryRemoteName: (cwd: string) => Effect.Effect<string, GitCommandError>;
+    readonly resolveRemoteNameForRef: (
+      input: GitResolveRemoteNameForRefInput,
+    ) => Effect.Effect<string, GitCommandError>;
     readonly fetchRemote: (input: GitFetchRemoteInput) => Effect.Effect<void, GitCommandError>;
     readonly remoteExists: (input: GitRemoteExistsInput) => Effect.Effect<boolean, GitCommandError>;
     readonly resolveRemoteTrackingCommit: (

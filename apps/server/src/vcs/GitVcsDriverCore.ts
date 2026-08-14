@@ -2907,6 +2907,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const resolveRemoteNameForRef: GitVcsDriver.GitVcsDriver["Service"]["resolveRemoteNameForRef"] =
+    Effect.fn("resolveRemoteNameForRef")(function* (input) {
+      const remoteNames = yield* listRemoteNames(input.cwd);
+      return (
+        parseRemoteRefWithRemoteNames(
+          input.refName,
+          remoteNames.toSorted((left, right) => right.length - left.length),
+        )?.remoteName ?? input.fallbackRemoteName
+      );
+    });
+
   const resolveRemoteTrackingCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveRemoteTrackingCommit"] =
     Effect.fn("resolveRemoteTrackingCommit")(function* (input) {
       const remoteNames = yield* listRemoteNames(input.cwd);
@@ -3215,6 +3226,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input)),
     ensureRemote: (input) => withListRefsInvalidation(input.cwd, ensureRemote(input)),
     resolvePrimaryRemoteName,
+    resolveRemoteNameForRef,
     fetchRemote: (input) => withListRefsInvalidation(input.cwd, fetchRemote(input)),
     remoteExists,
     resolveRemoteTrackingCommit,

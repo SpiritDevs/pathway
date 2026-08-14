@@ -101,6 +101,7 @@ export function useBranches(target: VcsRefTarget) {
           input: {
             cwd: target.cwd,
             ...(query.length > 0 ? { query } : {}),
+            includeMatchingRemoteRefs: true,
             limit: VCS_REF_LIST_LIMIT,
           },
         })
@@ -132,6 +133,7 @@ export function usePaginatedBranches(target: VcsRefTarget) {
                 cwd: target.cwd!,
                 ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
+                includeMatchingRemoteRefs: true,
                 limit: VCS_REF_LIST_LIMIT,
               },
             }),
