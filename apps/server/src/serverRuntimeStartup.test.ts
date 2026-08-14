@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_MODEL, ProviderInstanceId } from "@t3tools/contracts";
+import { DEFAULT_MODEL, ProviderInstanceId } from "@spiritdevs/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

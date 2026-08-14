@@ -20,7 +20,7 @@ import {
   type IssueLabelId,
   type IssuePatch,
   type IssuePriority,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import { isIssueEnrichmentRunActive } from "~/state/issues";
 

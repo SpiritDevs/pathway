@@ -6,7 +6,7 @@ import {
   GrokSettings,
   OpenCodeSettings,
   ProviderDriverKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import type * as Schema from "effect/Schema";
 import {
   ACPRegistryIcon,

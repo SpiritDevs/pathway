@@ -1,4 +1,4 @@
-import { IssueMilestoneId, ProjectId, type IssueMilestone } from "@t3tools/contracts";
+import { IssueMilestoneId, ProjectId, type IssueMilestone } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { IssueProgress } from "~/state/issues";

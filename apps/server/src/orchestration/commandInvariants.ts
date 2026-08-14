@@ -1,12 +1,12 @@
-import type { MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { MessageId, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import type {
   OrchestrationCommand,
   OrchestrationMessage,
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
-} from "@t3tools/contracts/legacy-orchestration";
-import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+} from "@spiritdevs/contracts/legacy-orchestration";
+import { normalizeProjectPathForComparison } from "@spiritdevs/shared/path";
 import * as Effect from "effect/Effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

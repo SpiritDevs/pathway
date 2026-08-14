@@ -16,7 +16,7 @@ import {
   type EmailMessageId,
   type EmailProjectSettings,
   type EmailRetentionPolicy,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -94,7 +94,7 @@ export interface EmailStoreShape {
 }
 
 export class EmailStore extends Context.Service<EmailStore, EmailStoreShape>()(
-  "t3/email/EmailStore",
+  "@spiritdevs/pathway/email/EmailStore",
 ) {}
 
 interface MessagePayloadRow {

@@ -22,7 +22,7 @@ import type {
   SyncListChangesResponse,
   SyncReserveIssueKeysRequest,
   SyncReserveIssueKeysResponse,
-} from "@t3tools/contracts/cloudSync";
+} from "@spiritdevs/contracts/cloudSync";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -67,4 +67,4 @@ export class SyncTransport extends Context.Service<
       input: SyncReserveIssueKeysRequest,
     ) => Effect.Effect<SyncReserveIssueKeysResponse, SyncTransportError>;
   }
->()("@t3tools/client-runtime/sync/transport/SyncTransport") {}
+>()("@spiritdevs/client-runtime/sync/transport/SyncTransport") {}

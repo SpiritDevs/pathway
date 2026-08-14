@@ -40,7 +40,7 @@ import {
   type IssueId,
   type IssuesStreamEvent,
   type SlackChannelWatch,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";

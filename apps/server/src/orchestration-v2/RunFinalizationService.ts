@@ -4,7 +4,7 @@ import {
   ThreadId,
   type IssuePullRequest,
   type VcsStatusResult,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -37,7 +37,7 @@ export class RunFinalizationObserver extends Context.Reference<{
     threadId: ThreadId,
     cwd: string,
   ) => Effect.Effect<void, RunFinalizationRefreshError>;
-}>("t3/orchestration-v2/RunFinalizationObserver", {
+}>("@spiritdevs/pathway/orchestration-v2/RunFinalizationObserver", {
   defaultValue: () => ({ refresh: () => Effect.void }),
 }) {}
 
@@ -46,7 +46,7 @@ export class RunFinalizationPullRequestObserver extends Context.Reference<{
   readonly record: (
     input: Omit<IssuePullRequest, "createdAt" | "updatedAt">,
   ) => Effect.Effect<void>;
-}>("t3/orchestration-v2/RunFinalizationPullRequestObserver", {
+}>("@spiritdevs/pathway/orchestration-v2/RunFinalizationPullRequestObserver", {
   defaultValue: () => ({ record: () => Effect.void }),
 }) {}
 
@@ -74,7 +74,7 @@ export class RunFinalizationService extends Context.Service<
       readonly scopeId: CheckpointScopeId;
     }) => Effect.Effect<void, RunFinalizationError>;
   }
->()("t3/orchestration-v2/RunFinalizationService") {}
+>()("@spiritdevs/pathway/orchestration-v2/RunFinalizationService") {}
 
 export const make = Effect.gen(function* () {
   const checkpointCapture = yield* CheckpointCapture.CheckpointCaptureServiceV2;

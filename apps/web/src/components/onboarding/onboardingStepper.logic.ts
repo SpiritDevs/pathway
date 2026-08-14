@@ -9,7 +9,7 @@ import {
   type OnboardingStep,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 /**
  * Pure navigation, selection, and patch-shaping rules behind the onboarding

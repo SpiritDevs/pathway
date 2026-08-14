@@ -143,7 +143,7 @@ import {
   type SlackWatchResult,
   type SlackWatchUpdateInput,
   type SlackWatchesResult,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -713,7 +713,7 @@ export interface IssueTrackerServiceShape {
 export class IssueTrackerService extends Context.Service<
   IssueTrackerService,
   IssueTrackerServiceShape
->()("t3/issues/IssueTrackerService") {}
+>()("@spiritdevs/pathway/issues/IssueTrackerService") {}
 
 const notFound = (subject: string, message: string) =>
   new IssueTrackerError({ reason: "not-found", message, subject });

@@ -12,8 +12,8 @@ import {
   RelayWebClientId,
   type RelayPublicClientId,
   type RelayEnvironmentLinkChallengeRequest,
-} from "@t3tools/contracts/relay";
-import { encodeOAuthScope, parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
+} from "@spiritdevs/contracts/relay";
+import { encodeOAuthScope, parseAllowedOAuthScope } from "@spiritdevs/shared/oauthScope";
 import {
   normalizeRelayIssuer,
   RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP,
@@ -23,7 +23,7 @@ import {
   signRelayEs256Jwt,
   verifyRelayJwt,
   verifyRelayEs256Jwt,
-} from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

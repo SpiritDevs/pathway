@@ -4,7 +4,7 @@
  *
  * @module components/issues/NewIssueDialog
  */
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
+import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@spiritdevs/contracts";
 import type {
   ChatAttachmentId,
   Issue,
@@ -19,8 +19,8 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+} from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CalendarRangeIcon,

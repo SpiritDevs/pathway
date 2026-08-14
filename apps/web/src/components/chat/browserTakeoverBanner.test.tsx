@@ -5,7 +5,7 @@ import type {
   OrchestrationV2BrowserTakeoverStatus,
   OrchestrationV2ThreadPreviewActivity,
   RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
@@ -107,9 +107,9 @@ describe("shouldShowBrowserTakeoverCallout", () => {
 
   it("hides when the activity belongs to a run that already finished", () => {
     expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: null })).toBe(false);
-    expect(
-      shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: "run-2" as RunId }),
-    ).toBe(false);
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, activeRunId: "run-2" as RunId })).toBe(
+      false,
+    );
     expect(
       shouldShowBrowserTakeoverCallout({
         ...eligible,
@@ -135,9 +135,9 @@ describe("shouldShowBrowserTakeoverCallout", () => {
   });
 
   it("hides on a desktop that does not own this thread's browser", () => {
-    expect(
-      shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: null }),
-    ).toBe(false);
+    expect(shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: null })).toBe(
+      false,
+    );
     expect(
       shouldShowBrowserTakeoverCallout({ ...eligible, automationHostClientId: "other-desktop" }),
     ).toBe(false);

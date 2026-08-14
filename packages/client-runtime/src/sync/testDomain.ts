@@ -28,7 +28,7 @@ import {
   type SyncOperationKind,
   type SyncOperationReceipt,
   type SyncRejectionCode,
-} from "@t3tools/contracts/cloudSync";
+} from "@spiritdevs/contracts/cloudSync";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";

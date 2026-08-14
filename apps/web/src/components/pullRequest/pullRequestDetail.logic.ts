@@ -8,7 +8,7 @@ import type {
   PullRequestMergeMethod,
   PullRequestReviewThread,
   PullRequestState,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 

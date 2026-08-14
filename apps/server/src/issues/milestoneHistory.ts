@@ -25,7 +25,7 @@ import type {
   IssueMilestoneHistoryPoint,
   IssueMilestoneHistoryResult,
   IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 /**
  * Categories holding work nobody has begun, plus the one nobody ever will. Named as an exclusion

@@ -11,7 +11,7 @@
  *
  * @module components/issues/TriageAcceptDialog
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   Issue,
   IssueAssignee,
@@ -19,7 +19,7 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { CircleDotIcon, FolderIcon, PlayIcon, SignalHighIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";

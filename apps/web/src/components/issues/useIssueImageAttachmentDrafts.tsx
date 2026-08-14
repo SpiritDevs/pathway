@@ -1,5 +1,5 @@
-import type { IssueId } from "@t3tools/contracts";
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES } from "@t3tools/contracts";
+import type { IssueId } from "@spiritdevs/contracts";
+import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES } from "@spiritdevs/contracts";
 import { XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 

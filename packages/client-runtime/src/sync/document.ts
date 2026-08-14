@@ -20,8 +20,8 @@ import {
   SyncOperationEnvelope,
   SyncRejectionCode,
   type SyncOperationId,
-} from "@t3tools/contracts/cloudSync";
-import { CompanyId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts/cloudSync";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Schema from "effect/Schema";
 
 import { syncEntityKey, type SyncEntityKey } from "./model.ts";

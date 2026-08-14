@@ -11,7 +11,7 @@
  *
  * @module components/issues/issueDetail.logic
  */
-import { ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
+import { ISSUE_MAX_PARENT_DEPTH } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueAssignee,
@@ -33,7 +33,7 @@ import type {
   IssueTodoPatch,
   ProjectId,
   ProviderDriverKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type {
   IssueProgress,

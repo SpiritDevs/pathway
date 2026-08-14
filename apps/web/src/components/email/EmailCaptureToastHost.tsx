@@ -10,7 +10,7 @@
  *
  * @module components/email/EmailCaptureToastHost
  */
-import type { CapturedEmailSummary } from "@t3tools/contracts";
+import type { CapturedEmailSummary } from "@spiritdevs/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { CheckIcon, CopyIcon, MailIcon, ZapOffIcon } from "lucide-react";

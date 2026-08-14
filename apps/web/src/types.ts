@@ -10,14 +10,14 @@ import type {
   ProviderInteractionMode,
   RunId,
   RuntimeMode,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
   ThreadRunSummary,
   ThreadRuntimeSummary,
-} from "@t3tools/client-runtime/state/shell";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+} from "@spiritdevs/client-runtime/state/shell";
+import type { ThreadCheckpointSummary } from "@spiritdevs/client-runtime/state/thread-checkpoints";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";

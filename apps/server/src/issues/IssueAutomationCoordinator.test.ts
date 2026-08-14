@@ -9,7 +9,7 @@ import {
   type IssuesStreamEvent,
   type IssueThreadLinkOrigin,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 

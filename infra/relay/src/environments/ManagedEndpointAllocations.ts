@@ -1,5 +1,5 @@
-import type { RelayManagedEndpoint } from "@t3tools/contracts/relay";
-import { api } from "@t3tools/backend/convexApi";
+import type { RelayManagedEndpoint } from "@spiritdevs/contracts/relay";
+import { api } from "@spiritdevs/backend/convexApi";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

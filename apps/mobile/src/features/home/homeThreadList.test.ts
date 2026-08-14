@@ -1,9 +1,9 @@
 import type {
   EnvironmentProject,
   EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/shell";
+import { threadSearchMatchKey } from "@spiritdevs/client-runtime/state/thread-search";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -531,7 +531,7 @@ describe("buildHomeThreadGroups", () => {
         remoteUrl: "git@github.com:coreybain/pathway.git",
       },
       provider: "github",
-      owner: "t3tools",
+      owner: "spiritdevs",
       name: "pathway",
       displayName: "Pathway",
       rootPath: "/workspaces/pathway",

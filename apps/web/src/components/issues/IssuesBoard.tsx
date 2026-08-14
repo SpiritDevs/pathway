@@ -36,7 +36,7 @@ import type {
   IssueLabelId,
   IssueStatusId,
   IssueViewSortMode,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { PlusIcon } from "lucide-react";
 import { memo, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 

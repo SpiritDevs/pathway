@@ -7,8 +7,8 @@ import type {
   EmailTriggerRule,
   EmailTriggerRuleId,
   ProjectId,
-} from "@t3tools/contracts";
-import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

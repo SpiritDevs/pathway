@@ -22,8 +22,8 @@ import type {
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+} from "@spiritdevs/contracts";
+import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as Effect from "effect/Effect";
 
 import { expandHomePath } from "../pathExpansion.ts";

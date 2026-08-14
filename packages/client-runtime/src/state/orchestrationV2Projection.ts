@@ -2,8 +2,8 @@ import type {
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
-} from "@t3tools/contracts";
-import { isOrchestrationV2TurnItemVisible } from "@t3tools/shared/orchestrationV2Timeline";
+} from "@spiritdevs/contracts";
+import { isOrchestrationV2TurnItemVisible } from "@spiritdevs/shared/orchestrationV2Timeline";
 
 function upsertEntity<T extends { readonly id: unknown }>(
   items: ReadonlyArray<T>,

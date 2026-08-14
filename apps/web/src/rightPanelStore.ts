@@ -8,8 +8,8 @@
  * workspace paths, thread surfaces point at child thread ids, and diff/files
  * remain singleton surfaces.
  */
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { ThreadId, type ScopedThreadRef } from "@spiritdevs/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 

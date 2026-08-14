@@ -22,7 +22,7 @@ describe("relay APNs configuration", () => {
         environment: "production",
         teamId: "team-id",
         keyId: "key-id",
-        bundleId: "com.t3tools.pathway",
+        bundleId: "com.spiritdevs.pathway",
       });
       expect(Redacted.value(credentials!.privateKey)).toBe("private-key");
     }).pipe(
@@ -32,7 +32,7 @@ describe("relay APNs configuration", () => {
           APNS_ENVIRONMENT: "production",
           APNS_TEAM_ID: "team-id",
           APNS_KEY_ID: "key-id",
-          APNS_BUNDLE_ID: "com.t3tools.pathway",
+          APNS_BUNDLE_ID: "com.spiritdevs.pathway",
           APNS_PRIVATE_KEY: "private-key",
         }),
       ),

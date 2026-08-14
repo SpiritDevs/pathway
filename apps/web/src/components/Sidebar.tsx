@@ -22,15 +22,15 @@ import {
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
-} from "@t3tools/client-runtime/state/thread-settled";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+} from "@spiritdevs/client-runtime/state/thread-settled";
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
 import {
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
-} from "@t3tools/client-runtime/environment";
-import type { Issue, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+} from "@spiritdevs/client-runtime/environment";
+import type { Issue, ScopedThreadRef, ThreadId } from "@spiritdevs/contracts";
+import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
@@ -72,7 +72,7 @@ import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import {
   resolveShortcutCommand,

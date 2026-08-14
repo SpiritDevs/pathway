@@ -17,7 +17,7 @@ import {
   ThreadId,
   type EmailProjectSettings,
   EmailMcpTaskState,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

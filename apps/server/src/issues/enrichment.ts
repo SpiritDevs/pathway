@@ -20,7 +20,7 @@ import {
   type IssueEnrichmentResult,
   type IssueRelationDirection,
   type IssueRelationKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 /** How much of a section the prompt will carry before it is cut. */
 const DESCRIPTION_MAX_CHARS = 8_000;

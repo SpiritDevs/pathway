@@ -1,4 +1,4 @@
-import type { PullRequestListEntry } from "@t3tools/contracts";
+import type { PullRequestListEntry } from "@spiritdevs/contracts";
 
 import { memo } from "react";
 

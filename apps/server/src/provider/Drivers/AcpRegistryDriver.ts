@@ -3,7 +3,7 @@ import {
   ProviderDriverKind,
   TextGenerationError,
   type ServerProvider,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";

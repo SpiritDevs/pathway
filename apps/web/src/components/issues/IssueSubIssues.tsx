@@ -7,7 +7,7 @@
  *
  * @module components/issues/IssueSubIssues
  */
-import type { Issue, IssueLabel, IssueStatus, IssueStatusId } from "@t3tools/contracts";
+import type { Issue, IssueLabel, IssueStatus, IssueStatusId } from "@spiritdevs/contracts";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 

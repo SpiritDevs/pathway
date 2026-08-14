@@ -26,8 +26,8 @@ import {
   type ProviderUserInputAnswers,
   type RuntimeRequestId,
   type ThreadId,
-} from "@t3tools/contracts";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";

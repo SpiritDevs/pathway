@@ -5,8 +5,8 @@ import type {
   ProviderInstanceId,
   ServerProvider,
   ThreadId,
-} from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
+} from "@spiritdevs/contracts";
+import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,

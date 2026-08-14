@@ -19,7 +19,7 @@ import {
   ISSUE_COMMENT_MAX_ATTACHMENTS,
   type ChatAttachmentId,
   type IssueComment,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import { issueCommentCreateBody } from "./issueDetail.logic";
 

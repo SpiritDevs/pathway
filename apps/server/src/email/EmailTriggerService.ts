@@ -20,7 +20,7 @@ import {
   type EmailTriggerRuleUpsertInput,
   MessageId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -112,7 +112,7 @@ export class EmailTriggerService extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<EmailTriggerProcessingResult>, EmailCaptureError>;
     readonly notices: Stream.Stream<EmailStreamEvent>;
   }
->()("t3/email/EmailTriggerService") {}
+>()("@spiritdevs/pathway/email/EmailTriggerService") {}
 
 const triggerError = (reason: EmailCaptureError["reason"], message: string) =>
   new EmailCaptureError({ reason, message });

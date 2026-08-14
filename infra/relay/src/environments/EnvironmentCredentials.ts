@@ -2,7 +2,7 @@ import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -11,7 +11,7 @@ import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { api } from "@t3tools/backend/convexApi";
+import { api } from "@spiritdevs/backend/convexApi";
 
 import { RelayConvexClient } from "../db.ts";
 

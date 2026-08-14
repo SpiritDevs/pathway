@@ -1,4 +1,4 @@
-import type { EnvironmentId, OrchestrationV2Actor, RunId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2Actor, RunId, ThreadId } from "@spiritdevs/contracts";
 
 export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Remove queued message";
 export const REORDER_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Reorder queued message";

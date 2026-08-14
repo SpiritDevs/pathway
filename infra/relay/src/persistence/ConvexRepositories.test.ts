@@ -1,4 +1,4 @@
-import { api } from "@t3tools/backend/convexApi";
+import { api } from "@spiritdevs/backend/convexApi";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -6,7 +6,7 @@ import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -88,7 +88,7 @@ const deviceRegistration = {
   platform: "ios",
   iosMajorVersion: 19,
   appVersion: "1.2.3" as RelayDeviceRegistrationRequest["appVersion"],
-  bundleId: "com.t3tools.pathway" as RelayDeviceRegistrationRequest["bundleId"],
+  bundleId: "com.spiritdevs.pathway" as RelayDeviceRegistrationRequest["bundleId"],
   apsEnvironment: "sandbox",
   pushToken: "push-token" as RelayDeviceRegistrationRequest["pushToken"],
   pushToStartToken: "push-to-start-token" as RelayDeviceRegistrationRequest["pushToStartToken"],

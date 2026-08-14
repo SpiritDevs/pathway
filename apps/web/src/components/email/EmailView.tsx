@@ -8,7 +8,7 @@
  *
  * @module components/email/EmailView
  */
-import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@t3tools/contracts";
+import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@spiritdevs/contracts";
 import { MailIcon, SearchXIcon } from "lucide-react";
 import {
   useEffect,

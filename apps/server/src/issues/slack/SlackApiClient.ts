@@ -25,7 +25,7 @@
  *
  * @module issues/slack/SlackApiClient
  */
-import type { SlackChannelRef } from "@t3tools/contracts";
+import type { SlackChannelRef } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -338,7 +338,7 @@ export interface SlackApiClientShape {
 }
 
 export class SlackApiClient extends Context.Service<SlackApiClient, SlackApiClientShape>()(
-  "t3/issues/slack/SlackApiClient",
+  "@spiritdevs/pathway/issues/slack/SlackApiClient",
 ) {}
 
 export interface SlackApiClientOptions {

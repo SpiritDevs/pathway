@@ -15,8 +15,8 @@ failure.
 
 ## Prerequisites
 
-- **Pathway Connect CLI credential** on this machine: run `t3 connect login` first. The harness
-  loads the stored credential the same way `t3 connect` relay calls do; without it the first step
+- **Pathway Connect CLI credential** on this machine: run `pathway connect login` first. The harness
+  loads the stored credential the same way `pathway connect` relay calls do; without it the first step
   fails with instructions.
 - **`npx convex run` works from `packages/backend`** with admin access to the target deployment.
   The hooks shell out with that directory as cwd and every subprocess pinned to
@@ -48,14 +48,14 @@ mismatch).
 
 ## Running it
 
-From the repo root (the `t3` package's test script is `vp test run`, so extra arguments select
+From the repo root (the `@spiritdevs/pathway` package's test script is `vp test run`, so extra arguments select
 files):
 
 ```sh
 PATHWAY_CONVEX_SMOKE=1 \
 CONVEX_URL=https://<deployment>.convex.cloud \
 PATHWAY_CONVEX_SMOKE_DEPLOYMENT=dev:<deployment> \
-vp run --filter t3 test src/cloud/convexSyncSmoke.integration.test.ts
+vp run --filter @spiritdevs/pathway test src/cloud/convexSyncSmoke.integration.test.ts
 ```
 
 The test prints a per-step `PASS`/`FAIL` report on failure. Steps are ordered so the negative cases
@@ -90,7 +90,7 @@ CONVEX_DEPLOYMENT=dev:<deployment> npx convex run smoke:cleanup '{"environmentId
 
 # Relay environment link (any authenticated relay client works the same way):
 curl -X DELETE https://relay.spiritdevs.com/v1/client/environment-links/env-smoke-<uuid> \
-  -H 'Authorization: Bearer <t3 connect CLI access token>'
+  -H 'Authorization: Bearer <pathway connect CLI access token>'
 ```
 
 Afterwards, delete the state file so the next run does not re-attempt recovery.
@@ -98,5 +98,5 @@ Afterwards, delete the state file so the next run does not re-attempt recovery.
 The CI-safe unit tests for the harness and hooks need no environment:
 
 ```sh
-vp run --filter t3 test src/cloud/convexSyncSmoke.test.ts src/cloud/convexSmokeHooks.test.ts
+vp run --filter @spiritdevs/pathway test src/cloud/convexSyncSmoke.test.ts src/cloud/convexSmokeHooks.test.ts
 ```

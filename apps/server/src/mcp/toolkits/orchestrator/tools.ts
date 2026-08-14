@@ -26,7 +26,7 @@ import {
   OrchestratorMcpThreadStartInput,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";

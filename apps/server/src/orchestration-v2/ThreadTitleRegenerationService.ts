@@ -4,7 +4,7 @@ import {
   type MessageId,
   type ServerSettingsError,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -158,7 +158,7 @@ export class ThreadTitleRegenerationService extends Context.Service<
       OrchestratorV2Error | ProjectionRepositoryError | ServerSettingsError
     >;
   }
->()("t3/orchestration-v2/ThreadTitleRegenerationService") {}
+>()("@spiritdevs/pathway/orchestration-v2/ThreadTitleRegenerationService") {}
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService;

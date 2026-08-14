@@ -7,7 +7,7 @@ import {
   type OrchestrationV2RunStatus,
   type OrchestrationV2ThreadPreviewActivity,
   type RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CircleAlertIcon, HandIcon, InfoIcon, MousePointerClickIcon } from "lucide-react";
 import type { PointerEventHandler, ReactNode } from "react";
 
@@ -24,9 +24,8 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
  * still in flight, a busy flag on the button that asked for it.
  */
 
-const SETTLED_BROWSER_TAKEOVER_STATUSES: ReadonlySet<OrchestrationV2BrowserTakeoverStatus> = new Set(
-  ["completed", "cancelled"],
-);
+const SETTLED_BROWSER_TAKEOVER_STATUSES: ReadonlySet<OrchestrationV2BrowserTakeoverStatus> =
+  new Set(["completed", "cancelled"]);
 
 // Deliberately narrower than ACTIVE_RUN_STATUSES: a run parked at "waiting" is
 // draining after its agent turn ended, and the server refuses to pause it.
@@ -104,7 +103,10 @@ export function shouldShowBrowserTakeoverCallout(input: BrowserTakeoverCalloutIn
   if (input.activeRunId === null || activity.runId !== input.activeRunId) return false;
   // The run is still "active" in the sidebar sense but past the point where the
   // server can pause it, so offering Take over would only earn a rejection.
-  if (input.activeRunStatus === null || !TAKEOVER_ELIGIBLE_RUN_STATUSES.has(input.activeRunStatus)) {
+  if (
+    input.activeRunStatus === null ||
+    !TAKEOVER_ELIGIBLE_RUN_STATUSES.has(input.activeRunStatus)
+  ) {
     return false;
   }
   // A takeover that is not settled still owns the browser (a failed one can
@@ -412,11 +414,7 @@ export function browserTakeoverBannerItem(
     variant: descriptor.variant,
     urgent: descriptor.tone === "active" || descriptor.tone === "failed",
     icon: TONE_ICONS[descriptor.tone](),
-    title: descriptor.transient ? (
-      <span role="status">{descriptor.title}</span>
-    ) : (
-      descriptor.title
-    ),
+    title: descriptor.transient ? <span role="status">{descriptor.title}</span> : descriptor.title,
     description: descriptor.description,
     ...(descriptor.actions.length === 0
       ? {}

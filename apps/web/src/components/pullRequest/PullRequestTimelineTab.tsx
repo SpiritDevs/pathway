@@ -1,4 +1,4 @@
-import type { PullRequestActor, PullRequestDetailView } from "@t3tools/contracts";
+import type { PullRequestActor, PullRequestDetailView } from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ExternalLinkIcon,

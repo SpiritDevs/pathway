@@ -7,7 +7,7 @@
  *
  * @module components/issues/issueContextMenu.logic
  */
-import type { Issue, IssueMilestone, IssuePatch, ProjectId } from "@t3tools/contracts";
+import type { Issue, IssueMilestone, IssuePatch, ProjectId } from "@spiritdevs/contracts";
 
 import { issueDetailUrl } from "./issueStartWork.logic";
 import { addIssueDays } from "./issuesList.logic";

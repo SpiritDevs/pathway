@@ -13,7 +13,7 @@ import type {
   EmailHeader,
   EmailHtmlCompatibilityWarning,
   EmailParsedHeaders,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export const EMAIL_DELIVERABILITY_ENGINE_VERSION = 1;
 export const EMAIL_SUBJECT_WARNING_LENGTH = 78;

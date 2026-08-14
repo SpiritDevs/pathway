@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/client-runtime",
+  "name": "@spiritdevs/client-runtime",
   "private": true,
   "type": "module",
   "exports": {
@@ -193,8 +193,8 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "@t3tools/contracts": "workspace:*",
-    "@t3tools/shared": "workspace:*",
+    "@spiritdevs/contracts": "workspace:*",
+    "@spiritdevs/shared": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

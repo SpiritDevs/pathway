@@ -9,7 +9,7 @@ import {
   ModelSelection,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   OrchestrationCheckpointFile,
   OrchestrationProposedPlanId,
@@ -27,7 +27,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
-} from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts/legacy-orchestration";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

@@ -13,7 +13,7 @@ import type {
   EmailDeliverabilityCheck,
   EmailProjectAttribution,
   EmailRoutingRule,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { AlertTriangleIcon, CheckIcon, MailOpenIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 

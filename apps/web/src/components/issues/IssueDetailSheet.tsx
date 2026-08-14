@@ -11,8 +11,8 @@
  * @module components/issues/IssueDetailSheet
  */
 import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import type {
   ChatAttachmentId,
   Issue,
@@ -39,7 +39,7 @@ import type {
   ProviderDriverKind,
   ThreadId,
   UploadChatAttachment,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {

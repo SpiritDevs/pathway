@@ -1,5 +1,5 @@
-import { ProjectId, type ProjectScript } from "@t3tools/contracts";
-import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
+import { ProjectId, type ProjectScript } from "@spiritdevs/contracts";
+import { projectScriptRuntimeEnv, setupProjectScript } from "@spiritdevs/shared/projectScripts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -80,7 +80,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
       input: ProjectSetupScriptRunnerInput,
     ) => Effect.Effect<ProjectSetupScriptRunnerResult, ProjectSetupScriptRunnerError>;
   }
->()("t3/project/ProjectSetupScriptRunner") {}
+>()("@spiritdevs/pathway/project/ProjectSetupScriptRunner") {}
 
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;

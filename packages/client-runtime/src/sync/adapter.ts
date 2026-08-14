@@ -13,7 +13,7 @@ import type {
   SyncEntityKind,
   SyncOperationId,
   SyncOperationKind,
-} from "@t3tools/contracts/cloudSync";
+} from "@spiritdevs/contracts/cloudSync";
 
 import type { SyncCodec } from "./codec.ts";
 import type { SyncEntityKey } from "./model.ts";

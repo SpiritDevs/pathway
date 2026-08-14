@@ -7,7 +7,7 @@
  *
  * @module IssueTrackerConfigRepository
  */
-import { IssueKey, IssueKeyPrefix, IssueTrackerConfig, PositiveInt } from "@t3tools/contracts";
+import { IssueKey, IssueKeyPrefix, IssueTrackerConfig, PositiveInt } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -64,4 +64,4 @@ export interface IssueTrackerConfigRepositoryShape {
 export class IssueTrackerConfigRepository extends Context.Service<
   IssueTrackerConfigRepository,
   IssueTrackerConfigRepositoryShape
->()("t3/persistence/Services/IssueTrackerConfig/IssueTrackerConfigRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueTrackerConfig/IssueTrackerConfigRepository") {}

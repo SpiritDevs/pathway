@@ -24,7 +24,7 @@ import type {
   ProviderInstanceId,
   ProviderOptionSelection,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export type RuntimeSubagentStatus =
   | "pending"

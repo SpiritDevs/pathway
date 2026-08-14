@@ -21,7 +21,7 @@ import {
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { IssueTodo, IssueTodoId, IssueTodoPatch } from "@t3tools/contracts";
+import type { IssueTodo, IssueTodoId, IssueTodoPatch } from "@spiritdevs/contracts";
 import { GripVerticalIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 

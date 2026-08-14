@@ -1,9 +1,9 @@
 import type { MenuAction } from "@react-native-menu/menu";
-import type { ModelSelection, ProviderOptionDescriptor, RuntimeMode } from "@t3tools/contracts";
+import type { ModelSelection, ProviderOptionDescriptor, RuntimeMode } from "@spiritdevs/contracts";
 import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
-} from "@t3tools/shared/model";
+} from "@spiritdevs/shared/model";
 
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 

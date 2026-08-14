@@ -3,9 +3,9 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ServerProvider,
-} from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@spiritdevs/contracts/settings";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

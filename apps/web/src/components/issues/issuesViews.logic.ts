@@ -12,8 +12,8 @@
  *
  * @module components/issues/issuesViews.logic
  */
-import { isProviderDriverKind } from "@t3tools/contracts";
-import { MembershipId } from "@t3tools/contracts/company";
+import { isProviderDriverKind } from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import type {
   IssueAssignee,
   IssueCycleId,
@@ -26,7 +26,7 @@ import type {
   IssueViewId,
   IssueViewTab,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import {
   DEFAULT_ISSUES_GROUPING,

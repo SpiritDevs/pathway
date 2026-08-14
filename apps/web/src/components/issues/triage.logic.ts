@@ -24,7 +24,7 @@ import type {
   IssueStatusId,
   IssueTriageAcceptInput,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type { IssueInvestigateBlock } from "./issueEnrichment.logic";
 

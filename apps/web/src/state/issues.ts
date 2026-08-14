@@ -15,8 +15,8 @@
  * @module state/issues
  */
 import { useAtomValue } from "@effect/atom-react";
-import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
-import { subscribe } from "@t3tools/client-runtime/rpc";
+import { EnvironmentSupervisor } from "@spiritdevs/client-runtime/connection";
+import { subscribe } from "@spiritdevs/client-runtime/rpc";
 import {
   type AtomCommand,
   type AtomCommandResult,
@@ -25,8 +25,8 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
   followStreamInEnvironment,
-} from "@t3tools/client-runtime/state/runtime";
-import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
+} from "@spiritdevs/client-runtime/state/runtime";
+import { pinOrderKeyBetween } from "@spiritdevs/client-runtime/state/thread-sort";
 import {
   ISSUES_WS_METHODS,
   issueCycleStatusOn,
@@ -61,7 +61,7 @@ import {
   type SlackChannelWatch,
   type SlackIntakeStatus,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -2191,7 +2191,7 @@ export const useTriageReject = () => usePrimaryIssueCommand(issueCommands.triage
  * row, so neighbours are never rewritten and two clients that drop a row in the same place
  * converge.
  */
-export { pinOrderKeyBetween as issueSortOrderBetween } from "@t3tools/client-runtime/state/thread-sort";
+export { pinOrderKeyBetween as issueSortOrderBetween } from "@spiritdevs/client-runtime/state/thread-sort";
 
 /**
  * The key a dropped row takes. `siblings` is the destination group in display order with the

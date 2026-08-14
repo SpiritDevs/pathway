@@ -1,4 +1,4 @@
-import { api } from "@t3tools/backend/convexApi";
+import { api } from "@spiritdevs/backend/convexApi";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 

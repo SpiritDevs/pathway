@@ -11,13 +11,13 @@ import {
   type OrchestrationV2ProjectedTurnItem,
   type RunAttemptId,
   type RunId,
-} from "@t3tools/contracts";
-import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
-import { formatPendingBackgroundWorkLabel } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+} from "@spiritdevs/contracts";
+import type { ThreadRunSummary } from "@spiritdevs/client-runtime/state/shell";
+import { formatPendingBackgroundWorkLabel } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
 import {
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolPresentation,
-} from "@t3tools/shared/pathwayMcpToolPresentation";
+} from "@spiritdevs/shared/pathwayMcpToolPresentation";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;

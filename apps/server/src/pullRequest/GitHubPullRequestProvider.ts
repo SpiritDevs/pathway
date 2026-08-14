@@ -3,7 +3,7 @@ import type {
   PullRequestActor,
   PullRequestCapabilities,
   PullRequestViewerPermissions,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {

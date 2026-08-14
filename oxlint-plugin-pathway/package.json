@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/oxlint-plugin-pathway",
+  "name": "@spiritdevs/oxlint-plugin-pathway",
   "private": true,
   "type": "module",
   "scripts": {

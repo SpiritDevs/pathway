@@ -8,7 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -200,9 +200,7 @@ function recordActivity(input: {
     return yield* threads
       .dispatch({
         type: "thread.preview-activity.record",
-        commandId: CommandId.make(
-          `command:takeover:${input.name}:activity${input.suffix ?? ""}`,
-        ),
+        commandId: CommandId.make(`command:takeover:${input.name}:activity${input.suffix ?? ""}`),
         threadId: input.threadId,
         runId: null,
         providerSessionId: "provider-session-1",
@@ -392,32 +390,34 @@ describe("browser takeover requests", () => {
     }),
   );
 
-  it.effect("arms the marker from the last preview activity and enqueues the establish effect", () =>
-    Effect.gen(function* () {
-      const harness = makeHarness();
-      yield* Effect.gen(function* () {
-        const outbox = yield* EffectOutbox.EffectOutboxV2;
-        const threadId = yield* createThread("arm");
-        const run = yield* startRun("arm", threadId);
-        yield* recordActivity({ name: "arm", threadId });
+  it.effect(
+    "arms the marker from the last preview activity and enqueues the establish effect",
+    () =>
+      Effect.gen(function* () {
+        const harness = makeHarness();
+        yield* Effect.gen(function* () {
+          const outbox = yield* EffectOutbox.EffectOutboxV2;
+          const threadId = yield* createThread("arm");
+          const run = yield* startRun("arm", threadId);
+          yield* recordActivity({ name: "arm", threadId });
 
-        const { takeoverId } = yield* requestTakeover({ name: "arm", threadId });
-        const marker = yield* markerOf(threadId);
-        assert.equal(marker?.id, takeoverId);
-        assert.equal(marker?.status, "requested");
-        assert.equal(marker?.runId, run.id);
-        assert.equal(marker?.providerSessionId, "provider-session-1");
-        assert.equal(marker?.tabId, "tab-1");
-        assert.equal(marker?.hostClientId, "host-client-1");
-        assert.isNull(marker?.hostConnectionId ?? null);
-        assert.isNull(marker?.failure ?? null);
+          const { takeoverId } = yield* requestTakeover({ name: "arm", threadId });
+          const marker = yield* markerOf(threadId);
+          assert.equal(marker?.id, takeoverId);
+          assert.equal(marker?.status, "requested");
+          assert.equal(marker?.runId, run.id);
+          assert.equal(marker?.providerSessionId, "provider-session-1");
+          assert.equal(marker?.tabId, "tab-1");
+          assert.equal(marker?.hostClientId, "host-client-1");
+          assert.isNull(marker?.hostConnectionId ?? null);
+          assert.isNull(marker?.failure ?? null);
 
-        assert.deepEqual(
-          (yield* outbox.listByCommandId(takeoverId)).map((effect) => effect.request),
-          [{ type: "browser-takeover.establish", takeoverId }],
-        );
-      }).pipe(Effect.provide(harness.layer));
-    }),
+          assert.deepEqual(
+            (yield* outbox.listByCommandId(takeoverId)).map((effect) => effect.request),
+            [{ type: "browser-takeover.establish", takeoverId }],
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
   );
 
   it.effect("absorbs a duplicate request and rejects a competing takeover", () =>
@@ -532,12 +532,12 @@ describe("browser takeover establish", () => {
         assert.isNull(marker?.failure ?? null);
         // Re-acquired rather than trusting the half-armed fence, and the run the
         // first attempt never got to interrupt is paused now.
-        assert.deepEqual(harness.fence.calls, [
-          `acquire:${takeoverId}`,
-          `acquire:${takeoverId}`,
-        ]);
+        assert.deepEqual(harness.fence.calls, [`acquire:${takeoverId}`, `acquire:${takeoverId}`]);
         const projection = yield* threads.getThreadProjection(threadId);
-        assert.equal(projection.runs.find((candidate) => candidate.id === run.id)?.status, "interrupted");
+        assert.equal(
+          projection.runs.find((candidate) => candidate.id === run.id)?.status,
+          "interrupted",
+        );
       }).pipe(Effect.provide(harness.layer));
     }),
   );
@@ -578,16 +578,16 @@ describe("browser takeover establish", () => {
           attemptId: CommandId.make("attempt:no-host:1"),
         });
 
-        assert.deepEqual(harness.fence.calls, [
-          `acquire:${takeoverId}`,
-          `release:${takeoverId}`,
-        ]);
+        assert.deepEqual(harness.fence.calls, [`acquire:${takeoverId}`, `release:${takeoverId}`]);
         const marker = yield* markerOf(threadId);
         assert.equal(marker?.status, "failed");
         assert.equal(marker?.failure, "no_live_host");
         // The agent's turn is untouched: nothing was ever paused.
         const projection = yield* threads.getThreadProjection(threadId);
-        assert.equal(projection.runs.find((candidate) => candidate.id === run.id)?.status, "starting");
+        assert.equal(
+          projection.runs.find((candidate) => candidate.id === run.id)?.status,
+          "starting",
+        );
       }).pipe(Effect.provide(harness.layer));
     }),
   );
@@ -639,10 +639,7 @@ describe("browser takeover establish", () => {
           attemptId: CommandId.make("attempt:raced:1"),
         });
 
-        assert.deepEqual(harness.fence.calls, [
-          `acquire:${takeoverId}`,
-          `release:${takeoverId}`,
-        ]);
+        assert.deepEqual(harness.fence.calls, [`acquire:${takeoverId}`, `release:${takeoverId}`]);
         const marker = yield* markerOf(threadId);
         assert.equal(marker?.status, "failed");
         assert.equal(marker?.failure, "already_finished");

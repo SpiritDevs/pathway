@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 
 /** Provider-visible name for Pathway's authenticated, app-owned MCP server. */
 export const PATHWAY_MCP_SERVER_NAME = "pathway";

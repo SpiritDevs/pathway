@@ -1,4 +1,4 @@
-import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@spiritdevs/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
 

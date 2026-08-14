@@ -21,7 +21,7 @@ import {
   type EmailTriggerRuleId,
   type EmailTriggerRuleUpsertInput,
   type ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 // ── Addresses ──────────────────────────────────────────────────────────
 

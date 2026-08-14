@@ -1,13 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
-import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
-import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
+import { resolveAssetUrl } from "@spiritdevs/client-runtime/state/assets";
+import type { AssetResource, EnvironmentId } from "@spiritdevs/contracts";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 
 import { assetEnvironment } from "~/state/assets";
 import { usePreparedConnection } from "~/state/session";
 
-export { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
+export { resolveAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 
 export type AssetUrlState =
   | { readonly _tag: "Loading" }

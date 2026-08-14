@@ -4,7 +4,7 @@ import type {
   OrchestrationV2TurnItem,
   ProviderDriverKind,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";

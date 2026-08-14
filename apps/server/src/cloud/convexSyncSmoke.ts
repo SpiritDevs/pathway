@@ -23,7 +23,7 @@ import * as NodeFs from "node:fs";
 import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
 
-import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
 import {
   RELAY_CONVEX_KEY_BINDING_TYP,
   RelayAccessTokenType,
@@ -36,20 +36,20 @@ import {
   RelayOkResponse,
   type RelayConvexKeyBindingPayload,
   type RelayEnvironmentLinkProofPayload,
-} from "@t3tools/contracts/relay";
-import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@t3tools/shared/dpop";
-import { normalizeDpopHtu } from "@t3tools/shared/dpopCommon";
+} from "@spiritdevs/contracts/relay";
+import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@spiritdevs/shared/dpop";
+import { normalizeDpopHtu } from "@spiritdevs/shared/dpopCommon";
 import {
   decodeRelayJwt,
   normalizeRelayIssuer,
   RELAY_LINK_PROOF_TYP,
   signRelayJwt,
-} from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/shared/relayJwt";
 import { ConvexHttpClient } from "convex/browser";
 import { ConvexError } from "convex/values";
-import { api } from "@t3tools/backend/convexApi";
-import { SMOKE_ENVIRONMENT_ID_PREFIX } from "@t3tools/backend/smokeSeed";
-import { SYNC_PROTOCOL_VERSION } from "@t3tools/contracts/cloudSync";
+import { api } from "@spiritdevs/backend/convexApi";
+import { SMOKE_ENVIRONMENT_ID_PREFIX } from "@spiritdevs/backend/smokeSeed";
+import { SYNC_PROTOCOL_VERSION } from "@spiritdevs/contracts/cloudSync";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -643,7 +643,7 @@ export function manualCleanupInstructions(
   const args = JSON.stringify({ environmentId: input.environmentId });
   return {
     convex: `cd packages/backend && CONVEX_DEPLOYMENT=${input.deployment} npx convex run smoke:cleanup '${args}'`,
-    relay: `curl -X DELETE ${input.relayBaseUrl}/v1/client/environment-links/${input.environmentId} -H 'Authorization: Bearer <t3 connect CLI access token>'`,
+    relay: `curl -X DELETE ${input.relayBaseUrl}/v1/client/environment-links/${input.environmentId} -H 'Authorization: Bearer <pathway connect CLI access token>'`,
     stateFile: smokeStateFilePath(input.stateDir, input.environmentId),
   };
 }
@@ -896,7 +896,7 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
               Effect.fail(
                 new ConvexSyncSmokeError({
                   reason:
-                    "No stored Pathway Connect CLI credential. Run `t3 connect login` on this machine first, then re-run the smoke.",
+                    "No stored Pathway Connect CLI credential. Run `pathway connect login` on this machine first, then re-run the smoke.",
                 }),
               ),
             onSome: Effect.succeed,

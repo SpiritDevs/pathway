@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { findIssueKeyMentions, type Issue } from "@t3tools/contracts";
+import { findIssueKeyMentions, type Issue } from "@spiritdevs/contracts";
 import { Children, cloneElement, isValidElement, type ReactNode } from "react";
 
 /** Key → issue, narrowed to the keys one message mentions. Only keys present here become links. */

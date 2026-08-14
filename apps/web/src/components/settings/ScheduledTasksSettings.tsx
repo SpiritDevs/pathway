@@ -12,12 +12,12 @@ import type {
   ScheduledTaskSchedule,
   ScheduledTaskUpsertInput,
   ThreadId,
-} from "@t3tools/contracts";
-import { ProviderInstanceId } from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { ProviderInstanceId } from "@spiritdevs/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 
 import { cn } from "../../lib/utils";
 import { formatRelativeTime } from "../../timestampFormat";

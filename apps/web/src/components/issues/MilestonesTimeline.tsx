@@ -25,7 +25,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
-import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@t3tools/contracts";
+import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@spiritdevs/contracts";
 import { ChevronDownIcon, ChevronRightIcon, FlagIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 

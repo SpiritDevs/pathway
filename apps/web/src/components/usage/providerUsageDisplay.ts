@@ -1,4 +1,4 @@
-import type { ServerProviderUsageLimit, ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageLimit, ServerProviderUsageSnapshot } from "@spiritdevs/contracts";
 
 export interface ProviderUsageDisplayLimit extends ServerProviderUsageLimit {
   readonly remainingPercent: number;

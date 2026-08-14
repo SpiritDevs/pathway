@@ -8,14 +8,14 @@
  *
  * @module components/issues/IssuesFilterBar
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   IssueAssignee,
   IssueCycle,
   IssueLabel,
   IssueMilestone,
   IssueStatus,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CheckIcon, ListFilterIcon, PlusIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 

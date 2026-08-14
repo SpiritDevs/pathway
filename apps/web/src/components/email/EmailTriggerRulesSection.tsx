@@ -10,7 +10,7 @@
  *
  * @module components/email/EmailTriggerRulesSection
  */
-import type { EmailTriggerFiring, EmailTriggerRule, ProjectId } from "@t3tools/contracts";
+import type { EmailTriggerFiring, EmailTriggerRule, ProjectId } from "@spiritdevs/contracts";
 import { PencilIcon, PlusIcon, Trash2Icon, ZapIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 

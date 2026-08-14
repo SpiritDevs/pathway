@@ -5,7 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";

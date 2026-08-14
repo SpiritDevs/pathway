@@ -9,9 +9,13 @@ import {
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { IssueMilestone, IssueMilestonePatch, IssueStatusCategory } from "@t3tools/contracts";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
+import type {
+  IssueMilestone,
+  IssueMilestonePatch,
+  IssueStatusCategory,
+} from "@spiritdevs/contracts";
 import { FolderIcon, GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useState } from "react";
 

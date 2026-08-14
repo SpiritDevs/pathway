@@ -6,7 +6,7 @@
  *
  * @module ProjectionSnapshotQuery
  */
-import type { CheckpointRef, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { CheckpointRef, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import type {
   OrchestrationCheckpointSummary,
   OrchestrationProject,
@@ -19,7 +19,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
   OrchestrationThreadShell,
-} from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts/legacy-orchestration";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
 import type * as Effect from "effect/Effect";
@@ -205,4 +205,4 @@ export interface ProjectionSnapshotQueryShape {
 export class ProjectionSnapshotQuery extends Context.Service<
   ProjectionSnapshotQuery,
   ProjectionSnapshotQueryShape
->()("t3/orchestration/Services/ProjectionSnapshotQuery") {}
+>()("@spiritdevs/pathway/orchestration/Services/ProjectionSnapshotQuery") {}

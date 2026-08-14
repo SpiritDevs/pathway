@@ -6,7 +6,7 @@
  *
  * @module sync/memoryStore
  */
-import type { CompanyId } from "@t3tools/contracts/company";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";

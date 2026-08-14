@@ -1,5 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { pullRequestHostOf, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { pullRequestHostOf, ThreadId } from "@spiritdevs/contracts";
 import type {
   EnvironmentId,
   ProjectId,
@@ -8,7 +8,7 @@ import type {
   PullRequestListResult,
   PullRequestListState,
   SourceControlProviderKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   EyeIcon,

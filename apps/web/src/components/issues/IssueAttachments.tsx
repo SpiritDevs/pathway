@@ -1,4 +1,4 @@
-import type { ChatAttachmentId, EnvironmentId, IssueComment } from "@t3tools/contracts";
+import type { ChatAttachmentId, EnvironmentId, IssueComment } from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ClipboardPasteIcon,

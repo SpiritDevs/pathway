@@ -1,13 +1,13 @@
 import {
   RelayConvexConnectGrantClaims,
   type RelayConvexConnectGrantPermission,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import {
   normalizeRelayIssuer,
   RELAY_CONVEX_CONNECT_GRANT_TYP,
   RelayJwtError,
   verifyRelayJwt,
-} from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

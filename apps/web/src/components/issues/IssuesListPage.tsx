@@ -8,7 +8,7 @@
  * @module components/issues/IssuesListPage
  */
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import type {
   Issue,
   IssueCycleId,
@@ -19,7 +19,7 @@ import type {
   IssuePriority,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { Link } from "@tanstack/react-router";
 import { ColumnsIcon, ListTodoIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";

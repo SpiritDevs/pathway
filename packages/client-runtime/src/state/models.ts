@@ -11,7 +11,7 @@ import type {
   ProviderInstanceId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 export interface EnvironmentProject extends OrchestrationProjectShell {

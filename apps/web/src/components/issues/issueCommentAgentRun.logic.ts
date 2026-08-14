@@ -15,7 +15,7 @@ import type {
   IssueCommentAgentRun,
   IssueCommentAgentRunPhase,
   IssueCommentAgentRunState,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 /** What the thread prints while a run is `running`, per phase the engine reports. */
 export const ISSUE_COMMENT_AGENT_RUN_PHASE_LABELS: Readonly<

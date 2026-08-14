@@ -4,7 +4,7 @@ import {
   ProviderSessionId,
   ThreadId,
   type ProviderReplayEntry,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

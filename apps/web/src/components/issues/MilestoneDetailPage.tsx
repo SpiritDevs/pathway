@@ -23,8 +23,8 @@ import {
   type IssuePriority,
   type IssueStatusId,
   type ProjectId,
-} from "@t3tools/contracts";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/contracts";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import {
   CircleAlertIcon,
   CircleCheckIcon,

@@ -1,9 +1,9 @@
 import { matchers, routes, type Transform, type VercelConfig } from "@vercel/config/v1";
 
-const ROUTER_HOST = "app.t3.codes";
+const ROUTER_HOST = "app.spiritdevs.com";
 const HOSTED_WEB_CHANNEL_COOKIE = "pathway_web_channel";
-const LATEST_ORIGIN = "https://latest.app.t3.codes";
-const NIGHTLY_ORIGIN = "https://nightly.app.t3.codes";
+const LATEST_ORIGIN = "https://latest.app.spiritdevs.com";
+const NIGHTLY_ORIGIN = "https://nightly.app.spiritdevs.com";
 const CLEAN_CHANNEL_QUERY_TRANSFORMS = [
   {
     type: "request.query",
@@ -25,12 +25,12 @@ function channelCookie(channel: "latest" | "nightly"): string {
 
 export const config: VercelConfig = {
   buildCommand:
-    'vp run --filter @t3tools/web build && node ../../scripts/apply-web-brand-assets.ts --channel "${VITE_HOSTED_APP_CHANNEL:-latest}"',
+    'vp run --filter @spiritdevs/web build && node ../../scripts/apply-web-brand-assets.ts --channel "${VITE_HOSTED_APP_CHANNEL:-latest}"',
   git: {
     deploymentEnabled: false,
   },
   installCommand:
-    "npm install -g vite-plus && vp install --ignore-scripts --filter '@t3tools/scripts...' --filter '@t3tools/web...'",
+    "npm install -g vite-plus && vp install --ignore-scripts --filter '@spiritdevs/scripts...' --filter '@spiritdevs/web...'",
   routes: [
     {
       src: "/__pathway/channel",

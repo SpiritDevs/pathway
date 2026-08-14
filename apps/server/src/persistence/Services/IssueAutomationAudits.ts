@@ -4,7 +4,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   TrimmedNonEmptyString,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -51,4 +51,6 @@ export interface IssueAutomationAuditRepositoryShape {
 export class IssueAutomationAuditRepository extends Context.Service<
   IssueAutomationAuditRepository,
   IssueAutomationAuditRepositoryShape
->()("t3/persistence/Services/IssueAutomationAudits/IssueAutomationAuditRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/IssueAutomationAudits/IssueAutomationAuditRepository",
+) {}

@@ -11,7 +11,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { UserIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";

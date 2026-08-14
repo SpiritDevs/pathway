@@ -1,4 +1,4 @@
-import type { PullRequestDiffSide, PullRequestReviewCommentDraft } from "@t3tools/contracts";
+import type { PullRequestDiffSide, PullRequestReviewCommentDraft } from "@spiritdevs/contracts";
 
 const REVIEW_COMMENT_OPEN = "<pathway-review-comment>";
 const REVIEW_COMMENT_CLOSE = "</pathway-review-comment>";

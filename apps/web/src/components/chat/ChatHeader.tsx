@@ -1,4 +1,4 @@
-import { type EnvironmentId } from "@t3tools/contracts";
+import { type EnvironmentId } from "@spiritdevs/contracts";
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";

@@ -10,7 +10,7 @@ import {
   type OnboardingStep,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 import type { UserResource } from "@clerk/expo/types";
 import { useCallback, useState } from "react";
 import { Alert, View } from "react-native";

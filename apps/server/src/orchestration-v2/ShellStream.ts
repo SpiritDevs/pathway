@@ -5,7 +5,7 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationV2ShellStreamItem,
   OrchestrationV2StoredEvent,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Stream from "effect/Stream";
 
 /** Keep only the newest shell-relevant event per project/thread aggregate. */

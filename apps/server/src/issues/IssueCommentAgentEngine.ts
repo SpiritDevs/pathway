@@ -14,7 +14,7 @@
  *
  * @module issues/IssueCommentAgentEngine
  */
-import { IssueTrackerError } from "@t3tools/contracts";
+import { IssueTrackerError } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueComment,
@@ -24,7 +24,7 @@ import type {
   IssueCommentAgentRunPhase,
   IssuePriority,
   ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -115,7 +115,7 @@ export interface IssueCommentAgentEngineShape {
 export class IssueCommentAgentEngine extends Context.Service<
   IssueCommentAgentEngine,
   IssueCommentAgentEngineShape
->()("t3/issues/IssueCommentAgentEngine") {}
+>()("@spiritdevs/pathway/issues/IssueCommentAgentEngine") {}
 
 /** Every refusal this stub gives, so the message is one string rather than three. */
 const UNAVAILABLE = "Mentioning an agent is not available on this server.";

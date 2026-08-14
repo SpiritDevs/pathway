@@ -32,7 +32,7 @@ import {
   type IssueActor,
   type IssueCommentAgentRunId,
   type IssueCommentAgentRunPhase,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

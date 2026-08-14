@@ -11,11 +11,11 @@ At least one provider CLI, installed and authenticated. See [Providers](#provide
 ## Run Without Installing
 
 ```bash
-npx t3@latest
+npx @spiritdevs/pathway@latest
 ```
 
 This starts the Pathway server on your machine and opens the local web app. Use
-`npx t3@latest --help` for the full CLI reference.
+`npx @spiritdevs/pathway@latest --help` for the full CLI reference.
 
 ## Desktop App
 

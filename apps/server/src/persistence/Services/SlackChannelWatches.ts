@@ -10,7 +10,7 @@
  *
  * @module SlackChannelWatchRepository
  */
-import { SlackChannelId, SlackChannelWatch, SlackChannelWatchId } from "@t3tools/contracts";
+import { SlackChannelId, SlackChannelWatch, SlackChannelWatchId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -77,4 +77,4 @@ export interface SlackChannelWatchRepositoryShape {
 export class SlackChannelWatchRepository extends Context.Service<
   SlackChannelWatchRepository,
   SlackChannelWatchRepositoryShape
->()("t3/persistence/Services/SlackChannelWatches/SlackChannelWatchRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/SlackChannelWatches/SlackChannelWatchRepository") {}

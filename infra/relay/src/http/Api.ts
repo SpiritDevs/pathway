@@ -1,5 +1,5 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
-import { api } from "@t3tools/backend/convexApi";
+import { api } from "@spiritdevs/backend/convexApi";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -19,8 +19,8 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpTraceContext from "effect/unstable/http/HttpTraceContext";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
-import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
-import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
+import { encodeOAuthScope } from "@spiritdevs/shared/oauthScope";
+import { httpHeaderRedactionLayer } from "@spiritdevs/shared/httpObservability";
 
 import {
   RelayApi,
@@ -52,8 +52,8 @@ import {
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
   RelayInternalError,
-} from "@t3tools/contracts/relay";
-import { normalizeRelayIssuer, verifyRelayJwt } from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/contracts/relay";
+import { normalizeRelayIssuer, verifyRelayJwt } from "@spiritdevs/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";

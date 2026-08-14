@@ -11,7 +11,7 @@
  *
  * @module components/issues/issuesList.logic
  */
-import { ISSUE_VIEW_FILTER_MAX_VALUES } from "@t3tools/contracts";
+import { ISSUE_VIEW_FILTER_MAX_VALUES } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueAssignee,
@@ -25,7 +25,7 @@ import type {
   IssueViewGrouping,
   IssueViewMode,
   IssueViewSortMode,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type { IssuesGrouping, IssuesStore, IssuesTab } from "~/state/issues";
 

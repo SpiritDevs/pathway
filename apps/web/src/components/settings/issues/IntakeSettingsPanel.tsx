@@ -11,16 +11,16 @@
  *
  * @module components/settings/issues/IntakeSettingsPanel
  */
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   ProjectId,
   SlackChannelRef,
   SlackChannelWatch,
   SlackIntakeTrigger,
   SlackReactionRoute,
-} from "@t3tools/contracts";
-import { SLACK_MAX_REACTION_ROUTES } from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { SLACK_MAX_REACTION_ROUTES } from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { CalendarRangeIcon, FolderIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";

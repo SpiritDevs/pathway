@@ -3,7 +3,7 @@ import type {
   DesktopAppStageLabel,
   DesktopRuntimeArch,
   DesktopRuntimeInfo,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -77,7 +77,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
     readonly developmentDockIconPath: string;
   }
->()("@t3tools/desktop/app/DesktopEnvironment") {}
+>()("@spiritdevs/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = "Pathway";
 
@@ -213,7 +213,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.pathway.dev" : "com.t3tools.pathway",
+      isDevelopment ? "com.spiritdevs.pathway.dev" : "com.spiritdevs.pathway",
     ),
     linuxDesktopEntryName: isDevelopment ? "pathway-dev.desktop" : "pathway.desktop",
     linuxWmClass: isDevelopment ? "pathway-dev" : "pathway",

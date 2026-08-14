@@ -9,7 +9,7 @@ import {
   OrchestrationV2ThreadProjection,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
@@ -81,4 +81,4 @@ export interface CheckpointPolicyV2Shape {
 export class CheckpointPolicyV2 extends Context.Service<
   CheckpointPolicyV2,
   CheckpointPolicyV2Shape
->()("t3/orchestration-v2/CheckpointPolicy/CheckpointPolicyV2") {}
+>()("@spiritdevs/pathway/orchestration-v2/CheckpointPolicy/CheckpointPolicyV2") {}

@@ -1,4 +1,4 @@
-import type { EmailAnalyticsResult, EmailMailSlug, ProjectId } from "@t3tools/contracts";
+import type { EmailAnalyticsResult, EmailMailSlug, ProjectId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

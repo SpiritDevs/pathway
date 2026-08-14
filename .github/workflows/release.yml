@@ -101,7 +101,7 @@ jobs:
           run-install: true
 
       - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
+        run: vp run --filter @spiritdevs/desktop ensure:electron
 
       - id: release_meta
         name: Resolve release version
@@ -293,7 +293,7 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=t3...
+              - --filter=@spiritdevs/pathway...
 
       - name: Build node-pty linux-x64 prebuild
         shell: bash
@@ -388,9 +388,9 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=@t3tools/desktop...
-              - --filter=t3...
-              - --filter=@t3tools/scripts...
+              - --filter=@spiritdevs/desktop...
+              - --filter=@spiritdevs/pathway...
+              - --filter=@spiritdevs/scripts...
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -693,9 +693,9 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=t3...
-              - --filter=@t3tools/web...
-              - --filter=@t3tools/scripts...
+              - --filter=@spiritdevs/pathway...
+              - --filter=@spiritdevs/web...
+              - --filter=@spiritdevs/scripts...
 
       - name: Download relay client tracing config
         uses: actions/download-artifact@v8
@@ -715,10 +715,10 @@ jobs:
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build web package
-        run: vp run --filter @t3tools/web build
+        run: vp run --filter @spiritdevs/web build
 
       - name: Build CLI package
-        run: vp run --filter t3 build
+        run: vp run --filter @spiritdevs/pathway build
 
       - name: Download resource monitors
         uses: actions/download-artifact@v8
@@ -766,7 +766,7 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=@t3tools/scripts...
+              - --filter=@spiritdevs/scripts...
 
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
@@ -891,8 +891,8 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=@t3tools/scripts...
-              - --filter=@t3tools/web...
+              - --filter=@spiritdevs/scripts...
+              - --filter=@spiritdevs/web...
 
       - name: Download relay client tracing config
         uses: actions/download-artifact@v8
@@ -924,9 +924,9 @@ jobs:
             exit 1
           fi
 
-          router_url="${PATHWAY_WEB_ROUTER_URL:-https://app.t3.codes}"
-          latest_domain="${PATHWAY_WEB_LATEST_DOMAIN:-latest.app.t3.codes}"
-          nightly_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-nightly.app.t3.codes}"
+          router_url="${PATHWAY_WEB_ROUTER_URL:-https://app.spiritdevs.com}"
+          latest_domain="${PATHWAY_WEB_LATEST_DOMAIN:-latest.app.spiritdevs.com}"
+          nightly_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-nightly.app.spiritdevs.com}"
           router_domain="${router_url#http://}"
           router_domain="${router_domain#https://}"
           router_domain="${router_domain%%/*}"
@@ -1019,8 +1019,8 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=@t3tools/scripts...
-              - --filter=@t3tools/oxlint-plugin-pathway...
+              - --filter=@spiritdevs/scripts...
+              - --filter=@spiritdevs/oxlint-plugin-pathway...
 
       - id: update_versions
         name: Update version strings
@@ -1083,7 +1083,7 @@ jobs:
           cache: true
           run-install: |
             args:
-              - --filter=@t3tools/scripts...
+              - --filter=@spiritdevs/scripts...
 
       - name: Announce prerelease on Discord
         if: needs.preflight.outputs.is_prerelease == 'true'

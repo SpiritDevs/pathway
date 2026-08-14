@@ -1,4 +1,4 @@
-import type { DetectedEmailCode } from "@t3tools/contracts";
+import type { DetectedEmailCode } from "@spiritdevs/contracts";
 
 const KEYWORD = String.raw`(?:code|verification|otp|one[\s-]?time|passcode|confirm(?:ation)?)`;
 const KEYWORD_EXPRESSION = new RegExp(String.raw`\b${KEYWORD}\b`, "giu");

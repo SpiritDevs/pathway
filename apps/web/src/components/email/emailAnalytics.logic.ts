@@ -23,7 +23,7 @@ import type {
   EmailProjectMessageCount,
   EmailVolumePoint,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 // ── Ranges ─────────────────────────────────────────────────────────────
 

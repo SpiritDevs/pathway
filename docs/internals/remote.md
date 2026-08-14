@@ -97,7 +97,7 @@ model: core owns environments, pairing, and connection lifecycle, and providers 
 Tailscale is the first provider, and Pathway manages more than discovery. When `tailscaleServeEnabled` is
 set, the server acquires a Tailscale serve mapping for its actual listening port at startup with
 `ensureTailscaleServe` and releases it with `disableTailscaleServe` on scope close
-(`apps/server/src/server.ts`, using [`@t3tools/tailscale`](../../packages/tailscale/src/tailscale.ts)).
+(`apps/server/src/server.ts`, using [`@spiritdevs/tailscale`](../../packages/tailscale/src/tailscale.ts)).
 Endpoint identifiers are synthesized in `apps/desktop/src/backend/tailscaleEndpointProvider.ts` with
 `private-network` reachability.
 
@@ -106,7 +106,7 @@ Endpoint identifiers are synthesized in `apps/desktop/src/backend/tailscaleEndpo
 A hosted pairing request is a bootstrap URL for the static web app, not a transport:
 
 ```text
-https://app.t3.codes/pair?host=https://backend.example.com:3773#token=PAIRCODE
+https://app.spiritdevs.com/pair?host=https://backend.example.com:3773#token=PAIRCODE
 ```
 
 The hosted app reads `host`, takes the token from the URL hash, exchanges it directly with that
@@ -187,7 +187,7 @@ it separate from access.
   came from SSH launch for reconnect and lifecycle UX only; that metadata never changes the protocol
   or the identity model.
 - **Client-managed local publish.** A local server is published through the relay with
-  `t3 connect link`, exposing a desktop-hosted environment to mobile without router or firewall
+  `pathway connect link`, exposing a desktop-hosted environment to mobile without router or firewall
   changes.
 
 The same `ExecutionEnvironment` can be reached several of these ways. Only the launch and access

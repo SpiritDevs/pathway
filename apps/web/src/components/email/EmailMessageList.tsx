@@ -12,7 +12,7 @@
  * @module components/email/EmailMessageList
  */
 import { LegendList } from "@legendapp/list/react";
-import type { CapturedEmailSummary, EmailMessageId } from "@t3tools/contracts";
+import type { CapturedEmailSummary, EmailMessageId } from "@spiritdevs/contracts";
 import { CheckIcon, KeyRoundIcon, PaperclipIcon } from "lucide-react";
 import { useMemo, type MouseEvent } from "react";
 

@@ -56,7 +56,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(normalizeResolvedPath(resolvedIdentityRoot)).toBe(normalizeResolvedPath(resolvedCwd));
       expect(identity?.displayName).toBe("coreybain/pathway");
       expect(identity?.provider).toBe("github");
-      expect(identity?.owner).toBe("t3tools");
+      expect(identity?.owner).toBe("spiritdevs");
       expect(identity?.name).toBe("pathway");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
@@ -144,9 +144,9 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       const identity = yield* resolver.resolve(cwd);
 
       expect(identity).not.toBeNull();
-      expect(identity?.canonicalKey).toBe("gitlab.com/t3tools/platform/pathway");
-      expect(identity?.displayName).toBe("t3tools/platform/pathway");
-      expect(identity?.owner).toBe("t3tools");
+      expect(identity?.canonicalKey).toBe("gitlab.com/spiritdevs/platform/pathway");
+      expect(identity?.displayName).toBe("spiritdevs/platform/pathway");
+      expect(identity?.owner).toBe("spiritdevs");
       expect(identity?.name).toBe("pathway");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );

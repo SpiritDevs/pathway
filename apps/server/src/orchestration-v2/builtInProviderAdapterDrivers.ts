@@ -1,4 +1,4 @@
-import type { ProviderDriverKind } from "@t3tools/contracts";
+import type { ProviderDriverKind } from "@spiritdevs/contracts";
 
 import {
   AcpRegistryAdapterV2Driver,

@@ -14,8 +14,8 @@
  *
  * @module components/issues/IssueCommentMentionControls
  */
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+import type { ModelSelection, ProviderInstanceId } from "@spiritdevs/contracts";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import { AtSignIcon, XIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";

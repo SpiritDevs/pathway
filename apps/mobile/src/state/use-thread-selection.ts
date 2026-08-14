@@ -7,15 +7,15 @@ import {
   type OrchestrationV2ThreadShell,
   type ScopedProjectRef,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   presentThreadShell,
   type EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/shell";
+} from "@spiritdevs/client-runtime/state/shell";
 import {
   deriveLatestThreadRun,
   deriveThreadRuntime,
-} from "@t3tools/client-runtime/state/thread-execution";
+} from "@spiritdevs/client-runtime/state/thread-execution";
 import * as Option from "effect/Option";
 
 import { useProject, useThreadShell } from "../state/entities";

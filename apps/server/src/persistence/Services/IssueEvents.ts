@@ -6,7 +6,7 @@
  *
  * @module IssueEventRepository
  */
-import { IssueEvent, IssueId } from "@t3tools/contracts";
+import { IssueEvent, IssueId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -70,4 +70,4 @@ export interface IssueEventRepositoryShape {
 export class IssueEventRepository extends Context.Service<
   IssueEventRepository,
   IssueEventRepositoryShape
->()("t3/persistence/Services/IssueEvents/IssueEventRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueEvents/IssueEventRepository") {}

@@ -11,7 +11,7 @@
  *
  * @module components/issues/milestonesTimeline.logic
  */
-import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@t3tools/contracts";
+import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@spiritdevs/contracts";
 
 import type { IssueProgress } from "~/state/issues";
 import { addIssueDays } from "./issuesList.logic";

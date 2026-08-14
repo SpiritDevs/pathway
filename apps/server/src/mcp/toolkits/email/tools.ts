@@ -9,7 +9,7 @@ import {
   EmailMcpListInput,
   EmailMcpLongPollResult,
   EmailMcpWaitForInput,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

@@ -16,7 +16,7 @@ import {
   ISSUE_TITLE_MAX_CHARS,
   type IssueCommentAgentRunPhase,
   type IssuePriority,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 /** How a comment is attributed in the prompt. The tracker has no names, only kinds. */
 export interface CommentAgentThreadEntry {

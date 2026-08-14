@@ -7,7 +7,7 @@
  *
  * @module IssueMilestoneRepository
  */
-import { IsoDateTime, IssueMilestone, IssueMilestoneId } from "@t3tools/contracts";
+import { IsoDateTime, IssueMilestone, IssueMilestoneId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -78,4 +78,4 @@ export interface IssueMilestoneRepositoryShape {
 export class IssueMilestoneRepository extends Context.Service<
   IssueMilestoneRepository,
   IssueMilestoneRepositoryShape
->()("t3/persistence/Services/IssueMilestones/IssueMilestoneRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueMilestones/IssueMilestoneRepository") {}

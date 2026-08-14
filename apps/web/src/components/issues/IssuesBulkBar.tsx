@@ -10,7 +10,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CircleDotIcon, SignalHighIcon, TagIcon, Trash2Icon, XIcon } from "lucide-react";
 
 import { Button } from "../ui/button";

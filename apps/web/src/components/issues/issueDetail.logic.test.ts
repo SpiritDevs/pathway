@@ -15,8 +15,8 @@ import {
   type IssueEvent,
   type IssueEventKind,
   type IssueTodo,
-} from "@t3tools/contracts";
-import { MembershipId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { IssueRelationLabel } from "~/state/issues";

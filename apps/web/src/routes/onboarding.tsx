@@ -1,4 +1,4 @@
-import { isOnboardingComplete, parseProfileMetadata } from "@t3tools/client-runtime/profile";
+import { isOnboardingComplete, parseProfileMetadata } from "@spiritdevs/client-runtime/profile";
 import { useUser } from "@clerk/react";
 import { Navigate, createFileRoute } from "@tanstack/react-router";
 

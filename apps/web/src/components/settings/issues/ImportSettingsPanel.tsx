@@ -2,9 +2,9 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
-import { ISSUES_IMPORT_CSV_MAX_CHARS, type IssuesImportCsvResult } from "@t3tools/contracts";
-import { previewIssueCsv, type IssueCsvPreview } from "@t3tools/shared/issuesCsv";
+} from "@spiritdevs/client-runtime/state/runtime";
+import { ISSUES_IMPORT_CSV_MAX_CHARS, type IssuesImportCsvResult } from "@spiritdevs/contracts";
+import { previewIssueCsv, type IssueCsvPreview } from "@spiritdevs/shared/issuesCsv";
 import { FileUpIcon, XIcon } from "lucide-react";
 import { useCallback, useRef, useState, type DragEvent } from "react";
 

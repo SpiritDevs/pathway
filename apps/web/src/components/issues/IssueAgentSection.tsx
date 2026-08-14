@@ -7,7 +7,7 @@
  *
  * @module components/issues/IssueAgentSection
  */
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
 import type {
   Issue,
   IssueThreadLink,
@@ -15,8 +15,8 @@ import type {
   ProviderInstanceId,
   ThreadId,
   VcsRef,
-} from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import {
   ChevronDownIcon,
   FolderIcon,

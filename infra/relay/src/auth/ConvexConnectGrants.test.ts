@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { RELAY_CONVEX_CONNECT_GRANT_TYP, signRelayJwt } from "@t3tools/shared/relayJwt";
+import { RELAY_CONVEX_CONNECT_GRANT_TYP, signRelayJwt } from "@spiritdevs/shared/relayJwt";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -33,7 +33,7 @@ const makeConfig = (cloudSync: RelayConfiguration.RelayCloudSyncConfiguration | 
       teamId: "team-id",
       keyId: "key-id",
       privateKey: Redacted.make("private-key"),
-      bundleId: "com.t3tools.pathway.dev",
+      bundleId: "com.spiritdevs.pathway.dev",
     },
     apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
     clerkSecretKey: Redacted.make("clerk-secret"),

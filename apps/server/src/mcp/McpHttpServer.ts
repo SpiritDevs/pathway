@@ -21,7 +21,7 @@ import {
   EmailMcpWaitForInput,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EmailProjectSettings,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -1076,7 +1076,7 @@ export const makeEmailTestHandler = (projects: ReadonlyArray<EmailProjectSetting
   }).pipe(Effect.provide(EmailToolkitHandlersLive));
 
 class McpV2HttpHandler extends Context.Service<McpV2HttpHandler, PathwayMcpHandler>()(
-  "t3/mcp/McpHttpServer/McpV2HttpHandler",
+  "@spiritdevs/pathway/mcp/McpHttpServer/McpV2HttpHandler",
 ) {}
 
 const McpV2HttpHandlerLive = Layer.effect(

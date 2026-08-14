@@ -6,8 +6,8 @@ import {
   SyncEntityId,
   SyncOperationId,
   SYNC_PROTOCOL_VERSION,
-} from "@t3tools/contracts/cloudSync";
-import { CompanyId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts/cloudSync";
+import { CompanyId } from "@spiritdevs/contracts/company";
 
 import type { PendingSyncOperation, PendingSyncStatus } from "./model.ts";
 import { presentSyncState, syncStatusText } from "./presentation.ts";

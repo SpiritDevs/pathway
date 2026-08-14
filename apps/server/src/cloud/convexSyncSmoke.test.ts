@@ -15,10 +15,10 @@ import {
   RELAY_CONVEX_KEY_BINDING_TYP,
   RelayConvexKeyBindingPayload,
   RelayEnvironmentLinkProofPayload,
-} from "@t3tools/contracts/relay";
-import { verifyDpopProof } from "@t3tools/shared/dpop";
-import { normalizeDpopHtu } from "@t3tools/shared/dpopCommon";
-import { RELAY_LINK_PROOF_TYP, signRelayJwt, verifyRelayJwt } from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/contracts/relay";
+import { verifyDpopProof } from "@spiritdevs/shared/dpop";
+import { normalizeDpopHtu } from "@spiritdevs/shared/dpopCommon";
+import { RELAY_LINK_PROOF_TYP, signRelayJwt, verifyRelayJwt } from "@spiritdevs/shared/relayJwt";
 import { ConvexError } from "convex/values";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -437,7 +437,7 @@ describe("smoke run state files", () => {
     );
     assert.equal(
       commands.relay,
-      "curl -X DELETE https://relay.example/v1/client/environment-links/env-smoke-fff -H 'Authorization: Bearer <t3 connect CLI access token>'",
+      "curl -X DELETE https://relay.example/v1/client/environment-links/env-smoke-fff -H 'Authorization: Bearer <pathway connect CLI access token>'",
     );
     assert.equal(commands.stateFile, smokeStateFilePath("/tmp/x", "env-smoke-fff"));
   });

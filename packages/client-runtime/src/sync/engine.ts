@@ -25,9 +25,9 @@ import {
   type SyncOperationEnvelope,
   type SyncOperationId,
   type SyncPresentation,
-} from "@t3tools/contracts/cloudSync";
-import type { CompanyId } from "@t3tools/contracts/company";
-import type { EnvironmentId } from "@t3tools/contracts";
+} from "@spiritdevs/contracts/cloudSync";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";

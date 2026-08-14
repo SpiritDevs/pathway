@@ -13,7 +13,7 @@ import type {
   AuthorizationEpoch,
   CompanyVersion,
   SyncChangeEnvelope,
-} from "@t3tools/contracts/cloudSync";
+} from "@spiritdevs/contracts/cloudSync";
 import * as Option from "effect/Option";
 
 import type { SyncDomainAdapter } from "./adapter.ts";

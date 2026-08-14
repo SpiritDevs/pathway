@@ -17,8 +17,8 @@ const devBundleIdSuffix = NodePath.basename(repoRoot)
   .replaceAll(/[^a-z0-9]+/g, "");
 export const APP_DISPLAY_NAME = isDevelopment ? "Pathway (Dev)" : "Pathway (Alpha)";
 export const APP_BUNDLE_ID = isDevelopment
-  ? `com.t3tools.pathway.dev.${devBundleIdSuffix || "local"}`
-  : "com.t3tools.pathway";
+  ? `com.spiritdevs.pathway.dev.${devBundleIdSuffix || "local"}`
+  : "com.spiritdevs.pathway";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["pathway-dev"] : ["pathway"];
 const LAUNCHER_VERSION = 14;
 const defaultIconPath = NodePath.join(desktopDir, "resources", "icon.icns");

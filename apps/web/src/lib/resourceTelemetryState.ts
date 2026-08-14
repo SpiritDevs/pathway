@@ -1,4 +1,7 @@
-import type { ResourceTelemetryHistoryInput, ResourceTelemetrySnapshot } from "@t3tools/contracts";
+import type {
+  ResourceTelemetryHistoryInput,
+  ResourceTelemetrySnapshot,
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import { useCallback } from "react";
 

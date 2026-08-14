@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { assert, it } from "@effect/vitest";
 
 import {

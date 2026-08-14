@@ -3,8 +3,8 @@ import type {
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ThreadProjection,
   RunId,
-} from "@t3tools/contracts";
-import { copySorted } from "@t3tools/shared/Array";
+} from "@spiritdevs/contracts";
+import { copySorted } from "@spiritdevs/shared/Array";
 
 type Projection = OrchestrationV2ThreadProjection;
 type Run = Projection["runs"][number];

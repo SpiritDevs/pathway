@@ -12,10 +12,10 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   type RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
+import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";

@@ -1,4 +1,4 @@
-import type { RuntimeRequestId } from "@t3tools/contracts";
+import type { RuntimeRequestId } from "@spiritdevs/contracts";
 
 export function sortPendingRequestsOldestFirst<
   Request extends { readonly requestId: RuntimeRequestId; readonly createdAt: string },

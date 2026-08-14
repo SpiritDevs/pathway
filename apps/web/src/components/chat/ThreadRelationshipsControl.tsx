@@ -1,4 +1,4 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   deriveThreadRelationshipGraph,
   immediateThreadRelationships,
@@ -6,12 +6,12 @@ import {
   orderWebThreadLineageRows,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
-} from "@t3tools/client-runtime/state/thread-relationships";
+} from "@spiritdevs/client-runtime/state/thread-relationships";
 import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
-} from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/thread-workflows";
+import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,

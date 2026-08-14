@@ -8,11 +8,11 @@ import {
   type ServerProviderSkill,
   type RunId,
   type ThreadId,
-} from "@t3tools/contracts";
-import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
-import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
-import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { buildOrchestrationErrorFixPrompt } from "@t3tools/shared/orchestrationV2Timeline";
+} from "@spiritdevs/contracts";
+import { parseScopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { canForkProjectedAssistantItem } from "@spiritdevs/client-runtime/state/thread-workflows";
+import { resolveChatListAnchoredEndSpace } from "@spiritdevs/shared/chatList";
+import { buildOrchestrationErrorFixPrompt } from "@spiritdevs/shared/orchestrationV2Timeline";
 import {
   createContext,
   Fragment,
@@ -112,7 +112,7 @@ import {
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
-import { type TimestampFormat } from "@t3tools/contracts/settings";
+import { type TimestampFormat } from "@spiritdevs/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { V2ItemInspector } from "./V2ItemInspector";
 import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";

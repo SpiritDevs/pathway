@@ -1,6 +1,6 @@
-import * as NetService from "@t3tools/shared/Net";
-import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
+import * as NetService from "@spiritdevs/shared/Net";
+import { parsePersistedServerObservabilitySettings } from "@spiritdevs/shared/serverSettings";
+import { DesktopBackendBootstrap, PortSchema } from "@spiritdevs/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -97,7 +97,9 @@ const EnvServerConfig = Config.all({
   otlpExportIntervalMs: Config.int("PATHWAY_OTLP_EXPORT_INTERVAL_MS").pipe(
     Config.withDefault(10_000),
   ),
-  otlpServiceName: Config.string("PATHWAY_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
+  otlpServiceName: Config.string("PATHWAY_OTLP_SERVICE_NAME").pipe(
+    Config.withDefault("pathway-server"),
+  ),
   mode: Config.schema(ServerConfig.RuntimeMode, "PATHWAY_MODE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),

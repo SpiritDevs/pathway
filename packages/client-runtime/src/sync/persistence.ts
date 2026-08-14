@@ -8,7 +8,7 @@
  *
  * @module sync/persistence
  */
-import type { CompanyId } from "@t3tools/contracts/company";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -32,4 +32,4 @@ export class SyncStore extends Context.Service<
     /** Sign-out and company removal. Drops confirmed rows, outbox, rejections, and cursor. */
     readonly clear: (companyId: CompanyId) => Effect.Effect<void, SyncStoreError>;
   }
->()("@t3tools/client-runtime/sync/persistence/SyncStore") {}
+>()("@spiritdevs/client-runtime/sync/persistence/SyncStore") {}

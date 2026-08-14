@@ -12,8 +12,8 @@
  *
  * @module components/issues/IssuesSidebar
  */
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { IssueCycleId, IssueMilestoneId, IssueView } from "@t3tools/contracts";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import type { IssueCycleId, IssueMilestoneId, IssueView } from "@spiritdevs/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {

@@ -1,4 +1,4 @@
-import { relayEs256PublicJwk, type RelayEs256PublicJwk } from "@t3tools/shared/relayJwt";
+import { relayEs256PublicJwk, type RelayEs256PublicJwk } from "@spiritdevs/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

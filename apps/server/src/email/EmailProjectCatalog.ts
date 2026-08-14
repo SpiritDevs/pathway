@@ -1,4 +1,4 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,7 +19,7 @@ export class EmailProjectCatalog extends Context.Service<
     readonly list: Effect.Effect<ReadonlyArray<EmailProject>, ProjectService.ProjectOperationError>;
     readonly streamChanges: Stream.Stream<void>;
   }
->()("t3/email/EmailProjectCatalog") {}
+>()("@spiritdevs/pathway/email/EmailProjectCatalog") {}
 
 export const layer = Layer.effect(
   EmailProjectCatalog,

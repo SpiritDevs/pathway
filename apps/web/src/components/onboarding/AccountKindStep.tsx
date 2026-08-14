@@ -1,4 +1,4 @@
-import { type AccountKind } from "@t3tools/client-runtime/profile";
+import { type AccountKind } from "@spiritdevs/client-runtime/profile";
 import { Building2Icon, UserIcon, type LucideIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";

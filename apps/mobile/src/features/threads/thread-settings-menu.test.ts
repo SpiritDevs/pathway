@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProviderInstanceId, type ProviderOptionDescriptor } from "@t3tools/contracts";
+import { ProviderInstanceId, type ProviderOptionDescriptor } from "@spiritdevs/contracts";
 
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { buildThreadSettingsMenu, type ThreadSettingsMenuEvent } from "./thread-settings-menu";

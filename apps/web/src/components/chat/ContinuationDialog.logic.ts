@@ -1,4 +1,4 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ModelSelection, ProviderInstanceId } from "@spiritdevs/contracts";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { isProviderInstancePickerReady } from "../../providerInstances";
 import type { ModelEsque } from "./providerIconUtils";

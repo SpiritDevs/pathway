@@ -1,10 +1,10 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type {
   EnvironmentId,
   PullRequestRef,
   PullRequestReviewThread,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CodeIcon, MessageSquareIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
 

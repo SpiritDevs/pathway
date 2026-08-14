@@ -21,7 +21,7 @@
  *   `packages/backend` resolved relative to this file.
  *
  * A stored Pathway Connect CLI credential must exist on this machine
- * (`t3 connect login`), and `npx convex run` must be authenticated for the
+ * (`pathway connect login`), and `npx convex run` must be authenticated for the
  * target deployment when executed from `packages/backend`. The registration
  * hooks shell out to the internal-only `smoke:*` functions in
  * `packages/backend/convex/smoke.ts`; see `./convexSmokeHooks.ts`.
@@ -32,8 +32,8 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { SMOKE_COMPANY_DOMAIN_ID } from "@t3tools/backend/smokeSeed";
-import * as NetService from "@t3tools/shared/Net";
+import { SMOKE_COMPANY_DOMAIN_ID } from "@spiritdevs/backend/smokeSeed";
+import * as NetService from "@spiritdevs/shared/Net";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -73,7 +73,7 @@ describe.skipIf(!SMOKE_ENABLED)("convex sync relay-flow smoke (live)", () => {
       return;
     }
 
-    // Same runtime wiring `t3 connect` commands use, minus the pieces the
+    // Same runtime wiring `pathway connect` commands use, minus the pieces the
     // smoke never touches (relay client binary, boot service, prompts).
     const program = Effect.gen(function* () {
       const config = yield* resolveCliAuthConfig({ baseDir: Option.none() }, Option.none());

@@ -17,7 +17,7 @@ import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import {
   RelayAccessTokenType,
   RelayConvexAudience,
@@ -25,9 +25,9 @@ import {
   RelayEnvironmentAuth,
   RelayEnvironmentCredentialTokenType,
   type RelayConvexServiceTokenRequest,
-} from "@t3tools/contracts/relay";
-import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@t3tools/shared/dpop";
-import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/contracts/relay";
+import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@spiritdevs/shared/dpop";
+import { decodeRelayJwt } from "@spiritdevs/shared/relayJwt";
 
 import {
   RELAY_REQUEST_DEADLINE_MS,

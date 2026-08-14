@@ -5,8 +5,8 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { EnvironmentInternalError } from "@t3tools/contracts";
-import * as NetService from "@t3tools/shared/Net";
+import { EnvironmentInternalError } from "@spiritdevs/contracts";
+import * as NetService from "@spiritdevs/shared/Net";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -45,7 +45,7 @@ const makeConfig = (baseDir: string) =>
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpExportIntervalMs: 10_000,
-      otlpServiceName: "t3-server",
+      otlpServiceName: "pathway-server",
       mode: "web",
       port: 0,
       host: "127.0.0.1",

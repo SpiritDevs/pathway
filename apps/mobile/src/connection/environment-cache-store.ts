@@ -4,8 +4,8 @@ import {
   ORCHESTRATION_CACHE_SCHEMA_VERSION,
   StoredOrchestrationShellSnapshot,
   StoredOrchestrationThreadSnapshot,
-} from "@t3tools/client-runtime/platform";
-import { type EnvironmentId, ServerConfig, VcsListRefsResult } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/platform";
+import { type EnvironmentId, ServerConfig, VcsListRefsResult } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";

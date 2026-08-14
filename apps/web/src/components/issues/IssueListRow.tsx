@@ -14,7 +14,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { ChevronRightIcon } from "lucide-react";
 import { memo, type MouseEvent } from "react";
 

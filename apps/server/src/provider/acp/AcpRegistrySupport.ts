@@ -1,8 +1,8 @@
 import {
   type AcpRegistryDistributionPreference,
   type AcpRegistrySettings,
-} from "@t3tools/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+} from "@spiritdevs/contracts";
+import { HostProcessArchitecture, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";

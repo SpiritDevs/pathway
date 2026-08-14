@@ -7,7 +7,7 @@
  *
  * @module components/email/ClearInboxButton
  */
-import type { EmailInboxScope } from "@t3tools/contracts";
+import type { EmailInboxScope } from "@spiritdevs/contracts";
 import { useState } from "react";
 
 import { useClearEmailInbox } from "~/state/email";

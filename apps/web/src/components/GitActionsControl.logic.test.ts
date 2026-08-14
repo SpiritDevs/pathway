@@ -1,4 +1,4 @@
-import type { OrchestrationV2ProjectedTurnItem, VcsStatusResult } from "@t3tools/contracts";
+import type { OrchestrationV2ProjectedTurnItem, VcsStatusResult } from "@spiritdevs/contracts";
 import { assert, describe, it } from "vite-plus/test";
 import {
   actionIncludesCommitStep,

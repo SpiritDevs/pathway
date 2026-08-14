@@ -1,13 +1,13 @@
-import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
+import type { KnownTerminalSession } from "@spiritdevs/client-runtime/state/terminal";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { DiscoveredLocalServer, ScopedThreadRef } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/runtime";
+import type { DiscoveredLocalServer, ScopedThreadRef } from "@spiritdevs/contracts";
 import { ChevronDownIcon, RadioTower, TerminalSquare } from "lucide-react";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 
-import { getTerminalLabel, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { getTerminalLabel, resolveTerminalSessionLabel } from "@spiritdevs/shared/terminalLabels";
 import { cn } from "~/lib/utils";
 import { useDiscoveredPorts } from "~/portDiscoveryState";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";

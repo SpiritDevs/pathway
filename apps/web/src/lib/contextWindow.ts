@@ -1,4 +1,4 @@
-import type { OrchestrationV2TurnItem, ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type { OrchestrationV2TurnItem, ThreadTokenUsageSnapshot } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 function asFiniteNumber(value: unknown): number | null {

@@ -126,7 +126,7 @@ pair in this order:
    relay APIs are healthy. Verify that it returns the public P-256 key.
 3. In Convex, set `PATHWAY_RELAY_JWT_ISSUER=https://<relay-origin>` and
    `PATHWAY_RELAY_JWKS_URL=https://<relay-origin>/.well-known/jwks.json`, then run
-   `pnpm --filter @t3tools/backend exec convex dev --once`.
+   `pnpm --filter @spiritdevs/backend exec convex dev --once`.
 
 Convex statically requires every environment variable referenced by `auth.config.ts`, so both relay
 variables must be present before codegen or deployment. Relay service calls then use short-lived

@@ -9,7 +9,7 @@ import {
   type ProviderReplayEntry,
   type ProviderReplayTranscript,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";

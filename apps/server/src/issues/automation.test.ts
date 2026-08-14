@@ -5,8 +5,8 @@ import {
   IssueStatusId,
   ProjectId,
   ProviderInstanceId,
-} from "@t3tools/contracts";
-import type { Issue, IssueAutomationSettings } from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import type { Issue, IssueAutomationSettings } from "@spiritdevs/contracts";
 
 import {
   buildIssueAutomationAuditPrompt,

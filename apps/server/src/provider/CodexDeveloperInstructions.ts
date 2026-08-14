@@ -1,4 +1,4 @@
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import type { ProviderInteractionMode } from "@spiritdevs/contracts";
 
 import { PATHWAY_ORCHESTRATION_INSTRUCTIONS } from "./PathwayOrchestrationInstructions.ts";
 

@@ -3,8 +3,8 @@
 > For maintainers. Using Pathway? See [docs/user](../user/).
 
 Pathway Connect uses one Clerk application for web, desktop, and mobile authentication. The relay verifies
-two kinds of bearer credential: template JWTs generated from the `t3-relay` template with the shared
-`t3-code-relay` audience, and Clerk OAuth tokens issued to the CLI. `verifyRelayClientBearerToken` in
+two kinds of bearer credential: template JWTs generated from the `pathway-relay` template with the shared
+`pathway-relay` audience, and Clerk OAuth tokens issued to the CLI. `verifyRelayClientBearerToken` in
 `infra/relay/src/http/Api.ts` tries the template/session path first and falls back to OAuth
 verification (`acceptsToken: "oauth_token"`), so the CLI's OAuth credential works without a JWT
 template.
@@ -14,16 +14,14 @@ For the wider system diagram, see
 
 ## Application Keys
 
-Pathway Connect is disabled in a fresh clone. To enable it for source builds against the production
-deployment, copy the repository-root example file:
+Pathway Connect is disabled in a fresh clone. To enable it for source builds, copy the
+repository-root example file and fill in the Pathway Clerk public identifiers:
 
 ```sh
 cp .env.example .env
 ```
 
-`.env.example` carries the production public identifiers (the same values baked into official
-release builds). To target a different Clerk application or relay, set the values yourself in a
-repository-root `.env` or `.env.local` file:
+Set the values in the repository-root `.env` or `.env.local` file:
 
 ```dotenv
 PATHWAY_CLERK_PUBLISHABLE_KEY=<publishable key>
@@ -55,7 +53,7 @@ The Clerk publishable key is mandatory in this fork: the app requires an account
 build without the key fails closed to a misconfiguration screen rather than running open
 ([decisions/0001](./decisions/0001-mandatory-account-gate.md)). The remaining public values stay
 optional — when the relay URL or JWT template is absent, Pathway Connect cloud UI is omitted while
-identity keeps working. The `t3 connect` command group is
+identity keeps working. The `pathway connect` command group is
 always registered: when the CLI public values are absent, `makeCli` in `apps/server/src/bin.ts`
 registers a hidden fallback `connect` command that reports the missing configuration instead of
 silently vanishing from help. The bundled server still accepts runtime overrides for self-hosted or
@@ -86,7 +84,7 @@ A fresh environment bootstraps in this order:
    requests are not healthy yet.
 3. Set `PATHWAY_RELAY_JWT_ISSUER` to the exact relay origin and `PATHWAY_RELAY_JWKS_URL` to that
    origin plus `/.well-known/jwks.json` on the Convex deployment, then run
-   `pnpm --filter @t3tools/backend exec convex dev --once`.
+   `pnpm --filter @spiritdevs/backend exec convex dev --once`.
 
 Convex statically requires both relay variables before codegen or deployment because they are
 referenced by `auth.config.ts`; a Clerk-only conditional cannot bypass that validation. Personal
@@ -95,7 +93,7 @@ because it owns the retained Cloudflare zones those stages reference.
 
 ## Headless CLI OAuth Application
 
-The `t3 connect` commands authorize a headless environment with a separate Clerk OAuth application.
+The `pathway connect` commands authorize a headless environment with a separate Clerk OAuth application.
 This uses an OAuth public client with PKCE, so the CLI stores no client secret.
 
 In **Clerk Dashboard > OAuth applications**:
@@ -104,7 +102,7 @@ In **Clerk Dashboard > OAuth applications**:
 2. Enable the **Public** option so authorization-code exchange uses PKCE.
 3. Add **both** allowed redirect URIs:
    - `http://127.0.0.1:34338/callback` for the loopback listener;
-   - `https://app.t3.codes/connect/callback` for the hosted out-of-band flow. This is
+   - `https://app.spiritdevs.com/connect/callback` for the hosted out-of-band flow. This is
      `connectCallbackUrl(DEFAULT_HOSTED_APP_URL)` from `packages/shared/src/connectAuth.ts`, so a
      custom `PATHWAY_HOSTED_APP_URL` means `$PATHWAY_HOSTED_APP_URL/connect/callback` instead.
      Omitting it breaks headless and SSH authorization.
@@ -119,28 +117,28 @@ handshake; it only validates the issued Clerk bearer token when the CLI manages 
 The connect command group is:
 
 ```sh
-t3 connect            # default: onboarding
-t3 connect login
-t3 connect link       # --publish-only
-t3 connect status     # --json
-t3 connect publish    # --disable
-t3 connect unlink
-t3 connect logout
+pathway connect            # default: onboarding
+pathway connect login
+pathway connect link       # --publish-only
+pathway connect status     # --json
+pathway connect publish    # --disable
+pathway connect unlink
+pathway connect logout
 ```
 
-`t3 serve` is a separate top-level command, not a connect subcommand.
+`pathway serve` is a separate top-level command, not a connect subcommand.
 
-`t3 connect login` opens the Clerk authorization flow and stores the CLI credential without enabling
-cloud exposure. `t3 connect link` installs the pinned managed `cloudflared` binary when needed,
+`pathway connect login` opens the Clerk authorization flow and stores the CLI credential without enabling
+cloud exposure. `pathway connect link` installs the pinned managed `cloudflared` binary when needed,
 authorizes when needed, and records durable intent to expose the environment. It works without a
-running Pathway server. The next `t3 serve` or `t3 start` reconciles the relay link and launches the
-managed tunnel. `t3 connect unlink` records disabled intent immediately, stops a reachable running
+running Pathway server. The next `pathway serve` or `pathway start` reconciles the relay link and launches the
+managed tunnel. `pathway connect unlink` records disabled intent immediately, stops a reachable running
 connector, and attempts to revoke the relay-side environment record. It retains the stored CLI
-authorization so `t3 connect link` can re-enable exposure without another browser flow. `t3 connect
+authorization so `pathway connect link` can re-enable exposure without another browser flow. `pathway connect
 logout` performs the same cleanup and removes the stored CLI authorization.
 
 The background service has an independent lifecycle. Connect setup may offer to install it, but
-logout leaves it running; manage it with `t3 service status`, `install`, `update`, and `uninstall`.
+logout leaves it running; manage it with `pathway service status`, `install`, `update`, and `uninstall`.
 
 ### Headless and SSH authorization
 
@@ -163,11 +161,11 @@ In **Clerk Dashboard > JWT templates**, create a template with:
 
 | Setting | Value                        |
 | ------- | ---------------------------- |
-| Name    | `t3-relay`                   |
-| Claims  | `{ "aud": "t3-code-relay" }` |
+| Name    | `pathway-relay`              |
+| Claims  | `{ "aud": "pathway-relay" }` |
 
-Set `PATHWAY_CLERK_JWT_TEMPLATE=t3-relay` in the repository-root `.env`, and set
-`CLERK_JWT_AUDIENCE=t3-code-relay` in `infra/relay/.env`. Define `CLERK_JWT_TEMPLATE` and
+Set `PATHWAY_CLERK_JWT_TEMPLATE=pathway-relay` in the repository-root `.env`, and set
+`CLERK_JWT_AUDIENCE=pathway-relay` in `infra/relay/.env`. Define `CLERK_JWT_TEMPLATE` and
 `CLERK_JWT_AUDIENCE` in the production relay deployment environment as well. The stable `aud` value
 is shared by production and non-production relay stages. The client-facing `PATHWAY_RELAY_URL` still
 selects the concrete relay deployment, but changing that URL does not require a JWT template change.
@@ -204,16 +202,16 @@ artifact.
 
 ## Desktop Passkeys
 
-The production macOS bundle ID is `com.t3tools.pathway`. To enable native passkeys:
+The production macOS bundle ID is `com.spiritdevs.pathway`. To enable native passkeys:
 
-1. Create an explicit macOS App ID for `com.t3tools.pathway` in the Apple Developer portal and enable
+1. Create an explicit macOS App ID for `com.spiritdevs.pathway` in the Apple Developer portal and enable
    **Associated Domains**.
 2. Create a compatible macOS provisioning profile for that App ID and the certificate used to sign
    the distributed app.
 3. In Clerk's Native API settings, add an iOS app with the same Apple Team ID and bundle ID. This is
    also the configuration point for Electron/macOS passkeys.
 4. Confirm Clerk serves `https://<frontend-api>/.well-known/apple-app-site-association` and that
-   `webcredentials.apps` contains `<TEAM_ID>.com.t3tools.pathway`.
+   `webcredentials.apps` contains `<TEAM_ID>.com.spiritdevs.pathway`.
 5. Set the local or CI signing configuration described below.
 
 For a local signed build, add these values to `.env.local` or export them before invoking the

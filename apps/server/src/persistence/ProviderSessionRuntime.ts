@@ -9,8 +9,8 @@ import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import { IsoDateTime, ProviderInstanceId, RuntimeMode, ThreadId } from "@t3tools/contracts";
-import { ProviderSessionRuntimeStatus } from "@t3tools/contracts/legacy-orchestration";
+import { IsoDateTime, ProviderInstanceId, RuntimeMode, ThreadId } from "@spiritdevs/contracts";
+import { ProviderSessionRuntimeStatus } from "@spiritdevs/contracts/legacy-orchestration";
 
 import {
   PersistenceDecodeError,
@@ -95,7 +95,7 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
       input: DeleteProviderSessionRuntimeInput,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
   }
->()("t3/persistence/ProviderSessionRuntime/ProviderSessionRuntimeRepository") {}
+>()("@spiritdevs/pathway/persistence/ProviderSessionRuntime/ProviderSessionRuntimeRepository") {}
 
 const ProviderSessionRuntimeDbRowSchema = ProviderSessionRuntime.mapFields(
   Struct.assign({

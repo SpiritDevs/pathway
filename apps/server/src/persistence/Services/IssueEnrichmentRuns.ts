@@ -16,7 +16,7 @@ import {
   IssueEnrichmentRun,
   IssueEnrichmentRunId,
   IssueId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -123,4 +123,4 @@ export interface IssueEnrichmentRunRepositoryShape {
 export class IssueEnrichmentRunRepository extends Context.Service<
   IssueEnrichmentRunRepository,
   IssueEnrichmentRunRepositoryShape
->()("t3/persistence/Services/IssueEnrichmentRuns/IssueEnrichmentRunRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueEnrichmentRuns/IssueEnrichmentRunRepository") {}

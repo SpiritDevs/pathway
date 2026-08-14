@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderInstanceId } from "@spiritdevs/contracts";
 
 import { parseClaudeUsage, parseCodexUsage, parseCursorUsage } from "./ProviderUsageService.ts";
 

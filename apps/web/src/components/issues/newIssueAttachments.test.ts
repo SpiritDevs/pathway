@@ -1,4 +1,4 @@
-import { ISSUE_COMMENT_MAX_ATTACHMENTS } from "@t3tools/contracts";
+import { ISSUE_COMMENT_MAX_ATTACHMENTS } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

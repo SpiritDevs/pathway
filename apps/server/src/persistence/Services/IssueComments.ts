@@ -7,7 +7,7 @@
  *
  * @module IssueCommentRepository
  */
-import { IssueComment, IssueCommentId, IssueId } from "@t3tools/contracts";
+import { IssueComment, IssueCommentId, IssueId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -76,4 +76,4 @@ export interface IssueCommentRepositoryShape {
 export class IssueCommentRepository extends Context.Service<
   IssueCommentRepository,
   IssueCommentRepositoryShape
->()("t3/persistence/Services/IssueComments/IssueCommentRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueComments/IssueCommentRepository") {}

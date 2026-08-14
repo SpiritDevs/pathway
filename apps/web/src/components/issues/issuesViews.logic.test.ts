@@ -8,8 +8,8 @@ import {
   ProviderDriverKind,
   type IssueView,
   type IssueViewConfig,
-} from "@t3tools/contracts";
-import { MembershipId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import { issueAssigneeValue, parseIssuesSearch, type IssuesSearch } from "./issuesList.logic";

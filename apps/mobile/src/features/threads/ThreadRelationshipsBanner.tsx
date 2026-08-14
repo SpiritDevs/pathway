@@ -5,13 +5,13 @@ import {
   immediateThreadRelationships,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
-} from "@t3tools/client-runtime/state/thread-relationships";
+} from "@spiritdevs/client-runtime/state/thread-relationships";
 import {
   canDetachThreadProviderSession,
   resolveLatestMergeBackRun,
-} from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
-import { copySorted } from "@t3tools/shared/Array";
+} from "@spiritdevs/client-runtime/state/thread-workflows";
+import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@spiritdevs/contracts";
+import { copySorted } from "@spiritdevs/shared/Array";
 import { useNavigation } from "@react-navigation/native";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, View } from "react-native";

@@ -1,7 +1,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
+import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import * as Console from "effect/Console";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";

@@ -2,8 +2,8 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { type TerminalSessionState } from "@t3tools/client-runtime/state/terminal";
+} from "@spiritdevs/client-runtime/state/runtime";
+import { type TerminalSessionState } from "@spiritdevs/client-runtime/state/terminal";
 import {
   EllipsisIcon,
   Maximize2Icon,
@@ -19,8 +19,8 @@ import {
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
   type ThreadId,
-} from "@t3tools/contracts";
-import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
+} from "@spiritdevs/contracts";
+import { getTerminalLabel } from "@spiritdevs/shared/terminalLabels";
 import * as Schema from "effect/Schema";
 import {
   type PointerEvent as ReactPointerEvent,

@@ -10,8 +10,8 @@ import {
   type IssueLabel,
   type IssueStatus,
   type IssueStatusCategory,
-} from "@t3tools/contracts";
-import { MembershipId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EMPTY_ISSUES_STORE, type IssuesGrouping, type IssuesStore } from "~/state/issues";

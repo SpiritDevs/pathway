@@ -3,7 +3,7 @@ import {
   REFERRAL_SOURCE_OPTIONS,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";

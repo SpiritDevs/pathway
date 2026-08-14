@@ -32,7 +32,7 @@ The available action depends on how that server was started. Pathway does not up
 servers silently in the background.
 
 An older background-service launcher may ask you to run the exact
-`npx t3@<version> service update` command on the server machine. That one local update installs the
+`npx @spiritdevs/pathway@<version> service update` command on the server machine. That one local update installs the
 rollback support needed for later remote updates, including versions that change the database.
 
 After selecting **Update**, the notice becomes a live status line: **Downloading…** while the new
@@ -40,17 +40,17 @@ version is fetched and verified, then **Restarting…** while the server restart
 status appears in the conversation and in Connections, so navigating between them does not lose the
 update. A failure remains visible with its error and an option to retry.
 
-**Copy update command** gives you `npx t3@<client-version>`, which relaunches the server directly
+**Copy update command** gives you `npx @spiritdevs/pathway@<client-version>`, which relaunches the server directly
 at the matching version. Add whatever startup options you normally use.
 
 If the server instead runs as the Pathway background service, update the service on the host and
 pin the same version:
 
 ```sh
-npx t3@<client-version> service update
+npx @spiritdevs/pathway@<client-version> service update
 ```
 
-`service update` installs the version of the CLI that invoked it, so `npx t3@latest service update`
+`service update` installs the version of the CLI that invoked it, so `npx @spiritdevs/pathway@latest service update`
 only resolves the skew when your client happens to be on the latest release. The exact version from
 the warning always works.
 
@@ -67,7 +67,7 @@ If a step fails:
 
 1. Retry the offered action once.
 2. Make sure you updated the machine named in the warning, not only the device you are using.
-3. For a command-line server, relaunch it with `npx t3@<client-version>`, replacing
+3. For a command-line server, relaunch it with `npx @spiritdevs/pathway@<client-version>`, replacing
    `<client-version>` with the client version shown in the warning.
 
 For remote connection setup and access troubleshooting, see [Remote Access](./remote-access.md).

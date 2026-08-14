@@ -3,7 +3,7 @@ import {
   COMPANY_SIZE_OPTIONS,
   type CompanyRole,
   type CompanySize,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";

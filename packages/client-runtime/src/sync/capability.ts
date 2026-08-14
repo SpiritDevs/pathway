@@ -15,7 +15,7 @@ export interface CloudSyncCapabilityState {
 }
 
 export class CloudSyncCapability extends Context.Reference<CloudSyncCapabilityState>(
-  "@t3tools/client-runtime/sync/capability/CloudSyncCapability",
+  "@spiritdevs/client-runtime/sync/capability/CloudSyncCapability",
   { defaultValue: () => ({ enabled: false }) },
 ) {}
 

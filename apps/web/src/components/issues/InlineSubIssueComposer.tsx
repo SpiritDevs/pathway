@@ -6,7 +6,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { CircleDotIcon, TagIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";

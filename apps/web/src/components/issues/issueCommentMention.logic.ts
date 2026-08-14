@@ -25,7 +25,7 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 /** One agent a comment may name, as the composer knows it: an instance, not a driver kind. */
 export interface IssueCommentMentionAgent {

@@ -8,25 +8,25 @@ boots and keeps running after you log out.
 Install it with the latest Pathway release:
 
 ```sh
-npx t3@latest service install
+npx @spiritdevs/pathway@latest service install
 ```
 
 Check whether it is installed:
 
 ```sh
-npx t3@latest service status
+npx @spiritdevs/pathway@latest service status
 ```
 
 Update or repair it:
 
 ```sh
-npx t3@latest service update
+npx @spiritdevs/pathway@latest service update
 ```
 
 Stop it and remove it from startup:
 
 ```sh
-npx t3@latest service uninstall
+npx @spiritdevs/pathway@latest service uninstall
 ```
 
 Updating restarts Pathway briefly. Let active agent work and terminal commands finish first.
@@ -43,7 +43,7 @@ available.
 Pathway Connect may offer to install the service during setup so the host stays reachable after you log
 out. This is only an onboarding shortcut: the service and Pathway Connect are managed separately.
 
-Signing out of Pathway Connect does not remove the service. Use `t3 service uninstall` when you no longer
+Signing out of Pathway Connect does not remove the service. Use `pathway service uninstall` when you no longer
 want Pathway to start in the background.
 
 The background service currently requires Linux with systemd.

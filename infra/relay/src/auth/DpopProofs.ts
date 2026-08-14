@@ -1,4 +1,4 @@
-import { api } from "@t3tools/backend/convexApi";
+import { api } from "@spiritdevs/backend/convexApi";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 
-import { verifyDpopProof } from "@t3tools/shared/dpop";
+import { verifyDpopProof } from "@spiritdevs/shared/dpop";
 import { RelayConvexClient } from "../db.ts";
 
 export const DPOP_PROOF_PRUNE_BATCH_SIZE = 500;

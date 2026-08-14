@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { decodeRelayJwt, signRelayEs256Jwt, signRelayJwt } from "@t3tools/shared/relayJwt";
+import { decodeRelayJwt, signRelayEs256Jwt, signRelayJwt } from "@spiritdevs/shared/relayJwt";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -27,7 +27,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
     teamId: "team-id",
     keyId: "key-id",
     privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.pathway.dev",
+    bundleId: "com.spiritdevs.pathway.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),

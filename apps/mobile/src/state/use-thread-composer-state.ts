@@ -1,10 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import { threadRuntimeIsActive } from "@spiritdevs/client-runtime/state/shell";
 import {
   deriveThreadActivityRun,
   deriveThreadRuntime,
   threadRuntimeHasInterruptibleRun,
-} from "@t3tools/client-runtime/state/thread-execution";
+} from "@spiritdevs/client-runtime/state/thread-execution";
 import { useCallback, useEffect, useMemo } from "react";
 
 import {
@@ -15,9 +15,9 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
-} from "@t3tools/contracts";
-import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
-import { deriveActiveWorkStartedAt } from "@t3tools/shared/orchestrationTiming";
+} from "@spiritdevs/contracts";
+import { safeErrorLogAttributes } from "@spiritdevs/client-runtime/errors";
+import { deriveActiveWorkStartedAt } from "@spiritdevs/shared/orchestrationTiming";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import {

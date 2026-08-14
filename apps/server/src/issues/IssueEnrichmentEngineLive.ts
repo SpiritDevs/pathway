@@ -33,7 +33,7 @@ import {
   type IssueEnrichmentRunId,
   type IssueLabel,
   type IssueStatus,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

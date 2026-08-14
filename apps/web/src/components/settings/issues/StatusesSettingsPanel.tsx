@@ -9,8 +9,8 @@ import {
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import { IssueStatusId, type IssueStatus, type IssueStatusCategory } from "@t3tools/contracts";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import { IssueStatusId, type IssueStatus, type IssueStatusCategory } from "@spiritdevs/contracts";
 import { GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 

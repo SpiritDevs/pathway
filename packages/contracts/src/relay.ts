@@ -564,7 +564,7 @@ export class RelayClientPrincipal extends Context.Service<
     readonly proofKeyThumbprint?: string;
     readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
   }
->()("@t3tools/contracts/relay/RelayClientPrincipal") {}
+>()("@spiritdevs/contracts/relay/RelayClientPrincipal") {}
 
 export class RelayEnvironmentPrincipal extends Context.Service<
   RelayEnvironmentPrincipal,
@@ -572,7 +572,7 @@ export class RelayEnvironmentPrincipal extends Context.Service<
     readonly environmentId: string;
     readonly environmentPublicKey: string;
   }
->()("@t3tools/contracts/relay/RelayEnvironmentPrincipal") {}
+>()("@spiritdevs/contracts/relay/RelayEnvironmentPrincipal") {}
 
 const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
   HttpApiSecurity.annotate(
@@ -709,11 +709,11 @@ export const RelayConvexControlPlaneTokenKind = "relay-control-plane" as const;
 // environment already holds. It is relay-specific, so it uses a relay URN rather
 // than one of the IETF-registered token types.
 export const RelayEnvironmentCredentialTokenType =
-  "urn:t3tools:params:oauth:token-type:environment-credential" as const;
+  "urn:spiritdevs:params:oauth:token-type:environment-credential" as const;
 
 /**
  * JWT type of the environment-signed assertion that names the DPoP key an
- * exchange may bind. Lives here rather than in `@t3tools/shared/relayJwt`
+ * exchange may bind. Lives here rather than in `@spiritdevs/shared/relayJwt`
  * because it is only ever produced and consumed alongside this request shape.
  */
 export const RELAY_CONVEX_KEY_BINDING_TYP = "t3-env-convex-key-binding+jwt" as const;

@@ -9,7 +9,7 @@ import {
   ProviderTurnId,
   ThreadId,
   type OrchestrationV2ProviderTurn,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 

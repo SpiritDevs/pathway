@@ -67,7 +67,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appRoot, "/repo");
       assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
       assert.equal(environment.backendCwd, "/repo");
-      assert.equal(environment.appUserModelId, "com.t3tools.pathway.dev");
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev");
       assert.equal(environment.linuxWmClass, "pathway-dev");
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
@@ -121,12 +121,12 @@ describe("DesktopEnvironment", () => {
       const environment = yield* makeEnvironment(
         {},
         {
-          PATHWAY_DESKTOP_APP_USER_MODEL_ID: " com.t3tools.pathway.dev.local ",
+          PATHWAY_DESKTOP_APP_USER_MODEL_ID: " com.spiritdevs.pathway.dev.local ",
           VITE_DEV_SERVER_URL: "http://localhost:5173",
         },
       );
 
-      assert.equal(environment.appUserModelId, "com.t3tools.pathway.dev.local");
+      assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev.local");
     }),
   );
 

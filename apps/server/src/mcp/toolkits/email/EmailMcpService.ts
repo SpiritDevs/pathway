@@ -13,7 +13,7 @@ import {
   type EmailProjectSettings,
   type EmailWaitRegistration,
   type ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -57,7 +57,7 @@ export class EmailMcpProjectScope extends Context.Service<
       project: EmailMcpProject | undefined,
     ) => Effect.Effect<EmailInboxScope, EmailCaptureError>;
   }
->()("t3/mcp/toolkits/email/EmailMcpService/EmailMcpProjectScope") {}
+>()("@spiritdevs/pathway/mcp/toolkits/email/EmailMcpService/EmailMcpProjectScope") {}
 
 export const EmailMcpProjectScopeLive = Layer.effect(
   EmailMcpProjectScope,
@@ -215,7 +215,7 @@ export class EmailMcpService extends Context.Service<
       invocation: McpInvocationScope,
     ) => Effect.Effect<Stream.Stream<EmailMcpTaskState, EmailCaptureError>, never, Scope.Scope>;
   }
->()("t3/mcp/toolkits/email/EmailMcpService") {}
+>()("@spiritdevs/pathway/mcp/toolkits/email/EmailMcpService") {}
 
 const make = Effect.fn("EmailMcpService.make")(function* () {
   const store = yield* EmailStore;

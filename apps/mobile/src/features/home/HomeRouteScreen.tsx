@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
-import { isPullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
+import { isPullRequestReviewThreadTitle } from "@spiritdevs/shared/pullRequestReview";
 import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";

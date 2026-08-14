@@ -10,7 +10,7 @@
  *
  * @module components/projects/AttachProjectDirectoryDialog
  */
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useEnvironments } from "~/state/environments";

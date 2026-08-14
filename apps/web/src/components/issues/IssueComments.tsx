@@ -25,7 +25,7 @@ import type {
   IssueId,
   ModelSelection,
   ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 

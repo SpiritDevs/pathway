@@ -11,7 +11,7 @@ import {
   ProjectId,
   type EmailCaptureReceipt,
   type EmailProjectSettings,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";

@@ -8,7 +8,7 @@
  *
  * @module sync/presentation
  */
-import type { SyncPresentation } from "@t3tools/contracts/cloudSync";
+import type { SyncPresentation } from "@spiritdevs/contracts/cloudSync";
 
 import type { PendingSyncOperation } from "./model.ts";
 import type { SyncTransportError } from "./transport.ts";

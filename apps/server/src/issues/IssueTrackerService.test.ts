@@ -17,8 +17,8 @@ import {
   type IssueEnrichmentRun,
   type IssueViewConfig,
   type ModelSelection,
-} from "@t3tools/contracts";
-import { MembershipId } from "@t3tools/contracts/company";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";

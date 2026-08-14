@@ -15,8 +15,8 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+} from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { PlusIcon } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 

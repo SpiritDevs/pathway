@@ -7,7 +7,7 @@
  *
  * @module components/issues/IssueActivityFeed
  */
-import type { IssueEvent } from "@t3tools/contracts";
+import type { IssueEvent } from "@spiritdevs/contracts";
 import { useMemo } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";

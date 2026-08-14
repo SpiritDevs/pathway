@@ -5,8 +5,8 @@ import type {
   ResolvedKeybindingsConfig,
   ServerProvider,
   ThreadId,
-} from "@t3tools/contracts";
-import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+} from "@spiritdevs/contracts";
+import type { EnvironmentConnectionPresentation } from "@spiritdevs/client-runtime/connection";
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";

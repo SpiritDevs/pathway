@@ -6,7 +6,7 @@ import {
   type Project,
   type ProjectScript,
   type ProjectSnapshot,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -116,7 +116,7 @@ export class ProjectService extends Context.Service<
     ) => Effect.Effect<Option.Option<Project>, ProjectOperationError>;
     readonly snapshot: Effect.Effect<ProjectSnapshot, ProjectOperationError>;
   }
->()("t3/project/ProjectService") {}
+>()("@spiritdevs/pathway/project/ProjectService") {}
 
 export const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;

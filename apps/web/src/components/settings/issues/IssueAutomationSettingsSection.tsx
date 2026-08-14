@@ -4,15 +4,15 @@ import type {
   IssueAutomationRoutingRule,
   IssueAutomationSettings,
   ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE,
   ISSUE_AUTOMATION_MAX_AUDIT_RULES,
   ISSUE_AUTOMATION_MAX_REVIEW_WORKERS,
   ISSUE_AUTOMATION_MAX_ROUTING_RULES,
   ProviderDriverKind,
-} from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import { ChevronDownIcon, ChevronUpIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "~/hooks/useSettings";

@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import {
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
@@ -11,7 +11,7 @@ import {
   type ProviderUsageDriver,
   type ServerProvider,
   type ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 
