@@ -202,6 +202,7 @@ export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly runId: RunId;
+  readonly forkKind?: "manual" | "side_chat";
   readonly title?: string;
 }
 
@@ -843,6 +844,7 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
     sourcePoint: { type: "run", runId: input.runId },
+    ...(input.forkKind === undefined ? {} : { forkKind: input.forkKind }),
     ...(input.title === undefined ? {} : { title: input.title }),
   });
 });

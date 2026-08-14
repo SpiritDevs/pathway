@@ -4,6 +4,7 @@ import {
   immediateThreadRelationships,
   isParentThreadRelationship,
   orderWebThreadLineageRows,
+  resolveThreadForkKind,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
 } from "@t3tools/client-runtime/state/thread-relationships";
@@ -16,10 +17,12 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
+  CheckIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   GitMergeIcon,
   LoaderCircleIcon,
+  MessagesSquareIcon,
   MoreHorizontalIcon,
   PlusIcon,
   UnplugIcon,
@@ -27,6 +30,7 @@ import {
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useThreadProjection, useThreadShells } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
@@ -150,8 +154,10 @@ export function ThreadRelationshipsPanel(props: {
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
+  const settleThread = useAtomCommand(threadEnvironment.settle);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
+  const [settlingThreadId, setSettlingThreadId] = useState<ThreadId | null>(null);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
   const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
   const relationshipRows = useMemo(
@@ -164,23 +170,52 @@ export function ThreadRelationshipsPanel(props: {
       }),
     [graph, mergeTargetThreadId, props.threadId],
   );
+  const chatRows = useMemo(
+    () =>
+      relationshipRows.filter(({ threadId, edge }) => {
+        const thread = graph.nodes.get(threadId)?.thread;
+        return (
+          edge.kind === "fork" &&
+          edge.sourceThreadId === props.threadId &&
+          thread?.settledOverride !== "settled"
+        );
+      }),
+    [graph.nodes, props.threadId, relationshipRows],
+  );
+  const lineageRows = useMemo(
+    () =>
+      relationshipRows.filter(
+        ({ edge }) => !(edge.kind === "fork" && edge.sourceThreadId === props.threadId),
+      ),
+    [props.threadId, relationshipRows],
+  );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
 
   const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  const [visibleChatCount, setVisibleChatCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
   const lineageResetKey = scopedThreadKey(ref);
   const lastLineageResetKeyRef = useRef(lineageResetKey);
   if (lastLineageResetKeyRef.current !== lineageResetKey) {
     lastLineageResetKeyRef.current = lineageResetKey;
     setVisibleCount(THREAD_LINEAGE_INITIAL_COUNT);
+    setVisibleChatCount(THREAD_LINEAGE_INITIAL_COUNT);
   }
   const showMore = useCallback(
     () => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT),
     [],
   );
-  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(relationshipRows, visibleCount);
+  const showMoreChats = useCallback(
+    () => setVisibleChatCount((count) => count + THREAD_LINEAGE_PAGE_COUNT),
+    [],
+  );
+  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(lineageRows, visibleCount);
+  const { visibleRows: visibleChatRows, hiddenCount: hiddenChatCount } = resolveThreadLineageWindow(
+    chatRows,
+    visibleChatCount,
+  );
 
-  if (relationshipRows.length === 0) {
+  if (chatRows.length === 0 && lineageRows.length === 0) {
     return null;
   }
 
@@ -189,6 +224,23 @@ export function ThreadRelationshipsPanel(props: {
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(scopeThreadRef(props.environmentId, threadId)),
     });
+  };
+
+  const openChat = (threadId: ThreadId) => {
+    useRightPanelStore.getState().openThread(ref, threadId);
+  };
+
+  const settleChat = async (threadId: ThreadId, kind: "manual" | "side_chat") => {
+    if (settlingThreadId !== null) return;
+    setSettlingThreadId(threadId);
+    const result = await settleThread({
+      environmentId: props.environmentId,
+      input: { threadId },
+    });
+    setSettlingThreadId(null);
+    if (result._tag === "Success" && kind === "side_chat") {
+      useRightPanelStore.getState().closeSurface(ref, `thread:${threadId}`);
+    }
   };
 
   const merge = async () => {
@@ -222,160 +274,255 @@ export function ThreadRelationshipsPanel(props: {
       : (graph.nodes.get(mergeTargetThreadId)?.thread?.title ?? null);
 
   return (
-    <section
-      aria-labelledby="thread-details-lineage-heading"
-      className="border-t border-border/65 px-2 pb-2.5 pt-2"
-      data-thread-relationships-panel
-    >
-      <div className="mb-1 flex min-h-8 items-center justify-between gap-2 px-2">
-        <h3
-          id="thread-details-lineage-heading"
-          className="text-[11px] font-medium text-muted-foreground"
+    <>
+      {chatRows.length > 0 ? (
+        <section
+          aria-labelledby="thread-details-chats-heading"
+          className="border-t border-border/65 px-2 pb-2.5 pt-2"
+          data-thread-chats-panel
         >
-          Lineage
-        </h3>
-        <div className="flex shrink-0 items-center gap-1">
-          {canDetach ? (
-            <Menu>
-              <MenuTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
-                    aria-label="More thread actions"
-                    disabled={busyAction !== null}
-                  />
-                }
-              >
-                <MoreHorizontalIcon className="size-3.5" />
-              </MenuTrigger>
-              <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
-                <MenuItem onClick={() => void detach()}>
-                  <UnplugIcon className="size-3.5" />
-                  Disconnect agent session
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
-          ) : null}
-        </div>
-      </div>
-
-      <ThreadLineageRowList hiddenCount={hiddenCount} onShowMore={showMore}>
-        {visibleRows.map(({ threadId, edge }) => {
-          const node = graph.nodes.get(threadId);
-          const isSubagent = edge.kind === "subagent";
-          const isMergeTarget = threadId === mergeTargetThreadId;
-          const isParent = isParentThreadRelationship(edge, props.threadId);
-          const RelationshipIcon = isParent ? CornerLeftUpIcon : isSubagent ? BotIcon : GitForkIcon;
-          const relationship = relationshipLabel(edge, props.threadId);
-          const threadTitle = relationshipThreadTitle({
-            title: node?.thread?.title ?? threadId,
-            isSubagent,
-          });
-          const relationshipContent = (
-            <>
-              <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
-                <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
-                <span
-                  className={cn(
-                    "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
-                    statusDotClass(edge.status),
-                  )}
-                  aria-hidden="true"
-                />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
-                  {threadTitle}
-                </span>
-              </span>
-              <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-            </>
-          );
-          return (
-            <li key={threadId} className="group flex h-9 items-center rounded-lg">
-              {isMergeTarget ? (
-                <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
-                          disabled={node?.missing === true}
-                          onClick={() => openThread(threadId)}
-                        />
-                      }
-                    >
-                      {relationshipContent}
-                    </TooltipTrigger>
-                    <TooltipPopup side="left">
-                      {node?.missing
-                        ? "This related thread is unavailable"
-                        : `Open ${relationship.toLowerCase()} in this chat`}
-                    </TooltipPopup>
-                  </Tooltip>
-                  <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
-                          aria-label={
-                            parentTitle
-                              ? `Merge back to ${parentTitle}`
-                              : "Merge back to source conversation"
-                          }
-                          disabled={!canMerge || busyAction !== null}
-                          onClick={() => void merge()}
-                        >
-                          {busyAction === "merge" ? (
-                            <LoaderCircleIcon className="size-3 animate-spin" />
-                          ) : (
-                            <GitMergeIcon className="size-3" />
-                          )}
-                        </Button>
-                      }
+          <div className="mb-1 flex min-h-8 items-center px-2">
+            <h3
+              id="thread-details-chats-heading"
+              className="text-[11px] font-medium text-muted-foreground"
+            >
+              Forks &amp; side chats
+            </h3>
+          </div>
+          <ThreadLineageRowList
+            ariaLabel="Forks and side chats"
+            hiddenCount={hiddenChatCount}
+            onShowMore={showMoreChats}
+          >
+            {visibleChatRows.map(({ threadId }) => {
+              const node = graph.nodes.get(threadId);
+              const thread = node?.thread;
+              if (!thread) return null;
+              const kind = resolveThreadForkKind(thread) ?? "manual";
+              const isSideChat = kind === "side_chat";
+              const ChatIcon = isSideChat ? MessagesSquareIcon : GitForkIcon;
+              const label = isSideChat ? "Side chat" : "Forked";
+              return (
+                <li key={threadId} className="group flex h-9 items-center rounded-lg">
+                  <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={node.missing}
+                            onClick={() => openChat(threadId)}
+                            className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                          />
+                        }
+                      >
+                        <ChatIcon aria-label={label} className={THREAD_RELATIONSHIP_ICON_CLASS} />
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-4 text-foreground/85">
+                          {thread.title}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipPopup side="left">{label}</TooltipPopup>
+                    </Tooltip>
+                    <span
+                      aria-hidden="true"
+                      className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS}
                     />
-                    <TooltipPopup side="left">
-                      {latestMergeBackRun === null
-                        ? "Complete a run in this fork before merging it back"
-                        : parentTitle
-                          ? `Merge this conversation back into ${parentTitle}`
-                          : "Merge this conversation back into its source"}
-                    </TooltipPopup>
-                  </Tooltip>
-                </div>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                            aria-label={`Settle ${isSideChat ? "side chat" : "fork"} ${thread.title}`}
+                            disabled={settlingThreadId !== null}
+                            onClick={() => void settleChat(threadId, kind)}
+                          />
+                        }
+                      >
+                        {settlingThreadId === threadId ? (
+                          <LoaderCircleIcon className="size-3 animate-spin" />
+                        ) : (
+                          <CheckIcon className="size-3" />
+                        )}
+                      </TooltipTrigger>
+                      <TooltipPopup side="left">
+                        Settle {isSideChat ? "side chat" : "fork"}
+                      </TooltipPopup>
+                    </Tooltip>
+                  </div>
+                </li>
+              );
+            })}
+          </ThreadLineageRowList>
+        </section>
+      ) : null}
+
+      {lineageRows.length > 0 ? (
+        <section
+          aria-labelledby="thread-details-lineage-heading"
+          className="border-t border-border/65 px-2 pb-2.5 pt-2"
+          data-thread-relationships-panel
+        >
+          <div className="mb-1 flex min-h-8 items-center justify-between gap-2 px-2">
+            <h3
+              id="thread-details-lineage-heading"
+              className="text-[11px] font-medium text-muted-foreground"
+            >
+              Lineage
+            </h3>
+            <div className="flex shrink-0 items-center gap-1">
+              {canDetach ? (
+                <Menu>
+                  <MenuTrigger
                     render={
                       <Button
-                        size="sm"
+                        size="icon-xs"
                         variant="ghost"
-                        disabled={node?.missing === true}
-                        onClick={() => openThread(threadId)}
-                        className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
+                        className={THREAD_DETAILS_PANEL_ICON_ACTION_CLASS}
+                        aria-label="More thread actions"
+                        disabled={busyAction !== null}
                       />
                     }
                   >
-                    {relationshipContent}
-                  </TooltipTrigger>
-                  <TooltipPopup side="left">
-                    {node?.missing
-                      ? "This related thread is unavailable"
-                      : `Open ${relationship.toLowerCase()} in this chat`}
-                  </TooltipPopup>
-                </Tooltip>
-              )}
-            </li>
-          );
-        })}
-      </ThreadLineageRowList>
-    </section>
+                    <MoreHorizontalIcon className="size-3.5" />
+                  </MenuTrigger>
+                  <MenuPopup align="end" className={THREAD_DETAILS_PANEL_MENU_POPUP_CLASS}>
+                    <MenuItem onClick={() => void detach()}>
+                      <UnplugIcon className="size-3.5" />
+                      Disconnect agent session
+                    </MenuItem>
+                  </MenuPopup>
+                </Menu>
+              ) : null}
+            </div>
+          </div>
+
+          <ThreadLineageRowList hiddenCount={hiddenCount} onShowMore={showMore}>
+            {visibleRows.map(({ threadId, edge }) => {
+              const node = graph.nodes.get(threadId);
+              const isSubagent = edge.kind === "subagent";
+              const isMergeTarget = threadId === mergeTargetThreadId;
+              const isParent = isParentThreadRelationship(edge, props.threadId);
+              const RelationshipIcon = isParent
+                ? CornerLeftUpIcon
+                : isSubagent
+                  ? BotIcon
+                  : GitForkIcon;
+              const relationship = relationshipLabel(edge, props.threadId);
+              const threadTitle = relationshipThreadTitle({
+                title: node?.thread?.title ?? threadId,
+                isSubagent,
+              });
+              const relationshipContent = (
+                <>
+                  <span className="relative -mx-0.5 grid size-4 shrink-0 place-items-center">
+                    <RelationshipIcon className={THREAD_RELATIONSHIP_ICON_CLASS} />
+                    <span
+                      className={cn(
+                        "absolute -bottom-1 -right-1 size-2 rounded-full border-2 border-card",
+                        statusDotClass(edge.status),
+                      )}
+                      aria-hidden="true"
+                    />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium leading-4 text-foreground/85">
+                      {threadTitle}
+                    </span>
+                  </span>
+                  <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                </>
+              );
+              return (
+                <li key={threadId} className="group flex h-9 items-center rounded-lg">
+                  {isMergeTarget ? (
+                    <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                              disabled={node?.missing === true}
+                              onClick={() => openThread(threadId)}
+                            />
+                          }
+                        >
+                          {relationshipContent}
+                        </TooltipTrigger>
+                        <TooltipPopup side="left">
+                          {node?.missing
+                            ? "This related thread is unavailable"
+                            : `Open ${relationship.toLowerCase()} in this chat`}
+                        </TooltipPopup>
+                      </Tooltip>
+                      <span
+                        aria-hidden="true"
+                        className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS}
+                      />
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                              aria-label={
+                                parentTitle
+                                  ? `Merge back to ${parentTitle}`
+                                  : "Merge back to source conversation"
+                              }
+                              disabled={!canMerge || busyAction !== null}
+                              onClick={() => void merge()}
+                            >
+                              {busyAction === "merge" ? (
+                                <LoaderCircleIcon className="size-3 animate-spin" />
+                              ) : (
+                                <GitMergeIcon className="size-3" />
+                              )}
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup side="left">
+                          {latestMergeBackRun === null
+                            ? "Complete a run in this fork before merging it back"
+                            : parentTitle
+                              ? `Merge this conversation back into ${parentTitle}`
+                              : "Merge this conversation back into its source"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    </div>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={node?.missing === true}
+                            onClick={() => openThread(threadId)}
+                            className={THREAD_DETAILS_PANEL_LINK_ROW_CLASS}
+                          />
+                        }
+                      >
+                        {relationshipContent}
+                      </TooltipTrigger>
+                      <TooltipPopup side="left">
+                        {node?.missing
+                          ? "This related thread is unavailable"
+                          : `Open ${relationship.toLowerCase()} in this chat`}
+                      </TooltipPopup>
+                    </Tooltip>
+                  )}
+                </li>
+              );
+            })}
+          </ThreadLineageRowList>
+        </section>
+      ) : null}
+    </>
   );
 }

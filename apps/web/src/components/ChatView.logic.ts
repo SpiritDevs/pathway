@@ -16,6 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { resolveThreadForkKind } from "@t3tools/client-runtime/state/thread-relationships";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -37,6 +38,14 @@ export const FORK_THREAD_READINESS_ERROR =
   "The fork was created, but its thread data did not reach this client. Reconnect and try opening it from the sidebar.";
 
 export type ChatShortcutScope = "page" | "side-chat";
+
+export function visibleTurnItemsForThreadPresentation(
+  thread: Pick<Thread, "forkKind" | "lineage" | "title"> | null,
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
+  if (thread === null || resolveThreadForkKind(thread) !== "side_chat") return rows;
+  return rows.filter((row) => row.visibility !== "inherited");
+}
 
 export function shortcutScopeOwnsEvent(
   scope: ChatShortcutScope,

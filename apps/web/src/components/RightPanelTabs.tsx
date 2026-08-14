@@ -6,7 +6,7 @@ import {
   Files,
   GitPullRequest,
   Globe2,
-  MessageSquare,
+  MessagesSquare,
   Plus,
   TerminalSquare,
   X,
@@ -210,7 +210,7 @@ function RightPanelEmptyState(props: {
     {
       label: "Side chat",
       description: "Ask with this conversation's context.",
-      icon: MessageSquare,
+      icon: MessagesSquare,
       available: props.sideChatAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.sideChat,
       onClick: props.onAddSideChat,
@@ -386,7 +386,7 @@ function SurfaceIcon({
     case "agents":
       return <Bot className="size-3 shrink-0" />;
     case "thread":
-      return <MessageSquare className="size-3 shrink-0" />;
+      return <MessagesSquare className="size-3 shrink-0" />;
   }
 }
 
@@ -623,7 +623,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     disabledReason={SURFACE_DISABLED_REASONS.sideChat}
                     onClick={props.onAddSideChat}
                   >
-                    <MessageSquare />
+                    <MessagesSquare />
                     Side chat
                   </SurfaceMenuItem>
                 </MenuPopup>

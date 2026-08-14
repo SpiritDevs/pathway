@@ -2464,6 +2464,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         canonicalSourcePoint: contextSourcePointForRun(sourceProjection, sourceRun),
         transferId,
         targetThreadId: command.targetThreadId,
+        ...(command.forkKind === undefined ? {} : { forkKind: command.forkKind }),
         ...(command.title === undefined ? {} : { title: command.title }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,

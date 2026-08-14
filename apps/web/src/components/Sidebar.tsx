@@ -24,6 +24,7 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { resolveThreadForkKind } from "@t3tools/client-runtime/state/thread-relationships";
 import {
   scopeProjectRef,
   scopeThreadRef,
@@ -44,6 +45,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -384,7 +386,7 @@ function SidebarThreadTooltip({
       {sideChats.length > 0 ? (
         <div className="border-border/60 border-t">
           <div className="flex items-center gap-1.5 px-[var(--floating-content-inset)] py-2 text-[10px] font-medium text-muted-foreground">
-            <MessageSquareIcon aria-hidden className="size-3" />
+            <MessagesSquareIcon aria-hidden className="size-3" />
             <span>Side chats</span>
             <span className="ml-auto tabular-nums">{sideChats.length}</span>
           </div>
@@ -396,7 +398,7 @@ function SidebarThreadTooltip({
                 className="flex w-full cursor-pointer items-center gap-2 px-[var(--floating-content-inset)] py-2 text-left text-xs text-foreground/80 outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
                 onClick={() => onOpenSideChat(sideChat.id)}
               >
-                <MessageSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                <MessagesSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{sideChat.title}</span>
               </button>
             ))}
@@ -1881,7 +1883,14 @@ export default function Sidebar() {
     const grouped = new Map<string, EnvironmentThreadShell[]>();
     for (const thread of threads) {
       const parentThreadId = getSidebarForkParentThreadId(thread);
-      if (parentThreadId === null || thread.archivedAt !== null) continue;
+      if (
+        parentThreadId === null ||
+        thread.archivedAt !== null ||
+        thread.settledOverride === "settled" ||
+        resolveThreadForkKind(thread) !== "side_chat"
+      ) {
+        continue;
+      }
       const parentKey = scopedThreadKey(scopeThreadRef(thread.environmentId, parentThreadId));
       const existing = grouped.get(parentKey);
       if (existing) {

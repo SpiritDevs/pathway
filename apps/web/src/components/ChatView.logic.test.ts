@@ -40,6 +40,7 @@ import {
   shouldShowBranchMismatchBanner,
   shouldShowComposerContextStrip,
   shouldWriteThreadErrorToCurrentServerThread,
+  visibleTurnItemsForThreadPresentation,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -129,6 +130,31 @@ describe("shortcutScopeOwnsEvent", () => {
     expect(shortcutScopeOwnsEvent("page", true)).toBe(false);
     expect(shortcutScopeOwnsEvent("side-chat", false)).toBe(false);
     expect(shortcutScopeOwnsEvent("side-chat", true)).toBe(true);
+  });
+});
+
+describe("visibleTurnItemsForThreadPresentation", () => {
+  const inherited = { visibility: "inherited" } as OrchestrationV2ProjectedTurnItem;
+  const local = { visibility: "local" } as OrchestrationV2ProjectedTurnItem;
+
+  it("hides inherited history only for side chats", () => {
+    const forkLineage = {
+      rootThreadId: threadId,
+      parentThreadId: ThreadId.make("parent"),
+      relationshipToParent: "fork" as const,
+    };
+    expect(
+      visibleTurnItemsForThreadPresentation(
+        makeThread({ lineage: forkLineage, forkKind: "side_chat" }),
+        [inherited, local],
+      ),
+    ).toEqual([local]);
+    expect(
+      visibleTurnItemsForThreadPresentation(
+        makeThread({ lineage: forkLineage, forkKind: "manual" }),
+        [inherited, local],
+      ),
+    ).toEqual([inherited, local]);
   });
 });
 

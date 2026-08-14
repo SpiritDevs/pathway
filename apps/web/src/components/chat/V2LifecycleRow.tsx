@@ -17,6 +17,7 @@ import {
   GitCommitHorizontalIcon,
   GitForkIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   MinusIcon,
   type LucideIcon,
   XIcon,
@@ -179,10 +180,17 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "fork") {
     const relatedThreadId = item.source.type === "run" ? item.source.threadId : item.targetThreadId;
+    const isSideChat = item.forkKind === "side_chat";
     return (
       <TimelineSystemDivider
-        label={item.source.type === "run" ? "Forked from conversation" : "Conversation fork"}
-        icon={GitForkIcon}
+        label={
+          isSideChat
+            ? "Side chat created"
+            : item.source.type === "run"
+              ? "Forked from conversation"
+              : "Conversation fork"
+        }
+        icon={isSideChat ? MessagesSquareIcon : GitForkIcon}
         actionLabel={item.source.type === "run" ? "Open source conversation" : "Open fork"}
         onAction={() => props.onOpenThread(relatedThreadId)}
       />

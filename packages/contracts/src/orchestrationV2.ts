@@ -370,6 +370,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   lineage: OrchestrationV2AppThreadLineage,
+  /** Distinguishes user-created side chats from ordinary conversation forks. */
+  forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -1085,6 +1087,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("fork"),
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     source: Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
       Schema.Struct({ type: Schema.Literal("node"), nodeId: NodeId }),
@@ -1362,6 +1365,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   lineage: OrchestrationV2AppThreadLineage,
+  forkKind: OrchestrationV2AppThread.fields.forkKind,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   latestRunId: Schema.NullOr(RunId),
@@ -1781,6 +1785,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("fork"),
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     source: Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
       Schema.Struct({ type: Schema.Literal("node"), nodeId: NodeId }),
@@ -2379,6 +2384,7 @@ export const OrchestrationV2Command = Schema.Union([
     sourceThreadId: ThreadId,
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     title: Schema.optional(TrimmedNonEmptyString),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),

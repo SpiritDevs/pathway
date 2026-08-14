@@ -23,14 +23,18 @@ Editing is available only for your latest message and only until that task chang
 ## Continue from an agent response
 
 On web and desktop, open an agent response's actions and select **Fork from this response** to
-continue from that exact point in a side chat. The parent thread stays visible while the fork opens
-as a tab in the right panel. Side chats stay out of the main thread sidebar; hover the parent thread
-to see and reopen them. Additional forks open as peer tabs, and closing a side-chat tab permanently
-deletes that side chat.
+continue from that exact point in a fork. The parent thread stays visible while the fork opens as a
+tab in the right panel, and the fork keeps the inherited conversation visible.
 
 On mobile, the fork opens as a regular full-screen thread.
 
 You can also choose **Side chat** from the web or desktop right panel. Pathway starts it from the
 latest completed response, so it inherits the conversation up to that point without adding its
-questions or answers to the parent thread. If the parent is still working, the side chat uses the
-newest response that had already completed.
+questions or answers to the parent thread. Its inherited history remains available to the agent but
+is hidden in the side-chat transcript. If the parent is still working, the side chat uses the newest
+response that had already completed.
+
+Open the thread details menu to find active forks and side chats above **Lineage**. Select one to
+reopen it, or use its settle action when you are finished. Settling an open side chat also closes its
+right-panel tab. Side chats stay out of the main thread sidebar; hover the parent thread to see and
+reopen active ones. Closing a side-chat tab permanently deletes that side chat.

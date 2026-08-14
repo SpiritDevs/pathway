@@ -38,6 +38,7 @@ export interface ThreadForkServiceV2Shape {
     readonly canonicalSourcePoint: OrchestrationV2ContextSourcePoint;
     readonly transferId: ContextTransferId;
     readonly targetThreadId: ThreadId;
+    readonly forkKind?: "manual" | "side_chat";
     readonly title?: string;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
@@ -74,6 +75,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             relationshipToParent: "fork",
             rootThreadId: input.sourceProjection.thread.lineage.rootThreadId,
           },
+          forkKind: input.forkKind ?? "manual",
           forkedFrom: {
             type: "run",
             threadId: input.sourceProjection.thread.id,

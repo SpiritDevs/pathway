@@ -39,6 +39,7 @@ import {
   resolveLatestForkableRun,
   resolveThreadProviderSession,
 } from "@t3tools/client-runtime/state/thread-workflows";
+import { resolveThreadForkKind } from "@t3tools/client-runtime/state/thread-relationships";
 import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import {
@@ -354,6 +355,7 @@ import {
   resolveEditableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
   resolveThreadMetadataUpdateForNextTurn,
+  visibleTurnItemsForThreadPresentation,
   resolveSendEnvMode,
   shortcutScopeOwnsEvent,
   revokeBlobPreviewUrl,
@@ -1388,9 +1390,13 @@ function ChatViewContent(props: ChatViewProps) {
     [serverProjection?.subagents],
   );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
+  const presentedServerVisibleTurnItems = useMemo(
+    () => visibleTurnItemsForThreadPresentation(serverThread, serverVisibleTurnItems),
+    [serverThread, serverVisibleTurnItems],
+  );
   const committedServerMessageIds = useMemo(
-    () => deriveCommittedServerUserMessageIds(serverVisibleTurnItems),
-    [serverVisibleTurnItems],
+    () => deriveCommittedServerUserMessageIds(presentedServerVisibleTurnItems),
+    [presentedServerVisibleTurnItems],
   );
   const projectedServerMessageIds = useMemo(
     () => new Set(serverProjection?.messages.map((message) => message.id) ?? []),
@@ -1811,7 +1817,9 @@ function ChatViewContent(props: ChatViewProps) {
             .filter(
               (thread) =>
                 thread.environmentId === activeThreadRef.environmentId &&
-                getSidebarForkParentThreadId(thread) === activeThreadRef.threadId,
+                getSidebarForkParentThreadId(thread) === activeThreadRef.threadId &&
+                thread.settledOverride !== "settled" &&
+                resolveThreadForkKind(thread) === "side_chat",
             )
             .toSorted(
               (left, right) =>
@@ -2660,14 +2668,14 @@ function ChatViewContent(props: ChatViewProps) {
   }, []);
   const committedServerAttachmentIds = useMemo(() => {
     const attachmentIds = new Set<string>();
-    for (const row of serverVisibleTurnItems) {
+    for (const row of presentedServerVisibleTurnItems) {
       if (row.item.type !== "user_message") continue;
       for (const attachment of row.item.attachments) {
         attachmentIds.add(attachment.id);
       }
     }
     return [...attachmentIds];
-  }, [serverVisibleTurnItems]);
+  }, [presentedServerVisibleTurnItems]);
   const serverAttachmentIds = isServerThread ? committedServerAttachmentIds : EMPTY_ATTACHMENT_IDS;
   const serverAttachmentResources = useMemo(
     () =>
@@ -2689,13 +2697,13 @@ function ChatViewContent(props: ChatViewProps) {
     [serverAttachmentIds, serverAttachmentUrls],
   );
   useEffect(() => {
-    if (typeof Image === "undefined" || serverVisibleTurnItems.length === 0) {
+    if (typeof Image === "undefined" || presentedServerVisibleTurnItems.length === 0) {
       return;
     }
 
     const cleanups: Array<() => void> = [];
     const userMessagesById = new Map(
-      serverVisibleTurnItems.flatMap((row) =>
+      presentedServerVisibleTurnItems.flatMap((row) =>
         row.item.type === "user_message" ? [[String(row.item.messageId), row.item] as const] : [],
       ),
     );
@@ -2779,11 +2787,11 @@ function ChatViewContent(props: ChatViewProps) {
     attachmentPreviewHandoffByMessageId,
     clearAttachmentPreviewHandoff,
     serverAttachmentUrlById,
-    serverVisibleTurnItems,
+    presentedServerVisibleTurnItems,
   ]);
   const timelineAttachmentUrlById = useMemo(() => {
     const urls = new Map(serverAttachmentUrlById);
-    for (const row of serverVisibleTurnItems) {
+    for (const row of presentedServerVisibleTurnItems) {
       if (row.item.type !== "user_message") continue;
       const handoffUrls = attachmentPreviewHandoffByMessageId[row.item.messageId];
       if (handoffUrls === undefined) continue;
@@ -2796,11 +2804,15 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     return urls;
-  }, [attachmentPreviewHandoffByMessageId, serverAttachmentUrlById, serverVisibleTurnItems]);
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    presentedServerVisibleTurnItems,
+    serverAttachmentUrlById,
+  ]);
   const serverTimelineEntries = useMemo(
     () =>
       deriveTimelineEntriesFromVisibleTurnItems({
-        visibleTurnItems: serverVisibleTurnItems,
+        visibleTurnItems: presentedServerVisibleTurnItems,
         optimisticMessages: optimisticUserMessages,
         attachmentUrlById: timelineAttachmentUrlById,
         ...(serverProjection === null
@@ -2811,7 +2823,12 @@ function ChatViewContent(props: ChatViewProps) {
               plans: serverProjection.plans,
             }),
       }),
-    [optimisticUserMessages, serverVisibleTurnItems, serverProjection, timelineAttachmentUrlById],
+    [
+      optimisticUserMessages,
+      presentedServerVisibleTurnItems,
+      serverProjection,
+      timelineAttachmentUrlById,
+    ],
   );
   const draftTimelineEntries = useMemo(
     () =>
@@ -5504,6 +5521,7 @@ function ChatViewContent(props: ChatViewProps) {
           sourceThreadId: activeThread.id,
           targetThreadId,
           runId: latestSideChatSourceRun.id,
+          forkKind: "side_chat",
           title: `${activeThread.title} side chat`,
         },
       });
@@ -7485,7 +7503,7 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             activeSubagentModelSelection={activeSubagentModelSelection}
                             activeThreadModelSelection={activeThread?.modelSelection}
-                            activeThreadVisibleTurnItems={serverVisibleTurnItems}
+                            activeThreadVisibleTurnItems={presentedServerVisibleTurnItems}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

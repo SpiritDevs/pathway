@@ -7,11 +7,27 @@ import {
   immediateThreadRelationships,
   orderWebThreadLineageRows,
   relatedThreadIds,
+  resolveThreadForkKind,
   resolveMergeBackTargetThreadId,
   walkThreadRelationships,
 } from "./threadRelationships.ts";
 
 describe("thread relationships", () => {
+  it("distinguishes explicit and legacy side chats from manual forks", () => {
+    const lineage = {
+      rootThreadId: ThreadId.make("root"),
+      parentThreadId: ThreadId.make("parent"),
+      relationshipToParent: "fork" as const,
+    };
+    expect(
+      resolveThreadForkKind({ title: "Question", lineage, forkKind: "side_chat" } as never),
+    ).toBe("side_chat");
+    expect(resolveThreadForkKind({ title: "Question side chat", lineage } as never)).toBe(
+      "side_chat",
+    );
+    expect(resolveThreadForkKind({ title: "Manual branch", lineage } as never)).toBe("manual");
+  });
+
   it("keeps an older activity run visible over a newer cancelled run", () => {
     const parent = ThreadId.make("thread-parent");
     const child = ThreadId.make("thread-child");
