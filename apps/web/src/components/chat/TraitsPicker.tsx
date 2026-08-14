@@ -18,6 +18,7 @@ import { memo, useCallback, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { ZapIcon } from "lucide-react";
 import { buttonVariants } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   Menu,
   MenuGroup,
@@ -216,6 +217,7 @@ export interface TraitsMenuContentProps {
   allowPromptInjectedEffort?: boolean;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
   triggerClassName?: string;
+  disabledReason?: string;
 }
 
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
@@ -227,11 +229,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   onPromptChange,
   modelOptions,
   allowPromptInjectedEffort = true,
+  disabledReason,
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const updateModelOptions = useCallback(
     (nextOptions: ProviderOptions | undefined) => {
+      if (disabledReason) {
+        return;
+      }
       if ("onModelOptionsChange" in persistence) {
         persistence.onModelOptionsChange(nextOptions);
         return;
@@ -246,7 +252,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         persistSticky: true,
       });
     },
-    [instanceId, model, persistence, provider, setProviderModelOptions],
+    [disabledReason, instanceId, model, persistence, provider, setProviderModelOptions],
   );
   const {
     descriptors,
@@ -272,6 +278,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
     value: string,
   ) => {
+    if (disabledReason) return;
     if (!value) return;
     if (descriptor.promptInjectedValues?.includes(value)) {
       const nextPrompt =
@@ -326,7 +333,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                     // Base UI keeps radio menus open by default. Close on pick so
                     // the traits menu behaves like the model picker.
                     closeOnClick
-                    disabled={ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id}
+                    disabled={
+                      Boolean(disabledReason) ||
+                      (ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id)
+                    }
                   >
                     <span className="flex w-full min-w-0 items-center justify-between gap-3">
                       <span className="min-w-0 truncate">
@@ -359,13 +369,20 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               <MenuRadioGroup
                 value={selectedValue}
                 onValueChange={(value) => {
+                  if (disabledReason) return;
                   updateDescriptors(
                     replaceDescriptorCurrentValue(descriptors, descriptor.id, value === "on"),
                   );
                 }}
               >
                 {(["on", "off"] as const).map((value) => (
-                  <MenuRadioItem key={value} value={value} hideIndicator closeOnClick>
+                  <MenuRadioItem
+                    key={value}
+                    value={value}
+                    hideIndicator
+                    closeOnClick
+                    disabled={Boolean(disabledReason)}
+                  >
                     <span className="flex w-full min-w-0 items-center justify-between gap-3">
                       <span>{value === "on" ? "On" : "Off"}</span>
                     </span>
@@ -446,6 +463,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   allowPromptInjectedEffort = true,
   triggerVariant,
   triggerClassName,
+  disabledReason,
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -491,41 +509,56 @@ export const TraitsPicker = memo(function TraitsPicker({
   ) : null;
 
   const isCodexStyle = provider === "codex";
+  const traitsTrigger = (
+    <MenuTrigger
+      render={
+        <ComposerControl
+          variant={triggerVariant ?? "ghost"}
+          className={cn(
+            isCodexStyle
+              ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
+              : "shrink-0 whitespace-nowrap",
+            triggerClassName,
+          )}
+          disabled={Boolean(disabledReason)}
+          aria-label={disabledReason ? `Provider traits. ${disabledReason}` : undefined}
+        />
+      }
+    >
+      {isCodexStyle ? (
+        <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
+          {fastModeIcon}
+          <span className="min-w-0 truncate">{triggerLabel}</span>
+          <ComposerControlChevron />
+        </span>
+      ) : (
+        <>
+          {fastModeIcon}
+          <span>{triggerLabel}</span>
+          <ComposerControlChevron />
+        </>
+      )}
+    </MenuTrigger>
+  );
 
   return (
     <Menu
-      open={isMenuOpen}
+      open={disabledReason ? false : isMenuOpen}
       onOpenChange={(open) => {
+        if (disabledReason) return;
         setIsMenuOpen(open);
       }}
     >
-      <MenuTrigger
-        render={
-          <ComposerControl
-            variant={triggerVariant ?? "ghost"}
-            className={cn(
-              isCodexStyle
-                ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
-                : "shrink-0 whitespace-nowrap",
-              triggerClassName,
-            )}
-          />
-        }
-      >
-        {isCodexStyle ? (
-          <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
-            {fastModeIcon}
-            <span className="min-w-0 truncate">{triggerLabel}</span>
-            <ComposerControlChevron />
-          </span>
-        ) : (
-          <>
-            {fastModeIcon}
-            <span>{triggerLabel}</span>
-            <ComposerControlChevron />
-          </>
-        )}
-      </MenuTrigger>
+      {disabledReason ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" title={disabledReason} />}>
+            {traitsTrigger}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{disabledReason}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        traitsTrigger
+      )}
       <MenuPopup align="start">
         <TraitsMenuContent
           provider={provider}
@@ -536,6 +569,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           modelOptions={modelOptions}
           allowPromptInjectedEffort={allowPromptInjectedEffort}
+          {...(disabledReason ? { disabledReason } : {})}
           {...persistence}
         />
       </MenuPopup>

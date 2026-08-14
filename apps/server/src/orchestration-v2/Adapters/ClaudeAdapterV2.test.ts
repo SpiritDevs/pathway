@@ -2938,6 +2938,249 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  const makeAgentToolUseFrame = (input: {
+    readonly uuid: string;
+    readonly toolUseId: string;
+    readonly model?: string;
+  }) =>
+    claudeSdkFrame({
+      type: "assistant",
+      message: {
+        model: "claude-sonnet-4-6",
+        id: `msg_${input.uuid}`,
+        type: "message",
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: input.toolUseId,
+            name: "Agent",
+            input: {
+              description: "Read package.json",
+              prompt: "Read package.json and return its contents.",
+              ...(input.model === undefined ? {} : { model: input.model }),
+            },
+            caller: { type: "direct" },
+          },
+        ],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+      parent_tool_use_id: null,
+      uuid: input.uuid,
+      session_id: WAKE_NATIVE_SESSION,
+    });
+  const makeSubagentTaskStartedFrame = (input: {
+    readonly uuid: string;
+    readonly taskId: string;
+    readonly toolUseId: string;
+  }) =>
+    claudeSdkFrame({
+      type: "system",
+      subtype: "task_started",
+      task_id: input.taskId,
+      tool_use_id: input.toolUseId,
+      description: "Read package.json",
+      subagent_type: "general-purpose",
+      task_type: "local_agent",
+      prompt: "Read package.json and return its contents.",
+      uuid: input.uuid,
+      session_id: WAKE_NATIVE_SESSION,
+    });
+
+  it.effect("stamps a subagent child thread with the model its Agent launch named", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const subagentEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+              event.type === "subagent.updated",
+          );
+        const childThreads = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "app_thread.created" }> =>
+              event.type === "app_thread.created",
+          );
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-subagent-model-a"),
+            text: "Spawn an opus subagent.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAgentToolUseFrame({
+            uuid: "00000000-0000-4000-8000-000000000301",
+            toolUseId: "toolu-subagent-model-opus",
+            model: "opus",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeSubagentTaskStartedFrame({
+            uuid: "00000000-0000-4000-8000-000000000302",
+            taskId: "task-subagent-model-opus",
+            toolUseId: "toolu-subagent-model-opus",
+          }),
+        );
+        yield* awaitUntil(() => subagentEvents().length >= 1, "subagent node created");
+
+        // The Agent input carries a family alias; the child thread must run on
+        // that family's current slug, not the parent's sonnet generation.
+        const subagent = subagentEvents()[0]?.subagent;
+        assert.equal(subagent?.model, "claude-opus-5");
+        assert.deepEqual(subagent?.options, CLAUDE_TEST_MODEL_SELECTION.options);
+        const childThread = childThreads()[0]?.appThread;
+        assert.equal(childThread?.modelSelection.model, "claude-opus-5");
+        assert.deepEqual(childThread?.modelSelection.options, CLAUDE_TEST_MODEL_SELECTION.options);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("keeps an Agent model override for a task_started that lands in a later turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const subagentEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+              event.type === "subagent.updated",
+          );
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-subagent-model-b1"),
+            text: "Spawn an opus subagent.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAgentToolUseFrame({
+            uuid: "00000000-0000-4000-8000-000000000311",
+            toolUseId: "toolu-subagent-model-delayed",
+            model: "opus",
+          }),
+        );
+        // The launch settles the root turn before the CLI reports the task, so
+        // the alias has to outlive the turn context that observed the tool_use.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({
+            uuid: "00000000-0000-4000-8000-000000000312",
+            result: "Launched the subagent.",
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "first turn terminal");
+        assert.lengthOf(subagentEvents(), 0);
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-subagent-model-b2"),
+            text: "Keep going.",
+            attachments: [],
+            providerTurnOrdinal: 2,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeSubagentTaskStartedFrame({
+            uuid: "00000000-0000-4000-8000-000000000313",
+            taskId: "task-subagent-model-delayed",
+            toolUseId: "toolu-subagent-model-delayed",
+          }),
+        );
+        yield* awaitUntil(() => subagentEvents().length >= 1, "subagent node created");
+        assert.equal(subagentEvents()[0]?.subagent.model, "claude-opus-5");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("falls back to the parent model when an Agent names no usable model", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        const subagentEvents = () =>
+          harness.events.filter(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "subagent.updated" }> =>
+              event.type === "subagent.updated",
+          );
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-subagent-model-c"),
+            text: "Spawn two subagents.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAgentToolUseFrame({
+            uuid: "00000000-0000-4000-8000-000000000321",
+            toolUseId: "toolu-subagent-model-absent",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeSubagentTaskStartedFrame({
+            uuid: "00000000-0000-4000-8000-000000000322",
+            taskId: "task-subagent-model-absent",
+            toolUseId: "toolu-subagent-model-absent",
+          }),
+        );
+        yield* awaitUntil(() => subagentEvents().length >= 1, "first subagent node created");
+
+        // An alias this adapter does not know must not become the child model.
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAgentToolUseFrame({
+            uuid: "00000000-0000-4000-8000-000000000323",
+            toolUseId: "toolu-subagent-model-unknown",
+            model: "gpt-5-codex",
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeSubagentTaskStartedFrame({
+            uuid: "00000000-0000-4000-8000-000000000324",
+            taskId: "task-subagent-model-unknown",
+            toolUseId: "toolu-subagent-model-unknown",
+          }),
+        );
+        yield* awaitUntil(() => subagentEvents().length >= 2, "second subagent node created");
+
+        for (const event of subagentEvents()) {
+          assert.equal(event.subagent.model, CLAUDE_TEST_MODEL_SELECTION.model);
+          assert.deepEqual(event.subagent.options, CLAUDE_TEST_MODEL_SELECTION.options);
+        }
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("routes forwarded subagent text and thinking to the child thread only", () =>
     Effect.scoped(
       Effect.gen(function* () {

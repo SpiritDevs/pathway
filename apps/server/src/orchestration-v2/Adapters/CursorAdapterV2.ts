@@ -77,6 +77,7 @@ import {
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
+  subagentChildModelSelection,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
 import {
@@ -1474,6 +1475,12 @@ export function makeCursorAdapterV2(
               driver: CURSOR_PROVIDER,
               nativeThreadId: `${input.context.run.runId}:task:${input.callId}`,
             });
+          // Cursor reports the subagent's model but never its options: the
+          // child thread and the task record share one selection so they agree.
+          const childSelection = subagentChildModelSelection({
+            parentSelection: input.context.input.modelSelection,
+            reportedModel: args.model,
+          });
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -1493,7 +1500,8 @@ export function makeCursorAdapterV2(
               },
               prompt: args.prompt,
               title: args.description,
-              model: args.model ?? input.context.input.modelSelection.model,
+              model: childSelection.model,
+              ...(childSelection.options === undefined ? {} : { options: childSelection.options }),
               result: null,
               startedAt: now,
             }),
@@ -1535,7 +1543,7 @@ export function makeCursorAdapterV2(
                 parentNodeId: nodeId,
                 activeProviderThreadId: null,
                 providerInstanceId: input.context.input.modelSelection.instanceId,
-                modelSelection: input.context.input.modelSelection,
+                modelSelection: childSelection,
                 title: subagentThreadTitle({
                   parentTitle: input.context.input.appThread.title,
                   title: args.description,

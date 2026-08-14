@@ -68,6 +68,7 @@ import { acpSelectionTransition } from "../ProviderSelectionTransition.ts";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,
+  subagentChildModelSelection,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
 import {
@@ -2134,6 +2135,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const turnItemOrdinal =
             existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(context, nativeTaskId));
           const taskStatus = update.status;
+          // ACP reports the subagent's model but never its options: the child
+          // thread and the task record share one selection so they agree.
+          const childSelection = subagentChildModelSelection({
+            parentSelection: context.input.modelSelection,
+            reportedModel: update.model,
+          });
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -2150,6 +2157,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               prompt: update.prompt,
               title: update.title,
               model: update.model,
+              ...(childSelection.options === undefined ? {} : { options: childSelection.options }),
               result: null,
               startedAt: now,
             }),
@@ -2184,10 +2192,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                 parentNodeId: nodeId,
                 activeProviderThreadId: null,
                 providerInstanceId: context.input.modelSelection.instanceId,
-                modelSelection: {
-                  ...context.input.modelSelection,
-                  model: update.model ?? context.input.modelSelection.model,
-                },
+                modelSelection: childSelection,
                 title: subagentThreadTitle({
                   parentTitle: context.input.appThread.title,
                   title: update.title,

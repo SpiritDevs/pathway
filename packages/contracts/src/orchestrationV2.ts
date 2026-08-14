@@ -34,6 +34,7 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
 } from "./checkpointDiff.ts";
+import { ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
   ProviderApprovalDecision,
@@ -354,8 +355,7 @@ export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
   hostClientId: Schema.String,
   lastActivityAt: Schema.DateTimeUtc,
 });
-export type OrchestrationV2ThreadPreviewActivity =
-  typeof OrchestrationV2ThreadPreviewActivity.Type;
+export type OrchestrationV2ThreadPreviewActivity = typeof OrchestrationV2ThreadPreviewActivity.Type;
 
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
@@ -574,6 +574,10 @@ export const OrchestrationV2Subagent = Schema.Struct({
   prompt: Schema.String,
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
+  // Provider option selections (effort, context window, fast mode, ...) the
+  // child thread actually runs with. Absent on legacy records and whenever the
+  // provider does not expose the subagent's options.
+  options: Schema.optional(ProviderOptionSelections),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
   // every terminal (async delegations; queue_after_active sequences it behind
   // a live parent run), "settled_only" offers only when the parent has no

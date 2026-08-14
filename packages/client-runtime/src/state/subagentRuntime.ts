@@ -18,7 +18,13 @@
  * metadata).
  */
 import * as DateTime from "effect/DateTime";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type {
+  OrchestrationThreadActivity,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderOptionSelection,
+  ThreadId,
+} from "@t3tools/contracts";
 
 export type RuntimeSubagentStatus =
   | "pending"
@@ -60,10 +66,15 @@ export interface SubagentRunHandles {
 export interface RuntimeSubagent {
   readonly id: string;
   readonly kind: "subagent" | "workflow" | "workflow_agent";
+  readonly origin: "provider_native" | "app_owned" | null;
+  readonly driver: ProviderDriverKind | null;
+  readonly providerInstanceId: ProviderInstanceId | null;
+  readonly childThreadId: ThreadId | null;
   readonly title: string;
   readonly role: string | null;
   readonly model: string | null;
   readonly effort: string | null;
+  readonly options: ReadonlyArray<ProviderOptionSelection> | null;
   readonly status: RuntimeSubagentStatus;
   readonly activationCount: number;
   readonly usage: SubagentUsage | null;
@@ -229,10 +240,15 @@ function mergeUsageMax(
 interface MutableAgent {
   id: string;
   kind: RuntimeSubagent["kind"];
+  origin: RuntimeSubagent["origin"];
+  driver: ProviderDriverKind | null;
+  providerInstanceId: ProviderInstanceId | null;
+  childThreadId: ThreadId | null;
   title: string;
   role: string | null;
   model: string | null;
   effort: string | null;
+  options: ReadonlyArray<ProviderOptionSelection> | null;
   status: RuntimeSubagentStatus;
   activationCount: number;
   usage: SubagentUsage | null;
@@ -283,10 +299,15 @@ function getOrCreate(
   const created: MutableAgent = {
     id,
     kind: kindFromPayload(payload, id),
+    origin: null,
+    driver: null,
+    providerInstanceId: null,
+    childThreadId: null,
     title: asString(payload.title) ?? asString(payload.detail) ?? id,
     role: asString(payload.role) ?? null,
     model: asString(payload.model) ?? null,
     effort: asString(payload.effort) ?? null,
+    options: null,
     status: "pending",
     activationCount: 0,
     usage: null,
@@ -726,9 +747,14 @@ export function emptyAgentPanelModel(): AgentPanelModel {
 export function projectedSubagentsToRuntime(
   subagents: ReadonlyArray<{
     readonly id: string;
+    readonly origin: "provider_native" | "app_owned";
+    readonly driver: ProviderDriverKind;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly childThreadId: ThreadId | null;
     readonly title: string | null;
     readonly prompt: string;
     readonly model: string | null;
+    readonly options?: ReadonlyArray<ProviderOptionSelection> | undefined;
     readonly status:
       | "pending"
       | "running"
@@ -747,15 +773,28 @@ export function projectedSubagentsToRuntime(
   return subagents.map((subagent) => {
     const updatedAt = DateTime.formatIso(subagent.updatedAt);
     const startedAt = subagent.startedAt === null ? null : DateTime.formatIso(subagent.startedAt);
+    const options = subagent.options ?? null;
+    const effort =
+      options?.find(
+        (selection) =>
+          selection.id === "effort" ||
+          selection.id === "reasoningEffort" ||
+          selection.id === "reasoning",
+      )?.value ?? null;
     return {
       id: subagent.id,
       kind: "subagent" as const,
+      origin: subagent.origin,
+      driver: subagent.driver,
+      providerInstanceId: subagent.providerInstanceId,
+      childThreadId: subagent.childThreadId,
       title:
         subagent.title ??
         (subagent.prompt.length > 80 ? `${subagent.prompt.slice(0, 77)}...` : subagent.prompt),
       role: null,
       model: subagent.model,
-      effort: null,
+      effort: typeof effort === "string" ? effort : null,
+      options,
       status: subagent.status,
       activationCount: 1,
       usage: null,
