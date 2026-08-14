@@ -1,0 +1,5 @@
+# `convex/_generated/` is deliberately NOT ignored: Convex's generated `api`/`server`/`dataModel`
+# modules are imported by `convex/*.ts`, so the package cannot typecheck from a fresh clone without
+# them, and regenerating them requires a configured deployment. Run `pnpm --filter @t3tools/backend
+# codegen` after changing `convex/schema.ts` or adding a function module, and commit the result.
+.env.local

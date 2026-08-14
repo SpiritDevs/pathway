@@ -1,0 +1,52 @@
+{
+  "name": "@t3tools/backend",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./companies": {
+      "types": "./src/companies.ts",
+      "import": "./src/companies.ts"
+    },
+    "./invitations": {
+      "types": "./src/invitations.ts",
+      "import": "./src/invitations.ts"
+    },
+    "./issueKeys": {
+      "types": "./src/issueKeys.ts",
+      "import": "./src/issueKeys.ts"
+    },
+    "./ownership": {
+      "types": "./src/ownership.ts",
+      "import": "./src/ownership.ts"
+    },
+    "./permissions": {
+      "types": "./src/permissions.ts",
+      "import": "./src/permissions.ts"
+    },
+    "./sync/changeFeed": {
+      "types": "./src/sync/changeFeed.ts",
+      "import": "./src/sync/changeFeed.ts"
+    },
+    "./sync/operations": {
+      "types": "./src/sync/operations.ts",
+      "import": "./src/sync/operations.ts"
+    },
+    "./sync/protocol": {
+      "types": "./src/sync/protocol.ts",
+      "import": "./src/sync/protocol.ts"
+    }
+  },
+  "scripts": {
+    "codegen": "convex codegen --typecheck disable",
+    "dev": "convex dev",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "convex": "^1.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -64,6 +64,7 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      "**/convex/_generated/**",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",
