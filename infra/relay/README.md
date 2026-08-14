@@ -87,7 +87,9 @@ tracing resources. Relay records live in the Convex deployment named by `CONVEX_
 client URL ending in `.convex.cloud`, not its HTTP Actions URL. Copy
 [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
-file from the relay directory. Runtime secrets include Clerk and APNs credentials. Production adopts
+file from the relay directory. Runtime secrets include Clerk credentials and, when enabled, APNs
+credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notifications or Live
+Activities; web, desktop, Convex sync, and remote agent control remain available. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
@@ -161,14 +163,21 @@ The `production` GitHub environment must define these Actions variables:
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
+- `APNS_ENABLED` (`false` disables mobile push notifications and Live Activities)
+
+When `APNS_ENABLED=true`, the environment must also define:
+
 - `APNS_ENVIRONMENT`
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`
 - `APNS_BUNDLE_ID`
 
-The `production` GitHub environment must define these Actions secrets:
+The `production` GitHub environment must define this Actions secret:
 
 - `CLERK_SECRET_KEY`
+
+When `APNS_ENABLED=true`, it must also define:
+
 - `APNS_PRIVATE_KEY`
 
 The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;

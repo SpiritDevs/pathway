@@ -1,4 +1,6 @@
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -13,6 +15,23 @@ export interface ApnsCredentials {
   readonly bundleId: string;
   readonly environment: ApnsEnvironment;
 }
+
+/**
+ * APNs is optional so operators can run web, desktop, and agent-control relay features without an
+ * Apple Developer account. Existing deployments remain enabled by default; disabling it avoids
+ * reading any Apple credential variables.
+ */
+export const loadApnsCredentials = Effect.gen(function* () {
+  const enabled = yield* Config.boolean("APNS_ENABLED").pipe(Config.withDefault(true));
+  if (!enabled) return undefined;
+  return {
+    environment: yield* Config.schema(ApnsEnvironment, "APNS_ENVIRONMENT"),
+    teamId: yield* Config.string("APNS_TEAM_ID"),
+    keyId: yield* Config.string("APNS_KEY_ID"),
+    bundleId: yield* Config.string("APNS_BUNDLE_ID"),
+    privateKey: yield* Config.redacted("APNS_PRIVATE_KEY"),
+  } satisfies ApnsCredentials;
+});
 
 /**
  * Cloud-sync capability configuration. Tests and legacy embedding contexts may
@@ -45,7 +64,7 @@ export class RelayConfiguration extends Context.Service<
   RelayConfiguration,
   {
     readonly relayIssuer: string;
-    readonly apns: ApnsCredentials;
+    readonly apns: ApnsCredentials | undefined;
     readonly clerkSecretKey: Redacted.Redacted<string>;
     readonly clerkPublishableKey: string;
     readonly clerkJwtAudience: string;

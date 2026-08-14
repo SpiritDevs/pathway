@@ -73,6 +73,10 @@ Required `production` environment variables:
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
 - `CLERK_CLI_OAUTH_CLIENT_ID`
+- `APNS_ENABLED`
+
+Required only when `APNS_ENABLED=true`:
+
 - `APNS_ENVIRONMENT`
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`
@@ -85,6 +89,9 @@ Optional `production` environment variables:
 Required `production` environment secrets:
 
 - `CLERK_SECRET_KEY`
+
+Required only when `APNS_ENABLED=true`:
+
 - `APNS_PRIVATE_KEY`
 
 The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;

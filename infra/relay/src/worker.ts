@@ -133,14 +133,7 @@ export const ApiLive = Api.make(
     //
     // 2. Create bindings
     //
-    const environment = yield* Config.schema(
-      RelayConfiguration.ApnsEnvironment,
-      "APNS_ENVIRONMENT",
-    );
-    const apnsTeamId = yield* Config.string("APNS_TEAM_ID");
-    const apnsKeyId = yield* Config.string("APNS_KEY_ID");
-    const apnsBundleId = yield* Config.string("APNS_BUNDLE_ID");
-    const apnsPrivateKey = yield* Config.redacted("APNS_PRIVATE_KEY");
+    const apns = yield* RelayConfiguration.loadApnsCredentials;
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
 
@@ -171,13 +164,7 @@ export const ApiLive = Api.make(
 
     const relaySettings = RelayConfiguration.RelayConfiguration.of({
       relayIssuer: relayPublicOrigin,
-      apns: {
-        environment,
-        teamId: apnsTeamId,
-        keyId: apnsKeyId,
-        bundleId: apnsBundleId,
-        privateKey: apnsPrivateKey,
-      },
+      apns,
       apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
       clerkSecretKey,
       clerkPublishableKey,

@@ -59,9 +59,14 @@ const apnsSigningKeyPair = NodeCrypto.generateKeyPairSync("ec", {
 const signingConfig = RelayConfiguration.RelayConfiguration.of({
   ...config,
   apns: {
-    ...config.apns,
+    ...config.apns!,
     privateKey: Redacted.make(apnsSigningKeyPair.privateKey),
   },
+});
+
+const apnsDisabledConfig = RelayConfiguration.RelayConfiguration.of({
+  ...config,
+  apns: undefined,
 });
 
 const state: RelayAgentActivityState = {
@@ -253,6 +258,40 @@ function makeLayer(input: {
 }
 
 describe("ApnsDeliveries", () => {
+  it.effect("does not queue or send deliveries when APNs is disabled", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      expect(
+        yield* deliveries.sendForTarget({
+          target,
+          aggregate,
+          nowMs: 10_000,
+        }),
+      ).toBeNull();
+      expect(
+        yield* deliveries.sendLiveActivity({
+          target: {
+            user_id: target.user_id,
+            device_id: target.device_id,
+            bundle_id: target.bundle_id,
+            aps_environment: target.aps_environment,
+          },
+          token: "activity-token",
+          kind: "live_activity_update",
+          aggregate,
+        }),
+      ).toMatchObject({
+        ok: false,
+        apnsReason: "APNs delivery is disabled.",
+      });
+      expect(queuedJobs).toEqual([]);
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs, config: apnsDisabledConfig })));
+  });
+
   it.effect("never starts an activity remotely when no update token is registered", () => {
     const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
     const queuedJobs: Array<SignedApnsDeliveryJob> = [];
