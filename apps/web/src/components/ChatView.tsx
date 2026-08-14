@@ -164,7 +164,11 @@ import {
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import {
+  RightPanelTabBarActions,
+  RightPanelTabs,
+  type PullRequestTabStatus,
+} from "./RightPanelTabs";
 import { InlineRightPanelPortal } from "./preview/InlineRightPanelPresence";
 import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
@@ -1896,13 +1900,15 @@ function ChatViewContent(props: ChatViewProps) {
     poppedOut: rightPanelPoppedOut,
   });
   const inlineRightPanelOwnsTitleBar = rightPanelOpen && !rightPanelUsesSheet;
-  const threadPanelPresentation = resolveThreadPanelPresentation(
-    workspaceLayoutWidth,
-    // The inline right panel lives in the adjacent workspace host, so this
-    // element's observed width is already the remaining chat-pane width.
-    0,
-    rightPanelPoppedOut,
-  );
+  const threadPanelPresentation = isPanelPresentation
+    ? "popover"
+    : resolveThreadPanelPresentation(
+        workspaceLayoutWidth,
+        // The inline right panel lives in the adjacent workspace host, so this
+        // element's observed width is already the remaining chat-pane width.
+        0,
+        rightPanelPoppedOut,
+      );
   const storedThreadPanelOpen = useRightPanelStore((state) =>
     selectThreadPanelOpen(
       state.threadPanelVisibilityByThreadKey,
@@ -1910,7 +1916,7 @@ function ChatViewContent(props: ChatViewProps) {
       threadPanelPresentation,
     ),
   );
-  const threadPanelOpen = !isPanelPresentation && storedThreadPanelOpen;
+  const threadPanelOpen = storedThreadPanelOpen;
   const inlineThreadPanelOpen = threadPanelOpen && threadPanelPresentation === "inline";
 
   useEffect(() => {
@@ -5209,7 +5215,6 @@ function ChatViewContent(props: ChatViewProps) {
         isPanelPresentation &&
         (command === "terminal.toggle" ||
           command === "rightPanel.toggle" ||
-          command === "threadPanel.toggle" ||
           command === "terminal.split" ||
           command === "terminal.splitVertical" ||
           command === "terminal.close" ||
@@ -7162,11 +7167,13 @@ function ChatViewContent(props: ChatViewProps) {
     ...(threadPanelPresentation === "popover"
       ? {
           threadPanelPopoverContent: (
-            <ThreadDetailsPanel
-              mode="popover"
-              onClose={closeThreadPanelPopover}
-              {...threadDetailsPanelProps}
-            />
+            <div data-side-chat-surface={isPanelPresentation ? "true" : undefined}>
+              <ThreadDetailsPanel
+                mode="popover"
+                onClose={closeThreadPanelPopover}
+                {...threadDetailsPanelProps}
+              />
+            </div>
           ),
         }
       : {}),
@@ -7220,6 +7227,17 @@ function ChatViewContent(props: ChatViewProps) {
       {panelToggleControls}
     </div>
   );
+  const sideChatThreadPanelControl = isPanelPresentation ? (
+    <RightPanelTabBarActions>
+      <div data-side-chat-surface="true">
+        <PanelLayoutControls
+          {...panelToggleControlProps}
+          showTerminalControl={false}
+          showRightPanelControl={false}
+        />
+      </div>
+    </RightPanelTabBarActions>
+  ) : null;
 
   return (
     <div
@@ -7227,6 +7245,7 @@ function ChatViewContent(props: ChatViewProps) {
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
       data-side-chat-surface={isPanelPresentation ? "true" : undefined}
     >
+      {sideChatThreadPanelControl}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         {/* Top bar */}
         {!isPanelPresentation ? (

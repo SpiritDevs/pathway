@@ -12,14 +12,17 @@ import {
   X,
 } from "lucide-react";
 import {
+  createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { isElectron } from "~/env";
 import type { RightPanelSurface } from "~/rightPanelStore";
@@ -82,6 +85,14 @@ export interface PullRequestTabStatus {
   number: number;
   state: PullRequestState;
   isDraft: boolean;
+}
+
+const RightPanelTabBarActionsContext = createContext<HTMLElement | null>(null);
+
+/** Mounts controls owned by the active surface into the right-panel tab bar. */
+export function RightPanelTabBarActions({ children }: { children: ReactNode }) {
+  const host = useContext(RightPanelTabBarActionsContext);
+  return host ? createPortal(children, host) : null;
 }
 
 const SURFACE_DISABLED_REASONS = {
@@ -380,6 +391,7 @@ function SurfaceIcon({
 }
 
 export function RightPanelTabs(props: RightPanelTabsProps) {
+  const [tabBarActionsHost, setTabBarActionsHost] = useState<HTMLDivElement | null>(null);
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -619,6 +631,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             ) : null}
           </div>
         </ScrollArea>
+        <div ref={setTabBarActionsHost} className="flex shrink-0 items-center" />
         {props.layoutControls}
       </div>
       <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
@@ -641,7 +654,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             liveAgentCount={props.liveAgentCount}
           />
         ) : (
-          props.children
+          <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>
+            {props.children}
+          </RightPanelTabBarActionsContext.Provider>
         )}
       </div>
     </PreviewPanelShell>
