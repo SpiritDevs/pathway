@@ -43,6 +43,10 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./sync": {
+      "types": "./src/sync/index.ts",
+      "default": "./src/sync/index.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
