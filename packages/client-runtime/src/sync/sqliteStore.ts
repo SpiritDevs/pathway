@@ -165,24 +165,29 @@ const migrateSqliteSyncStore = Effect.fn("migrateSqliteSyncStore")(function* (
   yield* executor.exec(
     `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (version INTEGER PRIMARY KEY)`,
   );
-  yield* executor.withTransaction(
-    Effect.gen(function* () {
-      const rows = yield* executor.all(
-        `SELECT COALESCE(MAX(version), 0) AS version FROM ${MIGRATIONS_TABLE}`,
-        [],
-      );
-      const current = columnNumber(rows[0]?.["version"]);
-      for (const migration of SQLITE_SYNC_STORE_MIGRATIONS) {
-        if (migration.version <= current) continue;
-        for (const statement of migration.statements) {
-          yield* executor.exec(statement);
-        }
-        yield* executor.run(`INSERT INTO ${MIGRATIONS_TABLE} (version) VALUES (?)`, [
-          migration.version,
-        ]);
+  const applyPending = Effect.gen(function* () {
+    const rows = yield* executor.all(
+      `SELECT COALESCE(MAX(version), 0) AS version FROM ${MIGRATIONS_TABLE}`,
+      [],
+    );
+    const current = columnNumber(rows[0]?.["version"]);
+    for (const migration of SQLITE_SYNC_STORE_MIGRATIONS) {
+      if (migration.version <= current) continue;
+      for (const statement of migration.statements) {
+        yield* executor.exec(statement);
       }
-    }),
-  );
+      yield* executor.run(`INSERT INTO ${MIGRATIONS_TABLE} (version) VALUES (?)`, [
+        migration.version,
+      ]);
+    }
+  });
+  // Sequentially, the version guard alone makes reopening a no-op. Concurrently — two processes
+  // opening the same file for the first time — both can read version 0 inside their own deferred
+  // transactions, and the loser's DDL then fails against the schema the winner just committed
+  // (SQLITE_BUSY on the snapshot upgrade, or "table already exists"). One retry is all it takes to
+  // converge: the second pass re-reads the version, finds the winner's row, and applies nothing.
+  // Anything still failing after it is a genuine error and propagates.
+  yield* Effect.retry(executor.withTransaction(applyPending), { times: 1 });
 });
 
 // ---------------------------------------------------------------------------

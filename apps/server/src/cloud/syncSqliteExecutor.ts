@@ -54,13 +54,20 @@ export const makeSyncSqliteExecutor: Effect.Effect<SqliteSyncExecutor, never, Sq
     const withTransaction = <A, E>(
       effect: Effect.Effect<A, E>,
     ): Effect.Effect<A, E | SqliteSyncExecutorError> =>
-      sql
-        .withTransaction(effect)
-        .pipe(
-          Effect.mapError((error: E | SqlError): E | SqliteSyncExecutorError =>
-            isSqlError(error) ? toExecutorError(error) : error,
-          ),
-        );
+      sql.withTransaction(effect).pipe(
+        Effect.mapError((error: E | SqlError): E | SqliteSyncExecutorError =>
+          isSqlError(error) ? toExecutorError(error) : error,
+        ),
+        // `SqlClient.withTransaction` runs the terminal COMMIT (and ROLLBACK) under
+        // `Effect.orDie`, so a driver failure while flushing the journal — disk full, an I/O
+        // error, a deferred constraint failing at commit time — arrives as a defect rather than a
+        // `SqlError` failure. Left alone it would bypass the adapter's `SyncStoreError` mapping
+        // and kill every fiber typed to handle a store error, so it is converted back into the
+        // executor's failure channel. Anything that is not a `SqlError` stays a defect.
+        Effect.catchDefect((defect) =>
+          isSqlError(defect) ? Effect.fail(toExecutorError(defect)) : Effect.die(defect),
+        ),
+      );
 
     return { exec, run, all, withTransaction } satisfies SqliteSyncExecutor;
   });

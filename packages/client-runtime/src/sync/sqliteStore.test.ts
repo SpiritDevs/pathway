@@ -468,6 +468,53 @@ describe("SqliteSyncStore", () => {
     }),
   );
 
+  it.effect("two first opens racing on the same file converge instead of failing", () =>
+    Effect.gen(function* () {
+      const { executor: base } = makeFakeSqliteExecutor();
+      let transactions = 0;
+
+      // This is the loser of a first-open race: both connections read version 0, the winner
+      // commits the v1 DDL first, and the loser's `CREATE TABLE` fails against the schema that
+      // just appeared. The winner's rows only become visible to the loser's *next* transaction,
+      // exactly as a committed write would be.
+      const racing: SqliteSyncExecutor = {
+        ...base,
+        exec: (statement) =>
+          transactions === 1 && statement.includes("CREATE TABLE cloud_sync_checkpoints")
+            ? Effect.fail(
+                new SqliteSyncExecutorError({
+                  message: "table cloud_sync_checkpoints already exists",
+                }),
+              )
+            : base.exec(statement),
+        withTransaction: <A, E>(
+          effect: Effect.Effect<A, E>,
+        ): Effect.Effect<A, E | SqliteSyncExecutorError> =>
+          Effect.gen(function* () {
+            transactions += 1;
+            // Between the failed attempt and the retry, the winner's open commits.
+            if (transactions === 2) yield* makeSqliteSyncStore(base);
+            return yield* base.withTransaction(effect);
+          }),
+      };
+
+      const store = yield* openStore(racing);
+      expect(transactions).toBe(2);
+
+      // Converged on the winner's schema, applied exactly once, and fully usable.
+      yield* store.commit(COMPANY_ID, {
+        checkpoint: checkpoint({ cursor: 7 }),
+        upsertEntities: [entity({ id: "e-raced", version: 7 })],
+      });
+      const stored = yield* store.read(COMPANY_ID);
+      expect(stored.checkpoint?.cursor).toBe(7);
+      expect(stored.entities.map((row) => row.entityId)).toEqual(["e-raced"]);
+      expect(
+        yield* base.all("SELECT version FROM cloud_sync_store_migrations ORDER BY version", []),
+      ).toEqual([{ version: 1 }]);
+    }),
+  );
+
   it.effect("a statement failing mid-commit leaves no partial state behind", () =>
     Effect.gen(function* () {
       const { executor: base } = makeFakeSqliteExecutor();

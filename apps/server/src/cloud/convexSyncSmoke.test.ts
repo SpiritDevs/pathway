@@ -39,6 +39,7 @@ import {
   manualCleanupInstructions,
   overallOk,
   parseSmokeRunStateFile,
+  partitionSmokeRecoveryTargets,
   relayAuthErrorReason,
   removeSmokeRunStateFile,
   renderConvexSyncSmokeReport,
@@ -435,6 +436,31 @@ describe("smoke run state files", () => {
     assert.isNull(parseSmokeRunStateFile(JSON.stringify({ environmentId: "env-smoke-x" })));
     assert.isNull(parseSmokeRunStateFile("[]"));
     assert.isNull(parseSmokeRunStateFile("not json"));
+  });
+
+  it("recovers only the leftovers recorded against this run's relay and deployment", () => {
+    const mine = state("env-smoke-mine");
+    const otherDeployment = { ...state("env-smoke-other-deployment"), deployment: "dev:other" };
+    const otherRelay = {
+      ...state("env-smoke-other-relay"),
+      relayBaseUrl: "https://relay.other.example",
+    };
+    const sameRun = state("env-smoke-current");
+
+    const targets = partitionSmokeRecoveryTargets({
+      states: [sameRun, mine, otherDeployment, otherRelay],
+      environmentId: "env-smoke-current",
+      // A trailing slash is the same relay: recovery must not be refused over spelling.
+      relayBaseUrl: "https://relay.example/",
+      deployment: "dev:chatty-ermine-52",
+    });
+
+    // The run's own marker belongs to the cleanup still to come, and the two runs recorded
+    // against another target must not be swept from here: the unlink would go to this run's
+    // relay (which reports the unknown id as "already gone") and the cleanup hook to this run's
+    // deployment, after which the only record of the real leftovers would be deleted.
+    assert.deepEqual([...targets.recoverable], [mine]);
+    assert.deepEqual([...targets.foreign], [otherDeployment, otherRelay]);
   });
 
   it("renders manual cleanup commands pinned to the run's deployment and relay", () => {

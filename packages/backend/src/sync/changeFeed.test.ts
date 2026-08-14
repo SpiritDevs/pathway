@@ -5,9 +5,15 @@ import {
   clampPageLimit,
   isCursorExpired,
   measureSerializedBytes,
+  readBoundedRows,
+  SYNC_READ_CHUNK_ROWS,
   takeChangePage,
 } from "./changeFeed.ts";
-import { SYNC_FEED_RETENTION_MS, SYNC_MAX_CHANGES_PER_PAGE } from "./protocol.ts";
+import {
+  SYNC_FEED_RETENTION_MS,
+  SYNC_MAX_CHANGE_PAGE_BYTES,
+  SYNC_MAX_CHANGES_PER_PAGE,
+} from "./protocol.ts";
 
 interface Row {
   readonly version: number;
@@ -113,6 +119,111 @@ describe("takeChangePage", () => {
     const page = takeChangePage([], 12, { sizeOf: size, isVisible: () => true });
 
     expect(page).toEqual({ changes: [], cursor: 12, hasMore: false, oversizedRow: null });
+  });
+});
+
+describe("readBoundedRows", () => {
+  interface SizedRow {
+    readonly index: number;
+    readonly bytes: number;
+  }
+
+  /** A table of `total` rows, each `bytes` big, that records how many rows each read asked for. */
+  function source(total: number, bytes: number) {
+    const requested: number[] = [];
+    const read = (after: SizedRow | undefined, limit: number) => {
+      requested.push(limit);
+      const from = after === undefined ? 0 : after.index + 1;
+      return Promise.resolve(
+        Array.from({ length: Math.max(0, Math.min(limit, total - from)) }, (_, offset) => ({
+          index: from + offset,
+          bytes,
+        })),
+      );
+    };
+    return { requested, read, sizeOf: (row: SizedRow) => row.bytes };
+  }
+
+  it("fills the row ceiling in chunks and never asks for more than it may keep", async () => {
+    const table = source(100, 10);
+
+    const result = await readBoundedRows({
+      maxRows: 20,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      sizeOf: table.sizeOf,
+      read: table.read,
+    });
+
+    expect(result.rows).toHaveLength(20);
+    expect(result.exhausted).toBe(false);
+    expect(Math.max(...table.requested)).toBeLessThanOrEqual(SYNC_READ_CHUNK_ROWS);
+    expect(table.requested.reduce((sum, limit) => sum + limit, 0)).toBe(20);
+  });
+
+  it("reports exhaustion when the source runs out before either ceiling", async () => {
+    const table = source(5, 10);
+
+    const result = await readBoundedRows({
+      maxRows: 100,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      sizeOf: table.sizeOf,
+      read: table.read,
+    });
+
+    expect(result.rows.map((row) => row.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(result.bytes).toBe(50);
+    expect(result.exhausted).toBe(true);
+  });
+
+  // The regression this exists for: a fixed hundred-row fetch of change documents reads whatever
+  // those hundred rows happen to weigh, which for a stretch of large payloads is tens of megabytes
+  // — past the transaction read limit, for every client whose cursor sits before that stretch.
+  it("stops on the byte ceiling long before the row ceiling", async () => {
+    const table = source(SYNC_MAX_CHANGES_PER_PAGE, 100_000);
+
+    const result = await readBoundedRows({
+      maxRows: SYNC_MAX_CHANGES_PER_PAGE,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      sizeOf: table.sizeOf,
+      read: table.read,
+    });
+
+    expect(result.rows.length).toBeLessThan(SYNC_MAX_CHANGES_PER_PAGE);
+    // Only just past the ceiling: the overshoot is one chunk sized from the rows already measured,
+    // which is what lets the caller see that more work remains.
+    expect(result.bytes).toBeLessThan(2 * SYNC_MAX_CHANGE_PAGE_BYTES);
+    expect(result.exhausted).toBe(false);
+    // Nothing was read that the budget did not pay for: the whole hundred rows are 10 MiB.
+    const rowsRead = table.requested.reduce((sum, limit) => sum + limit, 0);
+    expect(rowsRead * 100_000).toBeLessThan(2 * SYNC_MAX_CHANGE_PAGE_BYTES);
+  });
+
+  it("still reads one row when a single row is bigger than the whole budget", async () => {
+    const table = source(4, 4 * SYNC_MAX_CHANGE_PAGE_BYTES);
+
+    const result = await readBoundedRows({
+      maxRows: SYNC_MAX_CHANGES_PER_PAGE,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      chunkSize: 1,
+      sizeOf: table.sizeOf,
+      read: table.read,
+    });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.exhausted).toBe(false);
+  });
+
+  it("clamps a zero row ceiling up to one, so a caller cannot spin on an empty read", async () => {
+    const table = source(10, 10);
+
+    const result = await readBoundedRows({
+      maxRows: 0,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      sizeOf: table.sizeOf,
+      read: table.read,
+    });
+
+    expect(result.rows).toHaveLength(1);
   });
 });
 

@@ -33,14 +33,41 @@ export const SMOKE_ROLE_NAME = "Smoke Service";
  * Every environment the smoke harness registers has an id starting with this prefix (the harness
  * mints `env-smoke-<uuid>`; see `apps/server/src/cloud/convexSyncSmoke.ts` and
  * `docs/internals/cloud-sync-smoke.md`). Cleanup relies on it: a registration in the smoke company
- * whose environment id carries the prefix is synthetic by construction and safe to sweep even when
- * the run that seeded it was interrupted before its own teardown.
+ * whose environment id carries the prefix is synthetic by construction, so it can be swept even
+ * when the run that seeded it was interrupted before its own teardown — once it has aged out (see
+ * {@link isSweepableSmokeOrphan}, since the prefix alone cannot tell an orphan from a live run).
  */
 export const SMOKE_ENVIRONMENT_ID_PREFIX = "env-smoke-";
 
-/** True for the synthetic environment ids the harness mints; cleanup sweeps exactly these. */
+/** True for the synthetic environment ids the harness mints; cleanup sweeps only these. */
 export function isSmokeEnvironmentId(environmentId: string): boolean {
   return environmentId.startsWith(SMOKE_ENVIRONMENT_ID_PREFIX);
+}
+
+/**
+ * How long an `env-smoke-*` registration must have sat untouched before cleanup may treat it as
+ * residue from an interrupted run. The prefix alone cannot tell an orphan from the live
+ * registration of a smoke still in flight — the runs share one reserved company — and sweeping a
+ * live one deletes the company out from under it, failing a healthy run for no reason. A full run
+ * takes seconds, so age settles it.
+ */
+export const SMOKE_ORPHAN_MIN_AGE_MS = 15 * 60 * 1_000;
+
+/**
+ * True when cleanup may sweep a registration as orphaned residue: a synthetic id *and* untouched
+ * for at least {@link SMOKE_ORPHAN_MIN_AGE_MS}. Failing either test keeps the smoke company open
+ * rather than deleting it — the conservative direction, because a genuine orphan is swept by the
+ * next run once it ages out, while a wrongly swept one breaks a run in progress.
+ */
+export function isSweepableSmokeOrphan(input: {
+  readonly environmentId: string;
+  readonly updatedAt: number;
+  readonly now: number;
+}): boolean {
+  return (
+    isSmokeEnvironmentId(input.environmentId) &&
+    input.now - input.updatedAt >= SMOKE_ORPHAN_MIN_AGE_MS
+  );
 }
 
 export const SMOKE_ROLE_DESCRIPTION =
@@ -57,8 +84,8 @@ export function isSmokeCompanyDomainId(companyDomainId: string): boolean {
 }
 
 /**
- * Exactly the switches the sync surface and `environmentCommands` require of an environment actor,
- * plus the two remote-agent switches the smoke test exercises.
+ * Exactly the switches the smoke run itself needs — no wider, because a role nobody audits is the
+ * easiest place for an unearned grant to hide.
  *
  * `latestVersion` and `applyOperations` gate on the actor alone, and `listChanges` filters rows
  * through the per-entity-kind read permissions — so the read half is derived from that same map
@@ -69,13 +96,16 @@ export function isSmokeCompanyDomainId(companyDomainId: string): boolean {
  * `workflow.manage` is the one write switch: the harness's `issueLabel.create`/`delete` round trip
  * (`convexSyncSmoke.ts`) gates on it in `convex/lib/issueApply.ts`. It is deliberately not in
  * `COMPANY_ADMINISTRATION_PERMISSIONS`, so a plain role grant suffices.
+ *
+ * `remoteAgents.dispatch`/`remoteAgents.control` are deliberately absent: no step the harness runs
+ * gates on either (`environmentCommands.issue` and `cancel` want `remoteAgents.dispatch`, and the
+ * former is member-only anyway; nothing in the deployed surface reads `remoteAgents.control`).
+ * They belong here only once a smoke step actually exercises them.
  */
 export function smokeServiceRolePermissions(): readonly PermissionKey[] {
   const permissions = new Set<PermissionKey>();
   for (const kind of SYNC_ENTITY_KINDS) permissions.add(readPermissionForEntityKind(kind));
   permissions.add("workflow.manage");
-  permissions.add("remoteAgents.dispatch");
-  permissions.add("remoteAgents.control");
   return [...permissions];
 }
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import {
@@ -98,6 +100,75 @@ describe("WebLeaderElection", () => {
       expect(yield* tabA.isLeader).toBe(false);
 
       // The handoff completes: the other tab can lead now.
+      yield* tabB.acquire;
+      expect(yield* tabB.isLeader).toBe(true);
+    }),
+  );
+
+  it.effect("queues a second withLeadership instead of running it beside the first", () =>
+    Effect.gen(function* () {
+      const { tabA } = yield* makeTabs("user-a");
+      const firstStarted = yield* Deferred.make<void>();
+      const finishFirst = yield* Deferred.make<void>();
+      const secondStarted = yield* Ref.make(false);
+
+      const first = yield* Effect.forkChild(
+        tabA.withLeadership(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Deferred.await(finishFirst);
+          }),
+        ),
+        { startImmediately: true },
+      );
+      yield* Deferred.await(firstStarted);
+
+      const second = yield* Effect.forkChild(tabA.withLeadership(Ref.set(secondStarted, true)), {
+        startImmediately: true,
+      });
+      // Nothing but exclusion keeps the second body out: leadership is already this context's.
+      yield* Effect.yieldNow;
+      expect(yield* Ref.get(secondStarted)).toBe(false);
+
+      yield* Deferred.succeed(finishFirst, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(yield* Ref.get(secondStarted)).toBe(true);
+      expect(yield* tabA.isLeader).toBe(false);
+    }),
+  );
+
+  it.effect("withLeadership never releases a lock another claim still holds", () =>
+    Effect.gen(function* () {
+      const { tabA, tabB } = yield* makeTabs("user-a");
+
+      yield* tabA.acquire;
+      expect(yield* whileLeader(tabA, Effect.succeed("worked"))).toBe("worked");
+      // The explicit acquire still claims the lock, so the run finishing must not hand it on.
+      expect(yield* tabA.isLeader).toBe(true);
+
+      const waiting = yield* Effect.forkChild(tabB.acquire, { startImmediately: true });
+      expect(yield* tabB.isLeader).toBe(false);
+
+      yield* tabA.release;
+      yield* Fiber.join(waiting);
+      expect(yield* tabB.isLeader).toBe(true);
+    }),
+  );
+
+  it.effect("hands the lock back when the request that won it is interrupted", () =>
+    Effect.gen(function* () {
+      const { tabA, tabB } = yield* makeTabs("user-a");
+
+      // Interrupted while the free lock is being granted: aborting does nothing once a grant is
+      // under way, so the release closure has to travel with the grant or the lock leaks.
+      const running = yield* Effect.forkChild(tabA.withLeadership(Effect.never), {
+        startImmediately: true,
+      });
+      yield* Fiber.interrupt(running);
+      expect(yield* tabA.isLeader).toBe(false);
+
+      // Without the handback this never completes: the scope can never elect a leader again.
       yield* tabB.acquire;
       expect(yield* tabB.isLeader).toBe(true);
     }),

@@ -17,7 +17,12 @@
  */
 import { v } from "convex/values";
 
-/** Client-generated UUIDv7 domain id. */
+/**
+ * Client-generated UUIDv7 domain id. The contract brands these as trimmed non-empty strings, which
+ * a Convex validator cannot express: `validateOperationBatch` in `src/sync/operations` holds the
+ * envelope's `operationId` and `entityId` to that bound and refuses the batch as
+ * `invalid-arguments` otherwise.
+ */
 export const domainIdArg = v.string();
 
 /** `SyncActor` from `contracts/cloudSync`. */

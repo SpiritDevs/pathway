@@ -22,7 +22,7 @@ import { v } from "convex/values";
 
 import {
   isSmokeCompanyDomainId,
-  isSmokeEnvironmentId,
+  isSweepableSmokeOrphan,
   isUsableSmokeKey,
   SMOKE_COMPANY_DOMAIN_ID,
   SMOKE_COMPANY_NAME,
@@ -290,10 +290,16 @@ export const setThumbprint = internalMutation({
 /**
  * Tables the smoke flow cannot write, each carrying a `companyId`-prefixed index. `seed` only ever
  * inserts the company, one role, and registrations; the environment actor's sync surface can add
- * change-feed rows, receipts, key leases, commands, settings, and issue-domain rows (see
+ * change-feed rows, receipts, key leases, and issue-domain rows (see
  * {@link SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID}) — all of which `cleanup` sweeps — but
  * nothing here. A row in any of these means the reserved company has been mixed with data of
  * unknown provenance, and `cleanup` must refuse to delete the company rather than delete blind.
+ *
+ * `environmentCommands` and `companySettings` are on this list rather than swept because no write
+ * path reaches them for an environment actor: `ISSUE_DOMAIN_APPLY` has no operation kind for
+ * either, and every `environmentCommands` mutation is still `notImplemented` (`issue` additionally
+ * requires a member actor). They move to the sweep list when phase 8 gives the smoke actor a real
+ * way to write them.
  *
  * Enumerated from `schema.ts`, split by which company-scoped index each table carries.
  */
@@ -306,6 +312,8 @@ const FOREIGN_TABLES_BY_COMPANY = [
   "companyInvitations",
   "cloudProjects",
   "environmentBindings",
+  "environmentCommands",
+  "companySettings",
 ] as const;
 
 /**
@@ -357,31 +365,44 @@ async function foreignTablesWithRows(
       .first();
     if (row !== null) offending.push(table);
   }
+  // `roles` is half foreign: `seed` writes exactly one, at the reserved id. Any other role under
+  // the smoke company came from somewhere else, so the sweep must not delete it blind either.
+  const roles = await ctx.db
+    .query("roles")
+    .withIndex("by_company", (q) => q.eq("companyId", company._id))
+    .collect();
+  if (roles.some((role) => role.id !== SMOKE_ROLE_DOMAIN_ID)) offending.push("roles");
   return offending;
 }
 
 const cleanupCounts = v.object({
   registrations: v.number(),
   sweptRegistrations: v.number(),
+  /** Registrations left in place, each of which keeps the company alive. */
+  retainedRegistrations: v.number(),
   companies: v.number(),
   roles: v.number(),
   syncChanges: v.number(),
   syncOperationReceipts: v.number(),
   issueKeyReservations: v.number(),
-  environmentCommands: v.number(),
-  companySettings: v.number(),
   /** Rows deleted across {@link SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID}, summed. */
   issueDomainRows: v.number(),
 });
 
 /**
- * Deletes the smoke registration for `environmentId`, sweeps every orphaned registration whose
- * environment id carries {@link SMOKE_ENVIRONMENT_ID_PREFIX} (synthetic by construction, so an
- * interrupted earlier run cannot hold the company open forever), and then — once no registrations
- * remain at all — deletes the company itself plus everything the smoke flow can have written under
- * it: roles, change-feed rows, operation receipts, issue-key leases, commands, settings, and the
- * issue-domain rows the sync surface wrote on the environment actor's behalf (the harness's
- * tombstoned `issueLabels` row and the audit events issue operations emit).
+ * Deletes the smoke registration for `environmentId`, sweeps the orphaned registrations an
+ * interrupted earlier run left behind ({@link isSweepableSmokeOrphan}: the synthetic
+ * {@link SMOKE_ENVIRONMENT_ID_PREFIX} *and* untouched long enough that no run could still be using
+ * it), and then — once no registrations remain at all — deletes the company itself plus everything
+ * the smoke flow can have written under it: its service role, change-feed rows, operation
+ * receipts, issue-key leases, and the issue-domain rows the sync surface wrote on the environment
+ * actor's behalf (the harness's tombstoned `issueLabels` row and the audit events issue operations
+ * emit).
+ *
+ * The age gate is what keeps two smoke runs from destroying each other: they share one reserved
+ * company, so a prefix-only sweep would delete a concurrent run's live registration — and its
+ * company — mid-flight. A young registration is retained instead, which merely postpones the
+ * company delete to the next run.
  *
  * Every delete is scoped to the smoke company's `_id`, so nothing else is reachable. And before
  * the company goes, every table the smoke flow cannot write is checked: if any holds a row for
@@ -393,16 +414,16 @@ export const cleanup = internalMutation({
   returns: cleanupCounts,
   handler: async (ctx, args) => {
     const environmentId = requireUsableKey("environmentId", args.environmentId);
+    const now = Date.now();
     const counts = {
       registrations: 0,
       sweptRegistrations: 0,
+      retainedRegistrations: 0,
       companies: 0,
       roles: 0,
       syncChanges: 0,
       syncOperationReceipts: 0,
       issueKeyReservations: 0,
-      environmentCommands: 0,
-      companySettings: 0,
       issueDomainRows: 0,
     };
 
@@ -415,22 +436,28 @@ export const cleanup = internalMutation({
       counts.registrations += 1;
     }
 
-    // Sweep the orphans an interrupted run left behind. Only ids carrying the synthetic prefix
-    // qualify; anything else registered against the smoke company keeps holding it open.
+    // Sweep the orphans an interrupted run left behind. Only aged-out ids carrying the synthetic
+    // prefix qualify; anything else registered against the smoke company — a real registration, or
+    // a concurrent run's live one — keeps holding it open.
     const others = await ctx.db
       .query("environmentRegistrations")
       .withIndex("by_company", (q) => q.eq("companyId", company._id))
       .collect();
-    const remaining: typeof others = [];
     for (const other of others) {
-      if (isSmokeEnvironmentId(other.environmentId)) {
+      if (
+        isSweepableSmokeOrphan({
+          environmentId: other.environmentId,
+          updatedAt: other.updatedAt,
+          now,
+        })
+      ) {
         await ctx.db.delete(other._id);
         counts.sweptRegistrations += 1;
       } else {
-        remaining.push(other);
+        counts.retainedRegistrations += 1;
       }
     }
-    if (remaining.length > 0) return counts;
+    if (counts.retainedRegistrations > 0) return counts;
 
     const offendingTables = await foreignTablesWithRows(ctx, company);
     if (offendingTables.length > 0) {
@@ -442,11 +469,15 @@ export const cleanup = internalMutation({
       );
     }
 
-    const roles = await ctx.db
+    // The foreign check above proved the reserved role is the only one here, and deleting by its
+    // exact id keeps that true even if the check ever loosens.
+    const role = await ctx.db
       .query("roles")
-      .withIndex("by_company", (q) => q.eq("companyId", company._id))
-      .collect();
-    for (const role of roles) {
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", company._id).eq("id", SMOKE_ROLE_DOMAIN_ID),
+      )
+      .unique();
+    if (role !== null) {
       await ctx.db.delete(role._id);
       counts.roles += 1;
     }
@@ -476,24 +507,6 @@ export const cleanup = internalMutation({
     for (const reservation of reservations) {
       await ctx.db.delete(reservation._id);
       counts.issueKeyReservations += 1;
-    }
-
-    const commands = await ctx.db
-      .query("environmentCommands")
-      .withIndex("by_company", (q) => q.eq("companyId", company._id))
-      .collect();
-    for (const command of commands) {
-      await ctx.db.delete(command._id);
-      counts.environmentCommands += 1;
-    }
-
-    const settings = await ctx.db
-      .query("companySettings")
-      .withIndex("by_company", (q) => q.eq("companyId", company._id))
-      .collect();
-    for (const setting of settings) {
-      await ctx.db.delete(setting._id);
-      counts.companySettings += 1;
     }
 
     for (const table of SYNC_WRITTEN_TABLES_BY_COMPANY_AND_DOMAIN_ID) {

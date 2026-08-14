@@ -28,6 +28,7 @@ import {
   changeRetainUntil,
   clampPageLimit,
   measureSerializedBytes,
+  readBoundedRows,
   takeChangePage,
 } from "../src/sync/changeFeed.ts";
 import {
@@ -55,7 +56,12 @@ import type { MutationCtx } from "./_generated/server.js";
 import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { backendError } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor, type CompanyActor } from "./lib/identity.ts";
-import { emptyBootstrapCache, readBootstrapRows, ISSUE_DOMAIN_APPLY } from "./lib/issueApply.ts";
+import {
+  emptyBootstrapCache,
+  readBootstrapRows,
+  ISSUE_DOMAIN_APPLY,
+  type BootstrapRow,
+} from "./lib/issueApply.ts";
 import {
   domainIdArg,
   operationReceiptResult,
@@ -138,15 +144,6 @@ export const listChanges = query({
       };
     }
 
-    // Over-read so filtering cannot produce a short page while unread rows remain.
-    const rows = await ctx.db
-      .query("syncChanges")
-      .withIndex("by_company_and_version", (q) =>
-        q.eq("companyId", actor.company._id).gt("version", args.cursor),
-      )
-      .order("asc")
-      .take(SYNC_MAX_CHANGES_PER_PAGE);
-
     const toEnvelope = (row: Doc<"syncChanges">) => ({
       version: row.version,
       entityKind: row.entityKind,
@@ -154,6 +151,24 @@ export const listChanges = query({
       changeKind: row.changeKind,
       payload: row.payload,
     });
+
+    // Over-read so filtering cannot produce a short page while unread rows remain — but in chunks
+    // measured against the page ceiling, because the rows themselves are unbounded in size and a
+    // fixed hundred-row fetch of large payloads reads far more than a transaction may.
+    const read = await readBoundedRows<Doc<"syncChanges">>({
+      maxRows: SYNC_MAX_CHANGES_PER_PAGE,
+      maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES,
+      sizeOf: (row) => measureSerializedBytes(toEnvelope(row)),
+      read: (after, chunk) =>
+        ctx.db
+          .query("syncChanges")
+          .withIndex("by_company_and_version", (q) =>
+            q.eq("companyId", actor.company._id).gt("version", after?.version ?? args.cursor),
+          )
+          .order("asc")
+          .take(chunk),
+    });
+    const rows = read.rows;
 
     const page = takeChangePage(rows, args.cursor, {
       maxRows: limit,
@@ -181,7 +196,9 @@ export const listChanges = query({
       _tag: "Changes" as const,
       changes: page.changes.map(toEnvelope),
       cursor: page.cursor,
-      hasMore: page.hasMore || rows.length === SYNC_MAX_CHANGES_PER_PAGE,
+      // A read that stopped on a ceiling rather than on the end of the feed leaves work behind even
+      // when the pager consumed everything it was handed.
+      hasMore: page.hasMore || !read.exhausted,
       latestVersion: actor.company.syncVersion,
       authorizationEpoch: actor.company.authorizationEpoch,
     };
@@ -226,7 +243,10 @@ export const bootstrap = query({
       const decoded = decodeBootstrapCursor(args.cursor);
       // A token this build cannot read — tampered, or minted by a deployment with a different
       // walk — must restart the seed, not resume from a position that means something else now.
-      if (decoded === null) {
+      // A snapshot version past this company's head is the same kind of unusable: it comes back as
+      // the seed's resume version, and a client that persisted it as its feed cursor would skip
+      // every change up to it and never learn anything was missed.
+      if (decoded === null || decoded.snapshotVersion > actor.company.syncVersion) {
         throw backendError("invalid-arguments", "Unrecognized bootstrap cursor.");
       }
       state = decoded;
@@ -249,10 +269,22 @@ export const bootstrap = query({
     // reads are bounded by the page size no matter how much of a table filtering hides.
     let budget = pageSize;
     let pageFull = false;
+    // Rows are unbounded in size, so the row budget alone does not bound the transaction's reads:
+    // the walk also stops once it has read a page's worth of bytes, the same discipline
+    // `listChanges` applies, and resumes from its cursor on the next call.
+    let readBytes = 0;
 
-    while (kind !== null && !pageFull && budget > 0) {
-      const limit = budget;
-      const rows = await readBootstrapRows(ctx, actor.company, kind, afterId, limit, cache);
+    while (kind !== null && !pageFull && budget > 0 && readBytes <= SYNC_MAX_CHANGE_PAGE_BYTES) {
+      const walked = kind;
+      const read = await readBoundedRows<BootstrapRow>({
+        maxRows: budget,
+        maxBytes: SYNC_MAX_CHANGE_PAGE_BYTES - readBytes,
+        sizeOf: (row) => measureSerializedBytes(row.payload),
+        read: (after, chunk) =>
+          readBootstrapRows(ctx, actor.company, walked, after?.id ?? afterId, chunk, cache),
+      });
+      const rows = read.rows;
+      readBytes += read.bytes;
       for (const row of rows) {
         if (
           !row.deleted &&
@@ -280,7 +312,7 @@ export const bootstrap = query({
         budget -= 1;
       }
       // A short read means the table is exhausted; move to the next kind from its top.
-      if (!pageFull && rows.length < limit) {
+      if (!pageFull && read.exhausted) {
         kind = bootstrapKindAfter(kind);
         afterId = "";
       }

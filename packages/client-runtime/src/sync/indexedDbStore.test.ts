@@ -115,6 +115,25 @@ const normalize = (state: StoredSyncState) => ({
 const openStore = (factory: IDBFactory, scope = "user-a") =>
   makeIndexedDbSyncStore({ scope, factory });
 
+/** Writes a row no adapter API would produce: what some other build left in the store. */
+const putRaw = (input: {
+  readonly factory: IDBFactory;
+  readonly name: string;
+  readonly store: string;
+  readonly value: unknown;
+}) =>
+  Effect.promise(async () => {
+    const database = await openSyncDatabase({ factory: input.factory, name: input.name });
+    const transaction = database.transaction(input.store, "readwrite");
+    transaction.objectStore(input.store).put(input.value);
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(transaction.error ?? new Error("The write was aborted."));
+      transaction.onerror = () => reject(transaction.error ?? new Error("The write failed."));
+    });
+    database.close();
+  });
+
 describe("IndexedDbSyncStore", () => {
   it.effect("returns the empty state for a database that has never been written", () =>
     Effect.gen(function* () {
@@ -193,6 +212,101 @@ describe("IndexedDbSyncStore", () => {
 
       yield* second.service.commit(COMPANY_A, { removeQuarantined: [operationId("op-1")] });
       expect((yield* second.service.read(COMPANY_A)).quarantined).toEqual([]);
+    }),
+  );
+
+  it.effect("quarantines rows a newer build wrote instead of failing the whole read", () =>
+    Effect.gen(function* () {
+      const factory = new IDBFactory();
+      const store = yield* openStore(factory);
+      const name = store.databaseName(COMPANY_A);
+      yield* store.service.commit(COMPANY_A, {
+        upsertOutbox: [pendingEntry("op-1", 1)],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+
+      // A build that knows an operation kind this one has never heard of shares this database: it
+      // enqueued one operation and already quarantined another.
+      const futureOutbox = {
+        envelope: { ...envelope({ id: "op-2", sequence: 2 }), kind: "future.create" },
+        status: { _tag: "Pending" },
+      };
+      const futureQuarantine = {
+        order: 1,
+        row: {
+          envelope: { ...envelope({ id: "op-3", sequence: 3 }), kind: "future.create" },
+          status: { _tag: "Pending" },
+          reason: "A newer build could not read this either.",
+        },
+      };
+      yield* putRaw({ factory, name, store: "outbox", value: futureOutbox });
+      yield* putRaw({ factory, name, store: "quarantine", value: futureQuarantine });
+
+      // The readable rows still read, and the unreadable ones come back whole rather than taking
+      // the whole replica down with them.
+      const state = yield* store.service.read(COMPANY_A);
+      expect(state.outbox).toEqual([pendingEntry("op-1", 1)]);
+      expect(state.quarantined).toEqual([
+        futureQuarantine.row,
+        {
+          envelope: futureOutbox.envelope,
+          status: { _tag: "Pending" },
+          reason: "This build cannot read the stored shape of this outbox row.",
+        },
+      ]);
+
+      // Discarding one reaches the row where it actually lives, so it stays discarded.
+      yield* store.service.commit(COMPANY_A, { removeQuarantined: [operationId("op-2")] });
+      expect((yield* store.service.read(COMPANY_A)).quarantined).toEqual([futureQuarantine.row]);
+    }),
+  );
+
+  it.effect("still fails the read on a row too damaged to name its operation", () =>
+    Effect.gen(function* () {
+      const factory = new IDBFactory();
+      const store = yield* openStore(factory);
+      yield* putRaw({
+        factory,
+        name: store.databaseName(COMPANY_A),
+        store: "outbox",
+        value: { envelope: { operationId: "op-1" } },
+      });
+
+      const error = yield* Effect.flip(store.service.read(COMPANY_A));
+      expect(error._tag).toBe("SyncStoreError");
+      expect(error.operation).toBe("read");
+    }),
+  );
+
+  it.effect("reopens a database a newer build upgraded past this build's version", () =>
+    Effect.gen(function* () {
+      const factory = new IDBFactory();
+      const store = yield* openStore(factory);
+      yield* store.service.commit(COMPANY_A, {
+        upsertOutbox: [pendingEntry("op-1", 1)],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+      yield* store.close;
+
+      // Another tab running a newer build upgrades the shared database; this one must not spend
+      // the rest of its life failing every read with a VersionError.
+      const upgraded = yield* Effect.promise(() =>
+        openSyncDatabase({
+          factory,
+          name: store.databaseName(COMPANY_A),
+          version: SYNC_INDEXED_DB_VERSION + 1,
+          migrations: [
+            ...syncDatabaseMigrations,
+            (database) => database.createObjectStore("later"),
+          ],
+        }),
+      );
+      upgraded.close();
+
+      const reopened = yield* openStore(factory);
+      const state = yield* reopened.service.read(COMPANY_A);
+      expect(state.outbox).toEqual([pendingEntry("op-1", 1)]);
+      expect(state.localSequenceHighWater).toBe(1);
     }),
   );
 

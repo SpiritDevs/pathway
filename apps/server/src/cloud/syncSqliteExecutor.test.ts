@@ -210,6 +210,46 @@ layer("syncSqliteExecutor", (it) => {
   );
 });
 
+describe("syncSqliteExecutor commit failures", () => {
+  it.effect("a COMMIT that fails at the driver level stays in the executor's failure channel", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeSyncSqliteExecutor;
+
+      // A deferred foreign key is the portable way to make SQLite fail at COMMIT rather than at
+      // the statement: the violating INSERT is accepted and the constraint is only checked when
+      // the transaction is flushed — the same shape a disk-full or I/O error takes there.
+      yield* executor.exec("CREATE TABLE commit_parent (id INTEGER PRIMARY KEY)");
+      yield* executor.exec(
+        `CREATE TABLE commit_child (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED
+        )`,
+      );
+
+      // `SqlClient.withTransaction` runs COMMIT under `Effect.orDie`, so without the executor's
+      // defect conversion this dies mid-test instead of failing — and `SqliteSyncStore` would
+      // never map it to a `SyncStoreError` for the engine to handle.
+      const outcome = yield* executor
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* executor.run("INSERT INTO commit_child (id, parent_id) VALUES (?, ?)", [1, 404]);
+            // Every statement of the batch succeeded: only COMMIT can fail from here.
+            expect(yield* executor.all("SELECT id FROM commit_child", [])).toEqual([{ id: 1 }]);
+          }),
+        )
+        .pipe(
+          Effect.as("committed"),
+          Effect.catchTag("SqliteSyncExecutorError", (error) =>
+            Effect.succeed(`executor error: ${error.message}`),
+          ),
+        );
+      expect(outcome).toBe("executor error: Failed to execute statement");
+      // A failed COMMIT leaves SQLite's transaction open, so this connection is spent; the layer
+      // is scoped to this test and closes it.
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+  );
+});
+
 describe("syncSqliteExecutor durability", () => {
   it.effect("outbox, quarantine, and high-water mark survive a real close-and-reopen", () =>
     Effect.gen(function* () {

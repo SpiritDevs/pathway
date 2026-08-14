@@ -6,6 +6,7 @@ import {
   measureBatchArgsBytes,
   partitionByExistingReceipts,
   replayStoredReceipt,
+  SYNC_MAX_ID_CHARS,
   validateOperationBatch,
   type SyncOperationEnvelope,
 } from "./operations.ts";
@@ -77,6 +78,31 @@ describe("validateOperationBatch", () => {
     expect(
       validateOperationBatch([operation({ protocolVersion: SYNC_PROTOCOL_VERSION + 1 })], COMPANY),
     ).toMatchObject({ ok: false, code: "upgrade-required" });
+  });
+
+  // The contract brands both ids as trimmed non-empty strings and Convex's `v.string()` cannot say
+  // so. An empty entity id is the damaging one: the row it writes sorts below every bootstrap page,
+  // which pages ascending from an exclusive `""`, so a fresh device would never be seeded with it.
+  it.each([
+    ["an empty entity id", { entityId: "" }],
+    ["a padded entity id", { entityId: " issue-1 " }],
+    ["an entity id past the character ceiling", { entityId: "x".repeat(SYNC_MAX_ID_CHARS + 1) }],
+    ["an empty operation id", { operationId: "" }],
+    ["a padded operation id", { operationId: "op-1\n" }],
+    ["an operation id past the character ceiling", { operationId: "o".repeat(129) }],
+  ])("refuses the whole batch for %s", (_label, overrides) => {
+    expect(validateOperationBatch([operation(overrides)], COMPANY)).toMatchObject({
+      ok: false,
+      code: "invalid-arguments",
+    });
+  });
+
+  it("accepts ids sitting exactly on the ceiling", () => {
+    const edge = operation({
+      operationId: "o".repeat(SYNC_MAX_ID_CHARS),
+      entityId: "e".repeat(SYNC_MAX_ID_CHARS),
+    });
+    expect(validateOperationBatch([edge], COMPANY)).toEqual({ ok: true });
   });
 });
 

@@ -68,6 +68,10 @@ describe("decodeBootstrapCursor refusals", () => {
     ["a string version", '{"v":"1","k":"issue","a":""}'],
     ["a negative version", '{"v":-1,"k":"issue","a":""}'],
     ["a non-finite version", '{"v":null,"k":"issue","a":""}'],
+    // The version comes back as the seed's resume cursor and the client decodes it as a company
+    // version, so anything that is not a whole number it could compare against the feed is refused.
+    ["a fractional version", '{"v":1.5,"k":"issue","a":""}'],
+    ["a version past the safe-integer range", '{"v":1e21,"k":"issue","a":""}'],
     ["an unknown entity kind", '{"v":1,"k":"holograms","a":""}'],
     ["a company-domain entity kind", '{"v":1,"k":"membership","a":""}'],
     ["a non-string afterId", '{"v":1,"k":"issue","a":7}'],

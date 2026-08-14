@@ -54,6 +54,22 @@ export function measureBatchArgsBytes(operations: readonly SyncOperationEnvelope
   return total;
 }
 
+/**
+ * Character ceiling for the envelope's identifiers, mirroring the `domainId` bound every argument
+ * parser applies. The contract brands `SyncOperationId` and `SyncEntityId` as trimmed non-empty
+ * strings, which Convex's `v.string()` cannot express, so the envelope layer holds them to it here.
+ */
+export const SYNC_MAX_ID_CHARS = 128;
+
+/**
+ * An entity id has to survive a round trip through the bootstrap walk, which pages ascending by
+ * domain id from an exclusive `""` — a row keyed by the empty string sits below every page forever,
+ * so it would reach connected replicas through the feed and never appear in a fresh device's seed.
+ */
+function isSyncId(value: string): boolean {
+  return value.length > 0 && value.length <= SYNC_MAX_ID_CHARS && value.trim() === value;
+}
+
 export type BatchValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly code: SyncRejectionCode; readonly message: string };
@@ -94,6 +110,20 @@ export function validateOperationBatch(
         ok: false,
         code: "company-mismatch",
         message: "Every operation in a batch must target the requested company.",
+      };
+    }
+    if (!isSyncId(operation.operationId)) {
+      return {
+        ok: false,
+        code: "invalid-arguments",
+        message: `An operation id must be a trimmed, non-empty string of at most ${SYNC_MAX_ID_CHARS} characters.`,
+      };
+    }
+    if (!isSyncId(operation.entityId)) {
+      return {
+        ok: false,
+        code: "invalid-arguments",
+        message: `An entity id must be a trimmed, non-empty string of at most ${SYNC_MAX_ID_CHARS} characters.`,
       };
     }
     if (seen.has(operation.operationId)) {

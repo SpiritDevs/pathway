@@ -12,6 +12,7 @@ import schema from "../convex/schema.ts";
 import {
   SMOKE_COMPANY_DOMAIN_ID,
   SMOKE_ENVIRONMENT_ID_PREFIX,
+  SMOKE_ORPHAN_MIN_AGE_MS,
   SMOKE_ROLE_DOMAIN_ID,
   smokeRegistrationDomainId,
   smokeServiceRolePermissions,
@@ -226,6 +227,16 @@ describe("relay trust chain through the seeded registration", () => {
   });
 });
 
+/** Backdates every registration past the orphan threshold: residue of a long-dead run. */
+async function ageOutRegistrations(t: ReturnType<typeof harness>) {
+  await t.run(async (ctx) => {
+    const stale = Date.now() - SMOKE_ORPHAN_MIN_AGE_MS - 1_000;
+    for (const registration of await ctx.db.query("environmentRegistrations").collect()) {
+      await ctx.db.patch(registration._id, { updatedAt: stale });
+    }
+  });
+}
+
 describe("smoke.cleanup", () => {
   it("deletes the registration, and the company with its rows only once no registrations remain", async () => {
     const t = harness();
@@ -380,7 +391,7 @@ describe("smoke.cleanup", () => {
     });
   });
 
-  it("sweeps orphaned env-smoke-* registrations so an interrupted run cannot pin the company", async () => {
+  it("sweeps aged-out env-smoke-* registrations so an interrupted run cannot pin the company", async () => {
     const t = harness();
     const named = `${SMOKE_ENVIRONMENT_ID_PREFIX}named`;
     // Two orphans from interrupted earlier runs: their cleanup never ran.
@@ -396,11 +407,13 @@ describe("smoke.cleanup", () => {
       environmentId: named,
       publicKeyThumbprint: THUMB_A,
     });
+    await ageOutRegistrations(t);
 
     const counts = await t.mutation(internal.smoke.cleanup, { environmentId: named });
     expect(counts).toMatchObject({
       registrations: 1,
       sweptRegistrations: 2,
+      retainedRegistrations: 0,
       companies: 1,
       roles: 1,
     });
@@ -409,6 +422,43 @@ describe("smoke.cleanup", () => {
       expect(await ctx.db.query("companies").collect()).toHaveLength(0);
       expect(await ctx.db.query("environmentRegistrations").collect()).toHaveLength(0);
       expect(await ctx.db.query("roles").collect()).toHaveLength(0);
+    });
+  });
+
+  it("leaves a concurrent run's fresh env-smoke-* registration — and the company — alone", async () => {
+    const t = harness();
+    const mine = `${SMOKE_ENVIRONMENT_ID_PREFIX}mine`;
+    const concurrent = `${SMOKE_ENVIRONMENT_ID_PREFIX}concurrent`;
+    await t.mutation(internal.smoke.seed, { environmentId: mine, publicKeyThumbprint: THUMB_A });
+    await t.mutation(internal.smoke.seed, {
+      environmentId: concurrent,
+      publicKeyThumbprint: THUMB_B,
+    });
+
+    // Both registrations were touched moments ago: the other run is still in flight, so only this
+    // run's own registration goes.
+    const counts = await t.mutation(internal.smoke.cleanup, { environmentId: mine });
+    expect(counts).toMatchObject({
+      registrations: 1,
+      sweptRegistrations: 0,
+      retainedRegistrations: 1,
+      companies: 0,
+      roles: 0,
+    });
+
+    // The concurrent run can still authenticate and read its company.
+    await expect(
+      asEnvironment(t, concurrent, THUMB_B).query(api.sync.latestVersion, {
+        companyId: SMOKE_COMPANY_DOMAIN_ID,
+      }),
+    ).resolves.toMatchObject({ version: 0 });
+
+    // Once it ages out (its own run long gone), the next cleanup collects it.
+    await ageOutRegistrations(t);
+    expect(await t.mutation(internal.smoke.cleanup, { environmentId: mine })).toMatchObject({
+      registrations: 0,
+      sweptRegistrations: 1,
+      companies: 1,
     });
   });
 
@@ -459,6 +509,78 @@ describe("smoke.cleanup", () => {
       expect(await ctx.db.query("environmentRegistrations").collect()).toHaveLength(1);
       expect(await ctx.db.query("roles").collect()).toHaveLength(1);
       expect(await ctx.db.query("memberships").collect()).toHaveLength(1);
+    });
+  });
+
+  it("refuses over a companySettings row instead of deleting it blind", async () => {
+    const t = harness();
+    await t.mutation(internal.smoke.seed, {
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMB_A,
+    });
+
+    // No sync operation kind writes `companySettings`, so a row here is somebody else's data —
+    // an admin surface or a dashboard edit — and must stop the company delete.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", SMOKE_COMPANY_DOMAIN_ID))
+        .unique();
+      if (company === null) throw new Error("seed did not create the smoke company");
+      await ctx.db.insert("companySettings", {
+        companyId: company._id,
+        offlineAccessDays: 7,
+        updatedByMembershipId: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+
+    await expect(
+      t.mutation(internal.smoke.cleanup, { environmentId: ENVIRONMENT_ID }),
+    ).rejects.toThrow("companySettings");
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("companySettings").collect()).toHaveLength(1);
+      expect(await ctx.db.query("companies").collect()).toHaveLength(1);
+    });
+  });
+
+  it("refuses over a role the seed did not write instead of deleting it blind", async () => {
+    const t = harness();
+    await t.mutation(internal.smoke.seed, {
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMB_A,
+    });
+
+    // `seed` writes exactly one role, at the reserved id; a second one is foreign by construction.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", SMOKE_COMPANY_DOMAIN_ID))
+        .unique();
+      if (company === null) throw new Error("seed did not create the smoke company");
+      await ctx.db.insert("roles", {
+        id: "0198f7f0-5555-7555-8555-000000000001",
+        companyId: company._id,
+        name: "Hand-added",
+        description: "",
+        permissions: ["issues.read"],
+        seeded: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+
+    await expect(
+      t.mutation(internal.smoke.cleanup, { environmentId: ENVIRONMENT_ID }),
+    ).rejects.toThrow("roles");
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("roles").collect()).toHaveLength(2);
+      expect(await ctx.db.query("companies").collect()).toHaveLength(1);
     });
   });
 

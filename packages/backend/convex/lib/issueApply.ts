@@ -14,6 +14,7 @@
  *
  * @module lib/issueApply
  */
+import { ISSUE_KEY_BLOCK_SIZE } from "../../src/issueKeys.ts";
 import type { PermissionKey } from "../../src/permissions.ts";
 import { hasRecordPermission } from "../../src/permissions.ts";
 import type { BootstrapEntityKind } from "../../src/sync/bootstrap.ts";
@@ -454,6 +455,68 @@ function statusMatchesOwner(status: Doc<"issueStatuses">, owner: IssueWorkflowOw
   return owner.kind === "team" && status.teamId === owner.teamId;
 }
 
+/** A relation is visible from either end, so its feed row carries both issues' teams. */
+function unionTeamIds(a: readonly string[], b: readonly string[]): readonly string[] {
+  return [...new Set([...a, ...b])];
+}
+
+/**
+ * The audience a team-scope change has to reach: everyone who could see the record before it moved
+ * and everyone who can see it after. Scoping such a row to the new teams alone leaves a descoped
+ * member's replica holding a copy it will never hear about again — bootstrap would omit the record
+ * entirely, so the two disagree forever. An empty set is company-wide and swallows the other side.
+ */
+function scopeChangeTeamIds(
+  before: readonly string[],
+  after: readonly string[],
+): readonly string[] {
+  if (before.length === 0 || after.length === 0) return [];
+  return unionTeamIds(before, after);
+}
+
+/**
+ * Whether a team-scoped reference — a label, a cycle — is one the issue's teams can justify. A
+ * company entry (`null` team) is usable everywhere; a team entry needs its team attached. This is
+ * the invariant `issue.setTeams` maintains when a team is removed, enforced on the way in too so a
+ * client never receives a reference it cannot resolve.
+ */
+function teamScopeJustified(teamId: string | null, issueTeamIds: readonly string[]): boolean {
+  return teamId === null || issueTeamIds.includes(teamId);
+}
+
+/**
+ * Whether the actor may point another record at `issue`. A missing issue and one in a team the
+ * actor holds no `issues.read` on answer the same, so a cross-team pointer cannot be used to probe
+ * which ids exist.
+ */
+function readableIssue(actor: CompanyActor, issue: Doc<"issues"> | null): issue is Doc<"issues"> {
+  return issue !== null && can(actor, "issues.read", issue.teamIds);
+}
+
+/** How far a re-parent looks up the tree before giving up; a deeper chain is already broken. */
+const ISSUE_PARENT_MAX_DEPTH = 100;
+
+/**
+ * Whether `issueId` is `start` or one of its ancestors. Re-parenting an issue under its own
+ * descendant closes the tree into a cycle — every client that walks sub-issues for rollups or
+ * breadcrumbs then recurses forever — and each end of the cycle is a separately valid operation, so
+ * the check has to walk. The walk is bounded so a cycle that predates it cannot spin.
+ */
+async function hasAncestor(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  start: Doc<"issues">,
+  issueId: string,
+): Promise<boolean> {
+  let current: Doc<"issues"> | null = start;
+  for (let depth = 0; depth < ISSUE_PARENT_MAX_DEPTH && current !== null; depth += 1) {
+    if (current.id === issueId) return true;
+    const parentId: string | null = current.parentId;
+    current = parentId === null ? null : await byDomain(ctx, "issues", company._id, parentId);
+  }
+  return false;
+}
+
 /** All named teams must exist and be live; returns the offending id otherwise. */
 async function missingTeam(
   ctx: QueryCtx,
@@ -558,6 +621,9 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   for (const labelId of args.labelIds ?? []) {
     const label = await liveRow(ctx, "issueLabels", company._id, labelId);
     if (label === null) return rejected("invalid-arguments", `No label ${labelId}.`);
+    if (!teamScopeJustified(label.teamId, teamIds)) {
+      return rejected("invalid-arguments", `The label ${labelId} belongs to another team.`);
+    }
   }
   let milestone: Doc<"issueMilestones"> | null = null;
   if (args.milestoneId !== undefined) {
@@ -571,10 +637,15 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (args.cycleId !== undefined) {
     const cycle = await liveRow(ctx, "issueCycles", company._id, args.cycleId);
     if (cycle === null) return rejected("invalid-arguments", `No cycle ${args.cycleId}.`);
+    if (!teamScopeJustified(cycle.teamId, teamIds)) {
+      return rejected("invalid-arguments", `The cycle ${args.cycleId} belongs to another team.`);
+    }
   }
   if (args.parentId !== undefined) {
     const parent = await liveRow(ctx, "issues", company._id, args.parentId);
-    if (parent === null) return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+    if (!readableIssue(actor, parent)) {
+      return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+    }
   }
 
   // Key assignment. A leased key arrives in `args.key`; a client that ran its block dry sends none
@@ -592,22 +663,32 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
         `Issue keys here start with ${freshCompany.issueKeyPrefix}-.`,
       );
     }
-    const collision = await ctx.db
-      .query("issues")
-      .withIndex("by_company_and_key", (q) =>
-        q.eq("companyId", company._id).eq("key", args.key ?? ""),
-      )
-      .unique();
-    if (collision !== null) return rejected("invalid-arguments", `The key ${args.key} is taken.`);
-    key = args.key;
     keyNumber = issueKeyNumber(args.key);
-    // Defensive: a key at or past the counter would collide with a future lease.
-    if (keyNumber >= freshCompany.nextIssueNumber) {
-      await ctx.db.patch(company._id, { nextIssueNumber: keyNumber + 1, updatedAt: now });
+    // A leased number is always below the counter, so anything more than one block above it was
+    // never handed out. Accepting it would push the counter along with it: past the safe-integer
+    // range `nextIssueNumber + 1` stops advancing, and every later create would mint the same key.
+    if (
+      !Number.isSafeInteger(keyNumber) ||
+      keyNumber < 1 ||
+      keyNumber > freshCompany.nextIssueNumber + ISSUE_KEY_BLOCK_SIZE
+    ) {
+      return rejected("invalid-arguments", `The key ${args.key} is outside this company's range.`);
     }
+    key = args.key;
   } else {
     keyNumber = freshCompany.nextIssueNumber;
     key = `${freshCompany.issueKeyPrefix}-${keyNumber}`;
+  }
+  // Checked on both paths: a counter nudged forward by an earlier accepted key can hand out a
+  // number an existing issue already carries, and two issues sharing a key is the one outcome the
+  // leasing scheme exists to prevent.
+  const collision = await ctx.db
+    .query("issues")
+    .withIndex("by_company_and_key", (q) => q.eq("companyId", company._id).eq("key", key))
+    .unique();
+  if (collision !== null) return rejected("invalid-arguments", `The key ${key} is taken.`);
+  // A key at or past the counter would collide with a future lease.
+  if (keyNumber >= freshCompany.nextIssueNumber) {
     await ctx.db.patch(company._id, { nextIssueNumber: keyNumber + 1, updatedAt: now });
   }
 
@@ -686,17 +767,28 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (args.cycleId != null) {
     const cycle = await liveRow(ctx, "issueCycles", company._id, args.cycleId);
     if (cycle === null) return rejected("invalid-arguments", `No cycle ${args.cycleId}.`);
+    if (!teamScopeJustified(cycle.teamId, issue.teamIds)) {
+      return rejected("invalid-arguments", `The cycle ${args.cycleId} belongs to another team.`);
+    }
   }
   if (args.parentId != null) {
     if (args.parentId === issue.id) {
       return rejected("invalid-arguments", "An issue cannot be its own parent.");
     }
     const parent = await liveRow(ctx, "issues", company._id, args.parentId);
-    if (parent === null) return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+    if (!readableIssue(actor, parent)) {
+      return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+    }
+    if (await hasAncestor(ctx, company, parent, issue.id)) {
+      return rejected("invalid-arguments", "That parent is already below this issue.");
+    }
   }
   for (const labelId of args.labelIds ?? []) {
     const label = await liveRow(ctx, "issueLabels", company._id, labelId);
     if (label === null) return rejected("invalid-arguments", `No label ${labelId}.`);
+    if (!teamScopeJustified(label.teamId, issue.teamIds)) {
+      return rejected("invalid-arguments", `The label ${labelId} belongs to another team.`);
+    }
   }
 
   // Absent leaves the field alone; explicit null clears. Collect before/after for the audit trail
@@ -913,6 +1005,16 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
 
   const nextTeams = new Set(teamIds);
 
+  // Attaching is judged against the team being attached, the way creating an issue there is: a
+  // grant on the issue's current teams says nothing about the team it is being moved into, and
+  // making it company-wide needs the company-scoped grant. Without this, setTeams would be a
+  // weaker path into another team's scope than `issue.create`.
+  for (const teamId of teamIds) {
+    if (issue.teamIds.includes(teamId)) continue;
+    if (!can(actor, "issues.update", [teamId])) return denied("issues.update");
+  }
+  if (teamIds.length === 0 && !can(actor, "issues.update", [])) return denied("issues.update");
+
   // Removing a team invalidates whatever was scoped to it: labels, the cycle, and the workflow
   // owner. Each is cleared or reassigned atomically with the team change so no client ever sees a
   // team-scoped reference the issue's teams cannot justify.
@@ -926,6 +1028,20 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
   if (cycleId !== null) {
     const cycle = await liveRow(ctx, "issueCycles", company._id, cycleId);
     if (cycle === null || (cycle.teamId !== null && !nextTeams.has(cycle.teamId))) cycleId = null;
+  }
+  // A team-visible project the issue's teams no longer reach goes the same way, and its milestone
+  // with it: a milestone is project-owned, so a cleared project reference cannot leave one behind.
+  let projectId = issue.projectId;
+  let milestoneId = issue.milestoneId;
+  if (projectId !== null) {
+    const project = await liveRow(ctx, "cloudProjects", company._id, projectId);
+    const justified =
+      project !== null &&
+      (project.teamIds.length === 0 || project.teamIds.some((teamId) => nextTeams.has(teamId)));
+    if (!justified) {
+      projectId = null;
+      milestoneId = null;
+    }
   }
   let owner = issue.workflowOwner;
   let statusId = issue.statusId;
@@ -946,15 +1062,25 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
     teamIds: [...teamIds],
     labelIds: keptLabelIds,
     cycleId,
+    projectId,
+    milestoneId,
     workflowOwner: owner,
     statusId,
     updatedAt: now,
   });
   const doc = await mustGet(ctx, issue._id);
   return applied(
-    // The feed row carries the *new* teams: members of a removed team stop seeing updates, and the
-    // newly attached teams get the complete entity.
-    upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
+    // The feed row carries the teams from *both* sides of the move: the newly attached teams get
+    // the complete entity, and a removed team's members get one last upsert whose payload no longer
+    // names them, which is what tells their replica to drop the issue. Scoping it to the new teams
+    // alone would leave that replica holding a stale copy no later change could ever correct.
+    upsert(
+      "issue",
+      doc.id,
+      scopeChangeTeamIds(issue.teamIds, doc.teamIds),
+      issue._id,
+      encodeIssue(company, doc),
+    ),
     await appendAuditEvent(
       ctx,
       company,
@@ -1101,6 +1227,16 @@ const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now
   const target = await liveRow(ctx, "issueStatuses", company._id, args.reassignToStatusId);
   if (target === null) {
     return rejected("invalid-arguments", `No status ${args.reassignToStatusId}.`);
+  }
+  // Every stranded issue lands in the target, so the target has to belong to every workflow that
+  // could hold one. A team status only ever holds its own team's issues; a company status is
+  // inherited by every workflow, so absorbing its issues needs another company status.
+  const strandedOwner: IssueWorkflowOwner =
+    status.scope === "team" && status.teamId !== null
+      ? { kind: "team", teamId: status.teamId }
+      : { kind: "company" };
+  if (!statusMatchesOwner(target, strandedOwner)) {
+    return rejected("invalid-arguments", "The replacement status belongs to a different workflow.");
   }
 
   const changes: DomainChange[] = [];
@@ -1326,11 +1462,17 @@ const issueMilestoneUpdate: EnvApply = async ({ ctx, actor, company, operation, 
   const scopeTeams = await milestoneTeamIds(ctx, company, milestone);
   if (!can(actor, "projects.manage", scopeTeams)) return denied("projects.manage");
 
+  const moved =
+    args.cloudProjectId !== undefined && args.cloudProjectId !== milestone.cloudProjectId;
   if (args.cloudProjectId !== undefined) {
     const target = await liveRow(ctx, "cloudProjects", company._id, args.cloudProjectId);
     if (target === null || target.archivedAt !== null) {
       return rejected("invalid-arguments", `No project ${args.cloudProjectId}.`);
     }
+    // Moving a milestone puts it on the target project's boards, which is a write there —
+    // `issueMilestone.create` demands the same grant, so a manager scoped to one team cannot use a
+    // move to inject a milestone into another team's project.
+    if (moved && !can(actor, "projects.manage", target.teamIds)) return denied("projects.manage");
   }
 
   const patch: Record<string, unknown> = {};
@@ -1344,15 +1486,39 @@ const issueMilestoneUpdate: EnvApply = async ({ ctx, actor, company, operation, 
 
   await ctx.db.patch(milestone._id, { ...patch, updatedAt: now });
   const doc = await mustGet(ctx, milestone._id);
-  return applied(
+  const changes: DomainChange[] = [
     upsert(
       "issueMilestone",
       doc.id,
-      await milestoneTeamIds(ctx, company, doc),
+      // Both sides of the move: the old project's teams need the upsert to learn the milestone
+      // left, or their replicas keep a copy a fresh bootstrap would never seed.
+      scopeChangeTeamIds(scopeTeams, await milestoneTeamIds(ctx, company, doc)),
       milestone._id,
       encodeIssueMilestone(company, doc),
     ),
-  );
+  ];
+
+  // A milestone is project-owned, so issues left behind in the old project can no longer point at
+  // it — the very state `issue.update` refuses to write. They are cleared here, each as its own
+  // feed row, rather than left as a cross-project reference every client would have to render.
+  if (moved) {
+    const stranded = await ctx.db
+      .query("issues")
+      .withIndex("by_company_and_project", (q) =>
+        q.eq("companyId", company._id).eq("projectId", milestone.cloudProjectId),
+      )
+      .collect();
+    for (const issue of stranded) {
+      if (issue.deletedAt !== null || issue.milestoneId !== milestone.id) continue;
+      await ctx.db.patch(issue._id, { milestoneId: null, updatedAt: now });
+      const issueDoc = await mustGet(ctx, issue._id);
+      changes.push(
+        upsert("issue", issueDoc.id, issueDoc.teamIds, issue._id, encodeIssue(company, issueDoc)),
+      );
+    }
+  }
+
+  return applied(...changes);
 };
 
 const issueMilestoneDelete: EnvApply = async ({ ctx, actor, company, operation, now }) => {
@@ -1546,11 +1712,6 @@ const issueTodoDelete: EnvApply = async ({ ctx, actor, company, operation, now }
   return applied(tombstone("issueTodo", todo.id, teamIds, todo._id));
 };
 
-/** A relation is visible from either end, so its feed row carries both issues' teams. */
-function unionTeamIds(a: readonly string[], b: readonly string[]): readonly string[] {
-  return [...new Set([...a, ...b])];
-}
-
 const issueRelationCreate: EnvApply = async ({ ctx, actor, company, operation, now }) => {
   const parsed = decoded(parseIssueRelationCreateArgs(operation.args));
   if ("outcome" in parsed) return parsed.outcome;
@@ -1563,7 +1724,12 @@ const issueRelationCreate: EnvApply = async ({ ctx, actor, company, operation, n
   const issue = await liveRow(ctx, "issues", company._id, args.issueId);
   if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
   const related = await liveRow(ctx, "issues", company._id, args.relatedIssueId);
-  if (related === null) return rejected("invalid-arguments", `No issue ${args.relatedIssueId}.`);
+  // The relation is visible from both ends, so an actor who can only reach one end would be
+  // authoring an edge onto another team's issue. An unreadable related issue answers exactly like a
+  // missing one, so the refusal does not double as an existence oracle for that team's ids.
+  if (!readableIssue(actor, related)) {
+    return rejected("invalid-arguments", `No issue ${args.relatedIssueId}.`);
+  }
 
   const teamIds = unionTeamIds(issue.teamIds, related.teamIds);
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
@@ -1604,13 +1770,13 @@ const issueRelationDelete: EnvApply = async ({ ctx, actor, company, operation, n
 
   const relation = await byDomain(ctx, "issueRelations", company._id, operation.entityId);
   if (relation === null) return rejected("entity-not-found", `No relation ${operation.entityId}.`);
-  const teamIds = unionTeamIds(
-    await issueTeamIds(ctx, company, relation.issueId),
-    await issueTeamIds(ctx, company, relation.relatedIssueId),
-  );
-  if (!can(actor, "issues.update", await issueTeamIds(ctx, company, relation.issueId))) {
-    return denied("issues.update");
-  }
+  const issueTeams = await issueTeamIds(ctx, company, relation.issueId);
+  const relatedTeams = await issueTeamIds(ctx, company, relation.relatedIssueId);
+  const teamIds = unionTeamIds(issueTeams, relatedTeams);
+  if (!can(actor, "issues.update", issueTeams)) return denied("issues.update");
+  // Symmetric with create: removing the edge changes what the other end shows, so reaching only one
+  // end is not enough.
+  if (!can(actor, "issues.read", relatedTeams)) return denied("issues.read");
   if (relation.deletedAt !== null) return applied();
 
   await ctx.db.patch(relation._id, { deletedAt: now });
@@ -1801,12 +1967,15 @@ const issueViewUpdate: EnvApply = async ({ ctx, actor, company, operation, now }
   }
   const badTeam = await missingTeam(ctx, company, teamIds);
   if (badTeam !== null) return rejected("invalid-arguments", `No team ${badTeam}.`);
-  // Widening visibility is sharing; it needs the same switch creating a shared view does.
-  if (
-    visibility !== "private" &&
-    visibility !== view.visibility &&
-    !can(actor, "views.shared", teamIds)
-  ) {
+  // Sharing needs the same switch creating a shared view does — and re-pointing an already shared
+  // view at other teams is just as much an act of sharing as widening its visibility, so the check
+  // follows the effective audience rather than the visibility literal.
+  const currentScope = viewChangeTeamIds(view);
+  const audienceChanged =
+    visibility !== view.visibility ||
+    teamIds.length !== currentScope.length ||
+    teamIds.some((teamId) => !currentScope.includes(teamId));
+  if (visibility !== "private" && audienceChanged && !can(actor, "views.shared", teamIds)) {
     return denied("views.shared");
   }
 
@@ -1824,7 +1993,9 @@ const issueViewUpdate: EnvApply = async ({ ctx, actor, company, operation, now }
     upsert(
       "issueView",
       doc.id,
-      viewChangeTeamIds(doc),
+      // Narrowing the audience still has to reach the teams being dropped, so their replicas
+      // receive the upsert that tells them the view is no longer theirs.
+      scopeChangeTeamIds(currentScope, viewChangeTeamIds(doc)),
       view._id,
       await encodeIssueView(ctx, company, doc),
     ),

@@ -739,6 +739,49 @@ export function listSmokeStateFiles(stateDir: string): ReadonlyArray<SmokeRunSta
   return states;
 }
 
+/** Leftover runs split by whether this run's targets can clean them up. */
+export interface SmokeRecoveryTargets {
+  /** Recorded against this run's relay and deployment, so recovery reaches them. */
+  readonly recoverable: ReadonlyArray<SmokeRunStateFile>;
+  /** Recorded against a different relay or deployment; only an operator can clear them. */
+  readonly foreign: ReadonlyArray<SmokeRunStateFile>;
+}
+
+/**
+ * Splits the leftover state files of prior runs into the ones this run may
+ * recover and the ones it must not touch.
+ *
+ * Recovery is pinned to the *current* config — the unlink goes to
+ * `config.relayBaseUrl` and the cleanup hook to `config.deployment` — while a
+ * state file names the relay and deployment its run actually mutated. When the
+ * two disagree (the same machine smoke-tests two deployments, sharing the
+ * default state dir) recovering from here would sweep the wrong deployment,
+ * ask the wrong relay — which answers "already gone" for an id it never linked
+ * — and then delete the only record of the real leftovers. Those runs are
+ * reported instead, with their marker files kept.
+ *
+ * The run's own environment is never a recovery target: its state file belongs
+ * to the cleanup that is still to come.
+ */
+export function partitionSmokeRecoveryTargets(input: {
+  readonly states: ReadonlyArray<SmokeRunStateFile>;
+  readonly environmentId: string;
+  readonly relayBaseUrl: string;
+  readonly deployment: string;
+}): SmokeRecoveryTargets {
+  const relayBaseUrl = normalizeRelayIssuer(input.relayBaseUrl);
+  const recoverable: Array<SmokeRunStateFile> = [];
+  const foreign: Array<SmokeRunStateFile> = [];
+  for (const stale of input.states) {
+    if (stale.environmentId === input.environmentId) continue;
+    const matches =
+      stale.deployment === input.deployment &&
+      normalizeRelayIssuer(stale.relayBaseUrl) === relayBaseUrl;
+    (matches ? recoverable : foreign).push(stale);
+  }
+  return { recoverable, foreign };
+}
+
 /**
  * The commands an operator runs by hand to clean up after a run that died
  * before its own cleanup (SIGKILL, power loss). Logged at intent time, right
@@ -820,6 +863,11 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
 
   const skip = (name: string, reason: string): void => {
     steps.push({ name, ok: false, detail: `skipped: ${reason}` });
+  };
+
+  /** A verdict the harness reaches without running anything, and still must fail on. */
+  const fail = (name: string, detail: string): void => {
+    steps.push({ name, ok: false, detail: truncateDetail(detail) });
   };
 
   const relayPost = <A>(input: {
@@ -1026,32 +1074,55 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
     // run (SIGKILL cannot fire Effect.ensuring). Each state file names an
     // environment whose relay link and Convex registration may still exist;
     // the unlink is the same per-environment route cleanup uses, and one
-    // backend cleanup call suffices because `smoke:cleanup` sweeps every
-    // `env-smoke-*` registration.
+    // backend cleanup call suffices because `smoke:cleanup` sweeps aged-out
+    // `env-smoke-*` registrations. Only runs recorded against this run's relay
+    // and deployment are recoverable from here — see
+    // {@link partitionSmokeRecoveryTargets}.
     const leftovers = yield* step(
       "recovery.leftoverState",
       Effect.try({
         try: () =>
-          listSmokeStateFiles(config.stateDir).filter(
-            (stale) => stale.environmentId !== config.environmentId,
-          ),
+          partitionSmokeRecoveryTargets({
+            states: listSmokeStateFiles(config.stateDir),
+            environmentId: config.environmentId,
+            relayBaseUrl,
+            deployment: config.deployment,
+          }),
         catch: (cause) =>
           new ConvexSyncSmokeError({
             reason: `failed to list recovery state files in ${config.stateDir}`,
             cause,
           }),
       }),
-      (files) =>
-        files.length === 0
+      (targets) =>
+        targets.recoverable.length + targets.foreign.length === 0
           ? "no leftover state from prior runs"
-          : `found ${files.length} leftover run(s): ${files.map((stale) => stale.environmentId).join(", ")}`,
+          : `found ${targets.recoverable.length} recoverable and ${targets.foreign.length} foreign leftover run(s): ` +
+            [...targets.recoverable, ...targets.foreign]
+              .map((stale) => stale.environmentId)
+              .join(", "),
     );
-    if (Option.isSome(leftovers) && leftovers.value.length > 0) {
+    // A leftover run against another deployment or relay is reported, never
+    // cleaned from here: its marker file stays so the run keeps failing until
+    // an operator clears it against the target it actually mutated.
+    if (Option.isSome(leftovers)) {
+      for (const stale of leftovers.value.foreign) {
+        const commands = manualCleanupInstructions({ ...stale, stateDir: config.stateDir });
+        fail(
+          `recovery.foreignRun[${stale.environmentId}]`,
+          `state file records deployment ${stale.deployment} at ${stale.relayBaseUrl}, but this ` +
+            `run targets ${config.deployment} at ${relayBaseUrl}; recovering from here would ` +
+            `sweep the wrong deployment. State file kept at ${commands.stateFile}. Clean it by ` +
+            `hand: ${commands.convex} — and: ${commands.relay}`,
+        );
+      }
+    }
+    if (Option.isSome(leftovers) && leftovers.value.recoverable.length > 0) {
       const swept = yield* hookStep(
         "recovery.hooks.cleanupRegistration",
         config.hooks.cleanupRegistration(),
       );
-      for (const stale of leftovers.value) {
+      for (const stale of leftovers.value.recoverable) {
         const unlinked = yield* step(
           `recovery.relay.unlinkEnvironment[${stale.environmentId}]`,
           unlinkEnvironment(cliAccessToken, stale.environmentId),

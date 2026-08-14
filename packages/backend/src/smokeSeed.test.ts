@@ -4,9 +4,11 @@ import { COMPANY_ADMINISTRATION_PERMISSIONS, isPermissionKey } from "./permissio
 import {
   isSmokeCompanyDomainId,
   isSmokeEnvironmentId,
+  isSweepableSmokeOrphan,
   isUsableSmokeKey,
   SMOKE_COMPANY_DOMAIN_ID,
   SMOKE_ENVIRONMENT_ID_PREFIX,
+  SMOKE_ORPHAN_MIN_AGE_MS,
   SMOKE_ROLE_DOMAIN_ID,
   smokeDescriptor,
   smokeRegistrationDomainId,
@@ -16,7 +18,7 @@ import {
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/;
 
 describe("smokeServiceRolePermissions", () => {
-  it("grants exactly the read gates the sync feed filters on, the workflow write switch, and the remote-agent switches", () => {
+  it("grants exactly the read gates the sync feed filters on plus the workflow write switch", () => {
     expect([...smokeServiceRolePermissions()].sort()).toEqual(
       [
         "company.read",
@@ -28,10 +30,16 @@ describe("smokeServiceRolePermissions", () => {
         "issues.read",
         "audit.read",
         "workflow.manage",
-        "remoteAgents.dispatch",
-        "remoteAgents.control",
       ].sort(),
     );
+  });
+
+  it("grants no remote-agent switch, because no smoke step exercises one", () => {
+    // The harness only calls `environmentCommands.list` (gated on `environments.read`) and
+    // `claim` (gated on the actor kind); `remoteAgents.*` would be an unearned grant.
+    for (const permission of smokeServiceRolePermissions()) {
+      expect(permission.startsWith("remoteAgents.")).toBe(false);
+    }
   });
 
   it("only names known permission switches", () => {
@@ -41,8 +49,8 @@ describe("smokeServiceRolePermissions", () => {
   });
 
   it("never grants a company-administration write switch", () => {
-    // `remoteAgents.*` and the read gates are deliberately outside the administration set; nothing
-    // the smoke role carries may manage members, roles, environments, or exports.
+    // The read gates and `workflow.manage` are deliberately outside the administration set;
+    // nothing the smoke role carries may manage members, roles, environments, or exports.
     for (const permission of smokeServiceRolePermissions()) {
       expect(COMPANY_ADMINISTRATION_PERMISSIONS.has(permission)).toBe(false);
     }
@@ -102,6 +110,31 @@ describe("isSmokeEnvironmentId", () => {
     // The prefix must lead: a real id merely containing it stays untouchable.
     expect(isSmokeEnvironmentId(`prod-${SMOKE_ENVIRONMENT_ID_PREFIX}x`)).toBe(false);
     expect(isSmokeEnvironmentId("")).toBe(false);
+  });
+});
+
+describe("isSweepableSmokeOrphan", () => {
+  const now = 1_800_000_000_000;
+  const orphan = (updatedAt: number, environmentId = `${SMOKE_ENVIRONMENT_ID_PREFIX}0198f7f0`) => ({
+    environmentId,
+    updatedAt,
+    now,
+  });
+
+  it("sweeps a synthetic registration only once it is older than the orphan threshold", () => {
+    expect(isSweepableSmokeOrphan(orphan(now - SMOKE_ORPHAN_MIN_AGE_MS))).toBe(true);
+    expect(isSweepableSmokeOrphan(orphan(now - SMOKE_ORPHAN_MIN_AGE_MS - 1))).toBe(true);
+    // A registration touched moments ago may belong to a smoke run still in flight: sweeping it
+    // would delete the shared company out from under that run.
+    expect(isSweepableSmokeOrphan(orphan(now))).toBe(false);
+    expect(isSweepableSmokeOrphan(orphan(now - SMOKE_ORPHAN_MIN_AGE_MS + 1))).toBe(false);
+    // A clock that ran backwards leaves a future timestamp; that is not aged out either.
+    expect(isSweepableSmokeOrphan(orphan(now + SMOKE_ORPHAN_MIN_AGE_MS))).toBe(false);
+  });
+
+  it("never sweeps a registration outside the synthetic prefix, however old", () => {
+    expect(isSweepableSmokeOrphan(orphan(0, "environment-1"))).toBe(false);
+    expect(isSweepableSmokeOrphan(orphan(0, `prod-${SMOKE_ENVIRONMENT_ID_PREFIX}x`))).toBe(false);
   });
 });
 

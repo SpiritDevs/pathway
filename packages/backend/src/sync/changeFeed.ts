@@ -107,6 +107,71 @@ export function takeChangePage<Row extends ChangeFeedRow>(
   return { changes, cursor: nextCursor, hasMore: consumed < rows.length, oversizedRow };
 }
 
+/**
+ * Rows one database read pulls while a page is being filled. The first read happens before any row
+ * has been measured, so this is also the worst case a caller can be surprised by: one operation's
+ * arguments are capped at `SYNC_MAX_OPERATION_ARGS_BYTES` (512 KiB), which bounds a change payload,
+ * and eight of those stay comfortably inside Convex's per-transaction read limit.
+ */
+export const SYNC_READ_CHUNK_ROWS = 8;
+
+export interface BoundedReadOptions<Row> {
+  /** Hard row ceiling for the whole read. */
+  readonly maxRows: number;
+  /** Byte ceiling for what is *read*, which is the budget a transaction actually spends. */
+  readonly maxBytes: number;
+  /** Rows per database read; the first read costs at most this many rows of budget. */
+  readonly chunkSize?: number;
+  readonly sizeOf: (row: Row) => number;
+  /** Reads the next slice after `after` — `undefined` on the first call — of at most `limit` rows. */
+  readonly read: (after: Row | undefined, limit: number) => Promise<readonly Row[]>;
+}
+
+export interface BoundedRead<Row> {
+  readonly rows: readonly Row[];
+  /** Measured size of everything read, so a caller walking several sources can share one budget. */
+  readonly bytes: number;
+  /** True when a read came back short: the source has nothing left past these rows. */
+  readonly exhausted: boolean;
+}
+
+/**
+ * Reads rows in chunks until a row or byte ceiling is reached.
+ *
+ * The row ceiling alone is not a bound on the work: change payloads are whole entity snapshots and
+ * a description may be 100,000 characters, so a stretch of large rows makes a fixed hundred-row
+ * fetch read tens of megabytes and blow the transaction's read limit — for every client whose
+ * cursor sits before that stretch, on every retry, with no smaller page size to escape into. Sizing
+ * later chunks from the average row seen so far keeps a run of large rows from overshooting.
+ *
+ * The read deliberately stops *after* crossing `maxBytes` rather than before: the extra rows let the
+ * caller's pager see that more work remains and report `hasMore` honestly.
+ */
+export async function readBoundedRows<Row>(
+  options: BoundedReadOptions<Row>,
+): Promise<BoundedRead<Row>> {
+  const maxRows = Math.max(1, Math.trunc(options.maxRows));
+  const chunkSize = Math.max(1, Math.trunc(options.chunkSize ?? SYNC_READ_CHUNK_ROWS));
+  const rows: Row[] = [];
+  let bytes = 0;
+
+  while (rows.length < maxRows && bytes <= options.maxBytes) {
+    let limit = Math.min(chunkSize, maxRows - rows.length);
+    if (rows.length > 0) {
+      const averageBytes = Math.max(1, Math.ceil(bytes / rows.length));
+      limit = Math.min(limit, Math.max(1, Math.ceil((options.maxBytes - bytes) / averageBytes)));
+    }
+    const chunk = await options.read(rows[rows.length - 1], limit);
+    for (const row of chunk) {
+      rows.push(row);
+      bytes += options.sizeOf(row);
+    }
+    if (chunk.length < limit) return { rows, bytes, exhausted: true };
+  }
+
+  return { rows, bytes, exhausted: false };
+}
+
 export function changeRetainUntil(now: number): number {
   return now + SYNC_FEED_RETENTION_MS;
 }

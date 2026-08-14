@@ -67,8 +67,9 @@ export function bootstrapKindAfter(kind: BootstrapEntityKind): BootstrapEntityKi
 /**
  * Serialized as compact JSON rather than anything fancier: the contract only requires a trimmed
  * non-empty string, and a token a developer can read in a network tab is worth more than one that
- * pretends to be tamper-proof — a tampered token can only re-read rows the caller was already
- * authorized to read.
+ * pretends to be tamper-proof. Nothing in the token grants anything — the walk re-authorizes every
+ * row against the caller — but its snapshot version *is* load-bearing, since the client persists it
+ * as its feed cursor, so the caller must hold it to the company head as well as decoding it.
  */
 export function encodeBootstrapCursor(state: BootstrapCursorState): string {
   return JSON.stringify({ v: state.snapshotVersion, k: state.entityKind, a: state.afterId });
@@ -79,6 +80,10 @@ export function encodeBootstrapCursor(state: BootstrapCursorState): string {
  * naming an entity kind this build does not walk, which a newer deployment could have minted. The
  * caller turns `null` into an `invalid-arguments` refusal so the client restarts its seed cleanly
  * instead of resuming from a position that means something else now.
+ *
+ * The snapshot version must be a non-negative integer, because it comes back as the seed's resume
+ * `version` and the client decodes that as a `CompanyVersion`. Whether it is a version this company
+ * ever reached is the caller's check — this module cannot see the head.
  */
 export function decodeBootstrapCursor(token: string): BootstrapCursorState | null {
   let parsed: unknown;
@@ -92,7 +97,7 @@ export function decodeBootstrapCursor(token: string): BootstrapCursorState | nul
   const version = source["v"];
   const kind = source["k"];
   const afterId = source["a"];
-  if (typeof version !== "number" || !Number.isFinite(version) || version < 0) return null;
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) return null;
   if (typeof kind !== "string" || !BOOTSTRAP_ENTITY_SET.has(kind)) return null;
   if (typeof afterId !== "string") return null;
   return { snapshotVersion: version, entityKind: kind as BootstrapEntityKind, afterId };

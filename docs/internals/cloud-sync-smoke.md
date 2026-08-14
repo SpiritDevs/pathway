@@ -88,14 +88,28 @@ steps fail. Cleanup treats "already gone" as success, and intent is recorded **b
 mutating request goes out, so a link or seed whose response was lost is still cleaned up.
 
 One deliberate exception: if the reserved smoke company holds rows in any table the smoke flow
-never writes (memberships, teams, …), `smoke:cleanup` throws `smoke-cleanup-refused` instead of
-deleting the company — and since a thrown Convex error rolls back the whole mutation, its
-registration deletes are undone too, leaving the company fully intact for a human to inspect. The
-cleanup step (and the run) then fails, and the recovery state file is kept so every subsequent run
-keeps failing loudly until an operator resolves it by hand. Tables the smoke flow _can_ write —
-change-feed rows, operation receipts, issue-key leases, commands, settings, and the issue-domain
-rows the sync surface writes on its behalf (the run's tombstoned `issueLabels` row) — are swept,
-not treated as foreign.
+never writes (memberships, teams, `companySettings`, `environmentCommands`, a role other than the
+seeded one, …), `smoke:cleanup` throws `smoke-cleanup-refused` instead of deleting the company —
+and since a thrown Convex error rolls back the whole mutation, its registration deletes are undone
+too, leaving the company fully intact for a human to inspect. The cleanup step (and the run) then
+fails, and the recovery state file is kept so every subsequent run keeps failing loudly until an
+operator resolves it by hand. Only the tables the smoke flow _can_ write — change-feed rows,
+operation receipts, issue-key leases, and the issue-domain rows the sync surface writes on its
+behalf (the run's tombstoned `issueLabels` row) — are swept. `companySettings` and
+`environmentCommands` are deliberately on the foreign side: no sync operation kind writes either
+and every `environmentCommands` mutation is still unimplemented, so a row there is somebody else's
+data. They move to the sweep list when phase 8 gives the environment actor a real write path.
+
+## One run at a time
+
+Every run shares the reserved smoke company, so two overlapping runs (two operators, or a CI job
+racing its own retry) contend for the same rows: treat the smoke as single-flight per deployment.
+The one place it would have been destructive is guarded — `smoke:cleanup` sweeps another run's
+`env-smoke-*` registration only after it has sat untouched for `SMOKE_ORPHAN_MIN_AGE_MS`
+(15 minutes, far longer than a run takes), so a live registration is retained instead of deleted
+and the company survives with it. The trade-off is that a genuinely orphaned registration younger
+than the threshold outlives the recovery pass; the next run sweeps it once it ages out, or an
+operator runs the manual cleanup below.
 
 ## Crash recovery
 
@@ -104,8 +118,15 @@ a recovery state file — `$TMPDIR/pathway-convex-smoke/<environmentId>.json`, c
 environment id, relay URL, deployment, and company id — and removes it only after cleanup fully
 succeeds. On startup, the harness lists leftover state files from prior runs and recovers them
 before proceeding: it unlinks each stale environment at the relay (by environment id, under the
-operator's account) and runs the registration cleanup (`smoke:cleanup` sweeps every `env-smoke-*`
-registration). Each recovery attempt appears as its own step in the report.
+operator's account) and runs the registration cleanup (`smoke:cleanup` sweeps the aged-out
+`env-smoke-*` registrations). Each recovery attempt appears as its own step in the report.
+
+Recovery is pinned to the _current_ run's relay and deployment, so it only touches leftovers whose
+state file records those same targets. A leftover from a run against a different deployment or
+relay — the state directory is shared per machine — is reported as a failed
+`recovery.foreignRun[<environmentId>]` step carrying the manual commands below, and its state file
+is kept: cleaning it from here would sweep the wrong deployment, ask a relay that never held the
+link (which answers "already gone"), and then delete the only record of the real leftovers.
 
 At intent time the harness also logs the manual cleanup commands, so an operator can recover a dead
 run by hand:
