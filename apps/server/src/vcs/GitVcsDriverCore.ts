@@ -2916,11 +2916,36 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
       const remoteRefName =
         parsedRemoteRef?.remoteRef ?? `${input.fallbackRemoteName}/${input.refName}`;
-      const commitSha = yield* runGitStdout("GitVcsDriver.resolveRemoteTrackingCommit", input.cwd, [
-        "rev-parse",
-        "--verify",
-        `refs/remotes/${remoteRefName}^{commit}`,
-      ]).pipe(Effect.map((stdout) => stdout.trim()));
+      const remoteName = parsedRemoteRef?.remoteName ?? input.fallbackRemoteName;
+      const branchName = parsedRemoteRef?.branchName ?? input.refName;
+      const resolveCommitSha = () =>
+        runGitStdout("GitVcsDriver.resolveRemoteTrackingCommit", input.cwd, [
+          "rev-parse",
+          "--verify",
+          `refs/remotes/${remoteRefName}^{commit}`,
+        ]).pipe(Effect.map((stdout) => stdout.trim()));
+      // A status refresh can fetch the same Git common directory between the launch fetch and
+      // this read. Repair only the selected tracking ref so that race costs one narrow retry while
+      // the normal worktree path remains a single fetch.
+      const commitSha = yield* resolveCommitSha().pipe(
+        Effect.catchTag("GitCommandError", () =>
+          executeGit(
+            "GitVcsDriver.resolveRemoteTrackingCommit.refetch",
+            input.cwd,
+            [
+              "fetch",
+              "--quiet",
+              "--no-tags",
+              remoteName,
+              `+refs/heads/${branchName}:refs/remotes/${remoteRefName}`,
+            ],
+            {
+              env: STATUS_UPSTREAM_REFRESH_ENV,
+              fallbackErrorDetail: `git fetch ${remoteRefName} failed`,
+            },
+          ).pipe(Effect.andThen(resolveCommitSha())),
+        ),
+      );
 
       return { commitSha, remoteRefName };
     });
