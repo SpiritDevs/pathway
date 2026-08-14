@@ -273,8 +273,7 @@ export function resolveBrowserTakeoverBanner(
     tone: "callout",
     variant: "info",
     title: "Take over to assist agent",
-    description:
-      "Pause the agent and drive its Preview browser yourself — sign in, dismiss a dialog, or set the page up — then hand it back.",
+    description: "Pause the agent and drive its Preview browser yourself, then hand it back.",
     actions: [
       {
         kind: "take-over",

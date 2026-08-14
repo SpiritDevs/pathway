@@ -2,6 +2,7 @@ import { ISSUE_COMMENT_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  isNewIssueAttachmentRecord,
   newIssueAttachmentComment,
   newIssueAttachmentDataUrlRejection,
   newIssueAttachmentIntake,
@@ -38,8 +39,35 @@ describe("new issue attachments", () => {
     ).toContain("large.png is larger");
   });
 
-  it("describes the attachment activity in singular and plural", () => {
-    expect(newIssueAttachmentComment(1)).toBe("Attached an image when creating this issue.");
-    expect(newIssueAttachmentComment(2)).toBe("Attached 2 images when creating this issue.");
+  it("describes the attachment metadata in singular and plural", () => {
+    expect(newIssueAttachmentComment(1)).toContain("Attached an image when creating this issue.");
+    expect(newIssueAttachmentComment(2)).toContain("Attached 2 images when creating this issue.");
+  });
+
+  it("identifies only the generated creation-time attachment record", () => {
+    expect(
+      isNewIssueAttachmentRecord({
+        body: newIssueAttachmentComment(1),
+        attachmentIds: ["iss_first"],
+      }),
+    ).toBe(true);
+    expect(
+      isNewIssueAttachmentRecord({
+        body: newIssueAttachmentComment(1),
+        attachmentIds: ["iss_first", "iss_second"],
+      }),
+    ).toBe(false);
+    expect(
+      isNewIssueAttachmentRecord({
+        body: newIssueAttachmentComment(1),
+        attachmentIds: [],
+      }),
+    ).toBe(false);
+    expect(
+      isNewIssueAttachmentRecord({
+        body: "Attached an image when creating this issue.",
+        attachmentIds: ["iss_first"],
+      }),
+    ).toBe(false);
   });
 });

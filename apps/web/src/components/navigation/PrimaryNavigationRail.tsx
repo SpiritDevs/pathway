@@ -226,7 +226,6 @@ function NavigationRailButton({
             className={cn(
               "relative h-9! overflow-hidden [-webkit-app-region:no-drag] [--control-icon-color:var(--sidebar-muted-foreground)]",
               "hover:[--control-icon-color:var(--sidebar-foreground)]",
-              reorderable && "cursor-grab active:cursor-grabbing",
               expanded ? "w-full justify-start gap-2 px-2.5" : "w-9 gap-0 px-0",
               active &&
                 "bg-sidebar-accent text-sidebar-accent-foreground [--control-icon-color:var(--sidebar-accent-foreground)]",
