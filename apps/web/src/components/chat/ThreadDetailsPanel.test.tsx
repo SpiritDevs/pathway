@@ -192,6 +192,9 @@ describe("ThreadDetailsPanel", () => {
       driver: "codex",
       instanceId: "codex:default",
     } as ServerProvider;
+    const activeProviderEntry = {
+      displayName: "Work Codex",
+    } as NonNullable<ThreadDetailsPanelProps["activeProviderEntry"]>;
     testState.useT3ProjectFileScripts.mockReturnValue([]);
 
     const props: ThreadDetailsPanelProps = {
@@ -202,6 +205,8 @@ describe("ThreadDetailsPanel", () => {
       activeProjectName: undefined,
       activeProjectScripts: undefined,
       activeProvider,
+      activeProviderEntry,
+      activeProviderIconBadge: true,
       resourcesEnabled: true,
       preferredScriptId: null,
       keybindings: [],
@@ -233,6 +238,8 @@ describe("ThreadDetailsPanel", () => {
       provider: activeProvider,
       enabled: true,
       displayMode: "panel",
+      iconDisplayName: "Work Codex",
+      showIconBadge: true,
     });
     expect(testState.providerUsageList).not.toHaveBeenCalled();
   });

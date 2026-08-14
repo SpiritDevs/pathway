@@ -195,6 +195,7 @@ import {
   NO_PROVIDER_MODEL_SELECTION,
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  shouldShowProviderInstanceBadge,
   sortProviderInstanceEntries,
 } from "../providerInstances";
 import { useClientSettings, useEnvironmentSettings } from "../hooks/useSettings";
@@ -2846,6 +2847,13 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const activeProviderEntry = useMemo(
+    () =>
+      continuationProviderEntries.find(
+        (entry) => entry.instanceId === activeProviderStatus?.instanceId,
+      ) ?? null,
+    [activeProviderStatus?.instanceId, continuationProviderEntries],
+  );
   const providerStatusBannerKey = getProviderStatusBannerKey(activeProviderStatus);
   const [dismissedProviderStatusBannerKey, setDismissedProviderStatusBannerKey] = useState<
     string | null
@@ -6927,6 +6935,10 @@ function ChatViewContent(props: ChatViewProps) {
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,
     activeProvider: activeProviderStatus,
+    activeProviderEntry,
+    activeProviderIconBadge: activeProviderEntry
+      ? shouldShowProviderInstanceBadge(activeProviderEntry, continuationProviderEntries)
+      : false,
     resourcesEnabled: threadPanelOpen,
     preferredScriptId: activeProject
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)

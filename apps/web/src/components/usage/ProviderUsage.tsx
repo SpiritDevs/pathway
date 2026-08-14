@@ -26,6 +26,10 @@ import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import {
+  deriveProviderInstanceEntries,
+  shouldShowProviderInstanceBadge,
+} from "../../providerInstances";
 import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
   deriveProviderUsageLimits,
@@ -319,6 +323,8 @@ export function EnvironmentProviderUsage({
   grouped = false,
   refreshedSnapshot,
   parentRefreshing = false,
+  iconDisplayName,
+  showIconBadge = false,
 }: {
   environmentId: EnvironmentId;
   provider: ServerProvider;
@@ -327,6 +333,8 @@ export function EnvironmentProviderUsage({
   grouped?: boolean;
   refreshedSnapshot?: ServerProviderUsageSnapshot;
   parentRefreshing?: boolean;
+  iconDisplayName?: string;
+  showIconBadge?: boolean;
 }) {
   const isPanel = displayMode === "panel";
   const [open, setOpen] = useState(false);
@@ -337,7 +345,7 @@ export function EnvironmentProviderUsage({
     provider: usageProvider,
     enabled,
   });
-  const displayName = provider.displayName ?? providerName(usageProvider);
+  const displayName = iconDisplayName ?? provider.displayName ?? providerName(usageProvider);
   const refreshTargets = useMemo(
     () => [{ instanceId: provider.instanceId, provider: usageProvider, label: displayName }],
     [displayName, provider.instanceId, usageProvider],
@@ -397,6 +405,8 @@ export function EnvironmentProviderUsage({
                 driverKind={provider.driver}
                 displayName={displayName}
                 accentColor={provider.accentColor}
+                showBadge={showIconBadge}
+                badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
                 className="mt-0.5 size-4"
                 iconClassName="size-4"
               />
@@ -472,6 +482,8 @@ export function EnvironmentProviderUsage({
               driverKind={provider.driver}
               displayName={displayName}
               accentColor={provider.accentColor}
+              showBadge={showIconBadge}
+              badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
               className={cn("size-4", isPanel && "-translate-x-2")}
               iconClassName="size-4"
             />
@@ -520,18 +532,17 @@ export function EnvironmentProviderUsageList({
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const supported = useMemo(
     () =>
-      (providers ?? []).filter(
-        (provider) =>
-          provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
+      deriveProviderInstanceEntries(providers ?? []).filter(
+        (entry) => entry.enabled && entry.installed && isProviderUsageDriver(entry.driverKind),
       ),
     [providers],
   );
   const refreshTargets = useMemo(
     () =>
-      supported.map((provider) => ({
-        instanceId: provider.instanceId,
-        provider: provider.driver as ProviderUsageDriver,
-        label: provider.displayName ?? providerName(provider.driver as ProviderUsageDriver),
+      supported.map((entry) => ({
+        instanceId: entry.instanceId,
+        provider: entry.driverKind as ProviderUsageDriver,
+        label: entry.displayName,
       })),
     [supported],
   );
@@ -554,18 +565,20 @@ export function EnvironmentProviderUsageList({
         <p className="px-4 pb-3 pt-1 text-xs text-muted-foreground">Loading provider accounts…</p>
       ) : (
         <div className="divide-y divide-border/70">
-          {supported.map((provider) => {
+          {supported.map((entry) => {
             const refreshedSnapshot = usageRefresh.refreshedSnapshots.get(
-              providerUsageSnapshotKey(environmentId, provider.instanceId),
+              providerUsageSnapshotKey(environmentId, entry.instanceId),
             );
             return (
               <EnvironmentProviderUsage
-                key={provider.instanceId}
+                key={entry.instanceId}
                 environmentId={environmentId}
-                provider={provider}
+                provider={entry.snapshot}
                 enabled={enabled}
                 displayMode="panel"
                 grouped
+                iconDisplayName={entry.displayName}
+                showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
                 {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
                 parentRefreshing={usageRefresh.isRefreshing}
               />

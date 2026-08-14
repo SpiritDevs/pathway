@@ -10,6 +10,7 @@ import {
   resolveProviderCatalogAvailability,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
+  shouldShowProviderInstanceBadge,
 } from "./providerInstances";
 
 function provider(input: {
@@ -18,6 +19,7 @@ function provider(input: {
   enabled?: boolean;
   availability?: ServerProvider["availability"];
   displayName?: string;
+  accentColor?: string;
   status?: ServerProvider["status"];
   models?: ServerProvider["models"];
 }): ServerProvider {
@@ -25,6 +27,7 @@ function provider(input: {
     instanceId: ProviderInstanceId.make(input.instanceId),
     driver: input.provider,
     ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     enabled: input.enabled ?? true,
     installed: true,
     version: null,
@@ -44,6 +47,36 @@ const model = (slug: string, isCustom = false, isDefault = false) => ({
   isCustom,
   ...(isDefault ? { isDefault: true } : {}),
   capabilities: {},
+});
+
+describe("shouldShowProviderInstanceBadge", () => {
+  it("shows badges for accented or otherwise ambiguous provider instances", () => {
+    const [accented] = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_work",
+        accentColor: "#ff3300",
+      }),
+    ]);
+    const duplicateEntries = deriveProviderInstanceEntries([
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex_personal" }),
+    ]);
+
+    expect(accented && shouldShowProviderInstanceBadge(accented, [accented])).toBe(true);
+    expect(
+      duplicateEntries[0] &&
+        shouldShowProviderInstanceBadge(duplicateEntries[0], duplicateEntries.values()),
+    ).toBe(true);
+  });
+
+  it("keeps a lone unaccented provider icon unbadged", () => {
+    const [entry] = deriveProviderInstanceEntries([
+      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
+    ]);
+
+    expect(entry && shouldShowProviderInstanceBadge(entry, [entry])).toBe(false);
+  });
 });
 
 describe("isProviderInstancePickerReady", () => {

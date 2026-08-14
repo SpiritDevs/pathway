@@ -10,6 +10,7 @@ import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/
 import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";
+import type { ProviderInstanceEntry } from "../../providerInstances";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
@@ -49,6 +50,8 @@ export interface ThreadDetailsPanelProps {
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   activeProvider: ServerProvider | null;
+  activeProviderEntry?: ProviderInstanceEntry | null;
+  activeProviderIconBadge?: boolean;
   resourcesEnabled: boolean;
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
@@ -263,6 +266,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             provider={usageProvider}
             enabled={props.resourcesEnabled}
             displayMode="panel"
+            {...(props.activeProviderEntry
+              ? { iconDisplayName: props.activeProviderEntry.displayName }
+              : {})}
+            {...(props.activeProviderIconBadge === undefined
+              ? {}
+              : { showIconBadge: props.activeProviderIconBadge })}
           />
         ) : null}
 
