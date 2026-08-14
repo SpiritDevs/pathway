@@ -155,6 +155,24 @@ export function hasRecordPermission(
   return false;
 }
 
+/**
+ * Whether `permission` is granted *anywhere* — company-wide, or inside any single team. This is a
+ * deliberately weaker question than {@link hasRecordPermission} and answers exactly one thing: may
+ * this actor use the company catalog the workflow inherits into every team? A member who reads only
+ * team A still needs the company statuses, labels, and cycles team A's board is built from, and
+ * those rows are attached to no team at all.
+ */
+export function hasAnyScopePermission(
+  effective: EffectivePermissions,
+  permission: PermissionKey,
+): boolean {
+  if (hasCompanyPermission(effective, permission)) return true;
+  for (const permissions of effective.teams.values()) {
+    if (permissions.has(permission)) return true;
+  }
+  return false;
+}
+
 /** Teams the membership can reach with `permission`, used to filter change-feed pages. */
 export function permittedTeamIds(
   effective: EffectivePermissions,

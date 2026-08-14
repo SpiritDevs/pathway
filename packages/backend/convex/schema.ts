@@ -634,6 +634,13 @@ export default defineSchema({
     changeKind: v.union(v.literal("upsert"), v.literal("tombstone")),
     /** Empty means company-wide; otherwise any listed team grants the whole payload. */
     teamIds: v.array(domainId),
+    /**
+     * Set on a row whose only job is to tell an audience the entity just *left* it — today, a saved
+     * view that turned private. Such a row is filtered on `teamIds` alone; the owner-private gate
+     * that governs every other row of the same entity would withhold exactly the replicas that need
+     * it. Absent (the default) means the ordinary gate applies.
+     */
+    departure: v.optional(v.boolean()),
     /** The encoded entity for `upsert`, `null` for `tombstone`; the schema is chosen by `entityKind`. */
     payload: v.any(),
     operationId: v.union(v.string(), v.null()),
@@ -645,6 +652,39 @@ export default defineSchema({
     .index("by_company_and_version", ["companyId", "version"])
     .index("by_company_and_entity", ["companyId", "entityKind", "entityId"])
     .index("by_retain_until", ["retainUntil"]),
+
+  /**
+   * The permanent dedupe ledger: one compact row per decided operation id, kept for the life of the
+   * company.
+   *
+   * {@link syncOperationReceipts} carries the same decision with the detail a client's sync panel
+   * needs — who sent it, from which client and sequence, and the rejection message — and expires at
+   * the 90-day retention line with the change feed. That expiry cannot be allowed to reopen the
+   * dedupe question: a durable outbox survives a bootstrap, and an accepted operation whose response
+   * was lost can be resent long after its receipt is gone. Treating it as fresh then would re-apply
+   * an old title over newer state and append a second audit event, or turn an accepted create into a
+   * false `entity-exists` rejection.
+   *
+   * So this table stores only what a resend has to be answered with — the terminal status, the
+   * version range an acceptance covered, and the rejection code — and no retention column at all.
+   * Any prune job added for the feed must skip it. A row is ~100 bytes against Convex's 1 MiB
+   * document ceiling, and the single index is the only read path.
+   */
+  syncOperationDecisions: defineTable({
+    companyId: v.id("companies"),
+    operationId: v.string(),
+    status: v.union(v.literal("accepted"), v.literal("rejected")),
+    /** The run of company versions the acceptance wrote; both null for a rejection. */
+    firstVersion: v.union(v.number(), v.null()),
+    lastVersion: v.union(v.number(), v.null()),
+    /**
+     * A `SYNC_REJECTION_CODES` member, left open for the reason `syncChanges.entityKind` is. The
+     * message is deliberately not stored — it is the unbounded half, and a resend answered from
+     * this ledger falls back to a generic one.
+     */
+    rejectionCode: v.union(v.string(), v.null()),
+    decidedAt: v.number(),
+  }).index("by_company_and_operation", ["companyId", "operationId"]),
 
   /** Dedupe ledger. An operation id present here has already been applied, whatever the retry. */
   syncOperationReceipts: defineTable({
@@ -717,8 +757,17 @@ export default defineSchema({
     workModelSelection: v.union(v.any(), v.null()),
     /** `IssueAutomationAssignment` from `contracts/issues`. */
     automationAssignment: v.union(v.any(), v.null()),
-    /** `IssuePullRequest` from `contracts/issues`; a struct `v.*` cannot express (`PositiveInt`). */
-    pullRequest: v.union(v.any(), v.null()),
+    /**
+     * `IssuePullRequest` from `contracts/issues`; a struct `v.*` cannot express (`PositiveInt`).
+     *
+     * Optional rather than required because this column arrived after the first issue rows did: a
+     * deployment carrying phase-1 issues would fail schema validation on rollout the moment the
+     * field became mandatory, and a table validator is checked against every existing row, not just
+     * the ones a migration has reached. Readers normalize the absent field to `null`
+     * ({@link module:lib/issueApply.encodeIssue}); once a bounded backfill has written `null`
+     * everywhere, the `v.optional` wrapper can come off.
+     */
+    pullRequest: v.optional(v.union(v.any(), v.null())),
     createdAt: v.number(),
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),
@@ -729,6 +778,13 @@ export default defineSchema({
     .index("by_company_and_key", ["companyId", "key"])
     .index("by_company_and_status", ["companyId", "statusId"])
     .index("by_company_and_project", ["companyId", "projectId"])
+    /**
+     * The sweeps: every live issue a status deletion or a milestone move has to migrate. `deletedAt`
+     * is the last index field so the range covers live rows only — a company that has tombstoned a
+     * decade of issues must not spend its transaction budget skipping them.
+     */
+    .index("by_company_status_and_deleted", ["companyId", "statusId", "deletedAt"])
+    .index("by_company_milestone_and_deleted", ["companyId", "milestoneId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   /**
@@ -755,6 +811,16 @@ export default defineSchema({
     .index("by_company_and_scope", ["companyId", "scope"])
     .index("by_company_and_team", ["companyId", "teamId"])
     .index("by_company_and_base_status", ["companyId", "baseStatusId"])
+    /**
+     * Resolving one effective workflow reads its whole chain, so the chain reads are the ones that
+     * have to stay bounded: `deletedAt` last keeps a tombstoned column out of the range instead of
+     * out of a post-read filter, and the reader takes one row past its ceiling to notice an
+     * oversized workflow rather than silently truncating it.
+     */
+    .index("by_company_scope_and_deleted", ["companyId", "scope", "deletedAt"])
+    .index("by_company_team_and_deleted", ["companyId", "teamId", "deletedAt"])
+    /** Live overrides of one base: the delete sweep, and the one-override-per-(team, base) rule. */
+    .index("by_company_base_and_deleted", ["companyId", "baseStatusId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   issueLabels: defineTable({
@@ -796,6 +862,8 @@ export default defineSchema({
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
+    /** Appending to a project's timeline reads one row — the last position — instead of them all. */
+    .index("by_company_project_and_position", ["companyId", "cloudProjectId", "position"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   /**
@@ -838,6 +906,9 @@ export default defineSchema({
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
+    /** Appending to a checklist reads its last order key; the scope migration reads its live rows. */
+    .index("by_company_issue_and_sort_order", ["companyId", "issueId", "sortOrder"])
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   /**
@@ -858,6 +929,17 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_company_and_related_issue", ["companyId", "relatedIssueId"])
+    /** The duplicate check is one read of one live row, not a scan of an issue's whole edge list. */
+    .index("by_company_pair_kind_and_deleted", [
+      "companyId",
+      "issueId",
+      "relatedIssueId",
+      "kind",
+      "deletedAt",
+    ])
+    /** Both ends, live only: a relation is visible from either, so a scope change reaches both. */
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
+    .index("by_company_related_issue_and_deleted", ["companyId", "relatedIssueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   issueComments: defineTable({
@@ -877,6 +959,8 @@ export default defineSchema({
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
+    /** Live rows of one issue, for the scope migration a team change performs. */
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   /** Metadata only. Bytes live in Convex file storage and never travel in operation arguments. */
@@ -901,6 +985,8 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_company_and_state", ["companyId", "state"])
+    /** Live rows of one issue, for the scope migration a team change performs. */
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
   issueViews: defineTable({
@@ -969,5 +1055,15 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_company_and_thread", ["companyId", "environmentId", "threadId"])
+    /** One live row per (thread, issue): the duplicate check, without reading the thread's links. */
+    .index("by_company_thread_issue_and_deleted", [
+      "companyId",
+      "environmentId",
+      "threadId",
+      "issueId",
+      "deletedAt",
+    ])
+    /** Live rows of one issue, for the scope migration a team change performs. */
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 });

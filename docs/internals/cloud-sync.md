@@ -70,10 +70,32 @@ deletion durable and prevent an old update from recreating an entity implicitly.
 A cursor records the last contiguous company version included in confirmed local state. Changes and
 operation receipts remain available for 90 days.
 
+Receipt expiry must never reopen the dedupe question: a durable outbox can hold an unacknowledged
+send across a bootstrap and outlive its receipt. So every decided operation id also writes a compact,
+permanently retained row recording only its terminal outcome — the accepted version range or the
+rejection code. `applyOperations` consults the detailed receipt first and falls back to that ledger,
+and any feed prune leaves the ledger alone.
+
 `sync.listChanges` filters every payload against current company and team authorization. It advances
 the cursor even when every change in the scanned range is filtered out; otherwise a client without
 access to those records would stall permanently. Unauthorized payloads are never returned merely to
-explain a version gap.
+explain a version gap. `sync.bootstrap` applies the same predicate to the same row shapes, so a seed
+and a drain never disagree about what an actor may hold.
+
+Three visibility classes exist, not one:
+
+- **Team-scoped records** are reachable through any attached team, and a record attached to no team
+  is company-wide — only a company-scoped grant reaches it.
+- **Company catalog** — company base statuses, company labels, company cycles, and milestones of
+  company-wide projects — is attached to no team but reaches any actor holding `issues.read` in at
+  least one team, because every team board resolves its issues against that vocabulary.
+- **Owner-private rows** — private saved views — reach their owning membership and nobody else,
+  whatever anyone's team or company grants. The owner binding is read from the entity's current
+  state on every page, so a view that becomes private stops being delivered by its history too.
+  Withholding history is not the same as taking a record away, so the update that turns a shared
+  view private also writes one payloadless _departure_ tombstone addressed to the audience it drops.
+  That row is filtered on its team scope alone — the owner gate would withhold it from exactly the
+  replicas that already hold the view — and it discloses nothing, since those replicas have the id.
 
 Each change page includes the company's current authorization epoch, and the authenticated bootstrap
 path returns the epoch associated with its snapshot. Membership, role, team, and other visibility

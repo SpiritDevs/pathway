@@ -301,6 +301,23 @@ const openStore = Effect.fn("openStore")(function* (executor: SqliteSyncExecutor
   return store.service;
 });
 
+/** The envelope column holds JSON text; a raw write puts it there the way the adapter would. */
+const storedEnvelope = (value: SyncOperationEnvelope): string => JSON.stringify(value);
+
+/** Writes a row the adapter itself would never write: what another build, or a torn write, left. */
+const writeRaw = (
+  executor: SqliteSyncExecutor,
+  table: string,
+  row: Record<string, SqliteSyncValue>,
+) => {
+  const columns = Object.keys(row);
+  return executor.run(
+    `INSERT OR REPLACE INTO ${table} (${columns.join(", ")})
+      VALUES (${columns.map(() => "?").join(", ")})`,
+    Object.values(row),
+  );
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -414,6 +431,155 @@ describe("SqliteSyncStore", () => {
       const discarded = yield* store.read(COMPANY_ID);
       expect(discarded.quarantined).toEqual([]);
       expect(discarded.localSequenceHighWater).toBe(8);
+    }),
+  );
+
+  it.effect("quarantines rows it cannot read instead of failing the whole read", () =>
+    Effect.gen(function* () {
+      const { executor } = makeFakeSqliteExecutor();
+      const store = yield* openStore(executor);
+
+      const fine = envelope({ id: "op-fine", sequence: 1 });
+      const rejectedFine = envelope({ id: "op-rejected-fine", sequence: 2 });
+      yield* store.commit(COMPANY_ID, {
+        upsertOutbox: [{ envelope: fine, status: { _tag: "Pending" } }],
+        appendRejected: [
+          { envelope: rejectedFine, code: "permission-denied", message: "membership revoked" },
+        ],
+        localSequenceHighWater: LocalSequence.make(2),
+      });
+
+      // One row per table that this build cannot read: a torn envelope blob, a rejection whose
+      // code column came back as nothing, and a quarantined row carrying a status tag only some
+      // other build knows. None of them is corruption — each is a user's work.
+      yield* writeRaw(executor, "cloud_sync_outbox", {
+        company_id: COMPANY_ID,
+        operation_id: "op-torn",
+        local_sequence: 3,
+        envelope: '{"operationId":"op-torn","localSequence":3,"kind":"issue.crea',
+        status_tag: "Pending",
+        acknowledged_version: null,
+      });
+      const rejectedTorn = envelope({ id: "op-code-gone", sequence: 4 });
+      yield* writeRaw(executor, "cloud_sync_rejected", {
+        company_id: COMPANY_ID,
+        operation_id: "op-code-gone",
+        envelope: storedEnvelope(rejectedTorn),
+        code: null,
+        message: "",
+      });
+      const futureQuarantined = envelope({ id: "op-future", sequence: 5 });
+      yield* writeRaw(executor, "cloud_sync_quarantine", {
+        company_id: COMPANY_ID,
+        operation_id: "op-future",
+        envelope: storedEnvelope(futureQuarantined),
+        status_tag: "Superseded",
+        acknowledged_version: null,
+        reason: "A newer build could not read this either.",
+      });
+
+      // The readable rows still read, and the unreadable ones come back whole rather than taking
+      // the whole replica down with them: quarantine's own row keeps its place and its reason,
+      // then the rejected salvage, then the outbox salvage.
+      const state = yield* store.read(COMPANY_ID);
+      expect(state.outbox).toEqual([{ envelope: fine, status: { _tag: "Pending" } }]);
+      expect(state.rejected).toEqual([
+        { envelope: rejectedFine, code: "permission-denied", message: "membership revoked" },
+      ]);
+      expect(state.quarantined).toEqual([
+        {
+          envelope: futureQuarantined,
+          status: { _tag: "Pending" },
+          reason: "A newer build could not read this either.",
+        },
+        {
+          envelope: rejectedTorn,
+          status: { _tag: "Pending" },
+          reason: "This build cannot read the stored shape of this rejected row.",
+        },
+        {
+          // The blob could not be parsed at all, so the columns beside it name the operation.
+          envelope: { operationId: "op-torn", localSequence: 3 },
+          status: { _tag: "Pending" },
+          reason: "This build cannot read the stored shape of this outbox row.",
+        },
+      ]);
+      expect(state.localSequenceHighWater).toBe(2);
+
+      // Discarding a salvaged row reaches the table it actually lives in, so it stays discarded.
+      yield* store.commit(COMPANY_ID, {
+        removeQuarantined: [operationId("op-torn"), operationId("op-code-gone")],
+      });
+      const discarded = yield* store.read(COMPANY_ID);
+      expect(discarded.quarantined.map((row) => row.envelope.operationId)).toEqual(["op-future"]);
+      expect(discarded.outbox.map((entry) => entry.envelope.operationId)).toEqual(["op-fine"]);
+      expect(discarded.rejected.map((row) => row.envelope.operationId)).toEqual([
+        "op-rejected-fine",
+      ]);
+    }),
+  );
+
+  it.effect("an outbox status tag this build does not know never reads as pending", () =>
+    Effect.gen(function* () {
+      const { executor } = makeFakeSqliteExecutor();
+      const store = yield* openStore(executor);
+
+      // A build that knows a third outbox status wrote this row. Reading it as "Pending" would
+      // resend an operation that build may already consider applied, so it leaves the send path.
+      const superseded = envelope({ id: "op-superseded", sequence: 1 });
+      yield* writeRaw(executor, "cloud_sync_outbox", {
+        company_id: COMPANY_ID,
+        operation_id: "op-superseded",
+        local_sequence: 1,
+        envelope: storedEnvelope(superseded),
+        status_tag: "Superseded",
+        acknowledged_version: 12,
+      });
+
+      const state = yield* store.read(COMPANY_ID);
+      expect(state.outbox).toEqual([]);
+      expect(state.quarantined).toEqual([
+        {
+          envelope: superseded,
+          status: { _tag: "Pending" },
+          reason: "This build cannot read the stored shape of this outbox row.",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("a checkpoint it cannot read re-bootstraps; a replica row it cannot read fails", () =>
+    Effect.gen(function* () {
+      const { executor } = makeFakeSqliteExecutor();
+      const store = yield* openStore(executor);
+      yield* store.commit(COMPANY_ID, {
+        checkpoint: checkpoint({ cursor: 3 }),
+        upsertEntities: [entity({ id: "e-1", version: 3 })],
+      });
+
+      yield* writeRaw(executor, "cloud_sync_checkpoints", {
+        company_id: COMPANY_ID,
+        schema_version: SYNC_DOCUMENT_SCHEMA_VERSION,
+        cursor: null,
+        authorization_epoch: 0,
+        bootstrapped: 1,
+      });
+      const rebootstrapping = yield* store.read(COMPANY_ID);
+      expect(rebootstrapping.checkpoint).toBeNull();
+      expect(rebootstrapping.entities.map((row) => row.entityId)).toEqual(["e-1"]);
+
+      // Replica rows are not user work — they come back on the next bootstrap — so an unreadable
+      // one is still loud rather than silently dropped.
+      yield* writeRaw(executor, "cloud_sync_entities", {
+        company_id: COMPANY_ID,
+        entity_kind: "issue",
+        entity_id: "e-torn",
+        version: 4,
+        payload: '{"title": "half a',
+      });
+      const error = yield* Effect.flip(store.read(COMPANY_ID));
+      expect(error._tag).toBe("SyncStoreError");
+      expect(error.operation).toBe("read");
     }),
   );
 

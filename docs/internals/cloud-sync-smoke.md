@@ -22,14 +22,31 @@ authentication. In order:
    the seeded smoke role authorizes a company-scoped `workflow.manage` write.
 3. `sync.listChanges` drained from the pre-create head — the label's `upsert` must surface, with
    matching entity kind and id.
-4. `sync.bootstrap` paged to completion — the label must appear in the snapshot, and the returned
-   `version` is kept as the resume position.
-5. `sync.applyOperations` with an `issueLabel.delete`, then `sync.listChanges` resumed from the
-   bootstrap `version` — the tombstone written after the snapshot must be the change the resumed
-   feed yields, proving the snapshot→feed handoff is gap-free.
+4. `sync.bootstrap` with `pageSize: 1` — the smallest a `SyncBootstrapRequest` allows — for **one
+   page only**, so the seed is deliberately left mid-walk. Its `version` is the resume position a
+   fresh client persists, and page one's cursor is kept as an opaque token.
+5. `sync.applyOperations` with a **second** `issueLabel.create` while the seed is suspended: the
+   write the finding below calls for, landing between two pages of the same snapshot.
+6. `sync.bootstrap` resumed from page one's original cursor and paged to completion. Every page
+   must report page one's `version` — a seed that re-captured the head per page would hand back a
+   resume position past the mid-seed write — and the label created before the seed must appear in
+   the snapshot as a whole.
+7. `sync.listChanges` drained from that same `version`: the interleaved write must arrive **exactly
+   once**, counting the remaining seed pages and the drain together. It must be in the drain (its
+   version is past the seed's, so a resume there that misses it is a lost write), at most once on
+   either side, and every delivery must be the create's `upsert` stamped with the version its
+   receipt reported. Appearing on both sides is not a duplicate and is not an error: the seed is
+   pinned to page one's head, so a row the remaining pages still read is re-delivered by the drain
+   with the same stamp and folds through one idempotent upsert. Which side delivers it depends on
+   where the walk stood when the write landed — an internal detail the smoke deliberately does not
+   assert on.
+8. `sync.applyOperations` with an `issueLabel.delete` for the interleaved label, then one for the
+   original, then `sync.listChanges` resumed from the bootstrap `version` again — the tombstone
+   written after the snapshot must be the change the resumed feed yields for each, proving the
+   snapshot→feed handoff is gap-free and that the run left no live row behind.
 
-The tombstoned `issueLabels` row is the one authoritative row the run leaves behind; it is removed
-with the company by `smoke:cleanup`.
+The two tombstoned `issueLabels` rows are the only authoritative rows the run leaves behind; they
+are removed with the company by `smoke:cleanup`, whose sweep list already covers `issueLabels`.
 
 ## Prerequisites
 
@@ -95,7 +112,7 @@ too, leaving the company fully intact for a human to inspect. The cleanup step (
 fails, and the recovery state file is kept so every subsequent run keeps failing loudly until an
 operator resolves it by hand. Only the tables the smoke flow _can_ write — change-feed rows,
 operation receipts, issue-key leases, and the issue-domain rows the sync surface writes on its
-behalf (the run's tombstoned `issueLabels` row) — are swept. `companySettings` and
+behalf (the run's tombstoned `issueLabels` rows) — are swept. `companySettings` and
 `environmentCommands` are deliberately on the foreign side: no sync operation kind writes either
 and every `environmentCommands` mutation is still unimplemented, so a row there is somebody else's
 data. They move to the sweep list when phase 8 gives the environment actor a real write path.

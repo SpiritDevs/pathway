@@ -12,7 +12,7 @@ import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 import { parseIssueLabelCreateArgs } from "@spiritdevs/backend/sync/issueOps";
-import { SYNC_PROTOCOL_VERSION } from "@spiritdevs/contracts/cloudSync";
+import { SYNC_PROTOCOL_VERSION, SyncBootstrapRequest } from "@spiritdevs/contracts/cloudSync";
 import {
   RELAY_CONVEX_KEY_BINDING_TYP,
   RelayConvexKeyBindingPayload,
@@ -29,7 +29,9 @@ import {
   buildKeyBindingPayload,
   buildLinkProofPayload,
   buildSmokeSyncOperation,
+  checkBootstrapSnapshotVersions,
   checkConvexServiceTokenClaims,
+  checkInterleavedWriteDelivery,
   convexErrorCode,
   generateDpopKeyPair,
   generateEnvironmentLinkKeyPair,
@@ -44,11 +46,15 @@ import {
   removeSmokeRunStateFile,
   renderConvexSyncSmokeReport,
   signDpopProof,
+  SMOKE_BOOTSTRAP_MAX_PAGES,
+  SMOKE_BOOTSTRAP_PAGE_SIZE,
+  SMOKE_INTERLEAVED_LABEL_CREATE_ARGS,
   SMOKE_LABEL_CREATE_ARGS,
   SMOKE_LABEL_ENTITY_KIND,
   smokeDescriptor,
   smokeStateFilePath,
   smokeSyncClientId,
+  syncChangesFor,
   verifyServiceTokenSignature,
   writeSmokeRunStateFile,
   type SmokeRunStateFile,
@@ -515,6 +521,167 @@ describe("smoke domain operations", () => {
     // team list and the write gates on company-scope `workflow.manage`.
     assert.notProperty(SMOKE_LABEL_CREATE_ARGS, "teamId");
     assert.equal(SMOKE_LABEL_ENTITY_KIND, "issueLabel");
+  });
+
+  it("uses the same accepted, company-scoped shape for the interleaved label", () => {
+    // The mid-seed write goes through the same handler and the same permission
+    // (`workflow.manage` at company scope) the seeded smoke role already grants,
+    // so forcing the interleave needs no new role permission.
+    const parsed = parseIssueLabelCreateArgs(SMOKE_INTERLEAVED_LABEL_CREATE_ARGS);
+    assert.isTrue(parsed.ok);
+    assert.notProperty(SMOKE_INTERLEAVED_LABEL_CREATE_ARGS, "teamId");
+    // A distinct name so a row surviving a killed run says which write left it.
+    assert.notEqual(SMOKE_INTERLEAVED_LABEL_CREATE_ARGS.name, SMOKE_LABEL_CREATE_ARGS.name);
+  });
+});
+
+describe("smoke bootstrap paging", () => {
+  const decodeBootstrapRequest = Schema.decodeUnknownSync(SyncBootstrapRequest);
+  const request = (pageSize: unknown): unknown => ({
+    companyId: "00000000-0000-7000-8000-736d6f6b6501",
+    cursor: null,
+    pageSize,
+  });
+
+  it("forces the smallest page size the contract allows, so one seed spans pages", () => {
+    // `pageSize` is a positive int, so 1 is the floor: anything larger risks
+    // finishing the smoke company's seed in a single page, which exercises
+    // nothing about a write landing mid-seed.
+    assert.equal(SMOKE_BOOTSTRAP_PAGE_SIZE, 1);
+    const decoded = decodeBootstrapRequest(request(SMOKE_BOOTSTRAP_PAGE_SIZE));
+    assert.equal(decoded.pageSize, SMOKE_BOOTSTRAP_PAGE_SIZE);
+    assert.throws(() => decodeBootstrapRequest(request(SMOKE_BOOTSTRAP_PAGE_SIZE - 1)));
+    assert.isAbove(SMOKE_BOOTSTRAP_MAX_PAGES, 1);
+  });
+
+  it("holds every page of a seed to the version its first page captured", () => {
+    assert.isNull(
+      checkBootstrapSnapshotVersions({ snapshotVersion: 41, laterPageVersions: [41, 41, 41] }),
+    );
+    assert.isNull(checkBootstrapSnapshotVersions({ snapshotVersion: 41, laterPageVersions: [] }));
+    // A walk that re-captured the head per page resumes past the mid-seed
+    // writes, so the drift must be named with the page it appeared on.
+    const drift = checkBootstrapSnapshotVersions({
+      snapshotVersion: 41,
+      laterPageVersions: [41, 44],
+    });
+    assert.include(drift ?? "", "page 3");
+    assert.include(drift ?? "", "44");
+    assert.include(drift ?? "", "41");
+  });
+});
+
+describe("checkInterleavedWriteDelivery", () => {
+  const KIND = "issueLabel";
+  const ID = "label-interleaved";
+  const upsert = (version: number, entityId = ID): SyncChangeSummary => ({
+    version,
+    entityKind: KIND,
+    entityId,
+    changeKind: "upsert",
+  });
+
+  const check = (input: {
+    readonly laterSnapshotEntities: readonly SyncChangeSummary[];
+    readonly drainedChanges: readonly SyncChangeSummary[];
+    readonly writeVersion?: number;
+  }) =>
+    checkInterleavedWriteDelivery({
+      entityKind: KIND,
+      entityId: ID,
+      writeVersion: input.writeVersion ?? 12,
+      snapshotVersion: 10,
+      laterSnapshotEntities: input.laterSnapshotEntities,
+      drainedChanges: input.drainedChanges,
+    });
+
+  it("accepts the drain-only delivery and the both-sides delivery alike", () => {
+    // The walk had already passed the row's position when the write landed, so
+    // only the drain from the snapshot version carries it.
+    assert.isNull(check({ laterSnapshotEntities: [], drainedChanges: [upsert(12)] }));
+    // The remaining pages still read the new row. Not a duplicate: the seed is
+    // pinned to page one's head, so the drain re-delivers it with the same
+    // stamp and the client folds both through one idempotent upsert.
+    assert.isNull(check({ laterSnapshotEntities: [upsert(12)], drainedChanges: [upsert(12)] }));
+    // Other entities on either side are none of this check's business.
+    assert.isNull(
+      check({
+        laterSnapshotEntities: [upsert(4, "label-seeded")],
+        drainedChanges: [upsert(12), upsert(13, "label-other")],
+      }),
+    );
+  });
+
+  it("fails when the write is lost between the seed pages and the drain", () => {
+    const lost = check({ laterSnapshotEntities: [], drainedChanges: [] });
+    assert.include(lost ?? "", "lost");
+    assert.include(lost ?? "", ID);
+  });
+
+  it("fails when the drain resuming at the snapshot version misses the write", () => {
+    // The one case a client cannot recover from: it finished the seed, resumed
+    // at the seed's version, and the change past that version never arrived.
+    const missed = check({ laterSnapshotEntities: [upsert(12)], drainedChanges: [] });
+    assert.include(missed ?? "", "drain");
+    assert.include(missed ?? "", "never learn of it");
+  });
+
+  it("fails on repeated deliveries within one side", () => {
+    assert.include(
+      check({ laterSnapshotEntities: [], drainedChanges: [upsert(12), upsert(12)] }) ?? "",
+      "exactly once",
+    );
+    assert.include(
+      check({ laterSnapshotEntities: [upsert(12), upsert(12)], drainedChanges: [upsert(12)] }) ??
+        "",
+      "at most once",
+    );
+  });
+
+  it("fails when seed and feed disagree about the change's version or kind", () => {
+    // Two different stamps for one change is a double-apply: the client folds
+    // the seed page and the drain page as two separate changes.
+    assert.include(
+      check({ laterSnapshotEntities: [upsert(11)], drainedChanges: [upsert(12)] }) ?? "",
+      "stamp one change once",
+    );
+    assert.include(
+      check({
+        laterSnapshotEntities: [],
+        drainedChanges: [{ ...upsert(12), changeKind: "tombstone" }],
+      }) ?? "",
+      "expected the interleaved create's upsert",
+    );
+  });
+
+  it("refuses to certify a write that did not land after the snapshot version", () => {
+    const early = check({
+      writeVersion: 10,
+      laterSnapshotEntities: [],
+      drainedChanges: [upsert(10)],
+    });
+    assert.include(early ?? "", "not past the seed's snapshot version");
+  });
+});
+
+describe("syncChangesFor", () => {
+  const changes: readonly SyncChangeSummary[] = [
+    { version: 3, entityKind: "issueLabel", entityId: "a", changeKind: "upsert" },
+    { version: 5, entityKind: "issueLabel", entityId: "a", changeKind: "tombstone" },
+    { version: 4, entityKind: "issue", entityId: "a", changeKind: "upsert" },
+  ];
+
+  it("returns every delivery of one entity, in order", () => {
+    assert.deepEqual(
+      [...syncChangesFor(changes, "issueLabel", "a")].map((change) => change.version),
+      [3, 5],
+    );
+    assert.deepEqual(
+      [...syncChangesFor(changes, "issue", "a")].map((c) => c.version),
+      [4],
+    );
+    assert.deepEqual([...syncChangesFor(changes, "issueLabel", "b")], []);
+    assert.deepEqual([...syncChangesFor([], "issueLabel", "a")], []);
   });
 });
 

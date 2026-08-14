@@ -49,7 +49,7 @@ import {
   type SyncOperationKind,
   type SyncRejectionCode,
 } from "../src/sync/protocol.ts";
-import { isChangeVisible } from "../src/sync/visibility.ts";
+import { isChangeVisible, type ChangeViewer } from "../src/sync/visibility.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
@@ -58,7 +58,9 @@ import { backendError } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor, type CompanyActor } from "./lib/identity.ts";
 import {
   emptyBootstrapCache,
+  feedRowOwnerBinding,
   readBootstrapRows,
+  readOwnerPrivateBindings,
   ISSUE_DOMAIN_APPLY,
   type BootstrapRow,
 } from "./lib/issueApply.ts";
@@ -68,6 +70,18 @@ import {
   syncChangeResult,
   syncOperationArg,
 } from "./lib/validators.ts";
+
+/**
+ * The identity half of change-feed filtering. An environment identity owns nothing, so it carries no
+ * membership and reaches no owner-private row; a human carries theirs, which is what delivers their
+ * private saved views however narrow their team grants are.
+ */
+function changeViewer(actor: CompanyActor): ChangeViewer {
+  return {
+    permissions: actor.permissions,
+    membershipId: actor.kind === "member" ? actor.membership._id : null,
+  };
+}
 
 /**
  * The head every client subscribes to. Deliberately tiny: it carries the version and the
@@ -170,13 +184,25 @@ export const listChanges = query({
     });
     const rows = read.rows;
 
+    // Owner-private rows are filtered against the entity's *current* owner, not against anything
+    // the change row recorded when it was written: a saved view that has since become private must
+    // stop being delivered to everyone but its owner, including by the historical upserts still
+    // sitting between an older cursor and the head.
+    const ownerBindings = await readOwnerPrivateBindings(ctx, actor.company, rows);
+    const viewer = changeViewer(actor);
+
     const page = takeChangePage(rows, args.cursor, {
       maxRows: limit,
       // Measured over the whole envelope in UTF-8 bytes, because that is what crosses the wire —
       // the ids and kinds ride along with the payload, and a non-ASCII payload costs more bytes
       // than it has characters.
       sizeOf: (row) => measureSerializedBytes(toEnvelope(row)),
-      isVisible: (row) => isChangeVisible(actor.permissions, row),
+      isVisible: (row) =>
+        isChangeVisible(viewer, {
+          entityKind: row.entityKind,
+          teamIds: row.teamIds,
+          ownerMembershipId: feedRowOwnerBinding(row, ownerBindings),
+        }),
     });
 
     // One row bigger than a whole page still ships, alone, because the alternative is a feed that
@@ -238,14 +264,16 @@ export const bootstrap = query({
 
     let state: BootstrapCursorState;
     if (args.cursor === null) {
-      state = initialBootstrapState(actor.company.syncVersion);
+      state = initialBootstrapState(args.companyId, actor.company.syncVersion);
     } else {
-      const decoded = decodeBootstrapCursor(args.cursor);
-      // A token this build cannot read — tampered, or minted by a deployment with a different
-      // walk — must restart the seed, not resume from a position that means something else now.
-      // A snapshot version past this company's head is the same kind of unusable: it comes back as
-      // the seed's resume version, and a client that persisted it as its feed cursor would skip
-      // every change up to it and never learn anything was missed.
+      const decoded = decodeBootstrapCursor(args.cursor, args.companyId);
+      // A token this build cannot read — corrupted in the client's store, bound to another company,
+      // naming an incoherent walk position, or minted by a deployment with a different walk — must
+      // restart the seed, not resume from a position that means something else now. Failing closed
+      // here is the point: the quiet outcome of accepting one is an empty seed the client mistakes
+      // for a finished one. A snapshot version past this company's head is the same kind of
+      // unusable: it comes back as the seed's resume version, and a client that persisted it as its
+      // feed cursor would skip every change up to it and never learn anything was missed.
       if (decoded === null || decoded.snapshotVersion > actor.company.syncVersion) {
         throw backendError("invalid-arguments", "Unrecognized bootstrap cursor.");
       }
@@ -253,6 +281,7 @@ export const bootstrap = query({
     }
 
     const pageSize = clampPageLimit(args.pageSize, SYNC_BOOTSTRAP_PAGE_SIZE);
+    const viewer = changeViewer(actor);
     const cache = emptyBootstrapCache();
     const entities: {
       version: number;
@@ -288,7 +317,11 @@ export const bootstrap = query({
       for (const row of rows) {
         if (
           !row.deleted &&
-          isChangeVisible(actor.permissions, { entityKind: kind, teamIds: row.teamIds })
+          isChangeVisible(viewer, {
+            entityKind: kind,
+            teamIds: row.teamIds,
+            ownerMembershipId: row.ownerMembershipId,
+          })
         ) {
           const envelope = {
             version: row.version,
@@ -328,6 +361,7 @@ export const bootstrap = query({
         restKind === null
           ? null
           : encodeBootstrapCursor({
+              companyId: state.companyId,
               snapshotVersion: state.snapshotVersion,
               entityKind: restKind,
               afterId,
@@ -415,6 +449,11 @@ export interface DomainChange {
    * stamp is what `bootstrap` hands out as the row's version, closing the seed→drain handoff.
    */
   readonly versionDocId: Id<VersionedTable> | null;
+  /**
+   * Marks a row that exists only to tell {@link teamIds} the entity has left their audience. It is
+   * filtered on team scope alone, bypassing the owner-private gate — see `feedRowOwnerBinding`.
+   */
+  readonly departure?: boolean;
   readonly payload: unknown;
 }
 
@@ -485,8 +524,11 @@ export const applyOperations = mutation({
     const validation = validateOperationBatch(operations, args.companyId);
     if (!validation.ok) throw backendError(validation.code, validation.message);
 
-    // Dedupe against stored receipts. An operation id present here has already been decided, no
-    // matter how many times the client resends it after a dropped response.
+    // Dedupe against what has already been decided, no matter how many times the client resends it
+    // after a dropped response. The detailed receipt is consulted first because it carries the
+    // original rejection message; the permanent decision ledger answers for anything whose receipt
+    // has since expired at the 90-day line, which is the only reason an operation older than the
+    // retained feed does not read as fresh.
     const existingReceipts = new Map<string, StoredOperationReceipt>();
     for (const operation of operations) {
       const receipt = await ctx.db
@@ -502,6 +544,24 @@ export const applyOperations = mutation({
           lastVersion: receipt.lastVersion,
           rejectionCode: receipt.rejectionCode,
           rejectionMessage: receipt.rejectionMessage,
+        });
+        continue;
+      }
+      const decision = await ctx.db
+        .query("syncOperationDecisions")
+        .withIndex("by_company_and_operation", (q) =>
+          q.eq("companyId", actor.company._id).eq("operationId", operation.operationId),
+        )
+        .unique();
+      if (decision !== null) {
+        existingReceipts.set(operation.operationId, {
+          status: decision.status,
+          firstVersion: decision.firstVersion,
+          lastVersion: decision.lastVersion,
+          rejectionCode: decision.rejectionCode,
+          // `replayStoredReceipt` supplies the generic reason; the original message expired with
+          // the receipt, and the verdict is the load-bearing half.
+          rejectionMessage: null,
         });
       }
     }
@@ -570,6 +630,7 @@ export const applyOperations = mutation({
           entityId: change.entityId,
           changeKind: change.changeKind,
           teamIds: [...change.teamIds],
+          ...(change.departure === true ? { departure: true } : {}),
           payload: change.payload,
           operationId: entry.operation.operationId,
           actor: feedActor,
@@ -607,6 +668,15 @@ export const applyOperations = mutation({
         createdAt: now,
         retainUntil: changeRetainUntil(now),
       });
+      await ctx.db.insert("syncOperationDecisions", {
+        companyId: actor.company._id,
+        operationId: entry.operation.operationId,
+        status: "accepted",
+        firstVersion,
+        lastVersion,
+        rejectionCode: null,
+        decidedAt: now,
+      });
     }
 
     // Rejections are receipted too: the client's panel needs a durable reason, and a resend of a
@@ -632,6 +702,15 @@ export const applyOperations = mutation({
         rejectionMessage: entry.message,
         createdAt: now,
         retainUntil: changeRetainUntil(now),
+      });
+      await ctx.db.insert("syncOperationDecisions", {
+        companyId: actor.company._id,
+        operationId: entry.operation.operationId,
+        status: "rejected",
+        firstVersion: null,
+        lastVersion: null,
+        rejectionCode: entry.code,
+        decidedAt: now,
       });
     }
 

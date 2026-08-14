@@ -8,8 +8,9 @@
  * environment credential → DPoP + key-binding token exchange → `pathway-convex`
  * service token → authenticated Convex sync calls (a real `issueLabel`
  * create/tombstone through the domain apply handlers, the change-feed drain,
- * and a paginated `sync.bootstrap` snapshot with a gap-free feed resume) →
- * negative cases → cleanup.
+ * and a forced multi-page `sync.bootstrap` snapshot with a second write
+ * interleaved between its pages and a gap-free feed resume) → negative cases →
+ * cleanup.
  *
  * Nothing here talks to the network at import time or in the pure helpers; the
  * pure pieces (payload construction, DPoP proof signing, claim checks, report
@@ -559,6 +560,19 @@ export const SMOKE_LABEL_CREATE_ARGS = {
   color: "#0ea5e9",
 } as const;
 
+/**
+ * Args for the second label, created *between* two bootstrap pages (see
+ * {@link SMOKE_BOOTSTRAP_PAGE_SIZE}). Same shape and same company scope as
+ * {@link SMOKE_LABEL_CREATE_ARGS} — labels carry no uniqueness constraint, so
+ * only the name differs, and it says why the row exists to anyone who finds one
+ * after a run died mid-flight. Deleted in the flow and swept with the company
+ * by `smoke:cleanup` (`issueLabels` is on its sweep list).
+ */
+export const SMOKE_INTERLEAVED_LABEL_CREATE_ARGS = {
+  name: "convex-sync-smoke-interleaved",
+  color: "#f97316",
+} as const;
+
 /** One client id per throwaway environment, so receipts and feed rows are attributable to the run. */
 export function smokeSyncClientId(environmentId: EnvironmentId): string {
   return `convex-sync-smoke-${environmentId}`;
@@ -637,6 +651,127 @@ export function latestSyncChange<C extends SyncChangeSummary>(
     if (latest === undefined || change.version > latest.version) latest = change;
   }
   return latest;
+}
+
+/** Every delivery of one entity, in the order the caller collected them. */
+export function syncChangesFor<C extends SyncChangeSummary>(
+  changes: readonly C[],
+  entityKind: string,
+  entityId: string,
+): readonly C[] {
+  return changes.filter(
+    (change) => change.entityKind === entityKind && change.entityId === entityId,
+  );
+}
+
+/**
+ * Page size the smoke forces on `sync.bootstrap`: the smallest a
+ * `SyncBootstrapRequest` allows (`pageSize` is a positive int), so even the
+ * reserved smoke company's handful of rows takes several pages to seed. Without
+ * it one page finishes the walk and nothing about a write landing mid-seed —
+ * the one hazard the snapshot→feed handoff has — is exercised.
+ */
+export const SMOKE_BOOTSTRAP_PAGE_SIZE = 1;
+
+/**
+ * Page ceiling for the forced one-row-per-page walk. The smoke company only
+ * ever holds what the smoke flow wrote (`smoke:cleanup` refuses to delete a
+ * company carrying anything else), so a seed needing more pages than this means
+ * the walk is not advancing.
+ */
+export const SMOKE_BOOTSTRAP_MAX_PAGES = 25;
+
+/**
+ * A seed's `version` is the company head captured on its FIRST page, and every
+ * later page must repeat that same value: it is the resume position the client
+ * persists, so a walk that re-captured the head per page would hand back a
+ * version *past* the writes that landed mid-seed and the client's first drain
+ * would skip them. Returns `null` when every page agrees, otherwise the first
+ * page that did not.
+ *
+ * `laterPageVersions` holds the pages walked after the first, so page numbering
+ * starts at two.
+ */
+export function checkBootstrapSnapshotVersions(input: {
+  readonly snapshotVersion: number;
+  readonly laterPageVersions: readonly number[];
+}): string | null {
+  for (const [index, version] of input.laterPageVersions.entries()) {
+    if (version !== input.snapshotVersion) {
+      return `bootstrap page ${index + 2} reports version ${version}, expected the first page's snapshot version ${input.snapshotVersion} — a seed that re-captures the head per page resumes past the writes that landed mid-seed`;
+    }
+  }
+  return null;
+}
+
+export interface InterleavedWriteDeliveryInput {
+  readonly entityKind: string;
+  readonly entityId: string;
+  /** Version the accepted interleaved write reported. */
+  readonly writeVersion: number;
+  /** The head page one pinned the seed to; the write landed after it. */
+  readonly snapshotVersion: number;
+  /** Entities from the seed pages walked *after* the write landed. */
+  readonly laterSnapshotEntities: readonly SyncChangeSummary[];
+  /** Changes drained from `snapshotVersion` once the seed finished. */
+  readonly drainedChanges: readonly SyncChangeSummary[];
+}
+
+/**
+ * Holds a write that landed between two bootstrap pages to the one guarantee
+ * the seed→feed handoff makes: a client that finishes the seed and resumes
+ * `listChanges` at the seed's version applies that write exactly once.
+ *
+ * Concretely — returns `null` when all of this holds, otherwise the first thing
+ * that did not:
+ *
+ * - the write is past the snapshot version at all (otherwise it did not land
+ *   mid-seed and the rest proves nothing);
+ * - it is delivered — by the remaining seed pages, by the drain, or both;
+ * - the *drain* carries it, exactly once: its version is past the snapshot
+ *   version, so a resume there that misses it is a lost write;
+ * - the remaining seed pages carry it at most once;
+ * - every delivery is the create's `upsert` stamped with the version the
+ *   receipt reported, so the whole set collapses to one `(entityId, version)`.
+ *
+ * Deliberately NOT an exclusive-or over the two sides. The seed is pinned to
+ * page one's head, so a row written mid-walk that the remaining pages happen to
+ * still read is *re-delivered* by the drain that resumes at that head — by
+ * design (`packages/backend/src/sync/bootstrap.ts`), and harmless because both
+ * sides carry the same stamp and the client folds them through one idempotent
+ * upsert. Which side delivers it depends on where the walk stood in the table
+ * when the write landed: an internal detail of the cursor and the walk order
+ * that the contract does not promise and the smoke must not assert on.
+ */
+export function checkInterleavedWriteDelivery(input: InterleavedWriteDeliveryInput): string | null {
+  const { entityId, entityKind, snapshotVersion, writeVersion } = input;
+  const subject = `${entityKind} ${entityId}`;
+  if (writeVersion <= snapshotVersion) {
+    return `the interleaved write for ${subject} reports version ${writeVersion}, not past the seed's snapshot version ${snapshotVersion} — it did not land mid-seed, so the handoff is untested`;
+  }
+  const fromSeed = syncChangesFor(input.laterSnapshotEntities, entityKind, entityId);
+  const fromDrain = syncChangesFor(input.drainedChanges, entityKind, entityId);
+  if (fromSeed.length + fromDrain.length === 0) {
+    return `the write for ${subject} at version ${writeVersion} landed between seed pages and was then lost: neither the ${input.laterSnapshotEntities.length} remaining seed entity(ies) nor the ${input.drainedChanges.length} change(s) drained from ${snapshotVersion} carry it`;
+  }
+  if (fromDrain.length === 0) {
+    return `the write for ${subject} at version ${writeVersion} is past the seed's snapshot version ${snapshotVersion}, so a drain resuming there must carry it — it did not, over ${input.drainedChanges.length} drained change(s), so a client that seeded and resumed at ${snapshotVersion} would never learn of it`;
+  }
+  if (fromDrain.length > 1) {
+    return `the drain from ${snapshotVersion} carries ${fromDrain.length} changes for ${subject} (versions ${fromDrain.map((change) => change.version).join(", ")}), expected the interleaved write exactly once`;
+  }
+  if (fromSeed.length > 1) {
+    return `the remaining seed pages carry ${subject} ${fromSeed.length} times (versions ${fromSeed.map((entity) => entity.version).join(", ")}), expected at most once`;
+  }
+  for (const delivery of [...fromSeed, ...fromDrain]) {
+    if (delivery.changeKind !== "upsert") {
+      return `${subject} arrives as a ${delivery.changeKind} at version ${delivery.version}, expected the interleaved create's upsert`;
+    }
+    if (delivery.version !== writeVersion) {
+      return `${subject} arrives at version ${delivery.version}, expected the ${writeVersion} its receipt reported — seed and feed must stamp one change once, or a client folding both applies two`;
+    }
+  }
+  return null;
 }
 
 // --------------------------------------------------------------------------
@@ -1429,47 +1564,223 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
       (detail) => detail,
     );
 
-    // (f3) Full snapshot seed. The returned `version` is the resume position a
-    // fresh client would hand to listChanges, so it anchors the gap-free check
+    // (f3) Snapshot seed, forced multi-page, with a write interleaved between
+    // its pages. A seed that completes before anything else happens says
+    // nothing about the one hazard the snapshot→feed handoff has, so:
+    // page one is taken alone, a second label is created while the walk is
+    // suspended, the walk then finishes from page one's ORIGINAL (opaque)
+    // cursor, and the drain that resumes at page one's version must carry the
+    // interleaved write exactly once. The seed's `version` is the resume
+    // position a fresh client persists, so it also anchors the gap-free check
     // after the delete below.
-    const bootstrapped = yield* step(
-      "convex.sync.bootstrap",
-      Effect.gen(function* () {
-        const entities: SyncChangeSummary[] = [];
-        let cursor: string | null = null;
-        let version = 0;
-        for (let page = 1; page <= 10; page += 1) {
+    const interleavedLabelEntityId = NodeCrypto.randomUUID();
+    const bootstrapped = yield* Effect.gen(function* () {
+      const firstPage = yield* step(
+        "convex.sync.bootstrap.firstPage",
+        Effect.gen(function* () {
           const result = yield* convexCall(() =>
-            convexClient.query(api.sync.bootstrap, { companyId: config.companyId, cursor }),
+            convexClient.query(api.sync.bootstrap, {
+              companyId: config.companyId,
+              cursor: null,
+              pageSize: SMOKE_BOOTSTRAP_PAGE_SIZE,
+            }),
           );
-          version = result.version;
-          entities.push(...result.entities);
-          if (result.isDone) {
-            if (Option.isSome(created)) {
-              const entity = latestSyncChange(entities, SMOKE_LABEL_ENTITY_KIND, labelEntityId);
-              if (entity === undefined) {
-                return yield* new ConvexSyncSmokeError({
-                  reason: `the issueLabel accepted above is missing from the bootstrap snapshot (${entities.length} entities over ${page} page(s))`,
-                });
-              }
-            }
-            return { version, pages: page, entityCount: entities.length };
-          }
-          if (result.cursor === null) {
+          if (result.isDone || result.cursor === null) {
             return yield* new ConvexSyncSmokeError({
-              reason: "bootstrap reported isDone false with a null cursor — the walk cannot resume",
+              reason: `bootstrap finished the seed in one ${SMOKE_BOOTSTRAP_PAGE_SIZE}-row page (isDone ${result.isDone}, ${result.cursor === null ? "null" : "non-null"} cursor, ${result.entities.length} entity(ies)) — with the label above in the company the walk must have more to deliver, and a single-page seed cannot exercise a mid-seed write`,
             });
           }
-          cursor = result.cursor;
+          return {
+            snapshotVersion: result.version,
+            cursor: result.cursor,
+            entities: result.entities as readonly SyncChangeSummary[],
+          };
+        }),
+        (value) =>
+          `page 1 delivered ${value.entities.length} entity(ies) at snapshot version ${value.snapshotVersion}; the walk resumes from its cursor`,
+      );
+      if (Option.isNone(firstPage)) {
+        for (const name of [
+          "convex.sync.applyOperations.interleavedLabel",
+          "convex.sync.bootstrap.finishAfterWrite",
+          "convex.sync.bootstrap.interleavedWrite",
+          "convex.sync.applyOperations.deleteInterleavedLabel",
+        ]) {
+          skip(name, "bootstrap page one did not complete");
         }
-        return yield* new ConvexSyncSmokeError({
-          reason:
-            "bootstrap still not done after 10 pages — the smoke company's snapshot should complete in far fewer",
-        });
-      }),
-      (value) =>
-        `snapshot at version ${value.version}: ${value.entityCount} entities over ${value.pages} page(s)`,
-    );
+        return Option.none<{
+          readonly version: number;
+          readonly interleavedTombstoneVersion: Option.Option<number>;
+        }>();
+      }
+      const snapshotVersion = firstPage.value.snapshotVersion;
+
+      // The interleaved write itself: a second company-scoped label, created
+      // while the seed sits between pages. It is deleted below, and its rows
+      // are on `smoke:cleanup`'s `issueLabels` sweep either way.
+      const interleaved = yield* step(
+        "convex.sync.applyOperations.interleavedLabel",
+        Effect.gen(function* () {
+          const receipt = yield* applyOne(
+            buildSmokeSyncOperation({
+              operationId: NodeCrypto.randomUUID(),
+              companyId: config.companyId,
+              environmentId: config.environmentId,
+              localSequence: 2,
+              baseVersion: snapshotVersion,
+              kind: "issueLabel.create",
+              entityId: interleavedLabelEntityId,
+              args: SMOKE_INTERLEAVED_LABEL_CREATE_ARGS,
+            }),
+          );
+          if (receipt.status !== "accepted") {
+            return yield* new ConvexSyncSmokeError({
+              reason: `expected the interleaved issueLabel.create to be accepted, got rejected '${receipt.code}': ${receipt.message}`,
+            });
+          }
+          if (receipt.lastVersion <= snapshotVersion) {
+            return yield* new ConvexSyncSmokeError({
+              reason: `the interleaved create reports lastVersion ${receipt.lastVersion}, not past the seed's snapshot version ${snapshotVersion} — it did not land mid-seed`,
+            });
+          }
+          return { version: receipt.lastVersion };
+        }),
+        (value) =>
+          `issueLabel ${interleavedLabelEntityId} created at version ${value.version}, between seed pages`,
+      );
+
+      // Finish the walk with page one's own cursor — treated as opaque, exactly
+      // as a client must — and hold every page to page one's snapshot version.
+      const finished = yield* step(
+        "convex.sync.bootstrap.finishAfterWrite",
+        Effect.gen(function* () {
+          const laterEntities: SyncChangeSummary[] = [];
+          const laterPageVersions: number[] = [];
+          let cursor: string = firstPage.value.cursor;
+          for (let page = 2; page <= SMOKE_BOOTSTRAP_MAX_PAGES; page += 1) {
+            const result = yield* convexCall(() =>
+              convexClient.query(api.sync.bootstrap, {
+                companyId: config.companyId,
+                cursor,
+                pageSize: SMOKE_BOOTSTRAP_PAGE_SIZE,
+              }),
+            );
+            laterPageVersions.push(result.version);
+            laterEntities.push(...result.entities);
+            // Checked per page rather than at the end, so a walk that drifts and
+            // then fails to finish still reports the drift.
+            const drift = checkBootstrapSnapshotVersions({ snapshotVersion, laterPageVersions });
+            if (drift !== null) {
+              return yield* new ConvexSyncSmokeError({ reason: drift });
+            }
+            if (result.isDone) {
+              const seeded = latestSyncChange(
+                [...firstPage.value.entities, ...laterEntities],
+                SMOKE_LABEL_ENTITY_KIND,
+                labelEntityId,
+              );
+              if (Option.isSome(created) && seeded === undefined) {
+                return yield* new ConvexSyncSmokeError({
+                  reason: `the issueLabel accepted before the seed is missing from the snapshot (${firstPage.value.entities.length + laterEntities.length} entities over ${page} page(s))`,
+                });
+              }
+              return { pages: page, laterEntities: laterEntities as readonly SyncChangeSummary[] };
+            }
+            if (result.cursor === null) {
+              return yield* new ConvexSyncSmokeError({
+                reason:
+                  "bootstrap reported isDone false with a null cursor — the walk cannot resume",
+              });
+            }
+            cursor = result.cursor;
+          }
+          return yield* new ConvexSyncSmokeError({
+            reason: `bootstrap still not done after ${SMOKE_BOOTSTRAP_MAX_PAGES} pages of ${SMOKE_BOOTSTRAP_PAGE_SIZE} row(s) — the smoke company holds a handful of rows, so the walk is not advancing`,
+          });
+        }),
+        (value) =>
+          `seed finished from page one's cursor over ${value.pages} page(s), every page pinned to snapshot version ${snapshotVersion}`,
+      );
+
+      if (Option.isSome(interleaved) && Option.isSome(finished)) {
+        yield* step(
+          "convex.sync.bootstrap.interleavedWrite",
+          Effect.gen(function* () {
+            const drained = yield* drainChanges(snapshotVersion);
+            const mismatch = checkInterleavedWriteDelivery({
+              entityKind: SMOKE_LABEL_ENTITY_KIND,
+              entityId: interleavedLabelEntityId,
+              writeVersion: interleaved.value.version,
+              snapshotVersion,
+              laterSnapshotEntities: finished.value.laterEntities,
+              drainedChanges: drained.changes,
+            });
+            if (mismatch !== null) {
+              return yield* new ConvexSyncSmokeError({ reason: mismatch });
+            }
+            const inSeed = syncChangesFor(
+              finished.value.laterEntities,
+              SMOKE_LABEL_ENTITY_KIND,
+              interleavedLabelEntityId,
+            ).length;
+            const inDrain = syncChangesFor(
+              drained.changes,
+              SMOKE_LABEL_ENTITY_KIND,
+              interleavedLabelEntityId,
+            ).length;
+            return `the write at version ${interleaved.value.version} landed between seed pages and arrives exactly once: ${inSeed} later seed page delivery(ies) + ${inDrain} drain delivery(ies), all stamped with that one version`;
+          }),
+          (detail) => detail,
+        );
+      } else {
+        skip(
+          "convex.sync.bootstrap.interleavedWrite",
+          "no accepted interleaved write and finished seed to check",
+        );
+      }
+
+      // The extra entity leaves through the same surface it arrived by, in the
+      // flow, so a successful run adds no live row.
+      let interleavedTombstoneVersion = Option.none<number>();
+      if (Option.isSome(interleaved)) {
+        const interleavedDeleted = yield* step(
+          "convex.sync.applyOperations.deleteInterleavedLabel",
+          Effect.gen(function* () {
+            const receipt = yield* applyOne(
+              buildSmokeSyncOperation({
+                operationId: NodeCrypto.randomUUID(),
+                companyId: config.companyId,
+                environmentId: config.environmentId,
+                localSequence: 3,
+                baseVersion: interleaved.value.version,
+                kind: "issueLabel.delete",
+                entityId: interleavedLabelEntityId,
+                args: {},
+              }),
+            );
+            if (receipt.status !== "accepted") {
+              return yield* new ConvexSyncSmokeError({
+                reason: `expected the interleaved issueLabel.delete to be accepted, got rejected '${receipt.code}': ${receipt.message}`,
+              });
+            }
+            return { tombstoneVersion: receipt.lastVersion };
+          }),
+          (value) =>
+            `issueLabel ${interleavedLabelEntityId} tombstoned at version ${value.tombstoneVersion}`,
+        );
+        interleavedTombstoneVersion = Option.map(
+          interleavedDeleted,
+          (value) => value.tombstoneVersion,
+        );
+      } else {
+        skip(
+          "convex.sync.applyOperations.deleteInterleavedLabel",
+          "the interleaved issueLabel.create was not accepted, so there is nothing to delete",
+        );
+      }
+
+      return Option.some({ version: snapshotVersion, interleavedTombstoneVersion });
+    });
 
     // (f4) Tombstone the label and prove the bootstrap resume position is
     // gap-free: a change written after the snapshot must surface when
@@ -1486,7 +1797,7 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
               operationId: NodeCrypto.randomUUID(),
               companyId: config.companyId,
               environmentId: config.environmentId,
-              localSequence: 2,
+              localSequence: 4,
               baseVersion: created.value.headAfterCreate,
               kind: "issueLabel.delete",
               entityId: labelEntityId,
@@ -1529,6 +1840,29 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
               return yield* new ConvexSyncSmokeError({
                 reason: `expected the ${SMOKE_LABEL_ENTITY_KIND} tombstone at version ${deleted.value.tombstoneVersion}, got a ${change.changeKind} at ${change.version}`,
               });
+            }
+            // The interleaved label leaves the same way; the run must end with
+            // no live row it created.
+            if (Option.isSome(bootstrapped.value.interleavedTombstoneVersion)) {
+              const interleavedVersion = bootstrapped.value.interleavedTombstoneVersion.value;
+              const interleavedChange = latestSyncChange(
+                drained.changes,
+                SMOKE_LABEL_ENTITY_KIND,
+                interleavedLabelEntityId,
+              );
+              if (
+                interleavedChange === undefined ||
+                interleavedChange.changeKind !== "tombstone" ||
+                interleavedChange.version !== interleavedVersion
+              ) {
+                return yield* new ConvexSyncSmokeError({
+                  reason: `expected the interleaved ${SMOKE_LABEL_ENTITY_KIND} ${interleavedLabelEntityId} to end tombstoned at version ${interleavedVersion}, got ${
+                    interleavedChange === undefined
+                      ? "no change at all"
+                      : `a ${interleavedChange.changeKind} at ${interleavedChange.version}`
+                  }`,
+                });
+              }
             }
             return `listChanges from snapshot version ${snapshotVersion} yields the tombstone at ${change.version} — handoff is gap-free`;
           }),

@@ -6,6 +6,7 @@ import {
   decodeBootstrapCursor,
   encodeBootstrapCursor,
   initialBootstrapState,
+  type BootstrapCursorState,
   type BootstrapEntityKind,
 } from "./bootstrap.ts";
 import { SYNC_ENTITY_KINDS } from "./protocol.ts";
@@ -23,9 +24,13 @@ describe("BOOTSTRAP_ENTITY_ORDER", () => {
   });
 });
 
+const COMPANY = "0198c0de-aaaa-7aaa-8aaa-000000000001";
+const OTHER_COMPANY = "0198c0de-aaaa-7aaa-8aaa-000000000002";
+
 describe("initialBootstrapState", () => {
   it("starts the walk at the first kind, from the top of its table", () => {
-    expect(initialBootstrapState(41)).toEqual({
+    expect(initialBootstrapState(COMPANY, 41)).toEqual({
+      companyId: COMPANY,
       snapshotVersion: 41,
       entityKind: BOOTSTRAP_ENTITY_ORDER[0],
       afterId: "",
@@ -48,16 +53,44 @@ describe("bootstrapKindAfter", () => {
 describe("cursor token round trip", () => {
   it("decodes exactly what it encoded, for every kind", () => {
     for (const entityKind of BOOTSTRAP_ENTITY_ORDER) {
-      const state = { snapshotVersion: 7, entityKind, afterId: "0198aaaa-1" };
-      expect(decodeBootstrapCursor(encodeBootstrapCursor(state))).toEqual(state);
+      const state = {
+        companyId: COMPANY,
+        snapshotVersion: 7,
+        entityKind,
+        afterId: "0198aaaa-1",
+      };
+      expect(decodeBootstrapCursor(encodeBootstrapCursor(state), COMPANY)).toEqual(state);
     }
   });
 
   it("keeps an empty afterId and a zero snapshot", () => {
-    const state = { snapshotVersion: 0, entityKind: "issue" as const, afterId: "" };
-    expect(decodeBootstrapCursor(encodeBootstrapCursor(state))).toEqual(state);
+    const state = {
+      companyId: COMPANY,
+      snapshotVersion: 0,
+      entityKind: "issue" as const,
+      afterId: "",
+    };
+    expect(decodeBootstrapCursor(encodeBootstrapCursor(state), COMPANY)).toEqual(state);
   });
 });
+
+/** A cursor this deployment really minted, for the fields a refusal test wants to spoil. */
+function minted(overrides: Partial<BootstrapCursorState> = {}): string {
+  return encodeBootstrapCursor({
+    companyId: COMPANY,
+    snapshotVersion: 3,
+    entityKind: "issue",
+    afterId: "0198aaaa-1",
+    ...overrides,
+  });
+}
+
+/** The same token with one field rewritten *after* the checksum was computed over the original. */
+function tampered(field: string, value: unknown): string {
+  const token = JSON.parse(minted()) as Record<string, unknown>;
+  token[field] = value;
+  return JSON.stringify(token);
+}
 
 describe("decodeBootstrapCursor refusals", () => {
   it.each([
@@ -65,17 +98,42 @@ describe("decodeBootstrapCursor refusals", () => {
     ["a JSON scalar", "42"],
     ["a JSON array", "[1,2,3]"],
     ["missing keys", "{}"],
-    ["a string version", '{"v":"1","k":"issue","a":""}'],
-    ["a negative version", '{"v":-1,"k":"issue","a":""}'],
-    ["a non-finite version", '{"v":null,"k":"issue","a":""}'],
+    ["a token with no checksum at all", '{"c":"' + COMPANY + '","v":1,"k":"issue","a":""}'],
+    ["a string version", tampered("v", "1")],
+    ["a negative version", tampered("v", -1)],
+    ["a non-finite version", tampered("v", null)],
     // The version comes back as the seed's resume cursor and the client decodes it as a company
     // version, so anything that is not a whole number it could compare against the feed is refused.
-    ["a fractional version", '{"v":1.5,"k":"issue","a":""}'],
-    ["a version past the safe-integer range", '{"v":1e21,"k":"issue","a":""}'],
-    ["an unknown entity kind", '{"v":1,"k":"holograms","a":""}'],
-    ["a company-domain entity kind", '{"v":1,"k":"membership","a":""}'],
-    ["a non-string afterId", '{"v":1,"k":"issue","a":7}'],
+    ["a fractional version", tampered("v", 1.5)],
+    ["a version past the safe-integer range", tampered("v", 1e21)],
+    ["an unknown entity kind", tampered("k", "holograms")],
+    ["a company-domain entity kind", tampered("k", "membership")],
+    ["a non-string afterId", tampered("a", 7)],
+    ["an untrimmed afterId the walk could never stop on", tampered("a", " 0198aaaa-1")],
+    ["an afterId past the id ceiling", tampered("a", "z".repeat(129))],
+    ["a checksum from a different walk position", tampered("x", "deadbeef")],
   ])("returns null for %s", (_label, token) => {
-    expect(decodeBootstrapCursor(token)).toBeNull();
+    expect(decodeBootstrapCursor(token, COMPANY)).toBeNull();
+  });
+
+  it("refuses a well-formed token minted for another company", () => {
+    const token = encodeBootstrapCursor({
+      companyId: OTHER_COMPANY,
+      snapshotVersion: 3,
+      entityKind: "issue",
+      afterId: "0198aaaa-1",
+    });
+    expect(decodeBootstrapCursor(token, OTHER_COMPANY)).not.toBeNull();
+    expect(decodeBootstrapCursor(token, COMPANY)).toBeNull();
+  });
+
+  it("refuses a walk position edited under an intact-looking token", () => {
+    // The corruption this catches is the quiet one: a token naming the last table past every id
+    // finishes the seed immediately, and the client persists an empty replica as a complete one.
+    const last = BOOTSTRAP_ENTITY_ORDER[BOOTSTRAP_ENTITY_ORDER.length - 1];
+    const skipped = JSON.parse(minted()) as Record<string, unknown>;
+    skipped["k"] = last;
+    skipped["a"] = "zzzzzzzz";
+    expect(decodeBootstrapCursor(JSON.stringify(skipped), COMPANY)).toBeNull();
   });
 });

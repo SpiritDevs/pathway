@@ -14,6 +14,14 @@
  * read. `commit` reproduces `applySyncStoreBatch` inside one executor transaction, which is what
  * makes a crash mid-batch invisible.
  *
+ * Reads decode every row on its own. An outbox, rejected, or quarantine row this build cannot read
+ * — a blob some other build wrote, a status tag it has never heard of, a truncated write — is not
+ * corruption but a user's unsent work, so it reads back as a quarantined row, out of the send path
+ * and whole, while the stored row itself stays in the table it came from. Only a row too damaged
+ * to name its operation, and any undecodable replica row, fail the read loudly; an undecodable
+ * checkpoint reads as none at all and the engine re-bootstraps. This is the same contract
+ * {@link module:sync/indexedDbStore} keeps, so the two adapters recover identically.
+ *
  * @module sync/sqliteStore
  */
 import {
@@ -213,25 +221,47 @@ function encodeJson(value: unknown): string {
   return text;
 }
 
+/** Runs one row codec, answering `null` when the row it was handed is not the shape it expects. */
+function decoded<A>(decode: () => A): A | null {
+  try {
+    return decode();
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function decodeEnvelope(value: SqliteSyncResultValue | undefined): SyncOperationEnvelope {
-  return JSON.parse(columnString(value)) as SyncOperationEnvelope;
+  const parsed: unknown = JSON.parse(columnString(value));
+  if (!isRecord(parsed)) {
+    throw new Error(`expected an envelope object, got ${typeof parsed}`);
+  }
+  return parsed as unknown as SyncOperationEnvelope;
 }
 
 function decodeStatus(row: SqliteSyncRow): StoredOutboxStatus {
-  return columnString(row["status_tag"]) === "Acknowledged"
-    ? {
-        _tag: "Acknowledged",
-        version: CompanyVersion.make(columnNumber(row["acknowledged_version"])),
-      }
-    : { _tag: "Pending" };
+  const tag = columnString(row["status_tag"]);
+  if (tag === "Pending") return { _tag: "Pending" };
+  if (tag === "Acknowledged") {
+    return {
+      _tag: "Acknowledged",
+      version: CompanyVersion.make(columnNumber(row["acknowledged_version"])),
+    };
+  }
+  // A tag some other build wrote is emphatically not "Pending": reading it as one would resend an
+  // operation that build may already consider applied. The row leaves the send path instead.
+  throw new Error(`expected a known outbox status, got ${JSON.stringify(tag)}`);
 }
 
 function statusColumns(status: StoredOutboxStatus): readonly [string, number | null] {
   return status._tag === "Acknowledged" ? ["Acknowledged", status.version] : ["Pending", null];
 }
 
-function decodeCheckpoint(row: SqliteSyncRow): StoredSyncCheckpoint {
-  return {
+function decodeCheckpoint(row: SqliteSyncRow): StoredSyncCheckpoint | null {
+  return decoded(() => ({
     // Preserved verbatim; the engine compares it against its own SYNC_DOCUMENT_SCHEMA_VERSION
     // and drops the checkpoint on mismatch, so the store must not judge it here.
     schemaVersion: columnNumber(row["schema_version"]) as StoredSyncCheckpoint["schemaVersion"],
@@ -239,35 +269,176 @@ function decodeCheckpoint(row: SqliteSyncRow): StoredSyncCheckpoint {
     cursor: CompanyVersion.make(columnNumber(row["cursor"])),
     authorizationEpoch: AuthorizationEpoch.make(columnNumber(row["authorization_epoch"])),
     bootstrapped: columnNumber(row["bootstrapped"]) !== 0,
-  };
+  }));
 }
 
-function decodeEntity(row: SqliteSyncRow): StoredSyncEntity {
-  return {
+function decodeEntity(row: SqliteSyncRow): StoredSyncEntity | null {
+  return decoded(() => ({
     entityKind: columnString(row["entity_kind"]) as SyncEntityKind,
     entityId: columnString(row["entity_id"]) as SyncEntityId,
     version: CompanyVersion.make(columnNumber(row["version"])),
     payload: JSON.parse(columnString(row["payload"])) as unknown,
-  };
+  }));
 }
 
-function decodeOutboxRow(row: SqliteSyncRow): StoredOutboxEntry {
-  return { envelope: decodeEnvelope(row["envelope"]), status: decodeStatus(row) };
+function decodeOutboxRow(row: SqliteSyncRow): StoredOutboxEntry | null {
+  return decoded(() => ({ envelope: decodeEnvelope(row["envelope"]), status: decodeStatus(row) }));
 }
 
-function decodeRejectedRow(row: SqliteSyncRow): StoredSyncRejection {
-  return {
+function decodeRejectedRow(row: SqliteSyncRow): StoredSyncRejection | null {
+  return decoded(() => ({
     envelope: decodeEnvelope(row["envelope"]),
     code: columnString(row["code"]) as SyncRejectionCode,
     message: columnString(row["message"]),
-  };
+  }));
 }
 
-function decodeQuarantineRow(row: SqliteSyncRow): StoredSyncQuarantine {
-  return {
+function decodeQuarantineRow(row: SqliteSyncRow): StoredSyncQuarantine | null {
+  return decoded(() => ({
     envelope: decodeEnvelope(row["envelope"]),
     status: decodeStatus(row),
     reason: columnString(row["reason"]),
+  }));
+}
+
+/**
+ * Wraps a row this build cannot read as a quarantine row, or answers `null` when not even the
+ * operation it belongs to can be named.
+ *
+ * What the envelope blob does hold is carried over as it is — the parts this build cannot decode
+ * are exactly the parts a build that can needs back — but the quarantine list is keyed by
+ * operation id, and a blob too damaged to parse cannot supply one. The columns beside it can: no
+ * amount of JSON damage reaches `operation_id`, `local_sequence`, or `reason`, so those are what a
+ * salvaged row falls back to.
+ */
+function salvageRow(row: SqliteSyncRow, fallbackReason: string): StoredSyncQuarantine | null {
+  const stored = decoded(() => JSON.parse(columnString(row["envelope"])) as unknown);
+  const blob = isRecord(stored) ? stored : {};
+  const operationId =
+    typeof blob["operationId"] === "string"
+      ? blob["operationId"]
+      : decoded(() => columnString(row["operation_id"]));
+  if (operationId === null) return null;
+  const localSequence =
+    typeof blob["localSequence"] === "number"
+      ? blob["localSequence"]
+      : // Only the outbox carries the column; a rejected or quarantined row whose blob lost its
+        // sequence has nothing left to send, so an unknown sequence is recorded as zero.
+        (decoded(() => columnNumber(row["local_sequence"])) ?? 0);
+  return {
+    envelope: { ...blob, operationId, localSequence } as unknown as SyncOperationEnvelope,
+    // Unknown to this build is not "Pending": a salvaged row is out of the send path either way,
+    // and the durable row keeps whatever tag the build that wrote it meant.
+    status: decoded(() => decodeStatus(row)) ?? { _tag: "Pending" },
+    // A quarantined row that was already unreadable once keeps the reason it was quarantined for.
+    reason: decoded(() => columnString(row["reason"])) ?? fallbackReason,
+  };
+}
+
+interface RawSnapshot {
+  readonly checkpoints: ReadonlyArray<SqliteSyncRow>;
+  readonly entities: ReadonlyArray<SqliteSyncRow>;
+  readonly outbox: ReadonlyArray<SqliteSyncRow>;
+  readonly rejected: ReadonlyArray<SqliteSyncRow>;
+  readonly quarantined: ReadonlyArray<SqliteSyncRow>;
+  readonly sequences: ReadonlyArray<SqliteSyncRow>;
+}
+
+type DecodedSnapshot =
+  | { readonly ok: true; readonly state: StoredSyncState }
+  | { readonly ok: false; readonly error: SyncStoreError };
+
+/**
+ * Decodes one company's rows, each on its own.
+ *
+ * An outbox, rejected, or quarantine row this build cannot read is not corruption — some build
+ * wrote it, and what it holds is a user's work — so it reads back as a quarantined row rather than
+ * failing the whole read, exactly as an operation whose arguments the domain adapter cannot decode
+ * does. The stored row itself is left in the table it came from, so the build that understands it
+ * again still finds it in the outbox and sends it; that is why a discard has to reach all three
+ * tables (see {@link commitStatements}). Only a row too damaged to name its operation, and any
+ * undecodable replica row, fail the read loudly.
+ */
+function decodeSnapshot(raw: RawSnapshot): DecodedSnapshot {
+  const bad = (what: string): DecodedSnapshot => ({
+    ok: false,
+    error: new SyncStoreError({
+      operation: "read",
+      message: `unreadable stored row: the store holds ${what} this build cannot read`,
+    }),
+  });
+
+  const entities: Array<StoredSyncEntity> = [];
+  for (const row of raw.entities) {
+    const entity = decodeEntity(row);
+    if (entity === null) return bad("a replica row");
+    entities.push(entity);
+  }
+
+  // Quarantine first, in its own order: a row this build cannot read there keeps the place — and
+  // the reason — the build that quarantined it gave it. Rows salvaged out of the other two tables
+  // follow, in the order those tables are read.
+  const quarantined: Array<StoredSyncQuarantine> = [];
+  for (const row of raw.quarantined) {
+    const quarantine = decodeQuarantineRow(row);
+    if (quarantine !== null) {
+      quarantined.push(quarantine);
+      continue;
+    }
+    const salvaged = salvageRow(
+      row,
+      "This build cannot read the stored shape of this quarantined row.",
+    );
+    if (salvaged === null) return bad("a quarantined row");
+    quarantined.push(salvaged);
+  }
+
+  const rejected: Array<StoredSyncRejection> = [];
+  for (const row of raw.rejected) {
+    const rejection = decodeRejectedRow(row);
+    if (rejection !== null) {
+      rejected.push(rejection);
+      continue;
+    }
+    const salvaged = salvageRow(
+      row,
+      "This build cannot read the stored shape of this rejected row.",
+    );
+    if (salvaged === null) return bad("a rejected row");
+    quarantined.push(salvaged);
+  }
+
+  const outbox: Array<StoredOutboxEntry> = [];
+  for (const row of raw.outbox) {
+    const entry = decodeOutboxRow(row);
+    if (entry !== null) {
+      outbox.push(entry);
+      continue;
+    }
+    const salvaged = salvageRow(row, "This build cannot read the stored shape of this outbox row.");
+    if (salvaged === null) return bad("an outbox row");
+    quarantined.push(salvaged);
+  }
+
+  const sequenceRow = raw.sequences[0];
+  const highWater =
+    sequenceRow === undefined ? 0 : decoded(() => columnNumber(sequenceRow["high_water"]));
+  if (highWater === null) return bad("a local-sequence high-water mark");
+
+  const checkpointRow = raw.checkpoints[0];
+  return {
+    ok: true,
+    state: {
+      // A checkpoint this build cannot read reads as "no checkpoint": the engine re-bootstraps,
+      // exactly as it does for an explicit schema-version mismatch. The other tables never take
+      // that shortcut — their rows carry user work.
+      checkpoint: checkpointRow === undefined ? null : decodeCheckpoint(checkpointRow),
+      entities,
+      outbox,
+      rejected,
+      quarantined,
+      localSequenceHighWater: LocalSequence.make(highWater),
+    },
   };
 }
 
@@ -306,16 +477,18 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
             `SELECT entity_kind, entity_id, version, payload
               FROM cloud_sync_entities WHERE company_id = ? ORDER BY rowid`,
           );
+          // `operation_id` (and the outbox's `local_sequence`) are selected for salvage, not for
+          // the happy path: they are what names a row whose envelope blob is unreadable.
           const outbox = yield* byCompany(
-            `SELECT envelope, status_tag, acknowledged_version
+            `SELECT operation_id, local_sequence, envelope, status_tag, acknowledged_version
               FROM cloud_sync_outbox WHERE company_id = ? ORDER BY local_sequence`,
           );
           const rejected = yield* byCompany(
-            `SELECT envelope, code, message
+            `SELECT operation_id, envelope, code, message
               FROM cloud_sync_rejected WHERE company_id = ? ORDER BY rowid`,
           );
           const quarantined = yield* byCompany(
-            `SELECT envelope, status_tag, acknowledged_version, reason
+            `SELECT operation_id, envelope, status_tag, acknowledged_version, reason
               FROM cloud_sync_quarantine WHERE company_id = ? ORDER BY rowid`,
           );
           const sequences = yield* byCompany(
@@ -326,27 +499,8 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
       )
       .pipe(Effect.mapError(storeError("read")));
 
-    return yield* Effect.try({
-      try: (): StoredSyncState => {
-        const checkpointRow = state.checkpoints[0];
-        const sequenceRow = state.sequences[0];
-        return {
-          checkpoint: checkpointRow === undefined ? null : decodeCheckpoint(checkpointRow),
-          entities: state.entities.map(decodeEntity),
-          outbox: state.outbox.map(decodeOutboxRow),
-          rejected: state.rejected.map(decodeRejectedRow),
-          quarantined: state.quarantined.map(decodeQuarantineRow),
-          localSequenceHighWater: LocalSequence.make(
-            sequenceRow === undefined ? 0 : columnNumber(sequenceRow["high_water"]),
-          ),
-        };
-      },
-      catch: (cause) =>
-        new SyncStoreError({
-          operation: "read",
-          message: `unreadable stored row: ${String(cause)}`,
-        }),
-    });
+    const snapshot = decodeSnapshot(state);
+    return snapshot.ok ? snapshot.state : yield* snapshot.error;
   });
 
   const commit = Effect.fn("SqliteSyncStore.commit")(function* (
@@ -495,10 +649,19 @@ function commitStatements(
 
   const removedQuarantined = new Set(batch.removeQuarantined ?? []);
   for (const operationId of removedQuarantined) {
-    statements.push([
-      `DELETE FROM cloud_sync_quarantine WHERE company_id = ? AND operation_id = ?`,
-      [companyId, operationId],
-    ]);
+    for (const table of [
+      "cloud_sync_quarantine",
+      // A quarantined operation is neither sendable nor rejected, so these two are no-ops for a
+      // row this store moved itself — but a row it only *read* as quarantined, because it could
+      // not decode it, is still sitting in the table it came from, and a discard has to reach it.
+      "cloud_sync_outbox",
+      "cloud_sync_rejected",
+    ]) {
+      statements.push([
+        `DELETE FROM ${table} WHERE company_id = ? AND operation_id = ?`,
+        [companyId, operationId],
+      ]);
+    }
   }
   for (const row of batch.quarantineOutbox ?? []) {
     if (removedQuarantined.has(row.envelope.operationId)) continue;

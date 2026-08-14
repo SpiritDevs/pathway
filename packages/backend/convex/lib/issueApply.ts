@@ -52,6 +52,15 @@ import {
 } from "../../src/sync/issueOps.ts";
 import type { SyncOperationEnvelope } from "../../src/sync/operations.ts";
 import type { SyncOperationKind } from "../../src/sync/protocol.ts";
+import {
+  carryOverStatusId,
+  effectiveStatusFor,
+  firstVisibleStatus,
+  mergeEffectiveWorkflow,
+  statusVariantViolation,
+  type EffectiveStatus,
+  type StatusIdentity,
+} from "../../src/sync/workflow.ts";
 import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import type { DomainApply, DomainChange, DomainOutcome } from "../sync.ts";
@@ -64,7 +73,14 @@ type FeedActor = ReturnType<typeof actorRecord>;
 // ---------------------------------------------------------------------------
 
 function rejected(
-  code: "invalid-arguments" | "permission-denied" | "entity-not-found" | "entity-deleted",
+  code:
+    | "invalid-arguments"
+    | "permission-denied"
+    | "entity-not-found"
+    | "entity-deleted"
+    // What a sweep past its ceiling answers: the operation is blocked by the volume of dependent
+    // rows it would have to migrate, not by anything wrong with its arguments.
+    | "dependency-blocked",
   message: string,
 ): DomainOutcome {
   return { status: "rejected", code, message };
@@ -179,7 +195,9 @@ function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
     workflowOwner: doc.workflowOwner,
     workModelSelection: doc.workModelSelection,
     automationAssignment: doc.automationAssignment,
-    pullRequest: doc.pullRequest,
+    // Optional in storage so rows written before the column existed still validate; the wire shape
+    // has always carried an explicit `null` for "no pull request".
+    pullRequest: doc.pullRequest ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -375,6 +393,32 @@ function tombstone(
 }
 
 /**
+ * A tombstone that tells `teamIds` the entity has left their audience, for the case where the
+ * entity's new state hides it from them: a saved view that just turned private.
+ *
+ * The ordinary owner-private gate is derived from the view's *current* row, so an upsert announcing
+ * the change is delivered to the new owner-only audience and to nobody else — which leaves every
+ * replica that already holds the view believing it still has it. This row carries no payload and no
+ * `versionDocId` (the accompanying upsert stamps the entity's version), and is filtered on team
+ * scope alone. It discloses nothing: those replicas already hold the id.
+ */
+function departureTombstone(
+  entityKind: DomainChange["entityKind"],
+  entityId: string,
+  teamIds: readonly string[],
+): DomainChange {
+  return {
+    entityKind,
+    entityId,
+    changeKind: "tombstone",
+    teamIds,
+    versionDocId: null,
+    departure: true,
+    payload: null,
+  };
+}
+
+/**
  * Writes one issue audit event and returns its feed row. The event's domain id is derived from the
  * operation id, so an OCC retry of the transaction re-creates the same identity rather than a
  * sibling. Audit rows are retained until company deletion, unlike the 90-day feed.
@@ -410,49 +454,107 @@ async function appendAuditEvent(
 // Workflow helpers
 // ---------------------------------------------------------------------------
 
-/** Sorting rule the workflow catalog uses everywhere: position ascending, nulls last, id tie-break. */
-function firstStatus(rows: readonly Doc<"issueStatuses">[]): Doc<"issueStatuses"> | null {
-  const live = rows.filter((row) => row.deletedAt === null && !row.hidden);
-  live.sort((a, b) => {
-    const pa = a.position ?? Number.MAX_SAFE_INTEGER;
-    const pb = b.position ?? Number.MAX_SAFE_INTEGER;
-    if (pa !== pb) return pa - pb;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
-  return live[0] ?? null;
+/**
+ * How many stored status rows one chain may hold. A workflow is a board a human reads, so the
+ * ceiling is generous rather than tight; what it buys is that resolving one — which every issue
+ * placement does — is a bounded read instead of a `.collect()` that a pathological catalog could
+ * push past Convex's transaction limits, wedging the operation permanently.
+ */
+const WORKFLOW_MAX_STATUSES = 200;
+
+/**
+ * Every live row of one status partition: the company base chain, or one team's own rows (its
+ * overrides and its team-only statuses), which is the same partition `issueStatus.create` appends
+ * to and `issueStatus.reorder` orders. `null` means the partition is past its ceiling — the caller
+ * refuses rather than reading a truncated chain and calling it the workflow.
+ */
+async function liveStatusRows(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  of: { readonly scope: "company" | "team"; readonly teamId: string | null },
+): Promise<readonly Doc<"issueStatuses">[] | null> {
+  const teamId = of.teamId;
+  const rows =
+    of.scope === "team" && teamId !== null
+      ? await ctx.db
+          .query("issueStatuses")
+          .withIndex("by_company_team_and_deleted", (q) =>
+            q.eq("companyId", company._id).eq("teamId", teamId).eq("deletedAt", null),
+          )
+          .take(WORKFLOW_MAX_STATUSES + 1)
+      : await ctx.db
+          .query("issueStatuses")
+          .withIndex("by_company_scope_and_deleted", (q) =>
+            q.eq("companyId", company._id).eq("scope", "company").eq("deletedAt", null),
+          )
+          .take(WORKFLOW_MAX_STATUSES + 1);
+  return rows.length > WORKFLOW_MAX_STATUSES ? null : rows;
+}
+
+function workflowTooLarge(): DomainOutcome {
+  return rejected(
+    "dependency-blocked",
+    `A workflow may hold ${WORKFLOW_MAX_STATUSES} statuses; this one holds more.`,
+  );
 }
 
 /**
- * The status a new issue lands in when its create named none: the first visible status of the
- * owner's workflow. A team owner prefers its own rows and falls back to the inherited company
- * chain; full hidden-override merging is deliberately not modelled yet.
+ * The one answer to "what are the effective statuses of this owner": company bases with the owning
+ * team's overrides applied, the team's own statuses merged in, ordered. Every path that places or
+ * moves an issue reads the workflow through here, so a status a team hides is hidden for all of
+ * them and an override is the same column as the base it overrides everywhere.
+ */
+async function effectiveWorkflow(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  owner: IssueWorkflowOwner,
+): Promise<Resolved<readonly EffectiveStatus[]>> {
+  const bases = await liveStatusRows(ctx, company, { scope: "company", teamId: null });
+  if (bases === null) return { ok: false, outcome: workflowTooLarge() };
+  let teamRows: readonly Doc<"issueStatuses">[] = [];
+  if (owner.kind === "team") {
+    const rows = await liveStatusRows(ctx, company, { scope: "team", teamId: owner.teamId });
+    if (rows === null) return { ok: false, outcome: workflowTooLarge() };
+    teamRows = rows;
+  }
+  return { ok: true, value: mergeEffectiveWorkflow(bases, teamRows) };
+}
+
+/**
+ * The status a new issue lands in when its create named none, or a restore found its own gone: the
+ * first visible column of the owner's effective workflow. `null` is a workflow with nowhere to land.
  */
 async function defaultStatusId(
   ctx: QueryCtx,
   company: Doc<"companies">,
   owner: IssueWorkflowOwner,
-): Promise<string | null> {
-  if (owner.kind === "team") {
-    const teamRows = await ctx.db
-      .query("issueStatuses")
-      .withIndex("by_company_and_team", (q) =>
-        q.eq("companyId", company._id).eq("teamId", owner.teamId),
-      )
-      .collect();
-    const teamFirst = firstStatus(teamRows);
-    if (teamFirst !== null) return teamFirst.id;
-  }
-  const companyRows = await ctx.db
-    .query("issueStatuses")
-    .withIndex("by_company_and_scope", (q) => q.eq("companyId", company._id).eq("scope", "company"))
-    .collect();
-  return firstStatus(companyRows)?.id ?? null;
+): Promise<Resolved<string | null>> {
+  const workflow = await effectiveWorkflow(ctx, company, owner);
+  if (!workflow.ok) return workflow;
+  return { ok: true, value: firstVisibleStatus(workflow.value)?.id ?? null };
 }
 
 /** Whether `status` belongs to `owner`'s workflow. A team workflow inherits every company status. */
 function statusMatchesOwner(status: Doc<"issueStatuses">, owner: IssueWorkflowOwner): boolean {
   if (status.scope === "company") return true;
   return owner.kind === "team" && status.teamId === owner.teamId;
+}
+
+/**
+ * What a status row means for a carry-over, independently of which row expresses it: an override
+ * stands for its base and inherits the base's category when it sets none of its own.
+ */
+async function statusIdentity(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  status: Doc<"issueStatuses">,
+): Promise<StatusIdentity> {
+  const baseId = status.scope === "company" ? status.id : status.baseStatusId;
+  if (status.category !== null || status.baseStatusId === null) {
+    return { baseId, category: status.category };
+  }
+  const base = await liveRow(ctx, "issueStatuses", company._id, status.baseStatusId);
+  return { baseId, category: base?.category ?? null };
 }
 
 /** A relation is visible from either end, so its feed row carries both issues' teams. */
@@ -464,13 +566,19 @@ function unionTeamIds(a: readonly string[], b: readonly string[]): readonly stri
  * The audience a team-scope change has to reach: everyone who could see the record before it moved
  * and everyone who can see it after. Scoping such a row to the new teams alone leaves a descoped
  * member's replica holding a copy it will never hear about again — bootstrap would omit the record
- * entirely, so the two disagree forever. An empty set is company-wide and swallows the other side.
+ * entirely, so the two disagree forever.
+ *
+ * An empty list is the *narrowest* audience there is, not the widest: `[]` reaches company-scoped
+ * grants only, while `[A]` reaches company-scoped grants *and* team A. So the union of the two
+ * audiences is the union of the lists — except when one side is empty, where it is the other list,
+ * which already contains the company-scoped readers the empty side stood for.
  */
 function scopeChangeTeamIds(
   before: readonly string[],
   after: readonly string[],
 ): readonly string[] {
-  if (before.length === 0 || after.length === 0) return [];
+  if (before.length === 0) return after;
+  if (after.length === 0) return before;
   return unionTeamIds(before, after);
 }
 
@@ -482,6 +590,89 @@ function scopeChangeTeamIds(
  */
 function teamScopeJustified(teamId: string | null, issueTeamIds: readonly string[]): boolean {
   return teamId === null || issueTeamIds.includes(teamId);
+}
+
+/**
+ * The same question for a project, which carries a set of teams rather than one: a company-wide
+ * project is usable everywhere, a team-scoped one needs an overlap with the issue's teams. This is
+ * exactly the predicate `issue.setTeams` applies when it decides whether a move strands the issue's
+ * project reference, enforced on the way in so the two can never disagree.
+ */
+function projectScopeJustified(
+  projectTeamIds: readonly string[],
+  issueTeamIds: readonly string[],
+): boolean {
+  return (
+    projectTeamIds.length === 0 || projectTeamIds.some((teamId) => issueTeamIds.includes(teamId))
+  );
+}
+
+type Resolved<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly outcome: DomainOutcome };
+
+/**
+ * The project an issue may point at: live, unarchived, readable by the actor, and in a team scope
+ * the issue's own teams justify. Existence alone is not enough — without the read check an actor
+ * confined to one team could file its issues against another team's project, and the refusal is
+ * worded like a missing project so it cannot double as an existence oracle for ids it may not see.
+ */
+async function resolveIssueProject(
+  ctx: QueryCtx,
+  actor: CompanyActor,
+  company: Doc<"companies">,
+  projectId: string,
+  issueTeamIds: readonly string[],
+): Promise<Resolved<Doc<"cloudProjects">>> {
+  const project = await liveRow(ctx, "cloudProjects", company._id, projectId);
+  if (
+    project === null ||
+    project.archivedAt !== null ||
+    !can(actor, "projects.read", project.teamIds)
+  ) {
+    return { ok: false, outcome: rejected("invalid-arguments", `No project ${projectId}.`) };
+  }
+  if (!projectScopeJustified(project.teamIds, issueTeamIds)) {
+    return {
+      ok: false,
+      outcome: rejected("invalid-arguments", `The project ${projectId} belongs to another team.`),
+    };
+  }
+  return { ok: true, value: project };
+}
+
+/**
+ * Whether a new assignment may name this membership. Departed members stay on the issues they
+ * already hold — attribution survives a departure, which is why memberships are tombstoned rather
+ * than deleted — but handing *new* work to a membership this company cannot resolve, or to one that
+ * is locked or gone, writes authoritative issue data no replica can render.
+ */
+async function assignableMembership(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  membershipId: string,
+): Promise<Doc<"memberships"> | null> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_domain_id", (q) => q.eq("id", membershipId))
+    .unique();
+  if (membership === null) return null;
+  if (membership.companyId !== company._id || membership.state !== "active") return null;
+  return membership;
+}
+
+/** Refusal for an assignee naming a membership {@link assignableMembership} will not accept. */
+async function unassignableAssignee(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  assignee: { readonly kind: string; readonly membershipId?: string } | null | undefined,
+): Promise<DomainOutcome | null> {
+  if (assignee === null || assignee === undefined || assignee.kind !== "member") return null;
+  const membershipId = assignee.membershipId ?? "";
+  const membership = await assignableMembership(ctx, company, membershipId);
+  return membership === null
+    ? rejected("invalid-arguments", `No active member ${membershipId} here.`)
+    : null;
 }
 
 /**
@@ -587,10 +778,9 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   // workflow.
   let project: Doc<"cloudProjects"> | null = null;
   if (args.projectId !== undefined) {
-    project = await liveRow(ctx, "cloudProjects", company._id, args.projectId);
-    if (project === null || project.archivedAt !== null) {
-      return rejected("invalid-arguments", `No project ${args.projectId}.`);
-    }
+    const resolved = await resolveIssueProject(ctx, actor, company, args.projectId, teamIds);
+    if (!resolved.ok) return resolved.outcome;
+    project = resolved.value;
   }
   const owner: IssueWorkflowOwner = args.workflowOwner ??
     project?.defaultWorkflowOwner ?? { kind: "company" };
@@ -612,10 +802,11 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     statusId = "";
   } else {
     const fallback = await defaultStatusId(ctx, company, owner);
-    if (fallback === null) {
+    if (!fallback.ok) return fallback.outcome;
+    if (fallback.value === null) {
       return rejected("invalid-arguments", "This workflow has no status to place the issue in.");
     }
-    statusId = fallback;
+    statusId = fallback.value;
   }
 
   for (const labelId of args.labelIds ?? []) {
@@ -647,6 +838,8 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
       return rejected("invalid-arguments", `No issue ${args.parentId}.`);
     }
   }
+  const badAssignee = await unassignableAssignee(ctx, company, args.assignee);
+  if (badAssignee !== null) return badAssignee;
 
   // Key assignment. A leased key arrives in `args.key`; a client that ran its block dry sends none
   // and the company counter assigns one here. The counter is re-read because an earlier create in
@@ -749,20 +942,29 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     }
   }
   if (args.projectId != null) {
-    const project = await liveRow(ctx, "cloudProjects", company._id, args.projectId);
-    if (project === null || project.archivedAt !== null) {
-      return rejected("invalid-arguments", `No project ${args.projectId}.`);
-    }
+    const resolved = await resolveIssueProject(ctx, actor, company, args.projectId, issue.teamIds);
+    if (!resolved.ok) return resolved.outcome;
   }
+  // The pair is judged after the whole patch, not field by field: a milestone is project-owned, so
+  // moving the project while saying nothing about the milestone would otherwise leave the issue
+  // pointing at a milestone belonging to the project it just left. An explicitly named mismatch is
+  // a client error and refused; an implicitly stranded one is cleared, the way `issueMilestone.
+  // update` clears the issues a milestone leaves behind.
+  const effectiveProjectId = args.projectId !== undefined ? args.projectId : issue.projectId;
   if (args.milestoneId != null) {
     const milestone = await liveRow(ctx, "issueMilestones", company._id, args.milestoneId);
     if (milestone === null) {
       return rejected("invalid-arguments", `No milestone ${args.milestoneId}.`);
     }
-    const effectiveProject = args.projectId !== undefined ? args.projectId : issue.projectId;
-    if (milestone.cloudProjectId !== effectiveProject) {
+    if (milestone.cloudProjectId !== effectiveProjectId) {
       return rejected("invalid-arguments", "The milestone belongs to a different project.");
     }
+  }
+  const projectChanged = args.projectId !== undefined && args.projectId !== issue.projectId;
+  let strandedMilestone = false;
+  if (projectChanged && args.milestoneId === undefined && issue.milestoneId !== null) {
+    const milestone = await liveRow(ctx, "issueMilestones", company._id, issue.milestoneId);
+    strandedMilestone = milestone === null || milestone.cloudProjectId !== effectiveProjectId;
   }
   if (args.cycleId != null) {
     const cycle = await liveRow(ctx, "issueCycles", company._id, args.cycleId);
@@ -790,6 +992,8 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
       return rejected("invalid-arguments", `The label ${labelId} belongs to another team.`);
     }
   }
+  const badAssignee = await unassignableAssignee(ctx, company, args.assignee);
+  if (badAssignee !== null) return badAssignee;
 
   // Absent leaves the field alone; explicit null clears. Collect before/after for the audit trail
   // so a stale-base overwrite stays recoverable from the event log.
@@ -809,7 +1013,7 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   set("assignee", args.assignee);
   set("workModelSelection", args.workModelSelection);
   set("projectId", args.projectId);
-  set("milestoneId", args.milestoneId);
+  set("milestoneId", strandedMilestone ? null : args.milestoneId);
   set("cycleId", args.cycleId);
   set("parentId", args.parentId);
   set("labelIds", args.labelIds === undefined ? undefined : [...args.labelIds]);
@@ -863,11 +1067,78 @@ const issueRestore: EnvApply = async ({ ctx, actor, company, feedActor, operatio
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
   if (issue.deletedAt === null) return applied();
 
-  await ctx.db.patch(issue._id, { deletedAt: null, updatedAt: now });
+  // A deleted issue is skipped by every reference sweep there is — status deletion walks live rows
+  // only, and so do project and parent moves — so the world it pointed at may be gone by the time
+  // somebody restores it. Reviving the row untouched publishes a live issue referencing tombstones
+  // no replica can resolve, so the references are repaired in the same write that revives it.
+  const patch: Record<string, unknown> = { deletedAt: null, updatedAt: now };
+  const normalized: Record<string, { readonly before: unknown; readonly after: unknown }> = {};
+  const normalize = (field: keyof Doc<"issues"> & string, after: unknown) => {
+    patch[field] = after;
+    normalized[field] = { before: issue[field as keyof Doc<"issues">] ?? null, after };
+  };
+
+  // Status first: there is no unset status outside triage, so an unusable one is replaced with the
+  // effective default of the issue's own workflow rather than cleared.
+  const status =
+    issue.statusId === "" ? null : await liveRow(ctx, "issueStatuses", company._id, issue.statusId);
+  const statusUsable =
+    issue.statusId === ""
+      ? issue.triage
+      : status !== null && statusMatchesOwner(status, issue.workflowOwner);
+  if (!statusUsable) {
+    const fallback = await defaultStatusId(ctx, company, issue.workflowOwner);
+    if (!fallback.ok) return fallback.outcome;
+    if (fallback.value === null) {
+      return rejected(
+        "invalid-arguments",
+        "This workflow has no status to restore the issue into.",
+      );
+    }
+    normalize("statusId", fallback.value);
+  }
+
+  if (issue.parentId !== null) {
+    const parent = await liveRow(ctx, "issues", company._id, issue.parentId);
+    if (parent === null) normalize("parentId", null);
+  }
+
+  // A project reference the issue's teams can no longer justify goes the way `issue.setTeams` sends
+  // it, and its milestone with it: a milestone is project-owned, so a cleared project cannot leave
+  // one behind.
+  let projectId = issue.projectId;
+  if (projectId !== null) {
+    const project = await liveRow(ctx, "cloudProjects", company._id, projectId);
+    if (
+      project === null ||
+      project.archivedAt !== null ||
+      !projectScopeJustified(project.teamIds, issue.teamIds)
+    ) {
+      projectId = null;
+      normalize("projectId", null);
+    }
+  }
+  if (issue.milestoneId !== null) {
+    const milestone = await liveRow(ctx, "issueMilestones", company._id, issue.milestoneId);
+    if (milestone === null || milestone.cloudProjectId !== projectId)
+      normalize("milestoneId", null);
+  }
+
+  await ctx.db.patch(issue._id, patch);
   const doc = await mustGet(ctx, issue._id);
   return applied(
     upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
-    await appendAuditEvent(ctx, company, feedActor, operation, 0, doc, "restored", {}, now),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      0,
+      doc,
+      "restored",
+      Object.keys(normalized).length === 0 ? {} : { changes: normalized },
+      now,
+    ),
   );
 };
 
@@ -941,28 +1212,52 @@ const issueSetWorkflowOwner: EnvApply = async ({
     return rejected("invalid-arguments", "The workflow owner must be one of the issue's teams.");
   }
 
-  // Status carryover: keep the current status when the target workflow still contains it, else use
-  // the explicit one, else land in the target's default.
-  let statusId = issue.statusId;
+  // Status carryover, judged against the *effective* target workflow rather than against raw rows:
+  // the column an issue occupies is a base plus whatever the owning team overrode on it, so "the
+  // target still has this status" means the target resolves the same base — under the override's
+  // id when the target team has one — and does not hide it.
+  const resolvedTarget = await effectiveWorkflow(ctx, company, owner);
+  if (!resolvedTarget.ok) return resolvedTarget.outcome;
+  const target = resolvedTarget.value;
+
   const current =
     issue.statusId === "" ? null : await liveRow(ctx, "issueStatuses", company._id, issue.statusId);
-  const keepCurrent = current !== null && statusMatchesOwner(current, owner);
-  if (!keepCurrent) {
-    if (args.statusId !== undefined) {
-      const status = await liveRow(ctx, "issueStatuses", company._id, args.statusId);
-      if (status === null) return rejected("invalid-arguments", `No status ${args.statusId}.`);
-      if (!statusMatchesOwner(status, owner)) {
-        return rejected("invalid-arguments", "The status belongs to a different workflow.");
-      }
-      statusId = status.id;
-    } else if (issue.triage && issue.statusId === "") {
-      statusId = "";
+
+  let statusId: string;
+  if (args.statusId !== undefined) {
+    // An explicitly named target is a decision, not a hint: it wins over the automatic carry-over,
+    // and it has to be a column the target workflow actually shows.
+    const explicit = effectiveStatusFor(target, args.statusId);
+    if (explicit === null || explicit.hidden) {
+      return rejected("invalid-arguments", "The status belongs to a different workflow.");
+    }
+    statusId = explicit.id;
+  } else if (issue.triage && issue.statusId === "") {
+    // A triage item sits outside the workflow entirely; moving its owner does not file it.
+    statusId = "";
+  } else {
+    const carried =
+      current === null
+        ? null
+        : carryOverStatusId(target, await statusIdentity(ctx, company, current));
+    if (carried !== null) {
+      statusId = carried;
+    } else if (current !== null) {
+      // The contract's own escalation: reuse the inherited base, else the first target column in
+      // the same semantic category, else ask. Dropping the issue into the target's first column
+      // instead would silently reopen finished work.
+      return rejected(
+        "invalid-arguments",
+        "The target workflow has no matching status; name the one this issue should land in.",
+      );
     } else {
-      const fallback = await defaultStatusId(ctx, company, owner);
+      // No status to carry over at all — a row whose status died while it sat there. Landing in the
+      // target's first visible column is the only answer that keeps the issue on a board.
+      const fallback = firstVisibleStatus(target);
       if (fallback === null) {
         return rejected("invalid-arguments", "The target workflow has no status to land in.");
       }
-      statusId = fallback;
+      statusId = fallback.id;
     }
   }
 
@@ -988,6 +1283,150 @@ const issueSetWorkflowOwner: EnvApply = async ({
     ),
   );
 };
+
+/**
+ * How many dependent rows one team-scope change may republish. The migration has to be atomic with
+ * the move — a half-migrated issue is exactly the divergence it exists to prevent — so it has to fit
+ * in one mutation, and an issue whose conversation outgrew that is refused loudly rather than
+ * migrated silently short. The remedy for such an issue is a client reseed, which the refusal names.
+ */
+const ISSUE_SCOPE_MIGRATION_MAX_ROWS = 500;
+
+function tooManyDependents(issue: Doc<"issues">): DomainOutcome {
+  return rejected(
+    "dependency-blocked",
+    `Issue ${issue.key} carries more than ${ISSUE_SCOPE_MIGRATION_MAX_ROWS} dependent records; ` +
+      "a team change cannot migrate them in one operation.",
+  );
+}
+
+/**
+ * Everything hanging off an issue, republished under the union of the audiences its move spans.
+ *
+ * Comments, todos, attachments, relations, and thread links carry no team scope of their own: they
+ * inherit the parent issue's, both in the feed and in `bootstrap`. So moving the parent alone moves
+ * *nothing* for a replica that already holds them or is about to need them — the teams gaining the
+ * issue never hear the children exist, and the teams losing it keep theirs forever. Re-emitting each
+ * child as an upsert at the union audience is what makes the gaining replicas acquire them and lets
+ * the losing ones drop them alongside the parent.
+ *
+ * Audit history is deliberately not republished: it is append-only and unbounded, the one thing that
+ * could not fit a bounded migration, and a replica that newly gains an issue seeds its history on
+ * its next bootstrap rather than replaying years of it through the feed.
+ */
+async function issueScopeMigrationChanges(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  issue: Doc<"issues">,
+  before: readonly string[],
+  after: readonly string[],
+): Promise<Resolved<readonly DomainChange[]>> {
+  const audience = scopeChangeTeamIds(before, after);
+  const cap = ISSUE_SCOPE_MIGRATION_MAX_ROWS + 1;
+  const changes: DomainChange[] = [];
+  const room = () => cap - changes.length;
+
+  const todos = await ctx.db
+    .query("issueTodos")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of todos) {
+    changes.push(upsert("issueTodo", row.id, audience, row._id, encodeIssueTodo(company, row)));
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  const comments = await ctx.db
+    .query("issueComments")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of comments) {
+    changes.push(
+      upsert("issueComment", row.id, audience, row._id, encodeIssueComment(company, row)),
+    );
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  const attachments = await ctx.db
+    .query("issueAttachments")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of attachments) {
+    changes.push(
+      upsert(
+        "issueAttachment",
+        row.id,
+        audience,
+        row._id,
+        await encodeIssueAttachment(ctx, company, row),
+      ),
+    );
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  const links = await ctx.db
+    .query("issueThreadLinks")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of links) {
+    changes.push(
+      upsert(
+        "issueThreadLink",
+        row.id,
+        audience,
+        row._id,
+        await encodeIssueThreadLink(ctx, company, row),
+      ),
+    );
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  // A relation is visible from either end, so its audience is this issue's move unioned with the
+  // other issue's own teams — and both directions have to be walked, because the moved issue may be
+  // either end of the pair.
+  const seenRelations = new Set<string>();
+  for (const direction of ["issueId", "relatedIssueId"] as const) {
+    const rows =
+      direction === "issueId"
+        ? await ctx.db
+            .query("issueRelations")
+            .withIndex("by_company_issue_and_deleted", (q) =>
+              q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+            )
+            .take(room())
+        : await ctx.db
+            .query("issueRelations")
+            .withIndex("by_company_related_issue_and_deleted", (q) =>
+              q.eq("companyId", company._id).eq("relatedIssueId", issue.id).eq("deletedAt", null),
+            )
+            .take(room());
+    for (const row of rows) {
+      if (seenRelations.has(row.id)) continue;
+      seenRelations.add(row.id);
+      const otherId = direction === "issueId" ? row.relatedIssueId : row.issueId;
+      const otherTeams = otherId === issue.id ? [] : await issueTeamIds(ctx, company, otherId);
+      changes.push(
+        upsert(
+          "issueRelation",
+          row.id,
+          unionTeamIds(audience, otherTeams),
+          row._id,
+          encodeIssueRelation(company, row),
+        ),
+      );
+    }
+    if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+  }
+
+  return { ok: true, value: changes };
+}
 
 const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operation, now }) => {
   const parsed = decoded(parseIssueSetTeamsArgs(operation.args));
@@ -1049,13 +1488,38 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
     owner = { kind: "company" };
     const current =
       statusId === "" ? null : await liveRow(ctx, "issueStatuses", company._id, statusId);
-    if (current === null || !statusMatchesOwner(current, owner)) {
-      const fallback = await defaultStatusId(ctx, company, owner);
+    // The same carry-over `issue.setWorkflowOwner` performs — an issue sitting on a team override
+    // belongs on that override's base once the company workflow takes over, not wherever the first
+    // company column happens to be. Unlike the explicit move there is nobody to ask here, so a
+    // carry-over with no match falls back to the first visible column rather than refusing.
+    const resolvedTarget = await effectiveWorkflow(ctx, company, owner);
+    if (!resolvedTarget.ok) return resolvedTarget.outcome;
+    const target = resolvedTarget.value;
+    const carried =
+      current === null
+        ? null
+        : carryOverStatusId(target, await statusIdentity(ctx, company, current));
+    if (carried !== null) {
+      statusId = carried;
+    } else if (statusId !== "" || !issue.triage) {
+      const fallback = firstVisibleStatus(target);
       if (fallback === null) {
         return rejected("invalid-arguments", "The company workflow has no status to land in.");
       }
-      statusId = fallback;
+      statusId = fallback.id;
     }
+  }
+
+  // Everything hanging off the issue moves with it, and it has to be collected before the first
+  // write: an issue too large to migrate is refused whole rather than half-moved.
+  const scopeChanged =
+    issue.teamIds.length !== teamIds.length ||
+    issue.teamIds.some((teamId) => !nextTeams.has(teamId));
+  let dependents: readonly DomainChange[] = [];
+  if (scopeChanged) {
+    const migrated = await issueScopeMigrationChanges(ctx, company, issue, issue.teamIds, teamIds);
+    if (!migrated.ok) return migrated.outcome;
+    dependents = migrated.value;
   }
 
   await ctx.db.patch(issue._id, {
@@ -1081,6 +1545,7 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
       issue._id,
       encodeIssue(company, doc),
     ),
+    ...dependents,
     await appendAuditEvent(
       ctx,
       company,
@@ -1104,6 +1569,24 @@ function statusScopeTeamIds(status: {
   readonly teamId: string | null;
 }): readonly string[] {
   return status.scope === "team" && status.teamId !== null ? [status.teamId] : [];
+}
+
+/**
+ * Every live override of one company base, across teams. Bounded by the workflow ceiling: an
+ * override chain wider than a company has teams is already past what one mutation may sweep.
+ */
+async function liveOverridesOfBase(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  baseStatusId: string,
+): Promise<readonly Doc<"issueStatuses">[] | null> {
+  const rows = await ctx.db
+    .query("issueStatuses")
+    .withIndex("by_company_base_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("baseStatusId", baseStatusId).eq("deletedAt", null),
+    )
+    .take(WORKFLOW_MAX_STATUSES + 1);
+  return rows.length > WORKFLOW_MAX_STATUSES ? null : rows;
 }
 
 const issueStatusCreate: EnvApply = async ({ ctx, actor, company, operation, now }) => {
@@ -1131,30 +1614,41 @@ const issueStatusCreate: EnvApply = async ({ ctx, actor, company, operation, now
   if (!can(actor, "workflow.manage", scopeTeams)) return denied("workflow.manage");
 
   const baseStatusId = args.baseStatusId ?? null;
+  // The row has to be one of the three shapes a workflow resolves — a complete company base, a
+  // team's override of one, or a complete team-only status. Anything else is a row no board can
+  // render: a company status inheriting from another, or a standalone column with no name.
+  const violation = statusVariantViolation({
+    id: operation.entityId,
+    scope: args.scope,
+    teamId,
+    baseStatusId,
+    name: args.name ?? null,
+    color: args.color ?? null,
+    category: args.category ?? null,
+    position: args.position ?? null,
+    hidden: args.hidden ?? false,
+  });
+  if (violation !== null) return rejected("invalid-arguments", violation);
+
   if (baseStatusId !== null) {
     const base = await liveRow(ctx, "issueStatuses", company._id, baseStatusId);
     if (base === null || base.scope !== "company") {
       return rejected("invalid-arguments", "An override names a live company status as its base.");
     }
+    // One override per team and base: a second one is a column whose name depends on which row the
+    // merge happened to read, which is not a workflow.
+    const overrides = await liveOverridesOfBase(ctx, company, baseStatusId);
+    if (overrides === null) return workflowTooLarge();
+    if (overrides.some((row) => row.teamId === teamId)) {
+      return rejected("invalid-arguments", "This team already overrides that status.");
+    }
   }
 
   let position = args.position;
   if (position === undefined) {
-    // Append to the end of the same chain.
-    const siblings =
-      args.scope === "team"
-        ? await ctx.db
-            .query("issueStatuses")
-            .withIndex("by_company_and_team", (q) =>
-              q.eq("companyId", company._id).eq("teamId", teamId),
-            )
-            .collect()
-        : await ctx.db
-            .query("issueStatuses")
-            .withIndex("by_company_and_scope", (q) =>
-              q.eq("companyId", company._id).eq("scope", "company"),
-            )
-            .collect();
+    // Append to the end of the same chain — one bounded read of its live rows, not the table.
+    const siblings = await liveStatusRows(ctx, company, { scope: args.scope, teamId });
+    if (siblings === null) return workflowTooLarge();
     position = siblings.reduce((max, row) => Math.max(max, (row.position ?? 0) + 1), 0);
   }
 
@@ -1198,6 +1692,21 @@ const issueStatusUpdate: EnvApply = async ({ ctx, actor, company, operation, now
   if (args.hidden !== undefined) patch["hidden"] = args.hidden;
   if (Object.keys(patch).length === 0) return applied();
 
+  // The same variant rule that gated the create has to survive every patch: nulling the name of a
+  // base leaves an unrenderable column behind, and the rows that inherit from it inherit nothing.
+  const violation = statusVariantViolation({
+    id: status.id,
+    scope: status.scope,
+    teamId: status.teamId,
+    baseStatusId: status.baseStatusId,
+    name: args.name === undefined ? status.name : args.name,
+    color: args.color === undefined ? status.color : args.color,
+    category: args.category === undefined ? status.category : args.category,
+    position: args.position === undefined ? status.position : args.position,
+    hidden: args.hidden === undefined ? status.hidden : args.hidden,
+  });
+  if (violation !== null) return rejected("invalid-arguments", violation);
+
   await ctx.db.patch(status._id, { ...patch, updatedAt: now });
   const doc = await mustGet(ctx, status._id);
   return applied(
@@ -1211,6 +1720,14 @@ const issueStatusUpdate: EnvApply = async ({ ctx, actor, company, operation, now
   );
 };
 
+/**
+ * How many live issues one status deletion may move. The reassignment is atomic with the tombstone —
+ * an issue left pointing at a deleted status is exactly the dangling reference the sweep exists to
+ * prevent — so it has to fit in one mutation. A workflow column holding more than this is refused
+ * loudly rather than swept halfway; the honest remedy is to move the excess first.
+ */
+const STATUS_DELETE_MAX_ISSUES = 500;
+
 const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now }) => {
   const parsed = decoded(parseIssueStatusDeleteArgs(operation.args));
   if ("outcome" in parsed) return parsed.outcome;
@@ -1221,7 +1738,18 @@ const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now
   if (!can(actor, "workflow.manage", statusScopeTeamIds(status))) return denied("workflow.manage");
   if (status.deletedAt !== null) return applied();
 
-  if (args.reassignToStatusId === status.id) {
+  // Everything that dies in this transaction. A company base takes its team overrides with it, and
+  // an issue in a team that overrode the base sits on the *override's* id — `defaultStatusId` hands
+  // that id out — so sweeping the base id alone leaves precisely those issues stranded.
+  const doomed: Doc<"issueStatuses">[] = [status];
+  if (status.scope === "company") {
+    const overrides = await liveOverridesOfBase(ctx, company, status.id);
+    if (overrides === null) return workflowTooLarge();
+    doomed.push(...overrides);
+  }
+  const doomedIds = new Set(doomed.map((row) => row.id));
+
+  if (doomedIds.has(args.reassignToStatusId)) {
     return rejected("invalid-arguments", "A status cannot absorb its own issues.");
   }
   const target = await liveRow(ctx, "issueStatuses", company._id, args.reassignToStatusId);
@@ -1239,42 +1767,77 @@ const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now
     return rejected("invalid-arguments", "The replacement status belongs to a different workflow.");
   }
 
-  const changes: DomainChange[] = [];
-
-  // Issues sitting in the deleted status move to the named target, each as its own feed row so
-  // every replica repaints the affected cards.
-  const stranded = await ctx.db
-    .query("issues")
-    .withIndex("by_company_and_status", (q) =>
-      q.eq("companyId", company._id).eq("statusId", status.id),
-    )
-    .collect();
-  for (const issue of stranded) {
-    if (issue.deletedAt !== null) continue;
-    await ctx.db.patch(issue._id, { statusId: target.id, updatedAt: now });
-    const doc = await mustGet(ctx, issue._id);
-    changes.push(upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)));
-  }
-
-  // Team overrides of a deleted company status die with their base.
-  if (status.scope === "company") {
-    const overrides = await ctx.db
-      .query("issueStatuses")
-      .withIndex("by_company_and_base_status", (q) =>
-        q.eq("companyId", company._id).eq("baseStatusId", status.id),
-      )
-      .collect();
-    for (const override of overrides) {
-      if (override.deletedAt !== null) continue;
-      await ctx.db.patch(override._id, { deletedAt: now, updatedAt: now });
-      changes.push(
-        tombstone("issueStatus", override.id, statusScopeTeamIds(override), override._id),
-      );
+  // The column an issue lands in is the target *as its own workflow resolves it*: a team that
+  // overrides the target absorbs its issues under the override's id, and a team that hides the
+  // target has nowhere to put them, which is a refusal rather than a silent disappearance.
+  const landings = new Map<string, string>();
+  const landingFor = async (owner: IssueWorkflowOwner): Promise<Resolved<string>> => {
+    const key = owner.kind === "team" ? `team:${owner.teamId}` : "company";
+    const held = landings.get(key);
+    if (held !== undefined) return { ok: true, value: held };
+    const workflow = await effectiveWorkflow(ctx, company, owner);
+    if (!workflow.ok) return workflow;
+    // The doomed rows are still live in this read; resolve against what survives the deletion.
+    const surviving = workflow.value.filter(
+      (column) =>
+        !doomedIds.has(column.id) && (column.baseId === null || !doomedIds.has(column.baseId)),
+    );
+    const column = effectiveStatusFor(surviving, target.id);
+    if (column === null || column.hidden) {
+      return {
+        ok: false,
+        outcome: rejected(
+          "invalid-arguments",
+          "The replacement status is not a column every affected workflow shows.",
+        ),
+      };
     }
+    landings.set(key, column.id);
+    return { ok: true, value: column.id };
+  };
+
+  // Issues sitting in any doomed status move, each as its own feed row so every replica repaints
+  // the affected cards. Deleted issues are left alone; `issue.restore` renormalizes their status.
+  const stranded: Doc<"issues">[] = [];
+  for (const row of doomed) {
+    const room = STATUS_DELETE_MAX_ISSUES + 1 - stranded.length;
+    if (room <= 0) break;
+    const page = await ctx.db
+      .query("issues")
+      .withIndex("by_company_status_and_deleted", (q) =>
+        q.eq("companyId", company._id).eq("statusId", row.id).eq("deletedAt", null),
+      )
+      .take(room);
+    stranded.push(...page);
+  }
+  if (stranded.length > STATUS_DELETE_MAX_ISSUES) {
+    return rejected(
+      "dependency-blocked",
+      `A status holding more than ${STATUS_DELETE_MAX_ISSUES} issues cannot be deleted in one ` +
+        "operation; move the excess first.",
+    );
   }
 
-  await ctx.db.patch(status._id, { deletedAt: now, updatedAt: now });
-  changes.push(tombstone("issueStatus", status.id, statusScopeTeamIds(status), status._id));
+  // Every landing is resolved before a single write: a rejection does not roll the mutation back,
+  // so refusing halfway would tombstone nothing but leave part of the sweep applied.
+  const moves: { readonly issue: Doc<"issues">; readonly statusId: string }[] = [];
+  for (const issue of stranded) {
+    const landing = await landingFor(issue.workflowOwner);
+    if (!landing.ok) return landing.outcome;
+    moves.push({ issue, statusId: landing.value });
+  }
+
+  const changes: DomainChange[] = [];
+  for (const move of moves) {
+    await ctx.db.patch(move.issue._id, { statusId: move.statusId, updatedAt: now });
+    const doc = await mustGet(ctx, move.issue._id);
+    changes.push(upsert("issue", doc.id, doc.teamIds, move.issue._id, encodeIssue(company, doc)));
+  }
+
+  for (const row of doomed) {
+    await ctx.db.patch(row._id, { deletedAt: now, updatedAt: now });
+    changes.push(tombstone("issueStatus", row.id, statusScopeTeamIds(row), row._id));
+  }
   return applied(...changes);
 };
 
@@ -1284,7 +1847,14 @@ const issueStatusReorder: EnvApply = async ({ ctx, actor, company, operation, no
   const args = parsed.args;
 
   const rows: Doc<"issueStatuses">[] = [];
+  const listed = new Set<string>();
   for (const statusId of args.statusIds) {
+    // A repeated id would be written twice and ship two feed rows for one status, and the second
+    // write would silently decide the first one's position.
+    if (listed.has(statusId)) {
+      return rejected("invalid-arguments", `The status ${statusId} is listed twice.`);
+    }
+    listed.add(statusId);
     const status = await liveRow(ctx, "issueStatuses", company._id, statusId);
     if (status === null) return rejected("invalid-arguments", `No status ${statusId}.`);
     rows.push(status);
@@ -1297,6 +1867,19 @@ const issueStatusReorder: EnvApply = async ({ ctx, actor, company, operation, no
     }
   }
   if (!can(actor, "workflow.manage", statusScopeTeamIds(first))) return denied("workflow.manage");
+
+  // The contract calls this "the complete order within one workflow, not a move": positions are
+  // rewritten from the list, so a partial one leaves every omitted status on its old position and
+  // produces ties rather than an order. Refusing is the only answer that keeps positions total —
+  // guessing where the missing rows belong would reorder them without being asked.
+  const chain = await liveStatusRows(ctx, company, first);
+  if (chain === null) return workflowTooLarge();
+  if (chain.length !== rows.length || chain.some((row) => !listed.has(row.id))) {
+    return rejected(
+      "invalid-arguments",
+      "A reorder lists every live status of the workflow exactly once.",
+    );
+  }
 
   const changes: DomainChange[] = [];
   for (const [index, row] of rows.entries()) {
@@ -1410,13 +1993,17 @@ const issueMilestoneCreate: EnvApply = async ({ ctx, actor, company, operation, 
 
   let position = args.position;
   if (position === undefined) {
-    const siblings = await ctx.db
+    // Append after the project's last milestone — one indexed read of the highest position rather
+    // than a scan of every milestone the project ever had. Tombstones count, so a deleted
+    // milestone's position is never handed to a new one.
+    const last = await ctx.db
       .query("issueMilestones")
-      .withIndex("by_company_and_project", (q) =>
+      .withIndex("by_company_project_and_position", (q) =>
         q.eq("companyId", company._id).eq("cloudProjectId", project.id),
       )
-      .collect();
-    position = siblings.reduce((max, row) => Math.max(max, row.position + 1), 0);
+      .order("desc")
+      .first();
+    position = last === null ? 0 : last.position + 1;
   }
 
   const docId = await ctx.db.insert("issueMilestones", {
@@ -1438,6 +2025,13 @@ const issueMilestoneCreate: EnvApply = async ({ ctx, actor, company, operation, 
     upsert("issueMilestone", doc.id, project.teamIds, docId, encodeIssueMilestone(company, doc)),
   );
 };
+
+/**
+ * How many issues one milestone move may unlink. Same reasoning as the status sweep: the unlink is
+ * atomic with the move, so it has to fit one mutation, and a milestone past this is refused rather
+ * than moved with some of its issues still pointing at it across projects.
+ */
+const MILESTONE_MOVE_MAX_ISSUES = 500;
 
 /** The team scope of a milestone is its project's; a milestone of a vanished project is company-wide. */
 async function milestoneTeamIds(
@@ -1484,6 +2078,29 @@ const issueMilestoneUpdate: EnvApply = async ({ ctx, actor, company, operation, 
   if (args.cloudProjectId !== undefined) patch["cloudProjectId"] = args.cloudProjectId;
   if (Object.keys(patch).length === 0) return applied();
 
+  // Read the issues the move strands *before* touching anything: a rejection does not roll the
+  // mutation back, so a refusal issued halfway through would leave the milestone moved and its
+  // issues still pointing at it from the old project.
+  let stranded: readonly Doc<"issues">[] = [];
+  if (moved) {
+    // Straight at the issues holding this milestone, live ones only, instead of every issue of the
+    // old project: a busy project is not what makes a milestone move expensive, its own issues are.
+    const holders = await ctx.db
+      .query("issues")
+      .withIndex("by_company_milestone_and_deleted", (q) =>
+        q.eq("companyId", company._id).eq("milestoneId", milestone.id).eq("deletedAt", null),
+      )
+      .take(MILESTONE_MOVE_MAX_ISSUES + 1);
+    if (holders.length > MILESTONE_MOVE_MAX_ISSUES) {
+      return rejected(
+        "dependency-blocked",
+        `A milestone holding more than ${MILESTONE_MOVE_MAX_ISSUES} issues cannot be moved to ` +
+          "another project in one operation; move its issues first.",
+      );
+    }
+    stranded = holders.filter((issue) => issue.projectId === milestone.cloudProjectId);
+  }
+
   await ctx.db.patch(milestone._id, { ...patch, updatedAt: now });
   const doc = await mustGet(ctx, milestone._id);
   const changes: DomainChange[] = [
@@ -1501,21 +2118,12 @@ const issueMilestoneUpdate: EnvApply = async ({ ctx, actor, company, operation, 
   // A milestone is project-owned, so issues left behind in the old project can no longer point at
   // it — the very state `issue.update` refuses to write. They are cleared here, each as its own
   // feed row, rather than left as a cross-project reference every client would have to render.
-  if (moved) {
-    const stranded = await ctx.db
-      .query("issues")
-      .withIndex("by_company_and_project", (q) =>
-        q.eq("companyId", company._id).eq("projectId", milestone.cloudProjectId),
-      )
-      .collect();
-    for (const issue of stranded) {
-      if (issue.deletedAt !== null || issue.milestoneId !== milestone.id) continue;
-      await ctx.db.patch(issue._id, { milestoneId: null, updatedAt: now });
-      const issueDoc = await mustGet(ctx, issue._id);
-      changes.push(
-        upsert("issue", issueDoc.id, issueDoc.teamIds, issue._id, encodeIssue(company, issueDoc)),
-      );
-    }
+  for (const issue of stranded) {
+    await ctx.db.patch(issue._id, { milestoneId: null, updatedAt: now });
+    const issueDoc = await mustGet(ctx, issue._id);
+    changes.push(
+      upsert("issue", issueDoc.id, issueDoc.teamIds, issue._id, encodeIssue(company, issueDoc)),
+    );
   }
 
   return applied(...changes);
@@ -1646,18 +2254,17 @@ const issueTodoCreate: EnvApply = async ({ ctx, actor, company, operation, now }
 
   let sortOrder = args.sortOrder;
   if (sortOrder === undefined) {
-    const siblings = await ctx.db
+    // The highest sort key, read straight off the index rather than by scanning the checklist:
+    // appending a todo is an ordinary keystroke and must not get slower as the list grows. Deleted
+    // todos count towards the key, which only means a new one sorts after them — never a reused key.
+    const last = await ctx.db
       .query("issueTodos")
-      .withIndex("by_company_and_issue", (q) =>
+      .withIndex("by_company_issue_and_sort_order", (q) =>
         q.eq("companyId", company._id).eq("issueId", issue.id),
       )
-      .collect();
-    let last: string | null = null;
-    for (const row of siblings) {
-      if (row.deletedAt !== null) continue;
-      if (last === null || row.sortOrder > last) last = row.sortOrder;
-    }
-    sortOrder = orderKeyAfter(last);
+      .order("desc")
+      .first();
+    sortOrder = orderKeyAfter(last?.sortOrder ?? null);
   }
 
   const docId = await ctx.db.insert("issueTodos", {
@@ -1734,18 +2341,22 @@ const issueRelationCreate: EnvApply = async ({ ctx, actor, company, operation, n
   const teamIds = unionTeamIds(issue.teamIds, related.teamIds);
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
-  // One live row per directed pair and kind; the inverse is this row read from the other end.
-  const siblings = await ctx.db
+  // One live row per directed pair and kind; the inverse is this row read from the other end. The
+  // index answers that in a single point read, so a hub issue with thousands of edges costs the
+  // same as one with two.
+  const duplicate = await ctx.db
     .query("issueRelations")
-    .withIndex("by_company_and_issue", (q) =>
-      q.eq("companyId", company._id).eq("issueId", issue.id),
+    .withIndex("by_company_pair_kind_and_deleted", (q) =>
+      q
+        .eq("companyId", company._id)
+        .eq("issueId", issue.id)
+        .eq("relatedIssueId", related.id)
+        .eq("kind", args.kind)
+        .eq("deletedAt", null),
     )
-    .collect();
-  for (const row of siblings) {
-    if (row.deletedAt !== null) continue;
-    if (row.relatedIssueId === related.id && row.kind === args.kind) {
-      return rejected("invalid-arguments", "This relation already exists.");
-    }
+    .first();
+  if (duplicate !== null) {
+    return rejected("invalid-arguments", "This relation already exists.");
   }
 
   const docId = await ctx.db.insert("issueRelations", {
@@ -1787,6 +2398,96 @@ const issueRelationDelete: EnvApply = async ({ ctx, actor, company, operation, n
 // issueComment.*
 // ---------------------------------------------------------------------------
 
+/**
+ * The attachments a comment may carry. The upload flow finalizes metadata against a company and an
+ * issue before the comment is ever submitted, so an id that does not resolve to a live finalized
+ * upload *on this issue* is either a client bug or an attempt to graft somebody else's file onto a
+ * comment — either way it must not become authoritative comment data. A file already spoken for by
+ * another comment is refused for the same reason: `issueAttachments.commentId` is single-valued.
+ */
+async function resolveCommentAttachments(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  issueId: string,
+  commentId: string,
+  attachmentIds: readonly string[],
+): Promise<Resolved<readonly Doc<"issueAttachments">[]>> {
+  const rows: Doc<"issueAttachments">[] = [];
+  const listed = new Set<string>();
+  for (const attachmentId of attachmentIds) {
+    if (listed.has(attachmentId)) {
+      return {
+        ok: false,
+        outcome: rejected("invalid-arguments", `The attachment ${attachmentId} is listed twice.`),
+      };
+    }
+    listed.add(attachmentId);
+    const attachment = await liveRow(ctx, "issueAttachments", company._id, attachmentId);
+    if (attachment === null || attachment.issueId !== issueId || attachment.state !== "finalized") {
+      return {
+        ok: false,
+        outcome: rejected("invalid-arguments", `No attachment ${attachmentId} on this issue.`),
+      };
+    }
+    if (attachment.commentId !== null && attachment.commentId !== commentId) {
+      return {
+        ok: false,
+        outcome: rejected(
+          "invalid-arguments",
+          `The attachment ${attachmentId} belongs to another comment.`,
+        ),
+      };
+    }
+    rows.push(attachment);
+  }
+  return { ok: true, value: rows };
+}
+
+/**
+ * Points the resolved attachments at the comment and releases the ones it no longer carries, in the
+ * same transaction as the comment write. The back-reference is what makes an attachment's own row
+ * self-describing — the garbage collector reads it to decide an upload is unattached — so leaving
+ * it null while the comment claims the file would eventually collect a file somebody is looking at.
+ */
+async function bindCommentAttachments(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  issueTeams: readonly string[],
+  commentId: string,
+  attached: readonly Doc<"issueAttachments">[],
+  previousIds: readonly string[],
+  now: number,
+): Promise<readonly DomainChange[]> {
+  const changes: DomainChange[] = [];
+  const publish = async (docId: Id<"issueAttachments">) => {
+    const doc = await mustGet(ctx, docId);
+    changes.push(
+      upsert(
+        "issueAttachment",
+        doc.id,
+        issueTeams,
+        docId,
+        await encodeIssueAttachment(ctx, company, doc),
+      ),
+    );
+  };
+
+  const keep = new Set(attached.map((row) => row.id));
+  for (const previousId of previousIds) {
+    if (keep.has(previousId)) continue;
+    const attachment = await liveRow(ctx, "issueAttachments", company._id, previousId);
+    if (attachment === null || attachment.commentId !== commentId) continue;
+    await ctx.db.patch(attachment._id, { commentId: null, updatedAt: now });
+    await publish(attachment._id);
+  }
+  for (const attachment of attached) {
+    if (attachment.commentId === commentId) continue;
+    await ctx.db.patch(attachment._id, { commentId, updatedAt: now });
+    await publish(attachment._id);
+  }
+  return changes;
+}
+
 function isOwnComment(author: Doc<"issueComments">["author"], feedActor: FeedActor): boolean {
   if (author.kind === "member" && feedActor.kind === "member") {
     return author.membershipId === feedActor.membershipId;
@@ -1810,13 +2511,23 @@ const issueCommentCreate: EnvApply = async ({ ctx, actor, company, feedActor, op
   if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
   if (!can(actor, "comments.create", issue.teamIds)) return denied("comments.create");
 
+  const attachmentIds = args.attachmentIds ?? [];
+  const resolved = await resolveCommentAttachments(
+    ctx,
+    company,
+    issue.id,
+    operation.entityId,
+    attachmentIds,
+  );
+  if (!resolved.ok) return resolved.outcome;
+
   const docId = await ctx.db.insert("issueComments", {
     id: operation.entityId,
     companyId: company._id,
     issueId: issue.id,
     body: args.body,
     author: feedActor,
-    attachmentIds: [...(args.attachmentIds ?? [])],
+    attachmentIds: [...attachmentIds],
     // Mention extraction is a contracts concern this package does not depend on; clients render
     // mentions from the body until the shared extractor moves somewhere both can import.
     mentions: [],
@@ -1828,6 +2539,7 @@ const issueCommentCreate: EnvApply = async ({ ctx, actor, company, feedActor, op
   const doc = await mustGet(ctx, docId);
   return applied(
     upsert("issueComment", doc.id, issue.teamIds, docId, encodeIssueComment(company, doc)),
+    ...(await bindCommentAttachments(ctx, company, issue.teamIds, doc.id, resolved.value, [], now)),
   );
 };
 
@@ -1845,6 +2557,19 @@ const issueCommentUpdate: EnvApply = async ({ ctx, actor, company, feedActor, op
     : "comments.moderate";
   if (!can(actor, permission, teamIds)) return denied(permission);
 
+  let attached: readonly Doc<"issueAttachments">[] = [];
+  if (args.attachmentIds !== undefined) {
+    const resolved = await resolveCommentAttachments(
+      ctx,
+      company,
+      comment.issueId,
+      comment.id,
+      args.attachmentIds,
+    );
+    if (!resolved.ok) return resolved.outcome;
+    attached = resolved.value;
+  }
+
   const patch: Record<string, unknown> = {};
   if (args.body !== undefined) patch["body"] = args.body;
   if (args.attachmentIds !== undefined) patch["attachmentIds"] = [...args.attachmentIds];
@@ -1854,6 +2579,19 @@ const issueCommentUpdate: EnvApply = async ({ ctx, actor, company, feedActor, op
   const doc = await mustGet(ctx, comment._id);
   return applied(
     upsert("issueComment", doc.id, teamIds, comment._id, encodeIssueComment(company, doc)),
+    // The edited list decides the bindings: files the comment dropped are released so the upload
+    // collector can reclaim them, and newly named ones are claimed, atomically with the edit.
+    ...(args.attachmentIds === undefined
+      ? []
+      : await bindCommentAttachments(
+          ctx,
+          company,
+          teamIds,
+          comment.id,
+          attached,
+          comment.attachmentIds,
+          now,
+        )),
   );
 };
 
@@ -1879,15 +2617,32 @@ const issueCommentDelete: EnvApply = async ({ ctx, actor, company, feedActor, op
 // ---------------------------------------------------------------------------
 
 /**
- * A shared view's feed row carries its team scope; a company view is company-wide. A private view
- * also rides the feed — the change teamIds mechanism cannot express "owner only", so it is gated by
- * `issues.read` like the rest of the issue domain and clients hide other members' private views.
+ * A shared view's feed row carries its team scope; a company view is company-wide. A private view's
+ * team scope is meaningless — {@link viewOwnerBinding} is what decides its audience — so it stays
+ * empty rather than pretending to name one.
  */
 function viewChangeTeamIds(view: {
   readonly visibility: "private" | "teams" | "company";
   readonly teamIds: readonly string[];
 }): readonly string[] {
   return view.visibility === "teams" ? view.teamIds : [];
+}
+
+/**
+ * The owner a view row is private to, or `null` while it is shared. This is the authority for view
+ * visibility on both sides of the seed/feed handoff: `teamIds` cannot express "owner only", and
+ * client-side hiding is not an authorization boundary.
+ *
+ * It is read from the view's *current* row on every filtering pass, never stamped onto the change
+ * row. A view that was company-wide when its upsert was written and is private now must stop being
+ * delivered — history included — and a stamped copy would keep leaking the name and configuration
+ * to everyone whose cursor still sits behind the change that made it private.
+ */
+export function viewOwnerBinding(view: {
+  readonly visibility: "private" | "teams" | "company";
+  readonly ownerMembershipId: Id<"memberships">;
+}): string | null {
+  return view.visibility === "private" ? view.ownerMembershipId : null;
 }
 
 const issueViewCreate: EnvApply = async ({ ctx, actor, company, operation, now }) => {
@@ -1989,7 +2744,13 @@ const issueViewUpdate: EnvApply = async ({ ctx, actor, company, operation, now }
 
   await ctx.db.patch(view._id, { ...patch, updatedAt: now });
   const doc = await mustGet(ctx, view._id);
+  // Going private narrows the audience to one member, and the upsert below is owner-gated, so it
+  // reaches nobody who is losing the view. The departure tombstone goes first and is scoped to the
+  // audience being dropped; the owner, if they are in that scope, sees it and then the upsert that
+  // restores the row, so their replica converges on holding it.
+  const wentPrivate = viewOwnerBinding(view) === null && viewOwnerBinding(doc) !== null;
   return applied(
+    ...(wentPrivate ? [departureTombstone("issueView", doc.id, currentScope)] : []),
     upsert(
       "issueView",
       doc.id,
@@ -2038,25 +2799,40 @@ const issueThreadLinkCreate: EnvApply = async ({ ctx, actor, company, operation,
       q.eq("companyId", company._id).eq("environmentId", args.environmentId),
     )
     .unique();
-  if (registration === null) {
+  // A revoked registration answers exactly like one that was never here: the link stamps an
+  // environment as the place the work is happening, and a revoked environment is not that.
+  if (registration === null || registration.state !== "active") {
     return rejected("invalid-arguments", `No environment ${args.environmentId} here.`);
+  }
+  // An environment may only stamp links with itself. Its relay token authenticates one environment
+  // id, and nothing else in the operation is evidence about another one, so a link naming a
+  // different environment would attribute a thread that environment never ran — including to a
+  // registration it has no relationship with at all. A member is not acting as an environment, so
+  // they link a thread on an environment they can actually see, which is what `environments.read`
+  // over the registration's team scope means.
+  if (actor.kind === "environment") {
+    if (args.environmentId !== actor.registration.environmentId) {
+      return rejected("permission-denied", "An environment may only link its own threads.");
+    }
+  } else if (!can(actor, "environments.read", registration.teamIds)) {
+    return denied("environments.read");
   }
 
   // The same thread may be linked to several issues, but linking one issue to one thread twice is
-  // a duplicate rather than a second link.
-  const links = await ctx.db
+  // a duplicate rather than a second link — one point read of the pair, not of the thread's links.
+  const duplicate = await ctx.db
     .query("issueThreadLinks")
-    .withIndex("by_company_and_thread", (q) =>
+    .withIndex("by_company_thread_issue_and_deleted", (q) =>
       q
         .eq("companyId", company._id)
         .eq("environmentId", args.environmentId)
-        .eq("threadId", args.threadId),
+        .eq("threadId", args.threadId)
+        .eq("issueId", issue.id)
+        .eq("deletedAt", null),
     )
-    .collect();
-  for (const link of links) {
-    if (link.deletedAt === null && link.issueId === issue.id) {
-      return rejected("invalid-arguments", "This thread is already linked to the issue.");
-    }
+    .first();
+  if (duplicate !== null) {
+    return rejected("invalid-arguments", "This thread is already linked to the issue.");
   }
 
   const docId = await ctx.db.insert("issueThreadLinks", {
@@ -2154,8 +2930,58 @@ export interface BootstrapRow {
   readonly deleted: boolean;
   /** Team scope for visibility filtering, same rules the change feed applies. */
   readonly teamIds: readonly string[];
+  /** Owner of an owner-private row (a private saved view), `null` otherwise. */
+  readonly ownerMembershipId: string | null;
   /** Wire payload; `null` when `deleted` (a deleted row is only a cursor position). */
   readonly payload: unknown;
+}
+
+/**
+ * The owner-private bindings the rows of one change-feed page need, resolved from the entities'
+ * current state. Only saved views are owner-private today, so only view rows cost a read, and the
+ * page's row ceiling bounds how many.
+ *
+ * This is what keeps `listChanges` filtering identical to `bootstrap` filtering: both hand
+ * `isChangeVisible` the binding {@link viewOwnerBinding} reports for the live row, so a view that
+ * turned private stops being delivered by both at the same instant.
+ */
+export async function readOwnerPrivateBindings(
+  ctx: QueryCtx,
+  company: Doc<"companies">,
+  rows: readonly { readonly entityKind: string; readonly entityId: string }[],
+): Promise<ReadonlyMap<string, string | null>> {
+  const bindings = new Map<string, string | null>();
+  for (const row of rows) {
+    if (row.entityKind !== "issueView" || bindings.has(row.entityId)) continue;
+    const view = await byDomain(ctx, "issueViews", company._id, row.entityId);
+    // A row whose entity is gone cannot be shown to be shared, so it is withheld from everyone but
+    // the membership id no actor carries.
+    bindings.set(row.entityId, view === null ? OWNERLESS_PRIVATE : viewOwnerBinding(view));
+  }
+  return bindings;
+}
+
+/** Placeholder owner for an owner-private row whose entity no longer resolves; matches no actor. */
+const OWNERLESS_PRIVATE = "\u0000no-owner";
+
+/**
+ * The owner binding a feed row carries, given the page's resolved bindings. An owner-private kind
+ * with no resolved binding fails closed onto {@link OWNERLESS_PRIVATE}, so forgetting to resolve a
+ * page withholds views rather than leaking them.
+ */
+export function feedRowOwnerBinding(
+  row: {
+    readonly entityKind: string;
+    readonly entityId: string;
+    readonly departure?: boolean;
+  },
+  bindings: ReadonlyMap<string, string | null>,
+): string | null {
+  // A departure row exists to reach the audience the entity just left; gating it on the entity's
+  // current owner would withhold exactly the replicas it is addressed to. See `departureTombstone`.
+  if (row.departure === true) return null;
+  if (row.entityKind !== "issueView") return null;
+  return bindings.has(row.entityId) ? (bindings.get(row.entityId) ?? null) : OWNERLESS_PRIVATE;
 }
 
 /** Per-call memo of parent-issue team scopes, so a page of todos costs one issue read per issue. */
@@ -2228,6 +3054,7 @@ export async function readBootstrapRows(
     rows: readonly Row[],
     teamsOf: (row: Row) => Promise<readonly string[]> | readonly string[],
     encode: (row: Row) => Promise<unknown> | unknown,
+    ownerOf: (row: Row) => string | null = () => null,
   ): Promise<readonly BootstrapRow[]> => {
     const lifted: BootstrapRow[] = [];
     for (const row of rows) {
@@ -2237,6 +3064,7 @@ export async function readBootstrapRows(
         version: row.version,
         deleted,
         teamIds: deleted ? [] : await teamsOf(row),
+        ownerMembershipId: deleted ? null : ownerOf(row),
         payload: deleted ? null : await encode(row),
       });
     }
@@ -2307,6 +3135,7 @@ export async function readBootstrapRows(
         await pageOf(ctx, "issueViews", company._id, afterId, limit),
         (row) => viewChangeTeamIds(row),
         (row) => encodeIssueView(ctx, company, row),
+        (row) => viewOwnerBinding(row),
       );
     case "issueThreadLink":
       return lift(
