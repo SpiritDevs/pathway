@@ -102,10 +102,14 @@ export class GitLabMergeRequestNotFoundError extends Schema.TaggedErrorClass<Git
 
 export class GitLabCliCommandError extends Schema.TaggedErrorClass<GitLabCliCommandError>()(
   "GitLabCliCommandError",
-  gitLabCliExecutionErrorContext,
+  {
+    ...gitLabCliExecutionErrorContext,
+    /** Sanitized `glab` stderr excerpt captured by the VCS process boundary. */
+    stderrExcerpt: Schema.optional(Schema.String),
+  },
 ) {
   get detail(): string {
-    return "GitLab CLI command failed.";
+    return this.stderrExcerpt ?? "GitLab CLI command failed.";
   }
 
   override get message(): string {
@@ -129,7 +133,11 @@ export class GitLabCliCommandError extends Schema.TaggedErrorClass<GitLabCliComm
           case "not-found":
           case "command-failed":
           case undefined:
-            return new GitLabCliCommandError({ ...context, cause });
+            return new GitLabCliCommandError({
+              ...context,
+              cause,
+              ...(cause.stderrExcerpt !== undefined ? { stderrExcerpt: cause.stderrExcerpt } : {}),
+            });
         }
       },
       VcsProcessTimeoutError: (cause) => new GitLabCliCommandError({ ...context, cause }),

@@ -112,6 +112,11 @@ describe("VcsProcess.run", () => {
       });
       expect(error.message).not.toContain(secretArgument);
       expect(error.message).not.toContain(secretStderr);
+      // Only forge CLIs (gh/glab/az) opt into stderr excerpts; other commands
+      // keep the no-stderr-retention invariant.
+      expect(
+        error._tag === "VcsProcessExitError" ? error.stderrExcerpt : "wrong error",
+      ).toBeUndefined();
     }).pipe(provideLive),
   );
 
@@ -137,6 +142,9 @@ describe("VcsProcess.run", () => {
       });
       expect(error.message).not.toContain(secretStderr);
       expect(error.message).not.toContain("super-secret-token");
+      expect(
+        error._tag === "VcsProcessExitError" ? error.stderrExcerpt : "wrong error",
+      ).toBeUndefined();
     }).pipe(provideLive),
   );
 

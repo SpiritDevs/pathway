@@ -313,12 +313,25 @@ function resolvePullRequestHeadIdentity(pr: PullRequestInfo): PullRequestHeadIde
   };
 }
 
+export interface BranchHeadContextMatchOptions {
+  /**
+   * Drop the cross-repository consistency requirements and match on the head
+   * branch plus whatever head identity both sides actually carry. Used to
+   * re-detect an existing change request after the provider refused to create
+   * a duplicate for this head: a head context that is blind to the real change
+   * request (for example a misclassified cross-repository flag) is exactly how
+   * that create was reached.
+   */
+  readonly relaxCrossRepository?: boolean;
+}
+
 export function matchesBranchHeadContext(
   pr: PullRequestInfo,
   headContext: Pick<
     BranchHeadContext,
     "headBranch" | "headRepositoryNameWithOwner" | "headRepositoryOwnerLogin" | "isCrossRepository"
   >,
+  options?: BranchHeadContextMatchOptions,
 ): boolean {
   if (pr.headRefName !== headContext.headBranch) {
     return false;
@@ -344,6 +357,10 @@ export function matchesBranchHeadContext(
     if (expectedHead.ownerLogin !== pullRequestHead.ownerLogin) {
       return false;
     }
+  }
+
+  if (options?.relaxCrossRepository) {
+    return true;
   }
 
   if (headContext.isCrossRepository) {
@@ -1138,6 +1155,24 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  /**
+   * The remote whose repository change requests target: the provider-context
+   * remote when the registry resolved one, else the primary remote ("origin"
+   * when present, the first configured remote otherwise). A checkout whose
+   * remotes carry other names must compare branches against this remote, not
+   * against a hardcoded "origin".
+   */
+  const resolveBaseRemoteName = Effect.fn("resolveBaseRemoteName")(function* (cwd: string) {
+    const contextRemoteName = yield* sourceControlProviders.resolveHandle({ cwd }).pipe(
+      Effect.map((handle) => handle.context?.remoteName ?? null),
+      Effect.orElseSucceed(() => null),
+    );
+    if (contextRemoteName !== null) {
+      return contextRemoteName;
+    }
+    return yield* gitCore.resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
+  });
+
   const resolveBranchHeadContext = Effect.fn("resolveBranchHeadContext")(function* (
     cwd: string,
     details: { branch: string; upstreamRef: string | null },
@@ -1150,21 +1185,26 @@ export const make = Effect.gen(function* () {
     const shouldProbeLocalBranchSelector =
       headBranchFromUpstream.length === 0 || headBranch === details.branch;
 
-    const [remoteRepository, originRepository] = yield* Effect.all(
+    const baseRemoteName = yield* resolveBaseRemoteName(cwd);
+    const [remoteRepository, baseRepository] = yield* Effect.all(
       [
         resolveRemoteRepositoryContext(cwd, remoteName),
-        resolveRemoteRepositoryContext(cwd, "origin"),
+        resolveRemoteRepositoryContext(cwd, baseRemoteName),
       ],
       { concurrency: "unbounded" },
     );
 
+    // A branch is cross-repository only when its remote's repository differs
+    // from the repository change requests target. A repository without a
+    // remote literally named "origin" must not read as a fork of itself.
     const isCrossRepository =
       remoteRepository.repositoryNameWithOwner !== null &&
-      originRepository.repositoryNameWithOwner !== null
+      baseRepository.repositoryNameWithOwner !== null
         ? remoteRepository.repositoryNameWithOwner.toLowerCase() !==
-          originRepository.repositoryNameWithOwner.toLowerCase()
+          baseRepository.repositoryNameWithOwner.toLowerCase()
         : remoteName !== null &&
-          remoteName !== "origin" &&
+          baseRemoteName !== null &&
+          remoteName !== baseRemoteName &&
           remoteRepository.repositoryNameWithOwner !== null;
 
     const ownerHeadSelector =
@@ -1204,8 +1244,7 @@ export const make = Effect.gen(function* () {
         ownerHeadSelector && isCrossRepository ? ownerHeadSelector : headBranch,
       remoteName,
       headRemoteUrlKey:
-        remoteRepository.remoteUrlKey ??
-        (remoteName === null ? originRepository.remoteUrlKey : null),
+        remoteRepository.remoteUrlKey ?? (remoteName === null ? baseRepository.remoteUrlKey : null),
       headRepositoryNameWithOwner: remoteRepository.repositoryNameWithOwner,
       headRepositoryOwnerLogin: remoteRepository.ownerLogin,
       isCrossRepository,
@@ -1259,6 +1298,7 @@ export const make = Effect.gen(function* () {
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
     >,
+    options?: BranchHeadContextMatchOptions,
   ) {
     for (const headSelector of headContext.headSelectors) {
       const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
@@ -1270,7 +1310,7 @@ export const make = Effect.gen(function* () {
       const normalizedPullRequests = pullRequests.map(toPullRequestInfo);
 
       const firstPullRequest = normalizedPullRequests.find((pullRequest) =>
-        matchesBranchHeadContext(pullRequest, headContext),
+        matchesBranchHeadContext(pullRequest, headContext, options),
       );
       if (firstPullRequest) {
         return {
@@ -1713,7 +1753,7 @@ export const make = Effect.gen(function* () {
       phase: "pr",
       label: `Creating ${terms.singular}...`,
     });
-    yield* provider
+    const existingAfterFailedCreate = yield* provider
       .createChangeRequest({
         cwd,
         baseRefName: baseBranch,
@@ -1721,7 +1761,34 @@ export const make = Effect.gen(function* () {
         title: generated.title,
         bodyFile,
       })
-      .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
+      .pipe(
+        Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))),
+        Effect.as(null),
+        Effect.catch((error) =>
+          // The provider refuses a duplicate change request for a head the
+          // strict match failed to see (a misclassified cross-repository
+          // context, or head metadata the provider withheld). Re-check with a
+          // relaxed head-branch match and reuse a hit as the existing change
+          // request; only surface the create failure when the re-check also
+          // finds nothing.
+          findOpenPr(cwd, headContext, { relaxCrossRepository: true }).pipe(
+            Effect.orElseSucceed(() => null),
+            Effect.flatMap((existing) =>
+              existing === null ? Effect.fail(error) : Effect.succeed(existing),
+            ),
+          ),
+        ),
+      );
+    if (existingAfterFailedCreate !== null) {
+      return {
+        status: "opened_existing" as const,
+        url: existingAfterFailedCreate.url,
+        number: existingAfterFailedCreate.number,
+        baseBranch: existingAfterFailedCreate.baseRefName,
+        headBranch: existingAfterFailedCreate.headRefName,
+        title: existingAfterFailedCreate.title,
+      };
+    }
 
     const created = yield* findOpenPr(cwd, headContext);
     if (!created) {

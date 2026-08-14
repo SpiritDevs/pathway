@@ -374,3 +374,78 @@ describe("GitHubCli.layer", () => {
     }).pipe(Effect.provide(layer)),
   );
 });
+
+describe("GitHubCli.fromVcsError stderr excerpts", () => {
+  const context = { command: "gh", cwd: "/repo" } as const;
+
+  const exitError = (stderr: string, failureKind: "authentication" | "command-failed") =>
+    VcsProcessExitError.fromProcessExit(
+      { operation: "GitHubCli.execute", command: "gh", cwd: "/repo", argumentCount: 10 },
+      { exitCode: 1, stderr, stderrTruncated: false },
+      failureKind,
+    );
+
+  it("surfaces gh stderr in the command error detail", () => {
+    const stderr = [
+      'a pull request for branch "feature/pr-threads" into branch "main" already exists:',
+      "https://github.com/octocat/codething-mvp/pull/42",
+      "",
+    ].join("\n");
+
+    const error = GitHubCli.fromVcsError(context, exitError(stderr, "command-failed"));
+
+    assert.strictEqual(error._tag, "GitHubCliCommandError");
+    assert.strictEqual(
+      error.detail,
+      'a pull request for branch "feature/pr-threads" into branch "main" already exists: https://github.com/octocat/codething-mvp/pull/42',
+    );
+    assert.equal(error.message.includes("already exists"), true);
+  });
+
+  it("falls back to the constant detail when stderr is empty", () => {
+    const error = GitHubCli.fromVcsError(context, exitError("  \n\t ", "command-failed"));
+
+    assert.strictEqual(error._tag, "GitHubCliCommandError");
+    assert.strictEqual(error.detail, "GitHub CLI command failed.");
+  });
+
+  it("strips ANSI escapes and collapses whitespace noise", () => {
+    const stderr = "\u001B[1;31mGraphQL:\u001B[0m something failed\r\n\n   second\tline  ";
+
+    const error = GitHubCli.fromVcsError(context, exitError(stderr, "command-failed"));
+
+    assert.strictEqual(error.detail, "GraphQL: something failed second line");
+  });
+
+  it("caps the excerpt length", () => {
+    const error = GitHubCli.fromVcsError(context, exitError("x".repeat(400), "command-failed"));
+
+    assert.strictEqual(error.detail.length, 300);
+    assert.equal(error.detail.endsWith("…"), true);
+  });
+
+  it("keeps the friendly constant detail for authentication failures", () => {
+    const error = GitHubCli.fromVcsError(
+      context,
+      exitError("authentication failed for token super-secret-token", "authentication"),
+    );
+
+    assert.strictEqual(error._tag, "GitHubCliAuthenticationError");
+    assert.equal(error.message.includes("super-secret-token"), false);
+    assert.strictEqual(
+      error.detail,
+      "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+    );
+  });
+
+  it("redacts credentials embedded in stderr URLs", () => {
+    const stderr = "failed to push to https://user:token@github.com/octocat/codething-mvp.git";
+
+    const error = GitHubCli.fromVcsError(context, exitError(stderr, "command-failed"));
+
+    assert.strictEqual(
+      error.detail,
+      "failed to push to https://github.com/octocat/codething-mvp.git",
+    );
+  });
+});

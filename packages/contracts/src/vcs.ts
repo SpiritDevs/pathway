@@ -108,6 +108,41 @@ export class VcsProcessSpawnError extends Schema.TaggedErrorClass<VcsProcessSpaw
   }
 }
 
+const STDERR_EXCERPT_MAX_LENGTH = 300;
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_PATTERN = /\u001B\[[0-9;?]*[ -/]*[@-~]|\u001B[@-_]/g;
+const URL_CREDENTIALS_PATTERN = /(\/\/)[^\s/@]+(?::[^\s/@]*)?@/g;
+
+/**
+ * Commands whose stderr is safe to excerpt into transported errors. Forge CLIs
+ * print human-readable diagnostics (and at worst URLs) on stderr, never
+ * credentials. `git` is deliberately excluded: its stderr can echo
+ * credential-bearing remote URLs, so git errors keep reporting only
+ * `stderrLength`.
+ */
+const STDERR_EXCERPT_COMMANDS: ReadonlySet<string> = new Set(["gh", "glab", "az"]);
+
+/**
+ * Builds a transport-safe excerpt of CLI stderr for user-facing diagnostics:
+ * strips ANSI escape codes, replaces control characters, removes credentials
+ * embedded in URLs, collapses whitespace, and bounds the length.
+ */
+export function vcsStderrExcerpt(stderr: string): string | undefined {
+  const withoutAnsi = stderr.replace(ANSI_ESCAPE_PATTERN, "");
+  let printable = "";
+  for (const character of withoutAnsi) {
+    const codePoint = character.codePointAt(0);
+    printable += codePoint !== undefined && (codePoint < 32 || codePoint === 127) ? " " : character;
+  }
+  const collapsed = printable.replace(URL_CREDENTIALS_PATTERN, "$1").trim().replace(/\s+/gu, " ");
+  if (collapsed.length === 0) {
+    return undefined;
+  }
+  return collapsed.length > STDERR_EXCERPT_MAX_LENGTH
+    ? `${collapsed.slice(0, STDERR_EXCERPT_MAX_LENGTH - 1)}…`
+    : collapsed;
+}
+
 export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitError>()(
   "VcsProcessExitError",
   {
@@ -118,6 +153,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
     exitCode: Schema.Number,
     detail: Schema.String,
     failureKind: Schema.optional(VcsProcessExitFailureKind),
+    stderrExcerpt: Schema.optional(Schema.String),
     stderrLength: Schema.optional(NonNegativeInt),
     stderrTruncated: Schema.optional(Schema.Boolean),
   },
@@ -142,11 +178,17 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
               : "VCS resource not found."
           : "Process exited with a non-zero status.";
 
+    const stderrExcerpt =
+      failureKind !== "authentication" && STDERR_EXCERPT_COMMANDS.has(context.command)
+        ? vcsStderrExcerpt(error.stderr)
+        : undefined;
+
     return new VcsProcessExitError({
       ...context,
       exitCode: error.exitCode,
       detail,
       failureKind,
+      ...(stderrExcerpt !== undefined ? { stderrExcerpt } : {}),
       stderrLength: error.stderr.length,
       stderrTruncated: error.stderrTruncated,
     });

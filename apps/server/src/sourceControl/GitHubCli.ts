@@ -66,10 +66,14 @@ export class GitHubPullRequestNotFoundError extends Schema.TaggedErrorClass<GitH
 
 export class GitHubCliCommandError extends Schema.TaggedErrorClass<GitHubCliCommandError>()(
   "GitHubCliCommandError",
-  gitHubCliFailureFields,
+  {
+    ...gitHubCliFailureFields,
+    /** Sanitized `gh` stderr excerpt captured by the VCS process boundary. */
+    stderrExcerpt: Schema.optional(Schema.String),
+  },
 ) {
   get detail(): string {
-    return "GitHub CLI command failed.";
+    return this.stderrExcerpt ?? "GitHub CLI command failed.";
   }
 
   override get message(): string {
@@ -172,6 +176,13 @@ export function fromVcsError(
     }
     if (error.failureKind === "not-found") {
       return new GitHubPullRequestNotFoundError({ ...context, cause: error });
+    }
+    if (error.stderrExcerpt !== undefined) {
+      return new GitHubCliCommandError({
+        ...context,
+        cause: error,
+        stderrExcerpt: error.stderrExcerpt,
+      });
     }
   }
 
