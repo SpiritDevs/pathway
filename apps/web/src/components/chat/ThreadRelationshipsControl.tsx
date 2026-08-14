@@ -78,13 +78,16 @@ export function ThreadLineageRowList(props: {
         Bounded rather than free-growing so Lineage cannot push the rest of the
         thread details panel out of view. Plain overflow, not a ScrollArea
         component: this sits inside an already scrolling panel, where a
-        max-height-only virtual viewport measures badly. Every row is a focusable
-        button, so keyboard users reach and scroll the region through the rows
-        themselves and the container needs no extra tab stop of its own.
+        max-height-only virtual viewport measures badly. Let wheel and touch
+        scrolling chain to the surrounding details panel when this list reaches
+        an edge; containing overscroll here makes the panel feel stuck whenever
+        the pointer is over a lineage row. Every row is a focusable button, so
+        keyboard users reach and scroll the region through the rows themselves
+        and the container needs no extra tab stop of its own.
       */}
       <ul
         aria-label={props.ariaLabel ?? "Related threads"}
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
+        className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0"
       >
         {props.children}
       </ul>

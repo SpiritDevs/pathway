@@ -43,7 +43,7 @@ describe("thread lineage row list", () => {
     expect(list).toContain('aria-label="Related threads"');
     expect(list).toContain("max-h-[13.5rem]");
     expect(list).toContain("overflow-y-auto");
-    expect(list).toContain("overscroll-contain");
+    expect(list).not.toContain("overscroll-contain");
     expect(markup.indexOf("</ul>")).toBeLessThan(markup.indexOf("<button"));
   });
 });
