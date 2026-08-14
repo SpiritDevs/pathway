@@ -1,4 +1,6 @@
 import {
+  RelayConvexAudience,
+  RelayConvexServiceTokenClaims,
   RelayDpopAccessTokenScope,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -11,6 +13,7 @@ import {
 import { encodeOAuthScope, parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import {
   normalizeRelayIssuer,
+  RELAY_CONVEX_SERVICE_TOKEN_TYP,
   RelayJwtError,
   signRelayJwt,
   verifyRelayJwt,
@@ -27,6 +30,9 @@ const LINK_CHALLENGE_TYP = "t3-link-challenge+jwt";
 const ACCESS_TOKEN_TYP = "t3-relay-dpop-access+jwt";
 const LINK_CHALLENGE_KIND = "environment_link_challenge";
 export const RELAY_DPOP_ACCESS_TOKEN_TTL = "30 minutes";
+// Shorter than the client access token: an environment can re-exchange whenever
+// it needs one, and a leaked service token is only useful while Convex accepts it.
+export const RELAY_CONVEX_SERVICE_TOKEN_TTL = "10 minutes";
 
 const LinkChallengeClaims = Schema.Struct({
   kind: Schema.Literal(LINK_CHALLENGE_KIND),
@@ -59,6 +65,7 @@ export type RelayDpopAccessTokenClaims = Omit<typeof RelayDpopAccessTokenClaims.
 
 const decodeLinkChallengeClaims = Schema.decodeUnknownEffect(LinkChallengeClaims);
 const decodeDpopAccessTokenClaims = Schema.decodeUnknownEffect(RelayDpopAccessTokenClaims);
+const decodeConvexServiceTokenClaims = Schema.decodeUnknownEffect(RelayConvexServiceTokenClaims);
 
 const allowedScopesByClientId: Record<
   RelayPublicClientId,
@@ -112,6 +119,17 @@ export class RelayTokens extends Context.Service<
       readonly token: string;
       readonly nowEpochSeconds: number;
     }) => Effect.Effect<RelayDpopAccessTokenClaims | null>;
+    readonly issueConvexServiceToken: (input: {
+      readonly environmentId: string;
+      readonly proofKeyThumbprint: string;
+      readonly jti: string;
+      readonly issuedAtEpochSeconds: number;
+      readonly expiresAtEpochSeconds: number;
+    }) => Effect.Effect<string, RelayJwtError>;
+    readonly verifyConvexServiceToken: (input: {
+      readonly token: string;
+      readonly nowEpochSeconds: number;
+    }) => Effect.Effect<RelayConvexServiceTokenClaims | null>;
   }
 >()("pathway-relay/auth/RelayTokens") {}
 
@@ -215,12 +233,63 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  const issueConvexServiceToken: RelayTokens["Service"]["issueConvexServiceToken"] = Effect.fn(
+    "relay.tokens.issue_convex_service_token",
+  )(function* (input) {
+    yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
+    return yield* signRelayJwt({
+      privateKey: Redacted.value(config.cloudMintPrivateKey),
+      typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
+      payload: {
+        iss: issuer,
+        // The one relay token whose audience is not the relay itself: Convex
+        // trusts this issuer as a custom JWT provider and resolves the
+        // environment's company registrations from its own records.
+        aud: RelayConvexAudience,
+        sub: input.environmentId,
+        jti: input.jti,
+        iat: input.issuedAtEpochSeconds,
+        exp: input.expiresAtEpochSeconds,
+        environmentId: input.environmentId,
+        cnf: { jkt: input.proofKeyThumbprint },
+      },
+    });
+  });
+
+  const verifyConvexServiceToken: RelayTokens["Service"]["verifyConvexServiceToken"] = Effect.fn(
+    "relay.tokens.verify_convex_service_token",
+  )((input) =>
+    verifyRelayJwt({
+      publicKey: config.cloudMintPublicKey,
+      token: input.token,
+      typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
+      issuer,
+      audience: RelayConvexAudience,
+      nowEpochSeconds: input.nowEpochSeconds,
+      maxTokenAge: RELAY_CONVEX_SERVICE_TOKEN_TTL,
+    }).pipe(
+      Effect.tapError((error) =>
+        Effect.annotateCurrentSpan(
+          "relay.tokens.verification_failure",
+          RelayJwtError.diagnosticCode(error),
+        ),
+      ),
+      Effect.flatMap(decodeConvexServiceTokenClaims),
+      Effect.map((claims): RelayConvexServiceTokenClaims | null =>
+        claims.sub === claims.environmentId ? claims : null,
+      ),
+      Effect.orElseSucceed(() => null),
+    ),
+  );
+
   return RelayTokens.of({
     resolveDpopAccessTokenScopes,
     issueLinkChallenge,
     verifyLinkChallenge,
     issueDpopAccessToken,
     verifyDpopAccessToken,
+    issueConvexServiceToken,
+    verifyConvexServiceToken,
   });
 });
 

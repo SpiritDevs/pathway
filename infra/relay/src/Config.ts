@@ -14,6 +14,20 @@ export interface ApnsCredentials {
   readonly environment: ApnsEnvironment;
 }
 
+/**
+ * Cloud-sync capability configuration. Absent on every deployment until the
+ * Convex backend ships, which leaves Convex service-token exchange and
+ * connect-grant verification off.
+ */
+export interface RelayCloudSyncConfiguration {
+  /** Enables `POST /v1/environment/convex-token`. */
+  readonly serviceTokensEnabled: boolean;
+  /** Convex custom-JWT issuer trusted for connect grants. */
+  readonly connectGrantIssuer: string | undefined;
+  /** Ed25519 SPKI public key the Convex issuer signs connect grants with. */
+  readonly connectGrantPublicKey: string | undefined;
+}
+
 export class RelayConfiguration extends Context.Service<
   RelayConfiguration,
   {
@@ -27,6 +41,9 @@ export class RelayConfiguration extends Context.Service<
     readonly cloudMintPublicKey: string;
     readonly managedEndpointBaseDomain: string | undefined;
     readonly managedEndpointNamespace: string | undefined;
+    // Optional so existing deployments and tests keep their current shape while
+    // cloud sync is unbuilt; omitting it disables the capability.
+    readonly cloudSync?: RelayCloudSyncConfiguration | undefined;
   }
 >()("pathway-relay/Config/RelayConfiguration") {}
 

@@ -10,6 +10,10 @@ export const RELAY_HEALTH_REQUEST_TYP = "t3-cloud-health+jwt";
 export const RELAY_MINT_RESPONSE_TYP = "t3-env-mint+jwt";
 export const RELAY_HEALTH_RESPONSE_TYP = "t3-env-health+jwt";
 export const RELAY_ACTIVITY_PUBLISH_TYP = "t3-env-activity+jwt";
+/** Relay-issued environment service token for the `pathway-convex` audience. */
+export const RELAY_CONVEX_SERVICE_TOKEN_TYP = "t3-relay-convex-service+jwt";
+/** Convex-issued connect grant the relay validates against its configured Convex issuer. */
+export const RELAY_CONVEX_CONNECT_GRANT_TYP = "t3-convex-connect-grant+jwt";
 
 export class RelayJwtError extends Schema.TaggedErrorClass<RelayJwtError>()("RelayJwtError", {
   operation: Schema.Literals(["sign", "verify"]),

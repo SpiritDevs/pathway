@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { signRelayJwt } from "@t3tools/shared/relayJwt";
+import { decodeRelayJwt, signRelayJwt } from "@t3tools/shared/relayJwt";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -183,6 +183,88 @@ describe("RelayTokens", () => {
       });
 
       expect(yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 150 })).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues Convex-audience service tokens bound to an environment and proof key", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueConvexServiceToken({
+        environmentId: "environment-1",
+        proofKeyThumbprint: "environment-proof-key-thumbprint",
+        jti: "convex-service-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 700,
+      });
+
+      expect(decodeRelayJwt(token)).toMatchObject({
+        iss: "https://relay.example.test",
+        aud: "pathway-convex",
+        sub: "environment-1",
+        jti: "convex-service-token-1",
+        iat: 100,
+        exp: 700,
+        environmentId: "environment-1",
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toMatchObject({
+        aud: "pathway-convex",
+        environmentId: "environment-1",
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 800 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects self-audienced relay tokens presented as Convex service tokens", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* signRelayJwt({
+        privateKey: keyPair.privateKey,
+        typ: "t3-relay-convex-service+jwt",
+        payload: {
+          iss: "https://relay.example.test",
+          aud: "https://relay.example.test",
+          sub: "environment-1",
+          jti: "convex-service-token-wrong-audience",
+          iat: 100,
+          exp: 700,
+          environmentId: "environment-1",
+          cnf: { jkt: "environment-proof-key-thumbprint" },
+        },
+      });
+
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects Convex service tokens whose subject is not the environment", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* signRelayJwt({
+        privateKey: keyPair.privateKey,
+        typ: "t3-relay-convex-service+jwt",
+        payload: {
+          iss: "https://relay.example.test",
+          aud: "pathway-convex",
+          sub: "environment-2",
+          jti: "convex-service-token-subject-mismatch",
+          iat: 100,
+          exp: 700,
+          environmentId: "environment-1",
+          cnf: { jkt: "environment-proof-key-thumbprint" },
+        },
+      });
+
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toBeNull();
     }).pipe(Effect.provide(layer)),
   );
 });

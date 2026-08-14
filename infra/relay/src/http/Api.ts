@@ -29,6 +29,10 @@ import {
   RelayClientAuth,
   RelayClientPrincipal,
   RelayAccessTokenType,
+  RelayConvexAudience,
+  RELAY_CONVEX_KEY_BINDING_TYP,
+  RelayConvexKeyBindingPayload,
+  type RelayConvexServiceTokenRequest,
   RelayDpopClientAuth,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -49,7 +53,7 @@ import {
   type RelayDpopAccessTokenScope,
   RelayInternalError,
 } from "@t3tools/contracts/relay";
-import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
+import { normalizeRelayIssuer, verifyRelayJwt } from "@t3tools/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
@@ -685,6 +689,86 @@ export const clientApi = HttpApiBuilder.group(
   }),
 );
 
+const decodeConvexKeyBinding = Schema.decodeUnknownEffect(RelayConvexKeyBindingPayload);
+
+/**
+ * Exchanges a linked environment's credential plus a fresh DPoP proof for a
+ * short-lived `pathway-convex` service token. The credential lookup requires a
+ * live environment link, so revoking the link or the registration invalidates
+ * future exchanges without waiting for an issued token to expire.
+ *
+ * The issued token carries the proof key's thumbprint in `cnf.jkt`, and Convex
+ * authorizes on it, so the exchange may only ever bind a key the environment
+ * itself vouched for: the credential is a bearer secret, and a caller who stole
+ * one would otherwise have a token minted against a DPoP key of their own.
+ */
+export const exchangeConvexServiceToken = Effect.fn("relay.token.exchange_convex_service_token")(
+  function* (payload: RelayConvexServiceTokenRequest) {
+    const config = yield* RelayConfiguration.RelayConfiguration;
+    const crypto = yield* Crypto.Crypto;
+    const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
+    const relayTokens = yield* RelayTokens.RelayTokens;
+    yield* Effect.annotateCurrentSpan({
+      "relay.auth.mode": "environment_credential_token_exchange",
+      "relay.oauth.audience": payload.audience,
+    });
+    if (config.cloudSync?.serviceTokensEnabled !== true) {
+      return yield* relayAuthInvalidError("not_authorized");
+    }
+    // Check the credential before the proof so a rejected exchange never burns
+    // the caller's one-shot proof jti.
+    const principal = yield* credentials.authenticate(payload.subject_token);
+    if (principal._tag === "None") {
+      return yield* relayAuthInvalidError("invalid_bearer");
+    }
+    const now = yield* DateTime.now;
+    // The environment signs, with the link key the relay holds for it, an
+    // assertion naming the DPoP key this exchange may bind. Verifying it before
+    // the proof also keeps the credential-first ordering: a caller with a bad
+    // binding never burns the proof jti either.
+    const binding = yield* verifyRelayJwt({
+      publicKey: principal.value.environmentPublicKey,
+      token: payload.key_binding,
+      typ: RELAY_CONVEX_KEY_BINDING_TYP,
+      issuer: `t3-env:${principal.value.environmentId}`,
+      audience: normalizeRelayIssuer(config.relayIssuer),
+      nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+    }).pipe(
+      Effect.flatMap(decodeConvexKeyBinding),
+      Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
+    );
+    if (
+      binding.sub !== principal.value.environmentId ||
+      binding.environmentId !== principal.value.environmentId
+    ) {
+      return yield* relayAuthInvalidError("invalid_bearer");
+    }
+    // A proof made with any other key is somebody else's: the thumbprint is
+    // checked before the jti is consumed, so a foreign key cannot spend the
+    // environment's proofs either.
+    const proofKeyThumbprint = yield* requireDpopThumbprint(binding.jkt);
+    const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_CONVEX_SERVICE_TOKEN_TTL);
+    const jti = yield* crypto.randomUUIDv4.pipe(
+      Effect.catch(() => relayInternalErrorResponse("internal_error")),
+    );
+    return {
+      access_token: yield* relayTokens
+        .issueConvexServiceToken({
+          environmentId: principal.value.environmentId,
+          proofKeyThumbprint,
+          jti,
+          issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+          expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+        })
+        .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
+      issued_token_type: RelayAccessTokenType,
+      token_type: "Bearer" as const,
+      expires_in: Duration.toSeconds(RelayTokens.RELAY_CONVEX_SERVICE_TOKEN_TTL),
+      audience: RelayConvexAudience,
+    };
+  },
+);
+
 export const tokenApi = HttpApiBuilder.group(
   RelayApi,
   "token",
@@ -693,60 +777,82 @@ export const tokenApi = HttpApiBuilder.group(
     const crypto = yield* Crypto.Crypto;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
     const relayTokens = yield* RelayTokens.RelayTokens;
-    return handlers.handle(
-      "exchangeDpopAccessToken",
-      Effect.fn("relay.api.token.exchangeDpopAccessToken")(function* (args) {
-        yield* appendRelayCredentialResponseHeaders;
-        const issuer = normalizeRelayIssuer(config.relayIssuer);
-        const requestedScopes = relayTokens.resolveDpopAccessTokenScopes({
-          clientId: args.payload.client_id,
-          scope: args.payload.scope,
-        });
-        yield* Effect.annotateCurrentSpan({
-          "relay.auth.mode": "clerk_bearer_token_exchange",
-          "relay.oauth.client_id": args.payload.client_id,
-          "relay.oauth.scopes": args.payload.scope,
-        });
-        if (args.payload.resource !== issuer || requestedScopes === null) {
-          return yield* new HttpApiError.Unauthorized({});
-        }
+    const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
+    return handlers
+      .handle(
+        "exchangeDpopAccessToken",
+        Effect.fn("relay.api.token.exchangeDpopAccessToken")(function* (args) {
+          yield* appendRelayCredentialResponseHeaders;
+          const issuer = normalizeRelayIssuer(config.relayIssuer);
+          const requestedScopes = relayTokens.resolveDpopAccessTokenScopes({
+            clientId: args.payload.client_id,
+            scope: args.payload.scope,
+          });
+          yield* Effect.annotateCurrentSpan({
+            "relay.auth.mode": "clerk_bearer_token_exchange",
+            "relay.oauth.client_id": args.payload.client_id,
+            "relay.oauth.scopes": args.payload.scope,
+          });
+          if (args.payload.resource !== issuer || requestedScopes === null) {
+            return yield* new HttpApiError.Unauthorized({});
+          }
 
-        const verified = yield* verifyClerkBearerToken(config, args.payload.subject_token).pipe(
-          Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
-        );
-        if (!verified.sub || !hasExpectedClerkAudience(verified.aud, config.clerkJwtAudience)) {
-          return yield* relayAuthInvalidError("invalid_bearer");
-        }
-        const proofKeyThumbprint = yield* requireDpopProof().pipe(
-          Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
-        );
-        const now = yield* DateTime.now;
-        const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL);
-        const jti = yield* crypto.randomUUIDv4.pipe(
-          Effect.catch(() => relayInternalErrorResponse("internal_error")),
-        );
-        return {
-          access_token: yield* relayTokens
-            .issueDpopAccessToken({
-              userId: verified.sub,
-              proofKeyThumbprint,
-              jti,
-              issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
-              expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
-              clientId: args.payload.client_id,
-              scopes: requestedScopes,
-            })
-            .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
-          issued_token_type: RelayAccessTokenType,
-          token_type: "DPoP" as const,
-          expires_in: Duration.toSeconds(RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL),
-          scope: encodeOAuthScope(requestedScopes),
-        };
-      }, mapRelayCommonApiErrors("invalid_dpop")),
-    );
+          const verified = yield* verifyClerkBearerToken(config, args.payload.subject_token).pipe(
+            Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
+          );
+          if (!verified.sub || !hasExpectedClerkAudience(verified.aud, config.clerkJwtAudience)) {
+            return yield* relayAuthInvalidError("invalid_bearer");
+          }
+          const proofKeyThumbprint = yield* requireDpopProof().pipe(
+            Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
+          );
+          const now = yield* DateTime.now;
+          const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL);
+          const jti = yield* crypto.randomUUIDv4.pipe(
+            Effect.catch(() => relayInternalErrorResponse("internal_error")),
+          );
+          return {
+            access_token: yield* relayTokens
+              .issueDpopAccessToken({
+                userId: verified.sub,
+                proofKeyThumbprint,
+                jti,
+                issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+                expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+                clientId: args.payload.client_id,
+                scopes: requestedScopes,
+              })
+              .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
+            issued_token_type: RelayAccessTokenType,
+            token_type: "DPoP" as const,
+            expires_in: Duration.toSeconds(RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL),
+            scope: encodeOAuthScope(requestedScopes),
+          };
+        }, mapRelayCommonApiErrors("invalid_dpop")),
+      )
+      .handle(
+        "exchangeConvexServiceToken",
+        Effect.fn("relay.api.token.exchangeConvexServiceToken")(function* (args) {
+          yield* appendRelayCredentialResponseHeaders;
+          return yield* exchangeConvexServiceToken(args.payload).pipe(
+            Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
+            Effect.provideService(EnvironmentCredentials.EnvironmentCredentials, credentials),
+            Effect.provideService(RelayConfiguration.RelayConfiguration, config),
+            Effect.provideService(RelayTokens.RelayTokens, relayTokens),
+            Effect.provideService(Crypto.Crypto, crypto),
+          );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
+      );
   }),
 );
 
+// TODO(cloud-sync, rollout step 7): connectEnvironment must also require a
+// Convex-issued connect grant once clients can obtain one. The verifier is
+// ready — `ConvexConnectGrants.verifyConnectGrant` with permission
+// `environments.read` — but the grant has to reach the relay first, which needs
+// an additive `connectGrant` field on RelayEnvironmentConnectRequest plus client
+// support. Until then the route keeps its device-local link authorization and
+// `ConvexConnectGrants.enabled` stays false on every deployment.
 export const dpopClientApi = HttpApiBuilder.group(
   RelayApi,
   "dpopClient",
