@@ -14,6 +14,7 @@ import type {
 } from "@t3tools/contracts";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import {
+  BotIcon,
   CircleDotIcon,
   SignalHighIcon,
   TagIcon,
@@ -43,6 +44,8 @@ export function IssuesBulkBar({
   projects,
   investigateDisabledReason,
   onInvestigate,
+  askDisabledReason,
+  onAsk,
 }: {
   issues: ReadonlyArray<Issue>;
   statuses: ReadonlyArray<IssueStatus>;
@@ -55,6 +58,8 @@ export function IssuesBulkBar({
   projects: ReadonlyArray<EnvironmentProject>;
   investigateDisabledReason: string | null;
   onInvestigate: (projectId: ProjectId) => void;
+  askDisabledReason: string | null;
+  onAsk: () => void;
 }) {
   // A shared value shows as the current one; a mixed selection shows nothing checked rather than
   // pretending the first row speaks for the rest.
@@ -117,6 +122,16 @@ export function IssuesBulkBar({
           <WandSparklesIcon />
           Investigate
         </IssueInvestigateProjectMenu>
+        <Button
+          aria-label={`Ask AI about ${issues.length} selected ${issues.length === 1 ? "issue" : "issues"}`}
+          disabled={askDisabledReason !== null}
+          onClick={onAsk}
+          size="icon-xs"
+          title={askDisabledReason ?? "Ask AI"}
+          variant="ghost"
+        >
+          <BotIcon />
+        </Button>
         <IssueDeleteMenu
           count={issues.length}
           onConfirm={onDelete}

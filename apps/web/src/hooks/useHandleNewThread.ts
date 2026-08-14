@@ -38,6 +38,8 @@ interface NewThreadWorkspaceOptions {
   startFromOrigin?: boolean;
   /** Skip every empty-draft reuse path and mint a distinct thread identity. */
   forceNew?: boolean;
+  /** Embedded chat surfaces can own the draft without changing the page underneath them. */
+  navigate?: boolean;
 }
 
 // The workspace options the caller passed explicitly, shaped for the draft
@@ -76,6 +78,7 @@ export function useNewThreadHandler() {
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
         forceNew?: boolean;
+        navigate?: boolean;
         replace?: boolean;
       },
       // Which draft the thread ended up in, so a caller that has something to put in it — a
@@ -395,11 +398,13 @@ export function useNewThreadHandler() {
           setModelSelection(draftId, carryModelSelection, { replaceOptions: true });
         }
 
-        await router.navigate({
-          to: "/threads/draft/$draftId",
-          params: { draftId },
-          replace: options?.replace ?? false,
-        });
+        if (options?.navigate !== false) {
+          await router.navigate({
+            to: "/threads/draft/$draftId",
+            params: { draftId },
+            replace: options?.replace ?? false,
+          });
+        }
         return { draftId, threadId };
       })();
     },

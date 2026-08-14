@@ -8,6 +8,7 @@
  * @module components/issues/IssuesListPage
  */
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type {
   Issue,
@@ -25,7 +26,9 @@ import { ColumnsIcon, ListTodoIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { cn } from "~/lib/utils";
+import { useComposerDraftStore, type DraftId } from "~/composerDraftStore";
 import { useProjects } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
@@ -67,6 +70,7 @@ import { IssueDetailSheet } from "./IssueDetailSheet";
 import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
+import { IssuesAssistantPanel, type IssuesAssistantDraft } from "./IssuesAssistantPanel";
 import { IssuesFilterBar } from "./IssuesFilterBar";
 import { IssuesTriageView } from "./IssuesTriageView";
 import { IssuesViewOptions } from "./IssuesViewOptions";
@@ -80,6 +84,7 @@ import {
 } from "./issueContextMenu.logic";
 import { issueAssigneeOptions } from "./issueDetail.logic";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
+import { buildIssuesTalkPrompt, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
@@ -187,6 +192,7 @@ function IssuesListView({
   const startEnrichment = useStartIssueEnrichment();
   const setIssueSortOrder = useSetIssueSortOrder();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const openNewThread = useNewThreadHandler();
 
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
@@ -194,6 +200,9 @@ function IssuesListView({
   /** The right-click menu's target, or null while it is shut. One menu for every row and card. */
   const [contextMenu, setContextMenu] = useState<IssueContextMenuTarget | null>(null);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const [assistantDrafts, setAssistantDrafts] = useState<ReadonlyArray<IssuesAssistantDraft>>([]);
+  const [activeAssistantDraftId, setActiveAssistantDraftId] = useState<DraftId | null>(null);
+  const [assistantDraftPending, setAssistantDraftPending] = useState(false);
   /** Set by a column's `+`, which is the only path that names a status the filter did not. */
   const [newIssueStatusId, setNewIssueStatusId] = useState<IssueStatusId | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -514,6 +523,82 @@ function IssuesListView({
         );
       }
     })();
+  };
+
+  const bulkAskDisabledReason =
+    storeStatus === "disconnected"
+      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+      : investigationProjects.length === 0
+        ? "Connect a workspace to a project before asking AI about these issues."
+        : assistantDraftPending
+          ? "The discussion is being prepared."
+          : null;
+
+  const bulkAsk = () => {
+    if (assistantDraftPending || primaryEnvironmentId === null) return;
+    const issues = [...selectedIssues];
+    if (issues.length === 0) return;
+    const hostProjectId = issueTalkHostProjectId(
+      issues,
+      investigationProjects.map((project) => project.id),
+    );
+    const project = investigationProjects.find((candidate) => candidate.id === hostProjectId);
+    if (project === undefined) return;
+    setAssistantDraftPending(true);
+    void (async () => {
+      try {
+        const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+          branch: null,
+          envMode: "local",
+          forceNew: true,
+          navigate: false,
+          startFromOrigin: false,
+          worktreePath: null,
+        });
+        if (opened === null) throw new Error("The issue discussion draft could not be created.");
+        useComposerDraftStore
+          .getState()
+          .setPrompt(opened.draftId, buildIssuesTalkPrompt(issues, window.location.origin));
+        const title =
+          issues.length === 1
+            ? (issues[0]?.key ?? "Issue discussion")
+            : issues.length === 2
+              ? issues.map((issue) => issue.key).join(" + ")
+              : `${issues.length} issues`;
+        setAssistantDrafts((current) => [
+          ...current,
+          {
+            draftId: opened.draftId,
+            environmentId: project.environmentId,
+            threadId: opened.threadId,
+            title,
+          },
+        ]);
+        setActiveAssistantDraftId(opened.draftId);
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to start the issue discussion",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setAssistantDraftPending(false);
+      }
+    })();
+  };
+
+  const closeAssistantDraft = (draftId: DraftId) => {
+    setAssistantDrafts((current) => {
+      const index = current.findIndex((draft) => draft.draftId === draftId);
+      if (index < 0) return current;
+      const next = current.filter((draft) => draft.draftId !== draftId);
+      setActiveAssistantDraftId((active) =>
+        active !== draftId ? active : (next[Math.min(index, next.length - 1)]?.draftId ?? null),
+      );
+      return next;
+    });
   };
 
   // One write for both halves of a kanban drag: the contract carries `statusId` alongside the key
@@ -859,6 +944,7 @@ function IssuesListView({
               className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
               data={rows}
               estimatedItemSize={ESTIMATED_ROW_HEIGHT}
+              extraData={selection.ids}
               getItemType={getItemType}
               keyExtractor={keyExtractor}
               ref={listRef}
@@ -869,18 +955,20 @@ function IssuesListView({
 
           {bulkSelectionActive && selectedIssues.length > 0 ? (
             <IssuesBulkBar
+              askDisabledReason={bulkAskDisabledReason}
               issues={selectedIssues}
               labels={labels}
+              onAsk={bulkAsk}
               onClear={() => {
                 setSelection(EMPTY_ISSUES_SELECTION);
                 setBulkSelectionActive(false);
               }}
               onDelete={bulkDelete}
+              onInvestigate={bulkInvestigate}
               onPriority={bulkPriority}
               onStatus={bulkStatus}
               onToggleLabel={bulkToggleLabel}
               investigateDisabledReason={bulkInvestigateDisabledReason}
-              onInvestigate={bulkInvestigate}
               projects={investigationProjects}
               statuses={statuses}
             />
@@ -928,6 +1016,28 @@ function IssuesListView({
         issueKey={detailIssueKey}
         onClose={closeDetail}
         onOpenIssueKey={(key) => onSearch({ issue: key })}
+      />
+
+      <IssuesAssistantPanel
+        activeDraftId={activeAssistantDraftId}
+        drafts={assistantDrafts}
+        onActivate={setActiveAssistantDraftId}
+        onClose={closeAssistantDraft}
+        onCloseAll={() => {
+          setAssistantDrafts([]);
+          setActiveAssistantDraftId(null);
+        }}
+        onCloseOthers={(draftId) => {
+          setAssistantDrafts((current) => current.filter((draft) => draft.draftId === draftId));
+          setActiveAssistantDraftId(draftId);
+        }}
+        onCloseToRight={(draftId) => {
+          setAssistantDrafts((current) => {
+            const index = current.findIndex((draft) => draft.draftId === draftId);
+            return index < 0 ? current : current.slice(0, index + 1);
+          });
+          setActiveAssistantDraftId(draftId);
+        }}
       />
     </SidebarInset>
   );

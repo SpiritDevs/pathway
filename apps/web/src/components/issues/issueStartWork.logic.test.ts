@@ -6,6 +6,7 @@ import {
   IssueTodoId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProjectId,
   type Issue,
   type IssueTodo,
   type ServerProvider,
@@ -16,7 +17,9 @@ import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
   buildIssueStartWorkPrompt,
+  buildIssuesTalkPrompt,
   buildIssueTalkPrompt,
+  issueTalkHostProjectId,
   issueDetailPath,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
@@ -306,6 +309,44 @@ describe("buildIssueTalkPrompt", () => {
     expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
     expect(prompt).toContain("`issues_update` and `issues_comment`");
     expect(prompt).not.toContain("move it to Done");
+  });
+});
+
+describe("buildIssuesTalkPrompt", () => {
+  it("links every selected issue and makes the discussion explicitly non-implementing", () => {
+    const prompt = buildIssuesTalkPrompt(
+      [
+        issue(),
+        issue({ id: IssueId.make("i2"), key: "PAT-18", title: "Retries hide auth failures" }),
+      ],
+      "http://localhost:5733",
+    );
+
+    expect(prompt).toContain("# Talk through 2 selected issues");
+    expect(prompt).toContain("[PAT-12 — Login test is flaky]");
+    expect(prompt).toContain("issues?issue=PAT-12");
+    expect(prompt).toContain("[PAT-18 — Retries hide auth failures]");
+    expect(prompt).toContain("issues?issue=PAT-18");
+    expect(prompt).toContain("reading each issue with Pathway MCP's `issues_get` tool");
+    expect(prompt).toContain("link this thread to each one with `issues_link_thread`");
+    expect(prompt).toContain("Use each issue's own project as its context");
+    expect(prompt).toContain("treat an issue without a project as a global question");
+    expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
+  });
+
+  it("hosts the chat in an issue project when available and otherwise falls back globally", () => {
+    const connectedProject = ProjectId.make("connected");
+    const fallbackProject = ProjectId.make("fallback");
+
+    expect(
+      issueTalkHostProjectId(
+        [issue({ projectId: null }), issue({ projectId: connectedProject })],
+        [fallbackProject, connectedProject],
+      ),
+    ).toBe(connectedProject);
+    expect(issueTalkHostProjectId([issue({ projectId: null })], [fallbackProject])).toBe(
+      fallbackProject,
+    );
   });
 });
 

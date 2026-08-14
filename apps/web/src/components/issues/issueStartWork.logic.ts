@@ -18,6 +18,7 @@ import type {
   ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProjectId,
 } from "@t3tools/contracts";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 import { createModelSelection, resolveSelectableModel } from "@t3tools/shared/model";
@@ -218,6 +219,35 @@ export function buildIssueTalkPrompt(context: IssueStartWorkContext): string {
   );
 
   return `${blocks.join("\n\n")}\n`;
+}
+
+/** Seeds one discussion with several selected issues without duplicating their full live records. */
+export function buildIssuesTalkPrompt(issues: ReadonlyArray<Issue>, origin: string): string {
+  const issueList = issues
+    .map((issue) => `- [${issue.key} — ${issue.title}](${issueDetailUrl(origin, issue.key)})`)
+    .join("\n");
+  const keys = issues.map((issue) => issue.key).join(", ");
+
+  return (
+    [
+      `# Talk through ${issues.length} selected ${issues.length === 1 ? "issue" : "issues"}`,
+      issueList,
+      `I want to talk through ${keys} before deciding what to do. Start by reading each issue with Pathway MCP's \`issues_get\` tool and link this thread to each one with \`issues_link_thread\`. Use each issue's own project as its context, even when the selection spans several projects; treat an issue without a project as a global question. Answer my questions and help me compare, clarify, and investigate the selected issues. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the tickets current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP issue tools for these issues; do not use Linear or another external issue tracker.`,
+    ].join("\n\n") + "\n"
+  );
+}
+
+/** Picks a workspace host without changing the project context carried by each issue. */
+export function issueTalkHostProjectId(
+  issues: ReadonlyArray<Issue>,
+  availableProjectIds: ReadonlyArray<ProjectId>,
+): ProjectId | null {
+  for (const issue of issues) {
+    if (issue.projectId !== null && availableProjectIds.includes(issue.projectId)) {
+      return issue.projectId;
+    }
+  }
+  return availableProjectIds[0] ?? null;
 }
 
 /** What the checklist and relations look like once the todo rows are ordered. */

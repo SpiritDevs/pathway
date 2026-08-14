@@ -577,7 +577,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
-      presentation?: "page";
+      presentation?: "page" | "panel";
       panelOwnerThreadRef?: never;
       routeKind: "draft";
       draftId: DraftId;
