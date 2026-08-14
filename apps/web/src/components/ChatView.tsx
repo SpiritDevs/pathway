@@ -276,7 +276,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ContinuationDialog, type ContinuationWorkspaceTarget } from "./chat/ContinuationDialog";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
-import { ChatHeader } from "./chat/ChatHeader";
+import { ChatHeader, resolveThreadBreadcrumbAncestors } from "./chat/ChatHeader";
 import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
 import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
@@ -5478,6 +5478,10 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [environmentId, navigate],
   );
+  const threadBreadcrumbAncestors = useMemo(
+    () => resolveThreadBreadcrumbAncestors(activeThread, serverThreadShells),
+    [activeThread, serverThreadShells],
+  );
 
   const sideChatCreateInFlightRef = useRef(false);
   const createSideChat = useCallback(async () => {
@@ -7283,8 +7287,10 @@ function ChatViewContent(props: ChatViewProps) {
               activeThreadTitle={activeThread.title}
               activeProjectName={activeProject?.title}
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
+              threadAncestors={threadBreadcrumbAncestors}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProject}
+              onOpenThread={onOpenRelatedThread}
             />
           </header>
         ) : null}
