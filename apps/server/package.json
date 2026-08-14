@@ -46,6 +46,7 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@modelcontextprotocol/client": "^2.0.0",
+    "@t3tools/backend": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/tailscale": "workspace:*",
@@ -55,6 +56,7 @@
     "@types/node": "catalog:",
     "@types/nodemailer": "^8.0.1",
     "@types/smtp-server": "^3.5.13",
+    "convex": "^1.16.0",
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "nodemailer": "^9.0.5",

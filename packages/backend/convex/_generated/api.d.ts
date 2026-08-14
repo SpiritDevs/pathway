@@ -19,6 +19,7 @@ import type * as lib_validators from "../lib/validators.js";
 import type * as memberships from "../memberships.js";
 import type * as relayPersistence from "../relayPersistence.js";
 import type * as roles from "../roles.js";
+import type * as smoke from "../smoke.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
 
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   memberships: typeof memberships;
   relayPersistence: typeof relayPersistence;
   roles: typeof roles;
+  smoke: typeof smoke;
   sync: typeof sync;
   teams: typeof teams;
 }>;

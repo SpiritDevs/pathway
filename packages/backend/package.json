@@ -27,6 +27,10 @@
       "types": "./src/permissions.ts",
       "import": "./src/permissions.ts"
     },
+    "./smokeSeed": {
+      "types": "./src/smokeSeed.ts",
+      "import": "./src/smokeSeed.ts"
+    },
     "./sync/changeFeed": {
       "types": "./src/sync/changeFeed.ts",
       "import": "./src/sync/changeFeed.ts"
