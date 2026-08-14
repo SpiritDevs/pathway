@@ -22,7 +22,7 @@ The relay currently owns:
 - Listing linked environments and registered mobile devices for an account.
 - Registering mobile notification preferences and APNs tokens.
 - Receiving published agent activity and delivering notifications or Live Activity updates.
-- Persisting relay state and exposing relay-specific traces for diagnostics.
+- Persisting relay state in Convex and exposing relay-specific traces for diagnostics.
 
 The environment server and relay have separate credentials and trust boundaries. Read
 [Environment Authentication Profile](../../docs/internals/environment-auth.md) before changing token,
@@ -39,8 +39,8 @@ credential, or authorization behavior.
 - [`src/agentActivity`](./src/agentActivity) contains mobile device registration, activity state,
   APNs delivery, and queue processing.
 - [`src/auth`](./src/auth) contains relay token and DPoP proof handling.
-- [`src/persistence/schema.ts`](./src/persistence/schema.ts) defines persisted relay state. Keep
-  schema and migration changes together.
+- [`../../packages/backend/convex/relayPersistence.ts`](../../packages/backend/convex/relayPersistence.ts)
+  defines the authenticated Convex functions used for relay state.
 
 Shared request and response schemas live in
 [`packages/contracts/src/relay.ts`](../../packages/contracts/src/relay.ts). Shared client-side relay
@@ -82,21 +82,22 @@ The relay deploys through Alchemy:
 vp run --filter pathway-relay deploy
 ```
 
-The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
-connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.env.example) to
+The stack provisions the Cloudflare Worker and queues, managed endpoint resources, and relay
+tracing resources. Relay records live in the Convex deployment named by `CONVEX_URL`; use its
+client URL ending in `.convex.cloud`, not its HTTP Actions URL. Copy
+[`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
 file from the relay directory. Runtime secrets include Clerk and APNs credentials. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
-The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
-stable and nightly clients. Every other stage references that database and provisions an isolated
-PlanetScale branch and runtime role for local development, so deploy `prod` before creating
-developer stages:
+The `prod` Alchemy stage is the shared hosted relay for stable and nightly clients and owns the
+retained Cloudflare zones. Deploy it before a personal stage, which references those zone resources.
+Each stage can still use the Convex deployment named by its own `CONVEX_URL`:
 
 ```sh
-vp run --filter pathway-relay deploy -- --stage prod
-vp run --filter pathway-relay deploy -- --env-file .env.local
+vp run --filter pathway-relay deploy --stage prod
+vp run --filter pathway-relay deploy --env-file .env.local
 ```
 
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
@@ -107,6 +108,27 @@ DNS-safe sanitization as Alchemy physical resource names, so `prod` uses
 `prod-<digest>.<RELAY_TUNNEL_ZONE_NAME>`; personal stages use
 `<stage>-<digest>.<RELAY_TUNNEL_ZONE_NAME>`. `RELAY_DOMAIN` remains available as an explicit API
 domain override.
+
+For the Pathway deployment, both Cloudflare zones are `spiritdevs.com`. That yields
+`https://relay.spiritdevs.com` for `prod` and, for example,
+`https://relay-dev-corey.spiritdevs.com` for `dev_corey`.
+
+### First deployment bootstrap
+
+A new Convex deployment cannot trust the relay until the relay publishes its key. Bootstrap the
+pair in this order:
+
+1. Create the Convex deployment, set `CLERK_JWT_ISSUER_DOMAIN`, and record its client URL.
+2. Deploy the relay with `CONVEX_URL` set to that deployment. The JWKS route has no persistence
+   dependency, so `https://<relay-origin>/.well-known/jwks.json` is available before the normal
+   relay APIs are healthy. Verify that it returns the public P-256 key.
+3. In Convex, set `PATHWAY_RELAY_JWT_ISSUER=https://<relay-origin>` and
+   `PATHWAY_RELAY_JWKS_URL=https://<relay-origin>/.well-known/jwks.json`, then run
+   `pnpm --filter @t3tools/backend exec convex dev --once`.
+
+Convex statically requires every environment variable referenced by `auth.config.ts`, so both relay
+variables must be present before codegen or deployment. Relay service calls then use short-lived
+ES256 JWTs; the Worker never receives a Convex deploy key.
 
 After a successful deploy, the wrapper updates the repository-root `.env` file with the derived relay
 URL. That makes subsequent source builds point at the relay that was just deployed without copying
@@ -123,14 +145,11 @@ deploy personal non-production stages locally with any stage name other than `pr
 The repository must define these Actions variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
 
 The repository must define these Actions secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
 - `AXIOM_TOKEN`
 
 The `production` GitHub environment must define these Actions variables:
@@ -138,6 +157,7 @@ The `production` GitHub environment must define these Actions variables:
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
 - `RELAY_DOMAIN` if overriding the derived production relay domain
+- `CONVEX_URL`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -151,8 +171,9 @@ The `production` GitHub environment must define these Actions secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
+The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
+they are not bound into the relay Worker. The relay uses short-lived ES256 service JWTs rather than
+a Convex deploy key. The production deployment uses an Axiom personal access token,
 so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
 derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
 and hosted web builds.

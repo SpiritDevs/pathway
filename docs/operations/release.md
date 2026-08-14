@@ -57,20 +57,18 @@ GitHub Actions environment before building desktop, CLI, or hosted web artifacts
 Required repository variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
 
 Required repository secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
 - `AXIOM_TOKEN`
 
 Required `production` environment variables:
 
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
+- `CONVEX_URL`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
@@ -89,17 +87,28 @@ Required `production` environment secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The `prod` stage owns the retained PlanetScale
-database. Local personal stages provision isolated branches from it and are never deployed by CI.
-Production adopts the configured relay API and tunnel DNS zones as retained Cloudflare resources.
-Personal stages reference the production-owned zones.
+The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
+they are not bound into the relay Worker. The production deployment uses an Axiom personal access
+token, so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. Relay operational state lives in the Convex
+deployment named by `CONVEX_URL`; the Worker authenticates with its Alchemy-managed ES256 service
+key rather than a Convex deploy key. Production adopts the configured relay API and tunnel DNS
+zones as retained Cloudflare resources. Personal stages reference the production-owned zones.
+
+For the current production infrastructure, configure both zone variables as `spiritdevs.com`. The
+derived production relay is `https://relay.spiritdevs.com`; `RELAY_DOMAIN` should remain unset unless
+the derived hostname needs to be overridden.
+
+When provisioning a new Convex/relay pair, create the Convex deployment and set its Clerk issuer,
+then deploy the relay with that deployment's `CONVEX_URL`. Verify the relay's
+`/.well-known/jwks.json`, set both `PATHWAY_RELAY_JWT_ISSUER` and `PATHWAY_RELAY_JWKS_URL` in Convex,
+and deploy the functions. The JWKS route does not depend on Convex persistence, so the Worker can
+safely come first; normal relay requests become healthy after the function deployment. Convex
+statically requires both relay variables before codegen or deployment.
 
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter pathway-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter pathway-relay deploy --stage "$USER" --env-file .env.local
 ```
 
 ## Hosted web app release deployment

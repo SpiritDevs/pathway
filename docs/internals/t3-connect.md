@@ -29,7 +29,7 @@ repository-root `.env` or `.env.local` file:
 PATHWAY_CLERK_PUBLISHABLE_KEY=<publishable key>
 PATHWAY_CLERK_JWT_TEMPLATE=<JWT template name>
 PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=<public OAuth application client ID>
-PATHWAY_RELAY_URL=https://relay.example.com
+PATHWAY_RELAY_URL=https://relay.spiritdevs.com
 ```
 
 The shared client loader projects these canonical values into framework-specific `VITE_*` and
@@ -62,18 +62,36 @@ silently vanishing from help. The bundled server still accepts runtime overrides
 operator-managed deployments.
 
 For a hosted relay deployment, copy `infra/relay/.env.example` to `infra/relay/.env`. The relay
-deployment reads `RELAY_DOMAIN`, `RELAY_API_ZONE_NAME`, `RELAY_TUNNEL_ZONE_NAME`,
-`CLERK_PUBLISHABLE_KEY`, and `CLERK_JWT_AUDIENCE` through Effect `Config`. There are no checked-in
-deployment defaults.
+deployment reads `RELAY_DOMAIN`, `RELAY_API_ZONE_NAME`, `RELAY_TUNNEL_ZONE_NAME`, `CONVEX_URL`,
+`CLERK_PUBLISHABLE_KEY`, and `CLERK_JWT_AUDIENCE` through Effect `Config`. The checked-in example
+uses `spiritdevs.com` for both Cloudflare zones; production therefore derives
+`https://relay.spiritdevs.com`, while a `dev_corey` stage derives
+`https://relay-dev-corey.spiritdevs.com`.
 `vp run --filter pathway-relay deploy` invokes Alchemy from the relay directory, so Alchemy loads
 `infra/relay/.env`. After a successful deployment, the wrapper updates the repository-root `.env`
 with the deployed HTTPS relay URL. The relay still requires
 `CLERK_SECRET_KEY` as an Alchemy secret. Never put `CLERK_SECRET_KEY` in a client application
 environment or commit it to the repository.
 
-The `prod` Alchemy stage owns the retained PlanetScale database. Non-production stages reference
-that database and provision isolated PlanetScale branches, so deploy `prod` before creating a
-personal developer stage.
+Relay persistence lives in the same Convex project as company and issue sync. Set `CONVEX_URL` to
+the deployment that corresponds to the relay stage. The Worker authenticates with a short-lived
+`relay-control-plane` JWT signed by its Alchemy-managed ES256 key; deploy keys are never installed
+in the Worker.
+
+A fresh environment bootstraps in this order:
+
+1. Create the Convex deployment, set `CLERK_JWT_ISSUER_DOMAIN`, and record its client URL.
+2. Deploy the Worker with `CONVEX_URL` pointing at that deployment. Its public
+   `/.well-known/jwks.json` has no persistence dependency and is available even though normal relay
+   requests are not healthy yet.
+3. Set `PATHWAY_RELAY_JWT_ISSUER` to the exact relay origin and `PATHWAY_RELAY_JWKS_URL` to that
+   origin plus `/.well-known/jwks.json` on the Convex deployment, then run
+   `pnpm --filter @t3tools/backend exec convex dev --once`.
+
+Convex statically requires both relay variables before codegen or deployment because they are
+referenced by `auth.config.ts`; a Clerk-only conditional cannot bypass that validation. Personal
+relay stages may use personal Convex deployments, but the `prod` Alchemy stage must exist first
+because it owns the retained Cloudflare zones those stages reference.
 
 ## Headless CLI OAuth Application
 
