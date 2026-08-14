@@ -38,6 +38,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   terminalOpen?: boolean;
   shortcutScope?: "page" | "side-chat";
   open?: boolean;
@@ -49,7 +50,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
 }) {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
-  const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
+  const disabled = props.disabled === true || props.disabledReason !== undefined;
+  const isMenuOpen = disabled ? false : (props.open ?? uncontrolledIsMenuOpen);
 
   // Resolve the active instance entry by exact routing key. The composer
   // resolves fallbacks before rendering this component; if the selected
@@ -76,6 +78,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     : false;
 
   const setIsMenuOpen = (open: boolean) => {
+    if (disabled) return;
     props.onOpenChange?.(open);
     if (props.open === undefined) {
       setUncontrolledIsMenuOpen(open);
@@ -131,64 +134,80 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   }, [isMenuOpen]);
 
   const handleInstanceModelChange = (instanceId: ProviderInstanceId, model: string) => {
-    if (props.disabled) return;
+    if (disabled) return;
     props.onInstanceModelChange(instanceId, model);
     setIsMenuOpen(false);
   };
+
+  const pickerTrigger = (
+    <PopoverTrigger
+      render={
+        <ComposerControl
+          aria-label={
+            props.disabledReason
+              ? `${props.triggerAriaLabel ?? "Provider and model"}. ${props.disabledReason}`
+              : props.triggerAriaLabel
+          }
+          variant={props.triggerVariant ?? "ghost"}
+          data-chat-provider-model-picker="true"
+          className={cn(
+            "min-w-0 justify-between whitespace-nowrap",
+            props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56",
+            props.triggerClassName,
+          )}
+          disabled={disabled}
+        />
+      }
+    >
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        {activeEntry ? (
+          <ProviderInstanceIcon
+            driverKind={activeEntry.driverKind}
+            displayName={activeEntry.displayName}
+            accentColor={activeEntry.accentColor}
+            showBadge={showInstanceBadge}
+            className="size-4"
+            iconClassName={cn("size-4", props.activeProviderIconClassName)}
+            indicatorBackground="var(--input)"
+            badgeClassName={cn(
+              "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
+              "px-0.5 text-[7px]",
+            )}
+          />
+        ) : null}
+        <Tooltip>
+          <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
+            {triggerTitle}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
+        </Tooltip>
+      </span>
+      <span aria-hidden="true" className="flex items-center">
+        <ComposerControlChevron />
+      </span>
+    </PopoverTrigger>
+  );
 
   return (
     <Popover
       open={isMenuOpen}
       onOpenChange={(open) => {
-        if (props.disabled) {
-          setIsMenuOpen(false);
-          return;
-        }
+        if (disabled) return;
         setIsMenuOpen(open);
       }}
     >
-      <PopoverTrigger
-        render={
-          <ComposerControl
-            aria-label={props.triggerAriaLabel}
-            variant={props.triggerVariant ?? "ghost"}
-            data-chat-provider-model-picker="true"
-            className={cn(
-              "min-w-0 justify-between whitespace-nowrap",
-              props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56",
-              props.triggerClassName,
-            )}
-            disabled={props.disabled}
-          />
-        }
-      >
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          {activeEntry ? (
-            <ProviderInstanceIcon
-              driverKind={activeEntry.driverKind}
-              displayName={activeEntry.displayName}
-              accentColor={activeEntry.accentColor}
-              showBadge={showInstanceBadge}
-              className="size-4"
-              iconClassName={cn("size-4", props.activeProviderIconClassName)}
-              indicatorBackground="var(--input)"
-              badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
-                "px-0.5 text-[7px]",
-              )}
-            />
-          ) : null}
-          <Tooltip>
-            <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
-              {triggerTitle}
-            </TooltipTrigger>
-            <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
-          </Tooltip>
-        </span>
-        <span aria-hidden="true" className="flex items-center">
-          <ComposerControlChevron />
-        </span>
-      </PopoverTrigger>
+      {props.disabledReason ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<span className="inline-flex min-w-0" title={props.disabledReason} />}
+          >
+            {pickerTrigger}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{props.disabledReason}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        pickerTrigger
+      )}
       <PopoverPopup
         data-side-chat-surface={props.shortcutScope === "side-chat" ? "true" : undefined}
         align="start"

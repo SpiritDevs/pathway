@@ -55,6 +55,7 @@ import {
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
+  derivePersistableComposerModelSelection,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -275,6 +276,8 @@ const runtimeModeConfig: Record<
 };
 
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
+const PROVIDER_NATIVE_SUBAGENT_CONTROLS_LOCKED_REASON =
+  "Set by the parent agent — provider-native subagents can't be reconfigured";
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -320,42 +323,45 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
+  disabledReason?: string;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
   const interactionModeTooltip =
-    props.interactionMode === "plan"
+    props.disabledReason ??
+    (props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
-      : "Default mode — click to enter plan mode";
+      : "Default mode — click to enter plan mode");
   const interactionModeToggle = props.showInteractionModeToggle ? (
     <>
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
       <Tooltip>
-        <TooltipTrigger
-          render={
-            <ComposerControl
-              className={cn(
-                "shrink-0 whitespace-nowrap",
-                props.interactionMode === "plan"
-                  ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                  : "text-muted-foreground/70 hover:text-foreground/80",
-              )}
-              type="button"
-              onClick={props.onToggleInteractionMode}
-              aria-label={interactionModeTooltip}
-            />
-          }
-        >
-          {props.interactionMode === "plan" ? (
-            <ComposerControlIcon icon={PencilRulerIcon} className="text-current opacity-100" />
-          ) : (
-            <ComposerControlIcon icon={BotIcon} opticalSize="large" />
-          )}
-          <span className="sr-only sm:not-sr-only">
-            {props.interactionMode === "plan" ? "Plan" : "Build"}
-          </span>
+        <TooltipTrigger render={<span className="inline-flex" title={props.disabledReason} />}>
+          <ComposerControl
+            className={cn(
+              "shrink-0 whitespace-nowrap",
+              props.interactionMode === "plan"
+                ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
+                : "text-muted-foreground/70 hover:text-foreground/80",
+            )}
+            type="button"
+            onClick={() => {
+              if (!props.disabledReason) props.onToggleInteractionMode();
+            }}
+            disabled={Boolean(props.disabledReason)}
+            aria-label={interactionModeTooltip}
+          >
+            {props.interactionMode === "plan" ? (
+              <ComposerControlIcon icon={PencilRulerIcon} className="text-current opacity-100" />
+            ) : (
+              <ComposerControlIcon icon={BotIcon} opticalSize="large" />
+            )}
+            <span className="sr-only sm:not-sr-only">
+              {props.interactionMode === "plan" ? "Plan" : "Build"}
+            </span>
+          </ComposerControl>
         </TooltipTrigger>
         <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
       </Tooltip>
@@ -367,39 +373,49 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
 
       <Tooltip>
-        <Select
-          value={props.runtimeMode}
-          onValueChange={(value) => props.onRuntimeModeChange(value!)}
-        >
-          <TooltipTrigger
-            render={<ComposerSelectControl className="font-medium" aria-label="Runtime mode" />}
+        <TooltipTrigger render={<span className="inline-flex" title={props.disabledReason} />}>
+          <Select
+            value={props.runtimeMode}
+            disabled={Boolean(props.disabledReason)}
+            onValueChange={(value) => {
+              if (!props.disabledReason && value) props.onRuntimeModeChange(value);
+            }}
           >
-            <ComposerControlIcon icon={RuntimeModeIcon} />
-            <SelectValue>{runtimeModeOption.label}</SelectValue>
-          </TooltipTrigger>
-          <SelectPopup alignItemWithTrigger={false}>
-            {runtimeModeOptions.map((mode) => {
-              const option = runtimeModeConfig[mode];
-              const OptionIcon = option.icon;
-              return (
-                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
-                      </span>
+            <ComposerSelectControl
+              className="font-medium"
+              aria-label={
+                props.disabledReason ? `Runtime mode. ${props.disabledReason}` : "Runtime mode"
+              }
+            >
+              <ComposerControlIcon icon={RuntimeModeIcon} />
+              <SelectValue>{runtimeModeOption.label}</SelectValue>
+            </ComposerSelectControl>
+            <SelectPopup alignItemWithTrigger={false}>
+              {runtimeModeOptions.map((mode) => {
+                const option = runtimeModeConfig[mode];
+                const OptionIcon = option.icon;
+                return (
+                  <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="grid min-w-0 flex-1 gap-0.5">
+                        <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                          <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          {option.label}
+                        </span>
+                        <span className="text-muted-foreground text-xs leading-4">
+                          {option.description}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                </SelectItem>
-              );
-            })}
-          </SelectPopup>
-        </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+                  </SelectItem>
+                );
+              })}
+            </SelectPopup>
+          </Select>
+        </TooltipTrigger>
+        <TooltipPopup side="top">
+          {props.disabledReason ?? runtimeModeOption.description}
+        </TooltipPopup>
       </Tooltip>
 
       {interactionModeToggle}
@@ -507,6 +523,7 @@ export interface ChatComposerHandle {
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
     selectedModelSelection: ModelSelection;
+    persistableModelSelection: ModelSelection | undefined;
     providerAvailable: boolean;
     selectedProvider: ProviderDriverKind;
     selectedModel: string;
@@ -568,12 +585,14 @@ export interface ChatComposerProps {
   // Mode
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  composerControlsLocked: boolean;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
   providerCatalogLoaded: boolean;
   providerStatuses: ServerProvider[];
   activeProjectDefaultModelSelection: ModelSelection | null | undefined;
+  activeSubagentModelSelection: ModelSelection | null | undefined;
   activeThreadModelSelection: ModelSelection | null | undefined;
 
   // Context window
@@ -665,6 +684,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProposedPlan,
     runtimeMode,
     interactionMode,
+    composerControlsLocked,
     lockedProvider,
     providerCatalogLoaded,
     providerStatuses,
@@ -702,6 +722,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError,
     onExpandImage,
   } = props;
+  const composerControlsDisabledReason = composerControlsLocked
+    ? PROVIDER_NATIVE_SUBAGENT_CONTROLS_LOCKED_REASON
+    : undefined;
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -764,6 +787,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
   const threadProvider =
     activeThread?.runtime?.providerInstanceId ??
+    props.activeSubagentModelSelection?.instanceId ??
     activeThreadModelSelection?.instanceId ??
     activeProjectDefaultModelSelection?.instanceId ??
     null;
@@ -781,7 +805,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const lockedContinuationGroupKey = useMemo((): string | null => {
     if (!lockedProvider || !activeThread) return null;
     const lockedInstanceId =
-      activeThread.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId;
+      activeThread.runtime?.providerInstanceId ??
+      props.activeSubagentModelSelection?.instanceId ??
+      activeThreadModelSelection?.instanceId;
     if (!lockedInstanceId) return null;
     return (
       providerInstanceEntries.find((entry) => entry.instanceId === lockedInstanceId)
@@ -792,6 +818,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadModelSelection?.instanceId,
     lockedProvider,
     providerInstanceEntries,
+    props.activeSubagentModelSelection?.instanceId,
   ]);
 
   // Resolve which configured instance the composer is currently targeting.
@@ -808,6 +835,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const candidates: Array<string | null | undefined> = [
       composerDraft.activeProvider,
       activeThread?.runtime?.providerInstanceId,
+      props.activeSubagentModelSelection?.instanceId,
       activeThreadModelSelection?.instanceId,
       activeProjectDefaultModelSelection?.instanceId,
     ];
@@ -850,6 +878,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     lockedContinuationGroupKey,
     lockedProvider,
     providerInstanceEntries,
+    props.activeSubagentModelSelection?.instanceId,
     requestedDriverKind,
   ]);
 
@@ -887,11 +916,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
 
-  const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
+  const {
+    modelOptions: composerModelOptions,
+    selectedModel,
+    modelSelectionSource,
+  } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
     providers: providerStatuses,
     selectedProvider,
     selectedInstanceId,
+    subagentModelSelection: props.activeSubagentModelSelection,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
@@ -943,6 +977,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
     [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
   );
+  const persistableModelSelection = derivePersistableComposerModelSelection({
+    modelSelection: selectedModelSelection,
+    source: modelSelectionSource,
+  });
   const selectedModelForPicker = selectedModel;
   // Instance-keyed option list so the picker can show each configured
   // instance (built-in + custom) as a first-class sidebar entry. The
@@ -1250,6 +1288,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelOptions: composerModelOptions?.[selectedInstanceId],
     prompt,
     onPromptChange: setPromptFromTraits,
+    ...(composerControlsDisabledReason ? { disabledReason: composerControlsDisabledReason } : {}),
   });
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
@@ -1261,6 +1300,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelOptions: composerModelOptions?.[selectedInstanceId],
     prompt,
     onPromptChange: setPromptFromTraits,
+    ...(composerControlsDisabledReason ? { disabledReason: composerControlsDisabledReason } : {}),
   });
   const pendingPrimaryAction = useMemo(
     () =>
@@ -2687,6 +2727,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
         selectedModelSelection,
+        persistableModelSelection,
         providerAvailable: !noProviderAvailable,
         selectedProvider,
         selectedModel,
@@ -2715,6 +2756,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModel,
       selectedModelOptionsForDispatch,
       selectedModelSelection,
+      persistableModelSelection,
       noProviderAvailable,
       selectedPromptEffort,
       selectedProvider,
@@ -3218,6 +3260,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     keybindings={keybindings}
                     modelOptionsByInstance={modelOptionsByInstance}
                     triggerClassName="-ms-2.5"
+                    disabled={composerControlsLocked}
+                    {...(composerControlsDisabledReason
+                      ? { disabledReason: composerControlsDisabledReason }
+                      : {})}
                     terminalOpen={terminalOpen}
                     open={isComposerModelPickerOpen}
                     {...(composerProviderState.modelPickerIconClassName
@@ -3240,6 +3286,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
+                    {...(composerControlsDisabledReason
+                      ? { disabledReason: composerControlsDisabledReason }
+                      : {})}
                     onToggleInteractionMode={toggleInteractionMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
@@ -3256,6 +3305,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
                       showPlanToggle={false}
+                      {...(composerControlsDisabledReason
+                        ? { disabledReason: composerControlsDisabledReason }
+                        : {})}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />

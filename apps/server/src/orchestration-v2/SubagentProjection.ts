@@ -37,6 +37,35 @@ export function subagentThreadTitle(input: {
   return clipped;
 }
 
+/**
+ * Selection a subagent runs with, for providers that report the subagent's
+ * model but never its options (ACP, Cursor, OpenCode). An unreported model
+ * means the subagent stayed on the parent's. A subagent on the parent's model
+ * also runs the parent's session-scoped option selections, so they are
+ * inherited verbatim; a subagent that named a different model gets none,
+ * because option availability is advertised per model and stamping the
+ * parent's would misreport what the child thread actually runs with.
+ *
+ * The subagent record and its child thread both take their options from this
+ * one selection so the two can never disagree.
+ */
+export function subagentChildModelSelection(input: {
+  readonly parentSelection: ModelSelection;
+  readonly reportedModel: string | null | undefined;
+}): ModelSelection {
+  const model = input.reportedModel ?? input.parentSelection.model;
+  const parentOptions = input.parentSelection.options;
+  const options =
+    parentOptions !== undefined && parentOptions.length > 0 && model === input.parentSelection.model
+      ? parentOptions
+      : undefined;
+  return {
+    instanceId: input.parentSelection.instanceId,
+    model,
+    ...(options === undefined ? {} : { options }),
+  };
+}
+
 export function makeSubagentChildThread(input: {
   readonly parentThread: OrchestrationV2AppThread;
   readonly childThreadId: ThreadId;

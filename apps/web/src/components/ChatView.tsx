@@ -216,6 +216,8 @@ import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRo
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  deriveComposerControlsLocked,
+  deriveSubagentComposerModelSelection,
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
@@ -1653,6 +1655,38 @@ function ChatViewContent(props: ChatViewProps) {
     return scopeThreadRef(parentSubagentEnvironmentId, parentSubagentThreadId);
   }, [parentSubagentEnvironmentId, parentSubagentThreadId]);
   const parentSubagentThread = useThreadShell(parentSubagentThreadRef);
+  const parentSubagentProjection = useThreadProjection(parentSubagentThreadRef);
+  const parentRuntimeSubagents = useMemo(
+    () => projectedSubagentsToRuntime(parentSubagentProjection?.projection.subagents ?? []),
+    [parentSubagentProjection?.projection.subagents],
+  );
+  const matchedParentSubagent = useMemo(() => {
+    if (activeThread?.lineage.relationshipToParent !== "subagent") {
+      return null;
+    }
+    return (
+      parentRuntimeSubagents.find((candidate) => candidate.childThreadId === activeThread.id) ??
+      null
+    );
+  }, [activeThread?.id, activeThread?.lineage.relationshipToParent, parentRuntimeSubagents]);
+  const composerControlsLocked = deriveComposerControlsLocked({
+    relationshipToParent: activeThread?.lineage.relationshipToParent ?? null,
+    matchedSubagentOrigin: matchedParentSubagent?.origin,
+  });
+  const activeSubagentModelSelection = useMemo(
+    () =>
+      activeThread
+        ? deriveSubagentComposerModelSelection({
+            threadId: activeThread.id,
+            relationshipToParent: activeThread.lineage.relationshipToParent,
+            providerInstanceId: activeThread.providerInstanceId,
+            threadModelSelection: activeThread.modelSelection,
+            parentThreadModelSelection: parentSubagentThread?.modelSelection,
+            runtimeSubagents: parentRuntimeSubagents,
+          })
+        : null,
+    [activeThread, parentRuntimeSubagents, parentSubagentThread?.modelSelection],
+  );
   const parentThreadLink = useMemo(
     () =>
       parentSubagentThreadRef === null
@@ -5564,6 +5598,7 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
     const composerImages =
       directAnnotation?.image &&
@@ -5819,7 +5854,9 @@ function ChatViewContent(props: ChatViewProps) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
-        ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
+        ...(ctxSelectedModel && ctxPersistableModelSelection
+          ? { modelSelection: ctxPersistableModelSelection }
+          : {}),
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
@@ -6002,7 +6039,9 @@ function ChatViewContent(props: ChatViewProps) {
         const settingsResult = await persistThreadSettingsForNextTurn({
           threadId: activeThread.id,
           createdAt,
-          modelSelection: sendCtx.selectedModelSelection,
+          ...(sendCtx.persistableModelSelection
+            ? { modelSelection: sendCtx.persistableModelSelection }
+            : {}),
           runtimeMode,
           interactionMode: "default",
         });
@@ -6369,6 +6408,7 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
+      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
 
     const threadIdForSend = activeThread.id;
@@ -6416,7 +6456,7 @@ function ChatViewContent(props: ChatViewProps) {
     const settingsResult = await persistThreadSettingsForNextTurn({
       threadId: threadIdForSend,
       createdAt: messageCreatedAt,
-      modelSelection: ctxSelectedModelSelection,
+      ...(ctxPersistableModelSelection ? { modelSelection: ctxPersistableModelSelection } : {}),
       ...(localCheckoutBranchMismatch ? { branch: localCheckoutBranchMismatch.currentBranch } : {}),
       runtimeMode,
       interactionMode: nextInteractionMode,
@@ -7280,12 +7320,14 @@ function ChatViewContent(props: ChatViewProps) {
                             activeProposedPlan={activeProposedPlan}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
+                            composerControlsLocked={composerControlsLocked}
                             lockedProvider={modelPickerLockedProvider}
                             providerCatalogLoaded={serverConfig !== null}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             activeProjectDefaultModelSelection={
                               activeProject?.defaultModelSelection
                             }
+                            activeSubagentModelSelection={activeSubagentModelSelection}
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeThreadVisibleTurnItems={serverVisibleTurnItems}
                             resolvedTheme={resolvedTheme}

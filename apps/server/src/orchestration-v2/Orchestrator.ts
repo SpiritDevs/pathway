@@ -336,7 +336,9 @@ function hasLiveRun(projection: OrchestrationV2ThreadProjection): boolean {
  * the agent has already finished, and the request is rejected rather than
  * arming a takeover that could never pause anything. Matches `hasLiveRun`.
  */
-function takeoverEligibleRun(projection: OrchestrationV2ThreadProjection): OrchestrationV2Run | null {
+function takeoverEligibleRun(
+  projection: OrchestrationV2ThreadProjection,
+): OrchestrationV2Run | null {
   const eligible = projection.runs.filter(
     (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
   );
@@ -4856,6 +4858,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         prompt: command.task,
         title: command.title ?? null,
         model: command.modelSelection.model,
+        ...(command.modelSelection.options === undefined
+          ? {}
+          : { options: command.modelSelection.options }),
         ...(command.completionWake === undefined ? {} : { completionWake: command.completionWake }),
         status: "running",
         result: null,

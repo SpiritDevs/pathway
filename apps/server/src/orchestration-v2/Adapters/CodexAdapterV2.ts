@@ -19,6 +19,7 @@ import type {
   OrchestrationV2RuntimeRequest,
   OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
+  ProviderOptionSelections,
   ProviderUserInputAnswers,
   ProviderApprovalDecision,
   ProviderRequestKind,
@@ -104,6 +105,7 @@ import {
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
+const CODEX_REASONING_EFFORT_OPTION_ID = "reasoningEffort";
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
@@ -398,6 +400,30 @@ function trimText(value: string | null | undefined): string | undefined {
 
 function nonEmptyText(value: string | null | undefined, fallback: string): string {
   return trimText(value) ?? fallback;
+}
+
+/**
+ * Option selections a spawned subagent runs with: the reasoning effort Codex
+ * reports for the agent wins, and an unreported effort is dropped rather than
+ * inherited whenever the subagent runs a different model, because efforts are
+ * advertised per model. Session-scoped selections stay inherited.
+ */
+function codexSubagentOptionSelections(input: {
+  readonly parentSelection: ModelSelection;
+  readonly model: string;
+  readonly reasoningEffort: string | undefined;
+}): ProviderOptionSelections | undefined {
+  const parentOptions = input.parentSelection.options ?? [];
+  const inheritsParentEffort =
+    input.reasoningEffort === undefined && input.model === input.parentSelection.model;
+  const retained = inheritsParentEffort
+    ? parentOptions
+    : parentOptions.filter((selection) => selection.id !== CODEX_REASONING_EFFORT_OPTION_ID);
+  const resolved =
+    input.reasoningEffort === undefined
+      ? retained
+      : [...retained, { id: CODEX_REASONING_EFFORT_OPTION_ID, value: input.reasoningEffort }];
+  return resolved.length > 0 ? resolved : undefined;
 }
 
 function codexPlanStepStatus(
@@ -1991,6 +2017,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly prompt: string;
           readonly title: string | null;
           readonly model: string | null;
+          readonly reasoningEffort: string | null;
           readonly ordinal: number;
           readonly emitInitialPrompt: boolean;
         }) =>
@@ -2041,6 +2068,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               createdAt: now,
               updatedAt: now,
             } satisfies OrchestrationV2ProviderThread;
+            const childModel = input.model ?? input.context.input.modelSelection.model;
+            const childOptions = codexSubagentOptionSelections({
+              parentSelection: input.context.input.modelSelection,
+              model: childModel,
+              reasoningEffort: trimText(input.reasoningEffort),
+            });
             const task = {
               id: subagentNodeId,
               threadId: input.context.projectionThreadId,
@@ -2056,6 +2089,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               prompt: input.prompt,
               title: input.title,
               model: input.model,
+              ...(childOptions === undefined ? {} : { options: childOptions }),
               status: "running",
               result: null,
               startedAt: now,
@@ -2069,8 +2103,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               activeProviderThreadId: providerThread.id,
               providerInstanceId: input.context.input.modelSelection.instanceId,
               modelSelection: {
-                ...input.context.input.modelSelection,
-                model: task.model ?? input.context.input.modelSelection.model,
+                instanceId: input.context.input.modelSelection.instanceId,
+                model: childModel,
+                ...(childOptions === undefined ? {} : { options: childOptions }),
               },
               title: subagentThreadTitle({
                 parentTitle: input.context.projectionAppThread.title,
@@ -2229,6 +2264,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 prompt: input.item.prompt ?? "",
                 title: null,
                 model,
+                reasoningEffort: trimText(input.item.reasoningEffort) ?? null,
                 ordinal: index + 1,
                 emitInitialPrompt: true,
               });
@@ -2254,6 +2290,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 prompt: "",
                 title: input.item.agentPath,
                 model: null,
+                reasoningEffort: null,
                 ordinal,
                 emitInitialPrompt: false,
               });

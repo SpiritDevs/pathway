@@ -11,6 +11,7 @@ import {
   assertSemanticProjectionIntegrity,
   assertTurnItemTypes,
   assertUserMessagesInclude,
+  OPENCODE_MODEL_SELECTION,
   OPENCODE_SUBAGENT_PROMPT,
   projectionFor,
 } from "../shared.ts";
@@ -55,8 +56,15 @@ export function assertOpenCodeSubagentOutput(
   assert.equal(providerThread.appThreadId, subagent.childThreadId);
   assert.equal(providerThread.ownerNodeId, subagent.id);
 
+  // The recorded task runs the parent's model, so the parent's option
+  // selections carry onto both the task record and the child thread.
+  assert.equal(subagent.model, OPENCODE_MODEL_SELECTION.model);
+  assert.deepEqual(subagent.options, OPENCODE_MODEL_SELECTION.options);
+
   const childProjection = result.projections.get(subagent.childThreadId);
   assert.isDefined(childProjection);
+  assert.equal(childProjection.thread.modelSelection.model, subagent.model);
+  assert.deepEqual(childProjection.thread.modelSelection.options, subagent.options);
   assert.equal(childProjection.thread.lineage.parentThreadId, projection.thread.id);
   assert.equal(childProjection.thread.lineage.relationshipToParent, "subagent");
   assert.equal(childProjection.thread.activeProviderThreadId, providerThread.id);

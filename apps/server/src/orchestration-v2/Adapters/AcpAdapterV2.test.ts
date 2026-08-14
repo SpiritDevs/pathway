@@ -11802,6 +11802,159 @@ describe("AcpAdapterV2", () => {
       assert.isFalse(staleEventSeen, "interrupted runtime events must not attach to attempt 2");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
+
+  // ACP reports the subagent's model but never its options, so the parent's
+  // selections only carry over while the subagent stays on the parent's model.
+  // The mock agent exposes only the "model" config option, so that is the one
+  // selection an ACP session here can legitimately carry.
+  const parentOptions = [{ id: "model", value: "default" }] as const;
+  const runSubagentModelScenario = (input: {
+    readonly scenario: string;
+    readonly reportedModel: string | null;
+  }) =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          extractSubagentUpdate: (toolCall) =>
+            toolCall.toolCallId === "tool-call-generic-1"
+              ? {
+                  nativeTaskId: "task-generic-1",
+                  prompt: "child prompt",
+                  title: "child task",
+                  model: input.reportedModel,
+                  status: "completed",
+                  childSessionId: null,
+                  result: "CHILD_OK",
+                }
+              : undefined,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: { T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make(input.scenario);
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = {
+        instanceId,
+        model: "default",
+        options: parentOptions,
+      } as const satisfies ModelSelection;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make(`provider-session-${input.scenario}`),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          modelSelection,
+        }),
+      );
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: ACP_TEST_DRIVER,
+        nativeTurnId: "mock-session-1:turn:1",
+      });
+      let childThread: ProviderAdapterV2Event | null = null;
+      let subagentEvent: ProviderAdapterV2Event | null = null;
+      let terminal: string | null = null;
+      while (terminal === null) {
+        const event = yield* Queue.take(events);
+        if (event.type === "app_thread.created") childThread = event;
+        if (event.type === "subagent.updated") subagentEvent = event;
+        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
+          terminal = event.status;
+        }
+      }
+      assert.equal(terminal, "completed");
+      assert.isNotNull(childThread);
+      assert.isNotNull(subagentEvent);
+      if (
+        childThread?.type !== "app_thread.created" ||
+        subagentEvent?.type !== "subagent.updated"
+      ) {
+        throw new Error("ACP subagent scenario is missing its child thread or task record");
+      }
+      return {
+        task: subagentEvent.subagent,
+        childSelection: childThread.appThread.modelSelection,
+      };
+    });
+
+  it.effect("inherits the parent's options for a subagent that stays on the parent model", () =>
+    Effect.gen(function* () {
+      const { task, childSelection } = yield* runSubagentModelScenario({
+        scenario: "thread-acp-subagent-options-same-model",
+        reportedModel: "default",
+      });
+      assert.deepEqual(task.options, parentOptions);
+      assert.equal(childSelection.model, "default");
+      assert.deepEqual(childSelection.options, task.options);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("drops the parent's options for a subagent that reports a different model", () =>
+    Effect.gen(function* () {
+      const { task, childSelection } = yield* runSubagentModelScenario({
+        scenario: "thread-acp-subagent-options-divergent-model",
+        reportedModel: "grok-mock-alt",
+      });
+      assert.isUndefined(task.options);
+      assert.equal(task.model, "grok-mock-alt");
+      assert.equal(childSelection.model, "grok-mock-alt");
+      assert.isUndefined(childSelection.options);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("inherits the parent's options when no subagent model is reported", () =>
+    Effect.gen(function* () {
+      const { task, childSelection } = yield* runSubagentModelScenario({
+        scenario: "thread-acp-subagent-options-unreported-model",
+        reportedModel: null,
+      });
+      assert.deepEqual(task.options, parentOptions);
+      assert.isNull(task.model);
+      assert.equal(childSelection.model, "default");
+      assert.deepEqual(childSelection.options, task.options);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
 });
 
 describe("acpPostSettleWakeEvidence", () => {
