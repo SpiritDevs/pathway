@@ -1,6 +1,6 @@
 # 0005 — Company modelled as a Clerk organization
 
-Status: Accepted — implementation deferred; ships as its own change after the auth surfaces land
+Status: Superseded by 0007
 Date: 2026-08-11
 
 ## Context
