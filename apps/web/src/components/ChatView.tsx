@@ -4974,9 +4974,15 @@ function ChatViewContent(props: ChatViewProps) {
     handleReleaseBrowserTakeover,
     handleRequestBrowserTakeover,
   ]);
+  // Keep the takeover controls beside the browser whenever the browser is
+  // visible. If the panel is closed or another surface is selected, the
+  // composer remains the fallback so the prompt never disappears.
+  const browserTakeoverBannerInPreview = previewPanelOpen ? browserTakeoverBanner : null;
+  const browserTakeoverBannerInComposer = previewPanelOpen ? null : browserTakeoverBanner;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
-    const browserTakeoverItems = browserTakeoverBanner === null ? [] : [browserTakeoverBanner];
+    const browserTakeoverItems =
+      browserTakeoverBannerInComposer === null ? [] : [browserTakeoverBannerInComposer];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [...systemComposerBannerItems, ...browserTakeoverItems, ...parkedThreadItems];
     }
@@ -5026,7 +5032,7 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
-    browserTakeoverBanner,
+    browserTakeoverBannerInComposer,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
@@ -6876,6 +6882,14 @@ function ChatViewContent(props: ChatViewProps) {
           tabId={activeRightPanelSurface.resourceId}
           configuredUrls={configuredPreviewUrls}
           visible
+          footer={
+            browserTakeoverBannerInPreview ? (
+              <ComposerBannerStack
+                className="mb-0 px-3 pt-2 pb-3"
+                items={[browserTakeoverBannerInPreview]}
+              />
+            ) : null
+          }
           onSendAnnotation={(annotation, image) => {
             void onSend(undefined, "auto", { annotation, image });
           }}
