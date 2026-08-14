@@ -22,6 +22,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { sourceControlMarkerLabel } from "@t3tools/shared/sourceControl";
 import * as DateTime from "effect/DateTime";
 
 export type PendingApproval = ThreadPendingApproval;
@@ -202,7 +203,12 @@ function itemIsToolLike(item: OrchestrationV2TurnItem): boolean {
 }
 
 function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
-  return item.type === "fork" || item.type === "thread_created" || item.type === "subagent";
+  return (
+    item.type === "fork" ||
+    item.type === "source_control" ||
+    item.type === "thread_created" ||
+    item.type === "subagent"
+  );
 }
 
 function itemStatus(item: OrchestrationV2TurnItem): ThreadFeedActivity["status"] {
@@ -240,6 +246,7 @@ function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
     case "checkpoint":
     case "proposed_plan":
     case "todo_list":
+    case "source_control":
       return "check";
     case "compaction":
     case "handoff":
@@ -294,6 +301,8 @@ function itemSummary(
       return "Context handed off";
     case "fork":
       return "Thread forked";
+    case "source_control":
+      return sourceControlMarkerLabel(item);
     case "thread_created":
       return "Thread created";
     case "subagent":
@@ -342,6 +351,8 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
     case "fork":
     case "thread_created":
       return item.targetThreadId;
+    case "source_control":
+      return item.pullRequest === null ? null : `PR #${item.pullRequest.number}`;
     case "subagent":
       return item.result ?? item.progress ?? item.prompt;
     case "dynamic_tool":

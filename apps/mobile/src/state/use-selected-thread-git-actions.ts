@@ -330,6 +330,7 @@ export function useSelectedThreadGitActions() {
           const result = await runStackedAction({
             actionId,
             action: input.action,
+            threadId: thread.id,
             ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
             ...(input.featureBranch ? { featureBranch: input.featureBranch } : {}),
             ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),

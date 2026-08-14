@@ -7,12 +7,14 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
+import { sourceControlMarkerLabel } from "@t3tools/shared/sourceControl";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
   BotIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
+  GitCommitHorizontalIcon,
   GitForkIcon,
   MessageSquareIcon,
   MinusIcon,
@@ -31,6 +33,7 @@ const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "compaction",
   "handoff",
   "fork",
+  "source_control",
   "subagent",
   "thread_created",
 ]);
@@ -182,6 +185,28 @@ export function V2LifecycleRow(props: {
         icon={GitForkIcon}
         actionLabel={item.source.type === "run" ? "Open source conversation" : "Open fork"}
         onAction={() => props.onOpenThread(relatedThreadId)}
+      />
+    );
+  }
+  if (item.type === "source_control") {
+    return (
+      <TimelineSystemDivider
+        label={sourceControlMarkerLabel(item)}
+        icon={GitCommitHorizontalIcon}
+        detail={
+          item.pullRequest === null ? null : (
+            <a
+              href={item.pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+              aria-label={`Open PR #${item.pullRequest.number}`}
+            >
+              #{item.pullRequest.number}
+              <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+            </a>
+          )
+        }
       />
     );
   }

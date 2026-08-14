@@ -1099,6 +1099,17 @@ export const OrchestrationV2TurnItem = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
+    type: Schema.Literal("source_control"),
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("thread_created"),
     targetThreadId: ThreadId,
     targetRunId: Schema.NullOr(RunId),
@@ -1784,6 +1795,17 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
+    type: Schema.Literal("source_control"),
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("thread_created"),
     targetThreadId: ThreadId,
     targetRunId: Schema.NullOr(RunId),
@@ -2075,6 +2097,18 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.source-control.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),

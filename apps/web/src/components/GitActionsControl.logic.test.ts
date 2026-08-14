@@ -8,7 +8,9 @@ import {
   canScopeCommitToThread,
   collectThreadTouchedPaths,
   formatGitActionElapsed,
+  formatPushAutoSettlementCountdown,
   isPushCommandFailure,
+  pushAutoSettlementActivityKey,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -129,6 +131,60 @@ describe("git action result toast timing", () => {
       timeout: 0,
       dismissAfterVisibleMs: 10_000,
     });
+  });
+});
+
+describe("push auto-settlement countdown", () => {
+  it("counts down in whole seconds and clamps at zero", () => {
+    assert.isNull(formatPushAutoSettlementCountdown(null, 1_000));
+    assert.equal(
+      formatPushAutoSettlementCountdown(11_000, 1_000),
+      "Settling thread in 10s unless activity resumes.",
+    );
+    assert.equal(
+      formatPushAutoSettlementCountdown(11_000, 10_001),
+      "Settling thread in 1s unless activity resumes.",
+    );
+    assert.equal(
+      formatPushAutoSettlementCountdown(11_000, 12_000),
+      "Settling thread in 0s unless activity resumes.",
+    );
+  });
+});
+
+describe("push auto-settlement activity", () => {
+  const activity = {
+    latestUserMessageAt: "2026-08-14T00:00:00.000Z",
+    latestRun: null,
+    runtime: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    pendingBackgroundTasks: [],
+    settledOverride: null,
+    snoozedUntil: null,
+    pinnedAt: null,
+    archivedAt: null,
+    itemCount: 4,
+    visibleItemCount: 4,
+  } as const;
+
+  it("ignores count-only changes from the durable push marker", () => {
+    const markerChanged = { ...activity, itemCount: 5, visibleItemCount: 5 };
+    assert.equal(
+      pushAutoSettlementActivityKey(activity),
+      pushAutoSettlementActivityKey(markerChanged),
+    );
+  });
+
+  it("changes when a new user message arrives", () => {
+    assert.notEqual(
+      pushAutoSettlementActivityKey(activity),
+      pushAutoSettlementActivityKey({
+        ...activity,
+        latestUserMessageAt: "2026-08-14T00:00:01.000Z",
+      }),
+    );
   });
 });
 

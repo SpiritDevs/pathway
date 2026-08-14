@@ -1,4 +1,17 @@
-import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  OrchestrationV2TurnItem,
+  SourceControlProviderInfo,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
+
+export function sourceControlMarkerLabel(
+  item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,
+): string {
+  if (item.pullRequest !== null) {
+    return "pushed, committed, PR created";
+  }
+  return item.committed ? "pushed and committed" : "pushed";
+}
 
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";

@@ -135,6 +135,7 @@ export interface IdAllocatorV2DeriveShape {
   readonly delegatedTaskMessage: (input: { readonly commandId: CommandId }) => MessageId;
   readonly delegatedTaskTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
   readonly createdThreadTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
+  readonly sourceControlTurnItem: (input: { readonly commandId: CommandId }) => TurnItemId;
   readonly threadFromProviderThread: (input: {
     readonly driver: ProviderDriverKind;
     readonly nativeThreadId: string;
@@ -360,6 +361,8 @@ export const layer: Layer.Layer<IdAllocatorV2> = Layer.succeed(
         TurnItemId.make(joinId("turn-item", "delegated-task", input.commandId)),
       createdThreadTurnItem: (input) =>
         TurnItemId.make(joinId("turn-item", "created-thread", input.commandId)),
+      sourceControlTurnItem: (input) =>
+        TurnItemId.make(joinId("turn-item", "source-control", input.commandId)),
       threadFromProviderThread: (input) =>
         ThreadId.make(
           joinId("thread", "provider", input.driver, "native-thread", input.nativeThreadId),

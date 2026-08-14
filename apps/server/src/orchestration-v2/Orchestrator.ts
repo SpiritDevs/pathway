@@ -239,6 +239,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.unarchive":
     case "thread.delete":
     case "thread.settle":
+    case "thread.source-control.record":
     case "thread.unsettle":
     case "thread.snooze":
     case "thread.unsnooze":
@@ -1427,6 +1428,49 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: thread,
     });
   });
+
+  const dispatchSourceControlRecord = Effect.fn("orchestrationV2.dispatch.sourceControlRecord")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.source-control.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProjectionError({
+              threadId: command.threadId,
+              cause,
+            }),
+        ),
+      );
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "turn-item.updated",
+        threadId: command.threadId,
+        occurredAt: now,
+        payload: {
+          id: idAllocator.derive.sourceControlTurnItem({ commandId: command.commandId }),
+          threadId: command.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: nextTurnItemOrdinal(projection),
+          status: "completed",
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "source_control",
+          committed: command.committed,
+          pullRequest: command.pullRequest,
+        },
+      });
+    },
+  );
 
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
@@ -7218,6 +7262,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);
+        break;
+      case "thread.source-control.record":
+        yield* dispatchSourceControlRecord(command, events);
         break;
       case "thread.archive":
       case "thread.unarchive":

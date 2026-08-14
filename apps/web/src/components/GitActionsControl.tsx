@@ -1,5 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
-import { type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  PUSH_AUTO_SETTLE_DELAY_MS,
+  shouldStartPushAutoSettlement,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -46,8 +50,10 @@ import {
   collectThreadTouchedPaths,
   type CommitFileScope,
   formatGitActionElapsed,
+  formatPushAutoSettlementCountdown,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
   isPushCommandFailure,
+  pushAutoSettlementActivityKey,
   type GitActionProgressPresentation,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -166,6 +172,8 @@ interface InlineGitActionSuccess {
   readonly title: string;
   readonly description: string | null;
   readonly scopeKey: string;
+  readonly autoSettleAtMs: number | null;
+  readonly autoSettleActivityKey: string | null;
 }
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
@@ -466,7 +474,17 @@ function GitActionProgressButtonContent({
 }
 
 function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSuccess }) {
-  const hasDescription = success.description !== null;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (success.autoSettleAtMs === null) return;
+    const update = () => setNowMs(Date.now());
+    update();
+    const timer = window.setInterval(update, 250);
+    return () => window.clearInterval(timer);
+  }, [success.autoSettleAtMs]);
+  const description =
+    formatPushAutoSettlementCountdown(success.autoSettleAtMs, nowMs) ?? success.description;
+  const hasDescription = description !== null;
 
   return (
     <div
@@ -485,9 +503,9 @@ function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSu
         <div className="min-h-0 overflow-hidden">
           <p
             className="truncate pt-0.5 text-left text-[11px] font-normal text-muted-foreground"
-            title={success.description ?? undefined}
+            title={description ?? undefined}
           >
-            {success.description}
+            {description}
           </p>
         </div>
       </div>
@@ -1155,6 +1173,9 @@ export default function GitActionsControl({
   );
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;
+  const activeThreadActivityKey = activeServerThread
+    ? pushAutoSettlementActivityKey(activeServerThread)
+    : null;
   let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
   useEffect(() => {
@@ -1164,6 +1185,26 @@ export default function GitActionsControl({
     }, GIT_ACTION_SUCCESS_VISIBLE_MS);
     return () => window.clearTimeout(timeoutId);
   }, [inlineSuccess]);
+
+  useEffect(() => {
+    setInlineSuccess((current) => {
+      if (
+        current === null ||
+        current.autoSettleAtMs === null ||
+        current.autoSettleActivityKey === null ||
+        current.autoSettleActivityKey === activeThreadActivityKey ||
+        Date.now() >= current.autoSettleAtMs
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        description: "Settlement cancelled by new activity.",
+        autoSettleAtMs: null,
+        autoSettleActivityKey: null,
+      };
+    });
+  }, [activeThreadActivityKey]);
 
   const persistThreadBranchSync = useCallback(
     (branch: string | null) => {
@@ -1457,6 +1498,7 @@ export default function GitActionsControl({
       const result = await runImmediateGitAction.run({
         actionId,
         action,
+        ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(effectiveFilePaths ? { filePaths: effectiveFilePaths } : {}),
@@ -1487,11 +1529,23 @@ export default function GitActionsControl({
 
       const actionResult = result.value;
       syncThreadBranchAfterGitAction(actionResult);
+      const startsAutoSettlement = Boolean(
+        activeServerThread &&
+        serverConfig?.environment.capabilities.pushAutoSettlement === true &&
+        shouldStartPushAutoSettlement(actionResult),
+      );
+      const autoSettleAtMs = startsAutoSettlement ? Date.now() + PUSH_AUTO_SETTLE_DELAY_MS : null;
+      const autoSettleActivityKey =
+        startsAutoSettlement && activeServerThread !== null
+          ? pushAutoSettlementActivityKey(activeServerThread)
+          : null;
       if (isPanel) {
         setInlineSuccess({
           title: actionResult.toast.title,
           description: actionResult.toast.description ?? null,
           scopeKey: successScopeKey,
+          autoSettleAtMs,
+          autoSettleActivityKey,
         });
         return;
       }
@@ -1537,13 +1591,16 @@ export default function GitActionsControl({
           ? { dismissAfterVisibleMs: successToastTiming.dismissAfterVisibleMs }
           : {}),
       };
+      const successDescription = startsAutoSettlement
+        ? `Settling this thread in ${PUSH_AUTO_SETTLE_DELAY_MS / 1_000} seconds unless activity resumes.`
+        : actionResult.toast.description;
 
       if (toastActionProps) {
         resultToastId = toastManager.add(
           stackedThreadToast({
             type: "success",
             title: actionResult.toast.title,
-            description: actionResult.toast.description,
+            description: successDescription,
             timeout: successToastTiming.timeout,
             actionProps: toastActionProps,
             data: successToastData,
@@ -1553,7 +1610,7 @@ export default function GitActionsControl({
         resultToastId = toastManager.add({
           type: "success",
           title: actionResult.toast.title,
-          description: actionResult.toast.description,
+          description: successDescription,
           timeout: successToastTiming.timeout,
           data: successToastData,
         });
@@ -1644,7 +1701,13 @@ export default function GitActionsControl({
             ? `Updated ${pullResult.refName} from ${pullResult.upstreamRef ?? "upstream"}`
             : `${pullResult.refName} is already synchronized.`;
         if (isPanel) {
-          setInlineSuccess({ title, description, scopeKey: successScopeKey });
+          setInlineSuccess({
+            title,
+            description,
+            scopeKey: successScopeKey,
+            autoSettleAtMs: null,
+            autoSettleActivityKey: null,
+          });
           return;
         }
         const successToastTiming = resolveGitActionResultToastTiming("success");

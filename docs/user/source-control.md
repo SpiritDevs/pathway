@@ -32,6 +32,12 @@ Pathway works with the platforms your team already uses:
 **Create pull requests while you work**
 
 - Push a branch and create a pull request from the Git actions controls in the toolbar
+- After Pathway successfully pushes commits for a thread, it shows a 10-second countdown and then
+  settles the thread automatically. Sending another message or otherwise resuming thread activity
+  during that grace period cancels settlement.
+- Successful pushes and newly created pull requests add a source-control marker to the
+  conversation. The marker shows whether the action also committed changes and links the pull
+  request number when it created one.
 - If Git rejects a push, Pathway can ask the active agent to synchronize the branch, resolve
   conflicts, run focused checks, and retry. Pathway always asks before starting this recovery and
   never instructs the agent to force-push or discard unrelated work.

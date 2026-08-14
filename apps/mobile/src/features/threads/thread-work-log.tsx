@@ -3,7 +3,7 @@ import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
-import { LayoutAnimation, Pressable, useColorScheme, View } from "react-native";
+import { LayoutAnimation, Linking, Pressable, useColorScheme, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { PATHWAY_BRAND_MARK_SOURCE } from "../../components/brandAssets";
@@ -123,6 +123,7 @@ function ThreadActivityThreadLink(props: {
   const navigation = useNavigation();
   const item = row.item;
   let targetThreadId: ThreadId | null = null;
+  let externalUrl: string | null = null;
   let label = "Open related thread";
 
   if (item.type === "thread_created") {
@@ -137,9 +138,12 @@ function ThreadActivityThreadLink(props: {
         ? item.source.threadId
         : item.targetThreadId;
     label = targetThreadId === item.targetThreadId ? "Open forked thread" : "Open parent thread";
+  } else if (item.type === "source_control" && item.pullRequest !== null) {
+    externalUrl = item.pullRequest.url;
+    label = `Open PR #${item.pullRequest.number}`;
   }
 
-  if (targetThreadId === null) return null;
+  if (targetThreadId === null && externalUrl === null) return null;
 
   return (
     <Pressable
@@ -147,10 +151,14 @@ function ThreadActivityThreadLink(props: {
       accessibilityLabel={label}
       onPress={() => {
         void Haptics.selectionAsync();
-        navigation.navigate("Thread", {
-          environmentId: props.environmentId,
-          threadId: targetThreadId,
-        });
+        if (externalUrl !== null) {
+          void Linking.openURL(externalUrl);
+        } else if (targetThreadId !== null) {
+          navigation.navigate("Thread", {
+            environmentId: props.environmentId,
+            threadId: targetThreadId,
+          });
+        }
       }}
       className="mx-2 mb-2 min-h-9 flex-row items-center justify-center gap-1.5 rounded-lg border border-neutral-300/50 px-2 dark:border-white/[0.08]"
     >
