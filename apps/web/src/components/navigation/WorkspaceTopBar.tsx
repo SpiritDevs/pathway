@@ -1,48 +1,22 @@
-import { type RouterHistory, useCanGoBack, useRouter } from "@tanstack/react-router";
+import { useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { isElectron } from "../../env";
 import { cn, isMacPlatform } from "../../lib/utils";
 import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  createForwardHistoryTracker,
-  recordForwardHistoryNavigation,
-  type ForwardHistoryTracker,
-} from "./workspaceHistory.logic";
+import { forwardHistoryTracker } from "./workspaceHistory.logic";
 
 const NOOP = () => {};
-
-const forwardHistoryTrackers = new WeakMap<RouterHistory, ForwardHistoryTracker>();
-
-function forwardHistoryTracker(history: RouterHistory): ForwardHistoryTracker {
-  const existing = forwardHistoryTrackers.get(history);
-  if (existing) return existing;
-  const tracker = createForwardHistoryTracker(history.location.state.__TSR_index);
-  forwardHistoryTrackers.set(history, tracker);
-  return tracker;
-}
 
 // TanStack Router has no forward-facing counterpart to useCanGoBack. Keep the
 // high-water mark with the history instance so a route-driven remount does not
 // forget the forward entries that Back just exposed.
 function useCanGoForward() {
   const router = useRouter();
-  const history = router.history;
-  const tracker = forwardHistoryTracker(history);
-  const [canGoForward, setCanGoForward] = useState(() =>
-    recordForwardHistoryNavigation(tracker, history.location.state.__TSR_index),
-  );
-  useEffect(() => {
-    setCanGoForward(recordForwardHistoryNavigation(tracker, history.location.state.__TSR_index));
-    return history.subscribe(({ location, action }) => {
-      setCanGoForward(
-        recordForwardHistoryNavigation(tracker, location.state.__TSR_index, action.type),
-      );
-    });
-  }, [history, tracker]);
-  return canGoForward;
+  const tracker = forwardHistoryTracker(router.history);
+  return useSyncExternalStore(tracker.subscribe, tracker.getSnapshot, tracker.getSnapshot);
 }
 
 function WorkspaceHistoryControls() {
