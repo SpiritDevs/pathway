@@ -1,10 +1,13 @@
-import { DownloadIcon, RotateCwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { TriangleAlertIcon, XIcon } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { isElectron } from "../../env";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
@@ -12,14 +15,44 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
-  shouldShowDesktopUpdateButton,
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
 import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Separator } from "../ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "../../lib/utils";
+import {
+  DesktopUpdateStatusIcon,
+  shouldContinueDesktopUpdateCheckAnimation,
+  shouldShowDesktopUpdateCheckIcon,
+} from "./DesktopUpdateStatusIcon";
+
+function resolveSidebarUpdatePresentation({
+  action,
+  isDownloading,
+  showCheckIcon,
+}: {
+  readonly action: ReturnType<typeof resolveDesktopUpdateButtonAction>;
+  readonly isDownloading: boolean;
+  readonly showCheckIcon: boolean;
+}) {
+  const showUpdateDetails = action !== "none" || isDownloading;
+  const iconStatus = showCheckIcon
+    ? "checking"
+    : action === "install"
+      ? "downloaded"
+      : isDownloading
+        ? "downloading"
+        : action === "download"
+          ? "available"
+          : "idle";
+
+  return {
+    iconStatus,
+    showUpdateDetails,
+    showUpdateIconState: showUpdateDetails && !showCheckIcon,
+  } as const;
+}
 
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
@@ -73,12 +106,43 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const state = useDesktopUpdateState();
   const [dismissed, setDismissed] = useState(false);
   const [isActionPending, setIsActionPending] = useState(false);
+  const [checkAnimationKey, setCheckAnimationKey] = useState(0);
+  const [isCheckAnimationLatched, setIsCheckAnimationLatched] = useState(false);
+  const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 
-  const visible = isElectron && shouldShowDesktopUpdateButton(state) && !dismissed;
-  const tooltip = state ? getDesktopUpdateButtonTooltip(state) : "Update available";
-  const disabled = isDesktopUpdateButtonDisabled(state);
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setIsCheckAnimationLatched(false);
+    } else if (state?.status === "checking") {
+      setIsCheckAnimationLatched(true);
+    }
+  }, [prefersReducedMotion, state?.status]);
+
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
-
+  const isDownloading = state?.status === "downloading";
+  const showCheckIcon = shouldShowDesktopUpdateCheckIcon({
+    isAnimationLatched: isCheckAnimationLatched,
+    isChecking: state?.status === "checking",
+    prefersReducedMotion,
+  });
+  const { iconStatus, showUpdateDetails, showUpdateIconState } = resolveSidebarUpdatePresentation({
+    action,
+    isDownloading,
+    showCheckIcon,
+  });
+  const tooltip = showUpdateDetails
+    ? state
+      ? getDesktopUpdateButtonTooltip(state)
+      : "Update available"
+    : showCheckIcon
+      ? "Checking for updates…"
+      : "Check for updates";
+  const disabled = showCheckIcon
+    ? true
+    : showUpdateDetails
+      ? isDesktopUpdateButtonDisabled(state)
+      : !canCheckForUpdate(state);
+  const visible = isElectron && (!dismissed || !showUpdateDetails);
   const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
   const arm64Description =
     state && showArm64Warning ? getArm64IntelBuildWarningDescription(state) : null;
@@ -86,7 +150,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const handleAction = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !state) return;
-    if (disabled || action === "none" || isActionPending) return;
+    if (disabled || isActionPending) return;
 
     setIsActionPending(true);
 
@@ -166,8 +230,46 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
           );
         })
         .finally(() => setIsActionPending(false));
+      return;
     }
-  }, [action, disabled, isActionPending, state]);
+
+    if (!prefersReducedMotion) {
+      setIsCheckAnimationLatched(true);
+      setCheckAnimationKey((key) => key + 1);
+    }
+    void bridge
+      .checkForUpdate()
+      .then((result) => {
+        if (result.checked) return;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not check for updates",
+            description:
+              result.state.message ?? "Automatic updates are not available in this build.",
+          }),
+        );
+      })
+      .catch((error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not check for updates",
+            description: error instanceof Error ? error.message : "Update check failed.",
+          }),
+        );
+      })
+      .finally(() => setIsActionPending(false));
+  }, [action, disabled, isActionPending, prefersReducedMotion, state]);
+
+  const handleCheckAnimationIteration = useCallback(() => {
+    setIsCheckAnimationLatched(
+      shouldContinueDesktopUpdateCheckAnimation({
+        isChecking: state?.status === "checking",
+        prefersReducedMotion,
+      }),
+    );
+  }, [prefersReducedMotion, state?.status]);
 
   if (!visible && !showArm64Warning) return null;
 
@@ -201,12 +303,22 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
       {visible && (
         <div
           className={cn(
-            "group/update relative flex items-center bg-update-surface text-xs font-medium text-update-foreground",
+            "group/update relative flex items-center text-xs font-medium",
+            showUpdateIconState
+              ? "bg-update-surface text-update-foreground"
+              : "text-[var(--sidebar-icon-color)]",
             expanded ? "h-7 w-full rounded-lg" : "size-9 rounded-md",
             disabled && "cursor-not-allowed opacity-60",
           )}
         >
-          <div className="pointer-events-none absolute inset-0 rounded-[inherit] transition-colors group-has-[button.update-main:hover]/update:bg-update/12" />
+          <div
+            className={cn(
+              "pointer-events-none absolute inset-0 rounded-[inherit] transition-colors",
+              showUpdateIconState
+                ? "group-has-[button.update-main:hover]/update:bg-update/12"
+                : "group-has-[button.update-main:hover]/update:bg-sidebar-row-hover",
+            )}
+          />
           <Tooltip>
             <TooltipTrigger
               render={
@@ -221,36 +333,37 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                   )}
                   onClick={handleAction}
                 >
-                  {action === "install" ? (
-                    <>
-                      <RotateCwIcon className={expanded ? "size-3.5" : "size-4"} />
-                      {expanded ? <span>Restart to update</span> : null}
-                    </>
-                  ) : state?.status === "downloading" ? (
-                    <>
-                      <DownloadIcon className={expanded ? "size-3.5" : "size-4"} />
-                      {expanded ? (
-                        <span>
-                          Downloading
-                          {typeof state.downloadPercent === "number"
-                            ? ` (${Math.floor(state.downloadPercent)}%)`
-                            : "…"}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <DownloadIcon className={expanded ? "size-3.5" : "size-4"} />
-                      {expanded ? <span>Update available</span> : null}
-                    </>
-                  )}
+                  <DesktopUpdateStatusIcon
+                    key={showCheckIcon ? checkAnimationKey : iconStatus}
+                    downloadPercent={state?.downloadPercent ?? null}
+                    isCheckAnimating={showCheckIcon && !prefersReducedMotion}
+                    onCheckAnimationIteration={handleCheckAnimationIteration}
+                    status={iconStatus}
+                  />
+                  {expanded ? (
+                    <span>
+                      {action === "install"
+                        ? "Restart to update"
+                        : isDownloading
+                          ? `Downloading${
+                              typeof state?.downloadPercent === "number"
+                                ? ` (${Math.floor(state.downloadPercent)}%)`
+                                : "…"
+                            }`
+                          : action === "download"
+                            ? "Update available"
+                            : showCheckIcon
+                              ? "Checking for updates…"
+                              : "Check for updates"}
+                    </span>
+                  ) : null}
                 </button>
               }
             />
             <TooltipPopup
               align="start"
               className={
-                state?.channel === "nightly" && state.releaseNotes.length > 0
+                showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0
                   ? // pointer-events-auto overrides the positioner's pointer-events-none so the
                     // release notes stay open (and scrollable) when the cursor moves into them.
                     "pointer-events-auto max-w-none text-balance"
@@ -259,7 +372,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
               side={expanded ? "top" : "right"}
               sideOffset={expanded ? 0 : 8}
             >
-              {state ? (
+              {showUpdateDetails && state ? (
                 <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
               ) : (
                 tooltip
