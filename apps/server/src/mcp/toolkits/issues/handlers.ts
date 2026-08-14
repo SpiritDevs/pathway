@@ -119,12 +119,15 @@ export const normalizeIssueKey = (raw: string): string => raw.trim().toUpperCase
 
 const normalizeName = (raw: string): string => raw.trim().toLowerCase();
 
-/** How an actor reads in a tool result: `user`, `agent:codex`, `system:import`. */
+/** How an actor reads in a tool result: `user`, `member:<id>`, `agent:codex`, `system:import`. */
 export const formatIssueActor = (actor: IssueActor | null): string | null => {
   if (actor === null) return null;
   switch (actor.kind) {
     case "user":
       return "user";
+    // The membership id is the only identity a member carries; there is no name to print yet.
+    case "member":
+      return `member:${actor.membershipId}`;
     case "agent":
       return `agent:${actor.provider}`;
     case "system":

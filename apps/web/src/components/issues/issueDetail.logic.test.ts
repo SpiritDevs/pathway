@@ -16,6 +16,7 @@ import {
   type IssueEventKind,
   type IssueTodo,
 } from "@t3tools/contracts";
+import { MembershipId } from "@t3tools/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { IssueRelationLabel } from "~/state/issues";
@@ -105,6 +106,9 @@ function event(overrides: Partial<IssueEvent> & { kind: IssueEventKind }): Issue
   };
 }
 
+const MEMBER_A = MembershipId.make("membership-a");
+const MEMBER_B = MembershipId.make("membership-b");
+
 const PROVIDER_LABELS = new Map([
   ["codex", "Codex"],
   ["claudeAgent", "Claude"],
@@ -179,6 +183,28 @@ describe("sameIssueAssignee", () => {
     ).toBe(true);
     expect(sameIssueAssignee({ kind: "user" }, null)).toBe(false);
     expect(sameIssueAssignee(null, null)).toBe(true);
+  });
+
+  it("does not read one company member as another", () => {
+    expect(
+      sameIssueAssignee(
+        { kind: "member", membershipId: MEMBER_A },
+        { kind: "member", membershipId: MEMBER_A },
+      ),
+    ).toBe(true);
+    // Reassigning from one teammate to another is a real change, so the patch has to survive it.
+    expect(
+      sameIssueAssignee(
+        { kind: "member", membershipId: MEMBER_A },
+        { kind: "member", membershipId: MEMBER_B },
+      ),
+    ).toBe(false);
+    expect(
+      issueAssigneePatch(issue({ assignee: { kind: "member", membershipId: MEMBER_A } }), {
+        kind: "member",
+        membershipId: MEMBER_B,
+      }),
+    ).toEqual({ assignee: { kind: "member", membershipId: MEMBER_B } });
   });
 });
 
@@ -261,6 +287,15 @@ describe("issueActorLabel", () => {
     expect(issueActorLabel({ kind: "system", source: "slack" })).toBe("Slack");
   });
 
+  it("names each company member apart, by name when it knows one", () => {
+    const naming = { memberNames: new Map([["membership-a", "Ada"]]) };
+    expect(issueActorLabel({ kind: "member", membershipId: MEMBER_A }, naming)).toBe("Ada");
+    // Never a bare "Member": two teammates sharing one line is two people losing their words.
+    expect(issueActorLabel({ kind: "member", membershipId: MEMBER_B }, naming)).toBe(
+      "membership-b",
+    );
+  });
+
   it("names the cycle carry-over as itself rather than as Slack", () => {
     // `IssueTrackerService.finalizeEndedCycles` signs its writes `{ kind: "system", source:
     // "cycles" }`. A label bag that only knew `import` and `slack` attributed them to Slack.
@@ -329,6 +364,28 @@ describe("describeIssueEvent", () => {
         event({ kind: "field_changed", field: "assignee", before: null, after: "user" }),
       ).summary,
     ).toBe("assigned this to you");
+    // A teammate reads by name when the directory knows them, and by membership when it does not.
+    expect(
+      describeIssueEvent(
+        event({
+          kind: "field_changed",
+          field: "assignee",
+          before: null,
+          after: "member:membership-a",
+        }),
+        { memberNames: new Map([["membership-a", "Ada"]]) },
+      ).summary,
+    ).toBe("assigned this to Ada");
+    expect(
+      describeIssueEvent(
+        event({
+          kind: "field_changed",
+          field: "assignee",
+          before: null,
+          after: "member:membership-b",
+        }),
+      ).summary,
+    ).toBe("assigned this to membership-b");
   });
 
   it("names a project by title and falls back to the raw id", () => {

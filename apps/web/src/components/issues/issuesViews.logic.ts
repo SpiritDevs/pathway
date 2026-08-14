@@ -13,6 +13,7 @@
  * @module components/issues/issuesViews.logic
  */
 import { isProviderDriverKind } from "@t3tools/contracts";
+import { MembershipId } from "@t3tools/contracts/company";
 import type {
   IssueAssignee,
   IssueCycleId,
@@ -33,6 +34,7 @@ import {
   DEFAULT_ISSUES_TAB,
   DEFAULT_ISSUES_VIEW_MODE,
   ISSUE_ASSIGNEE_AGENT_PREFIX,
+  ISSUE_ASSIGNEE_MEMBER_PREFIX,
   ISSUE_ASSIGNEE_USER_VALUE,
   ISSUE_GROUPING_LABELS,
   ISSUE_SORT_MODE_LABELS,
@@ -69,10 +71,16 @@ export const DEFAULT_ISSUE_VIEW_CONFIG: IssueViewConfig = {
 /**
  * The inverse of {@link issueAssigneeValue}. An unknown provider spelling is dropped rather than
  * cast: `IssueViewConfig.assignees` holds real assignees, and the server would refuse a slug that
- * is not one, taking the whole save down with it.
+ * is not one, taking the whole save down with it. A membership is opaque, so the only thing to
+ * check is that the token carries one at all — an empty or padded id would fail the same way.
  */
 export function parseIssueAssigneeValue(value: string): IssueAssignee | null {
   if (value === ISSUE_ASSIGNEE_USER_VALUE) return { kind: "user" };
+  if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
+    const membershipId = value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
+    if (membershipId.length === 0 || membershipId !== membershipId.trim()) return null;
+    return { kind: "member", membershipId: MembershipId.make(membershipId) };
+  }
   if (!value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX)) return null;
   const provider = value.slice(ISSUE_ASSIGNEE_AGENT_PREFIX.length);
   return isProviderDriverKind(provider) ? { kind: "agent", provider } : null;

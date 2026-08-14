@@ -113,20 +113,42 @@ export const ISSUE_DUE_FILTER_LABELS: Readonly<Record<IssueViewDueFilter, string
  */
 export const ISSUE_ASSIGNEE_USER_VALUE = "user";
 export const ISSUE_ASSIGNEE_AGENT_PREFIX = "agent:";
+/**
+ * A company member carries their membership, unlike `user`, which is the sole human on an
+ * environment-scoped tracker and needs no id. Every token has to name one person: without the
+ * membership, filtering on one teammate would return the whole company's work.
+ */
+export const ISSUE_ASSIGNEE_MEMBER_PREFIX = "member:";
 
 export function issueAssigneeValue(assignee: IssueAssignee | null): string | null {
   if (assignee === null) return null;
-  return assignee.kind === "user"
-    ? ISSUE_ASSIGNEE_USER_VALUE
-    : `${ISSUE_ASSIGNEE_AGENT_PREFIX}${assignee.provider}`;
+  switch (assignee.kind) {
+    case "user":
+      return ISSUE_ASSIGNEE_USER_VALUE;
+    case "member":
+      return `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${assignee.membershipId}`;
+    case "agent":
+      return `${ISSUE_ASSIGNEE_AGENT_PREFIX}${assignee.provider}`;
+  }
+}
+
+/** The token without its prefix: a provider slug, a membership, or `user` as it stands. */
+export function issueAssigneeValueId(value: string): string {
+  if (value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX)) {
+    return value.slice(ISSUE_ASSIGNEE_AGENT_PREFIX.length);
+  }
+  if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
+    return value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
+  }
+  return value;
 }
 
 function isAssigneeValue(value: string): boolean {
   if (value === ISSUE_ASSIGNEE_USER_VALUE) return true;
-  return (
-    value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX) &&
-    value.length > ISSUE_ASSIGNEE_AGENT_PREFIX.length
-  );
+  for (const prefix of [ISSUE_ASSIGNEE_AGENT_PREFIX, ISSUE_ASSIGNEE_MEMBER_PREFIX]) {
+    if (value.startsWith(prefix) && value.length > prefix.length) return true;
+  }
+  return false;
 }
 
 /** Past this many chips a row starts eating the title, so the rest collapse into `+N`. */
@@ -326,7 +348,7 @@ export interface IssuesListFilter {
   readonly labelIds: ReadonlyArray<string>;
   readonly milestoneIds: ReadonlyArray<string>;
   readonly cycleIds: ReadonlyArray<string>;
-  /** {@link issueAssigneeValue} spellings: `user`, `agent:codex`. */
+  /** {@link issueAssigneeValue} spellings: `user`, `member:<membershipId>`, `agent:codex`. */
   readonly assignees: ReadonlyArray<string>;
   readonly priorities: ReadonlyArray<IssuePriority>;
   readonly dueFilter: IssueViewDueFilter | null;
@@ -826,7 +848,10 @@ function projectGroups(
   return groups;
 }
 
-/** The one human first, then the agents by name, then whatever nobody has picked up. */
+/**
+ * You first, then the rest of the people by name, then the agents by name, then whatever nobody
+ * has picked up. People before agents because a teammate's row is somebody to talk to.
+ */
 function assigneeGroups(
   issues: ReadonlyArray<Issue>,
   compare: IssueComparator,
@@ -839,18 +864,26 @@ function assigneeGroups(
     if (bucket === undefined) buckets.set(key, [issue]);
     else bucket.push(issue);
   }
+  const members: Array<IssuesViewGroup> = [];
   const agents: Array<IssuesViewGroup> = [];
   for (const [value, bucket] of buckets) {
     if (value === null || value === ISSUE_ASSIGNEE_USER_VALUE) continue;
-    agents.push({
+    // The token carries the membership, so one row per teammate rather than one row per company.
+    // Until the member directory lands the id is the only name there is, same as a provider slug.
+    const group: IssuesViewGroup = {
       id: `assignee:${value}`,
-      label: assigneeLabels?.get(value) ?? value.slice(ISSUE_ASSIGNEE_AGENT_PREFIX.length),
+      label: assigneeLabels?.get(value) ?? issueAssigneeValueId(value),
       status: null,
       priority: null,
       issues: bucket.sort(compare),
-    });
+    };
+    if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) members.push(group);
+    else agents.push(group);
   }
-  agents.sort((left, right) => left.label.localeCompare(right.label));
+  const byLabel = (left: IssuesViewGroup, right: IssuesViewGroup) =>
+    left.label.localeCompare(right.label);
+  members.sort(byLabel);
+  agents.sort(byLabel);
 
   const groups: Array<IssuesViewGroup> = [];
   const user = buckets.get(ISSUE_ASSIGNEE_USER_VALUE);
@@ -863,6 +896,7 @@ function assigneeGroups(
       issues: user.sort(compare),
     });
   }
+  groups.push(...members);
   groups.push(...agents);
   const none = buckets.get(null);
   if (none !== undefined) {

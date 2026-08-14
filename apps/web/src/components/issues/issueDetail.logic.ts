@@ -43,6 +43,7 @@ import type {
 } from "~/state/issues";
 import {
   ISSUE_ASSIGNEE_AGENT_PREFIX,
+  ISSUE_ASSIGNEE_MEMBER_PREFIX,
   ISSUE_ASSIGNEE_USER_VALUE,
   ISSUE_PRIORITY_LABELS,
   issueAssigneeValue,
@@ -213,6 +214,12 @@ export interface IssueEventNaming {
   /** `project` events carry a raw `ProjectId`, which is a nanoid, not a name. */
   readonly projectTitles?: ReadonlyMap<string, string> | undefined;
   readonly providerLabels?: ReadonlyMap<string, string> | undefined;
+  /**
+   * A `member` actor carries a `MembershipId`, which is an id and not a name. Keyed by membership
+   * rather than by person because attribution outlives a departure: the tombstoned membership is
+   * still what the row points at.
+   */
+  readonly memberNames?: ReadonlyMap<string, string> | undefined;
   /** `parent` events carry a raw `IssueId`; the key is what a human recognises. */
   readonly issueKeys?: ReadonlyMap<string, string> | undefined;
 }
@@ -244,22 +251,38 @@ export function issueActorLabel(
   actor: IssueEvent["actor"],
   naming: IssueEventNaming = EMPTY_NAMING,
 ): string {
-  if (actor.kind === "user") return "You";
-  if (actor.kind === "agent") return naming.providerLabels?.get(actor.provider) ?? actor.provider;
-  return ISSUE_SYSTEM_ACTOR_LABELS[actor.source];
+  switch (actor.kind) {
+    case "user":
+      return "You";
+    // A teammate reads as a person, never as the company: the membership is the fallback name for
+    // the same reason the provider slug is an agent's, so two people never share one line.
+    case "member":
+      return naming.memberNames?.get(actor.membershipId) ?? actor.membershipId;
+    case "agent":
+      return naming.providerLabels?.get(actor.provider) ?? actor.provider;
+    case "system":
+      return ISSUE_SYSTEM_ACTOR_LABELS[actor.source];
+  }
 }
 
 function quote(value: string): string {
   return `“${value}”`;
 }
 
-/** `agent:codex` and `user` are how the log stores an assignee; neither is a sentence. */
+/**
+ * `agent:codex`, `member:<membershipId>` and `user` are how the log stores an assignee; none of
+ * them is a sentence.
+ */
 function assigneeEventLabel(value: string | null, naming: IssueEventNaming): string | null {
   if (value === null || value.length === 0) return null;
   if (value === ISSUE_ASSIGNEE_USER_VALUE) return "you";
   if (value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX)) {
     const provider = value.slice(ISSUE_ASSIGNEE_AGENT_PREFIX.length);
     return naming.providerLabels?.get(provider) ?? provider;
+  }
+  if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
+    const membershipId = value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
+    return naming.memberNames?.get(membershipId) ?? membershipId;
   }
   return value;
 }

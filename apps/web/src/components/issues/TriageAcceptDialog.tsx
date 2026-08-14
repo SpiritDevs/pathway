@@ -66,6 +66,22 @@ import {
 const PICKER_CLASS =
   "flex h-8 w-full items-center gap-1.5 rounded-md border border-input px-2 text-[13px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
 
+/**
+ * What the picker reads as. A teammate falls back to their membership rather than to a bare
+ * "Member": the picker's whole job is saying which one of them is about to own this.
+ */
+function assigneeLabel(assignee: IssueAssignee | null): string {
+  if (assignee === null) return "Unassigned";
+  switch (assignee.kind) {
+    case "user":
+      return "You";
+    case "member":
+      return assignee.membershipId;
+    case "agent":
+      return PROVIDER_CLIENT_DEFINITION_BY_VALUE[assignee.provider]?.label ?? assignee.provider;
+  }
+}
+
 export function TriageAcceptDialog({
   open,
   onOpenChange,
@@ -160,13 +176,7 @@ export function TriageAcceptDialog({
   });
   const selectedStatus = statuses.find((status) => status.id === draft.statusId) ?? null;
   const selectedProject = projects.find((project) => project.id === draft.projectId) ?? null;
-  const selectedAssigneeLabel =
-    draft.assignee === null
-      ? "Unassigned"
-      : draft.assignee.kind === "user"
-        ? "You"
-        : (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
-          draft.assignee.provider);
+  const selectedAssigneeLabel = assigneeLabel(draft.assignee);
   const alreadyInvestigated =
     singleIssue !== null && issueHasCompletedInvestigation(singleIssue, enrichmentRuns);
   const submitting = submittingAction !== null;

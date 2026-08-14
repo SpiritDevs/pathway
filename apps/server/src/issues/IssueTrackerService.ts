@@ -793,8 +793,18 @@ const normalizeSlackTitle = (title: string): string => {
 const truncateEventValue = (value: string) =>
   value.length <= EVENT_VALUE_MAX_CHARS ? value : `${value.slice(0, EVENT_VALUE_MAX_CHARS)}…`;
 
-const describeAssignee = (assignee: Issue["assignee"]) =>
-  assignee === null ? null : assignee.kind === "user" ? "user" : `agent:${assignee.provider}`;
+const describeAssignee = (assignee: Issue["assignee"]): string | null => {
+  if (assignee === null) return null;
+  switch (assignee.kind) {
+    case "user":
+      return "user";
+    // The membership id is the only identity a member carries; there is no name to record yet.
+    case "member":
+      return `member:${assignee.membershipId}`;
+    case "agent":
+      return `agent:${assignee.provider}`;
+  }
+};
 
 interface IssueFieldChange {
   /** Null on the kinds that are not `field_changed`: a create, a delete, an import. */
@@ -911,13 +921,22 @@ const describeRelation = (
 
 /**
  * Whether two actors are the same writer. Kind alone would let a Codex agent rewrite what Claude
- * said, and the feed names the provider, so the provider is part of the identity.
+ * said, and the feed names the provider, so the provider is part of the identity. For the same
+ * reason a member is only itself: without the membership, anyone in the company would pass an
+ * ownership check on anyone else's words. `user` carries no identity because an environment-scoped
+ * tracker has exactly one human, so kind alone is the whole identity there.
  */
 const isSameActor = (left: IssueActor, right: IssueActor): boolean => {
-  if (left.kind !== right.kind) return false;
-  if (left.kind === "agent" && right.kind === "agent") return left.provider === right.provider;
-  if (left.kind === "system" && right.kind === "system") return left.source === right.source;
-  return true;
+  switch (left.kind) {
+    case "agent":
+      return right.kind === "agent" && left.provider === right.provider;
+    case "system":
+      return right.kind === "system" && left.source === right.source;
+    case "member":
+      return right.kind === "member" && left.membershipId === right.membershipId;
+    case "user":
+      return right.kind === "user";
+  }
 };
 
 /** Parent and child lookups built once per write, because the depth cap walks them per issue. */

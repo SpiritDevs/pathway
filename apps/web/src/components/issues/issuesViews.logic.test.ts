@@ -9,9 +9,10 @@ import {
   type IssueView,
   type IssueViewConfig,
 } from "@t3tools/contracts";
+import { MembershipId } from "@t3tools/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseIssuesSearch, type IssuesSearch } from "./issuesList.logic";
+import { issueAssigneeValue, parseIssuesSearch, type IssuesSearch } from "./issuesList.logic";
 import {
   DEFAULT_ISSUE_VIEW_CONFIG,
   findIssueViewByName,
@@ -27,6 +28,11 @@ import {
 } from "./issuesViews.logic";
 
 const NOW = "2026-08-12T00:00:00.000Z";
+
+const MEMBER = {
+  kind: "member",
+  membershipId: MembershipId.make("membership-b"),
+} as const;
 
 function config(overrides: Partial<IssueViewConfig> = {}): IssueViewConfig {
   return { ...DEFAULT_ISSUE_VIEW_CONFIG, ...overrides };
@@ -50,14 +56,22 @@ function search(raw: Record<string, unknown>): IssuesSearch {
 }
 
 describe("parseIssueAssigneeValue", () => {
-  it("reads the user and agent spellings the URL uses", () => {
+  it("reads the user, member, and agent spellings the URL uses", () => {
     expect(parseIssueAssigneeValue("user")).toEqual({ kind: "user" });
     expect(parseIssueAssigneeValue("agent:codex")).toEqual({ kind: "agent", provider: "codex" });
+    // The membership survives the round trip, so a saved view names one teammate, not the company.
+    expect(parseIssueAssigneeValue("member:membership-a")).toEqual({
+      kind: "member",
+      membershipId: "membership-a",
+    });
+    expect(parseIssueAssigneeValue(issueAssigneeValue(MEMBER) ?? "")).toEqual(MEMBER);
   });
 
   it("drops a value that is not an assignee, so a hand-edited URL cannot poison a save", () => {
     expect(parseIssueAssigneeValue("agent:")).toBeNull();
     expect(parseIssueAssigneeValue("agent:not a slug")).toBeNull();
+    expect(parseIssueAssigneeValue("member:")).toBeNull();
+    expect(parseIssueAssigneeValue("member: padded ")).toBeNull();
     expect(parseIssueAssigneeValue("nobody")).toBeNull();
   });
 });

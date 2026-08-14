@@ -18,6 +18,7 @@ import {
   type IssueViewConfig,
   type ModelSelection,
 } from "@t3tools/contracts";
+import { MembershipId } from "@t3tools/contracts/company";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -61,6 +62,9 @@ import { IssueTrackerService, layer } from "./IssueTrackerService.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
 const AGENT: IssueActor = { kind: "agent", provider: ProviderDriverKind.make("claudeAgent") };
+/** Two people in the same company: the pair every ownership check has to tell apart. */
+const MEMBER_A: IssueActor = { kind: "member", membershipId: MembershipId.make("membership-a") };
+const MEMBER_B: IssueActor = { kind: "member", membershipId: MembershipId.make("membership-b") };
 const PROJECT = ProjectId.make("project-alpha");
 const OTHER_PROJECT = ProjectId.make("project-beta");
 /** Created from a name alone, never given a directory: the case enrichment has to refuse. */
@@ -1199,6 +1203,34 @@ describe("IssueTrackerService", () => {
         events.map((event) => event.kind),
         ["created"],
       );
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
+  it.effect("keeps one company member off another member's comment", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Two people" }, MEMBER_A);
+
+      const mine = yield* tracker.commentCreate({ issueId: issue.id, body: "Mine" }, MEMBER_A);
+      assert.deepStrictEqual(mine.comment.author, MEMBER_A);
+
+      // Membership is the identity: kind alone would make everybody in the company one writer.
+      const theirEdit = yield* tracker
+        .commentUpdate({ commentId: mine.comment.id, patch: { body: "Rewritten" } }, MEMBER_B)
+        .pipe(Effect.flip);
+      assert.strictEqual(theirEdit.reason, "invalid");
+      const theirDelete = yield* tracker
+        .commentDelete({ commentId: mine.comment.id }, MEMBER_B)
+        .pipe(Effect.flip);
+      assert.strictEqual(theirDelete.reason, "invalid");
+
+      const edited = yield* tracker.commentUpdate(
+        { commentId: mine.comment.id, patch: { body: "Mine, revised" } },
+        MEMBER_A,
+      );
+      assert.strictEqual(edited.comment.body, "Mine, revised");
+      const { comments } = yield* tracker.commentDelete({ commentId: mine.comment.id }, MEMBER_A);
+      assert.deepStrictEqual(comments, []);
     }).pipe(Effect.provide(makeTestLayer())),
   );
 

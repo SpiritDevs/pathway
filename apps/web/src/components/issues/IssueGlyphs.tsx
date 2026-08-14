@@ -263,6 +263,23 @@ export function IssueAssigneeGlyph({
       </span>
     );
   }
+  // A teammate is a person, so the same circle as you, without the "this is mine" accent. The
+  // membership rides the label because it is the only thing that tells two teammates apart until
+  // the member directory lands.
+  if (assignee.kind === "member") {
+    return (
+      <span
+        aria-label={`Assigned to ${assignee.membershipId}`}
+        className={cn(
+          "flex size-5 items-center justify-center rounded-full bg-muted text-foreground/80",
+          className,
+        )}
+        role="img"
+      >
+        <UserIcon className="size-2.5" />
+      </span>
+    );
+  }
   const definition = PROVIDER_CLIENT_DEFINITION_BY_VALUE[assignee.provider];
   const ProviderIcon = definition?.icon;
   return (
