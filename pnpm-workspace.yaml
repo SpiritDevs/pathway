@@ -35,7 +35,6 @@ catalog:
   "@effect/platform-bun": 4.0.0-beta.103
   "@effect/platform-node": 4.0.0-beta.103
   "@effect/platform-node-shared": 4.0.0-beta.103
-  "@effect/sql-pg": 4.0.0-beta.103
   "@effect/sql-sqlite-bun": 4.0.0-beta.103
   "@effect/tsgo": 0.13.2
   "@effect/vitest": 4.0.0-beta.103
@@ -64,13 +63,11 @@ minimumReleaseAgeExclude:
   - "@distilled.cloud/cloudflare@0.30.2"
   - "@distilled.cloud/core@0.30.2"
   - "@distilled.cloud/neon@0.30.2"
-  - "@distilled.cloud/planetscale@0.30.2"
   - "@effect/atom-react@4.0.0-beta.103"
   - "@effect/openapi-generator@4.0.0-beta.103"
   - "@effect/platform-bun@4.0.0-beta.103"
   - "@effect/platform-node-shared@4.0.0-beta.103"
   - "@effect/platform-node@4.0.0-beta.103"
-  - "@effect/sql-pg@4.0.0-beta.103"
   - "@effect/sql-sqlite-bun@4.0.0-beta.103"
   - "@effect/vitest@4.0.0-beta.103"
   - alchemy@2.0.0-beta.65
@@ -95,7 +92,6 @@ overrides:
   "@effect/platform-bun": "catalog:"
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
-  "@effect/sql-pg": "catalog:"
   "@effect/sql-sqlite-bun": "catalog:"
   "@effect/vitest": "catalog:"
   "@effect/vitest>vitest": "-"

@@ -51,6 +51,13 @@ const configuredLayer = ConvexConnectGrants.layer.pipe(
     RelayConfiguration.layer(
       makeConfig({
         serviceTokensEnabled: true,
+        convexUrl: "https://convex.example.test",
+        signingKey: {
+          keyId: "pathway-convex-test",
+          privateKey: Redacted.make(relayKeyPair.privateKey),
+          publicKey: relayKeyPair.publicKey,
+        },
+        verificationKeys: [{ keyId: "pathway-convex-test", publicKey: relayKeyPair.publicKey }],
         connectGrantIssuer: CONVEX_ISSUER,
         connectGrantPublicKey: convexKeyPair.publicKey,
       }),

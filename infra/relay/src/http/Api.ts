@@ -1,5 +1,5 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
-import { sql as drizzleSql } from "drizzle-orm";
+import { api } from "@t3tools/backend/convexApi";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -72,7 +72,7 @@ import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllo
 import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublishSignatures.ts";
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
-import * as RelayDb from "../db.ts";
+import { RelayConvexClient } from "../db.ts";
 
 const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
@@ -393,12 +393,14 @@ export const healthApi = HttpApiBuilder.group(
   RelayApi,
   "health",
   Effect.fnUntraced(function* (handlers) {
-    const db = yield* RelayDb.RelayDb;
+    const client = yield* RelayConvexClient;
     return handlers.handle(
       "health",
       Effect.fn("relay.api.health")(
         function* () {
-          yield* db.execute(drizzleSql`SELECT 1`);
+          yield* client.query(api.relayPersistence.listUsersForEnvironment, {
+            environmentId: "__relay_health__",
+          });
           return { ok: true, service: "relay" as const };
         },
         Effect.catch(() => relayInternalErrorResponse("database_unavailable")),
@@ -414,24 +416,25 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
   readonly environmentId: string;
   readonly environmentPublicKey: string;
 }) {
-  const transactions = yield* RelayDb.RelayTransactions;
-  const links = yield* EnvironmentLinks.EnvironmentLinks;
-  const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
-  return yield* transactions.withTransaction(
-    Effect.gen(function* () {
-      const revoked = yield* links.revokeForUser({
-        userId: input.userId,
-        environmentId: input.environmentId,
-      });
-      if (revoked) {
-        yield* credentials.revokeForEnvironmentPublicKey({
-          environmentId: input.environmentId,
-          environmentPublicKey: input.environmentPublicKey,
-        });
-      }
-      return revoked;
-    }),
-  );
+  const client = yield* RelayConvexClient;
+  const now = DateTime.formatIso(yield* DateTime.now);
+  const result = yield* client
+    .mutation(api.relayPersistence.revokeEnvironmentLinkWithCredentials, {
+      userId: input.userId,
+      environmentId: input.environmentId,
+      now,
+    })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new EnvironmentLinks.EnvironmentLinkRevokePersistenceError({
+            userId: input.userId,
+            environmentId: input.environmentId,
+            cause,
+          }),
+      ),
+    );
+  return result.linkRevoked;
 });
 
 export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnvironmentRecord")(
@@ -455,7 +458,7 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
             environmentPublicKey: link.environmentPublicKey,
           });
 
-    // External teardown cannot share the SQL transaction. Run it only after
+    // External teardown cannot share the Convex mutation. Run it only after
     // revocation commits so a database failure leaves a fully usable active
     // link. Still run teardown when the link is already revoked, allowing a
     // retry to finish cleanup after an earlier Cloudflare failure.
@@ -661,7 +664,8 @@ export const clientApi = HttpApiBuilder.group(
             environmentId: params.environmentId,
           }).pipe(
             Effect.catchTags({
-              SqlError: () => relayInternalErrorResponse("internal_error"),
+              EnvironmentLinkRevokePersistenceError: () =>
+                relayInternalErrorResponse("internal_error"),
               ManagedEndpointDeprovisioningFailed: () =>
                 relayInternalErrorResponse("upstream_unavailable"),
             }),

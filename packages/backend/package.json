@@ -7,6 +7,10 @@
       "types": "./src/companies.ts",
       "import": "./src/companies.ts"
     },
+    "./convexApi": {
+      "types": "./src/convexApi.ts",
+      "import": "./src/convexApi.ts"
+    },
     "./invitations": {
       "types": "./src/invitations.ts",
       "import": "./src/invitations.ts"
@@ -47,6 +51,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "convex-test": "0.0.55",
     "vite-plus": "catalog:"
   }
 }

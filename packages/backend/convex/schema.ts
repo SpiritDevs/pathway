@@ -102,6 +102,49 @@ const issuePriority = v.union(
   v.literal("low"),
 );
 
+const relayActivityPhase = v.union(
+  v.literal("starting"),
+  v.literal("running"),
+  v.literal("waiting_for_approval"),
+  v.literal("waiting_for_input"),
+  v.literal("completed"),
+  v.literal("failed"),
+  v.literal("stale"),
+);
+
+const relayActivityState = v.object({
+  environmentId: v.string(),
+  threadId: v.string(),
+  projectTitle: v.string(),
+  threadTitle: v.string(),
+  phase: relayActivityPhase,
+  headline: v.string(),
+  detail: v.optional(v.string()),
+  modelTitle: v.string(),
+  updatedAt: v.string(),
+  deepLink: v.string(),
+});
+
+const relayActivityAggregateState = v.object({
+  title: v.string(),
+  subtitle: v.string(),
+  activeCount: v.number(),
+  updatedAt: v.string(),
+  activities: v.array(
+    v.object({
+      environmentId: v.string(),
+      threadId: v.string(),
+      projectTitle: v.string(),
+      threadTitle: v.string(),
+      modelTitle: v.string(),
+      phase: relayActivityPhase,
+      status: v.string(),
+      updatedAt: v.string(),
+      deepLink: v.string(),
+    }),
+  ),
+});
+
 export default defineSchema({
   // ---------------------------------------------------------------------------
   // Identity, companies, and authorization
@@ -409,6 +452,164 @@ export default defineSchema({
     .index("by_target_and_state", ["targetEnvironmentId", "state"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
+
+  // ---------------------------------------------------------------------------
+  // Relay control-plane persistence
+  // ---------------------------------------------------------------------------
+
+  relayMobileDevices: defineTable({
+    userId: v.string(),
+    deviceId: v.string(),
+    label: v.string(),
+    platform: v.literal("ios"),
+    iosMajorVersion: v.number(),
+    appVersion: v.union(v.string(), v.null()),
+    bundleId: v.union(v.string(), v.null()),
+    apsEnvironment: v.union(v.literal("sandbox"), v.literal("production"), v.null()),
+    pushToken: v.union(v.string(), v.null()),
+    pushToStartToken: v.union(v.string(), v.null()),
+    preferences: v.object({
+      liveActivitiesEnabled: v.boolean(),
+      notificationsEnabled: v.boolean(),
+      notifyOnApproval: v.boolean(),
+      notifyOnInput: v.boolean(),
+      notifyOnCompletion: v.boolean(),
+      notifyOnFailure: v.boolean(),
+    }),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_user_and_device", ["userId", "deviceId"])
+    .index("by_user", ["userId"])
+    .index("by_push_token", ["pushToken"])
+    .index("by_push_to_start_token", ["pushToStartToken"]),
+
+  relayLiveActivities: defineTable({
+    userId: v.string(),
+    deviceId: v.string(),
+    activityPushToken: v.union(v.string(), v.null()),
+    remoteStartQueuedAt: v.union(v.string(), v.null()),
+    remoteStartedAt: v.union(v.string(), v.null()),
+    endedAt: v.union(v.string(), v.null()),
+    lastAggregate: v.union(relayActivityAggregateState, v.null()),
+    lastLiveActivityDeliveryAt: v.union(v.string(), v.null()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_user_and_device", ["userId", "deviceId"])
+    .index("by_user", ["userId"])
+    .index("by_activity_push_token", ["activityPushToken"]),
+
+  relayEnvironmentLinks: defineTable({
+    userId: v.string(),
+    environmentId: v.string(),
+    environmentLabel: v.string(),
+    environmentPublicKey: v.string(),
+    endpointHttpBaseUrl: v.string(),
+    endpointWsBaseUrl: v.string(),
+    endpointProviderKind: v.string(),
+    notificationsEnabled: v.boolean(),
+    liveActivitiesEnabled: v.boolean(),
+    managedTunnelsEnabled: v.boolean(),
+    createdByDeviceId: v.union(v.string(), v.null()),
+    revokedAt: v.union(v.string(), v.null()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_user_and_environment", ["userId", "environmentId"])
+    .index("by_user", ["userId"])
+    .index("by_environment", ["environmentId"])
+    .index("by_environment_and_key", ["environmentId", "environmentPublicKey"])
+    .index("by_environment_key_and_revoked", [
+      "environmentId",
+      "environmentPublicKey",
+      "revokedAt",
+    ]),
+
+  relayManagedEndpointAllocations: defineTable({
+    userId: v.string(),
+    environmentId: v.string(),
+    hostname: v.string(),
+    tunnelId: v.union(v.string(), v.null()),
+    tunnelName: v.string(),
+    dnsRecordId: v.union(v.string(), v.null()),
+    readyAt: v.union(v.string(), v.null()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_user_and_environment", ["userId", "environmentId"])
+    .index("by_user", ["userId"])
+    .index("by_hostname", ["hostname"])
+    .index("by_tunnel_name", ["tunnelName"]),
+
+  relayManagedTunnelLimits: defineTable({
+    userId: v.string(),
+    maxTunnels: v.number(),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  }).index("by_user", ["userId"]),
+
+  relayEnvironmentCredentials: defineTable({
+    credentialId: v.string(),
+    environmentId: v.string(),
+    environmentPublicKey: v.string(),
+    credentialHash: v.string(),
+    revokedAt: v.union(v.string(), v.null()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_credential_id", ["credentialId"])
+    .index("by_credential_hash", ["credentialHash"])
+    .index("by_environment", ["environmentId"])
+    .index("by_environment_and_key", ["environmentId", "environmentPublicKey"])
+    .index("by_environment_key_and_revoked", [
+      "environmentId",
+      "environmentPublicKey",
+      "revokedAt",
+    ]),
+
+  relayAgentActivityRows: defineTable({
+    environmentId: v.string(),
+    environmentPublicKey: v.string(),
+    threadId: v.string(),
+    state: relayActivityState,
+    phase: relayActivityPhase,
+    updatedAt: v.string(),
+    createdAt: v.string(),
+  })
+    .index("by_environment_key_and_thread", ["environmentId", "environmentPublicKey", "threadId"])
+    .index("by_environment_and_thread", ["environmentId", "threadId"])
+    .index("by_updated_at", ["updatedAt"])
+    .index("by_phase_and_updated_at", ["phase", "updatedAt"]),
+
+  relayDeliveryAttempts: defineTable({
+    id: v.string(),
+    createdAt: v.string(),
+    userId: v.union(v.string(), v.null()),
+    environmentId: v.union(v.string(), v.null()),
+    threadId: v.union(v.string(), v.null()),
+    deviceId: v.union(v.string(), v.null()),
+    kind: v.string(),
+    sourceJobId: v.union(v.string(), v.null()),
+    tokenSuffix: v.union(v.string(), v.null()),
+    apnsStatus: v.union(v.number(), v.null()),
+    apnsReason: v.union(v.string(), v.null()),
+    apnsId: v.union(v.string(), v.null()),
+    transportError: v.union(v.string(), v.null()),
+  })
+    .index("by_attempt_id", ["id"])
+    .index("by_source_job", ["sourceJobId"])
+    .index("by_environment_thread_created", ["environmentId", "threadId", "createdAt"]),
+
+  relayDpopProofs: defineTable({
+    thumbprint: v.string(),
+    jti: v.string(),
+    iat: v.number(),
+    expiresAt: v.string(),
+    createdAt: v.string(),
+  })
+    .index("by_thumbprint_and_jti", ["thumbprint", "jti"])
+    .index("by_expires_at", ["expiresAt"]),
 
   // ---------------------------------------------------------------------------
   // Sync feed

@@ -25,6 +25,7 @@ import {
 import type { Doc } from "../_generated/dataModel.js";
 import type { QueryCtx } from "../_generated/server.js";
 import { backendError } from "./errors.ts";
+import { isRelayControlPlaneIdentity } from "./relayIdentity.ts";
 
 export interface MemberActor {
   readonly kind: "member";
@@ -51,12 +52,14 @@ function relayIssuer(): string | undefined {
 /** True when the token came from the relay's `pathway-convex` audience rather than from Clerk. */
 export function isEnvironmentIdentity(identity: UserIdentity): boolean {
   const issuer = relayIssuer();
-  return issuer !== undefined && identity.issuer === issuer;
+  return (
+    issuer !== undefined && identity.issuer === issuer && !isRelayControlPlaneIdentity(identity)
+  );
 }
 
 export async function requireIdentity(ctx: QueryCtx): Promise<UserIdentity> {
   const identity = await ctx.auth.getUserIdentity();
-  if (identity === null) {
+  if (identity === null || isRelayControlPlaneIdentity(identity)) {
     throw backendError("not-authenticated", "This request requires an authenticated identity.");
   }
   return identity;

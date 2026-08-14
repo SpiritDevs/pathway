@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { decodeRelayJwt, signRelayJwt } from "@t3tools/shared/relayJwt";
+import { decodeRelayJwt, signRelayEs256Jwt, signRelayJwt } from "@t3tools/shared/relayJwt";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -13,6 +13,12 @@ const keyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
   publicKeyEncoding: { format: "pem", type: "spki" },
 });
+const convexKeyPair = NodeCrypto.generateKeyPairSync("ec", {
+  namedCurve: "P-256",
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+const convexKeyId = "pathway-convex-test";
 
 const config = RelayConfiguration.RelayConfiguration.of({
   relayIssuer: "https://relay.example.test/",
@@ -31,6 +37,18 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPublicKey: keyPair.publicKey,
   managedEndpointBaseDomain: undefined,
   managedEndpointNamespace: undefined,
+  cloudSync: {
+    serviceTokensEnabled: true,
+    convexUrl: "https://convex.example.test",
+    signingKey: {
+      keyId: convexKeyId,
+      privateKey: Redacted.make(convexKeyPair.privateKey),
+      publicKey: convexKeyPair.publicKey,
+    },
+    verificationKeys: [{ keyId: convexKeyId, publicKey: convexKeyPair.publicKey }],
+    connectGrantIssuer: undefined,
+    connectGrantPublicKey: undefined,
+  },
 });
 
 const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
@@ -247,8 +265,9 @@ describe("RelayTokens", () => {
   it.effect("rejects Convex service tokens whose subject is not the environment", () =>
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
-      const token = yield* signRelayJwt({
-        privateKey: keyPair.privateKey,
+      const token = yield* signRelayEs256Jwt({
+        privateKey: convexKeyPair.privateKey,
+        keyId: convexKeyId,
         typ: "t3-relay-convex-service+jwt",
         payload: {
           iss: "https://relay.example.test",
@@ -264,6 +283,31 @@ describe("RelayTokens", () => {
 
       expect(
         yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues a distinct short-lived control-plane identity for relay persistence", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueConvexControlPlaneToken({
+        jti: "relay-control-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 220,
+      });
+
+      expect(decodeRelayJwt(token)).toMatchObject({
+        iss: "https://relay.example.test",
+        aud: "pathway-convex",
+        sub: "pathway-relay",
+        tokenKind: "relay-control-plane",
+        jti: "relay-control-token-1",
+      });
+      expect(
+        yield* relayTokens.verifyConvexControlPlaneToken({ token, nowEpochSeconds: 150 }),
+      ).toMatchObject({ sub: "pathway-relay", tokenKind: "relay-control-plane" });
+      expect(
+        yield* relayTokens.verifyConvexControlPlaneToken({ token, nowEpochSeconds: 400 }),
       ).toBeNull();
     }).pipe(Effect.provide(layer)),
   );

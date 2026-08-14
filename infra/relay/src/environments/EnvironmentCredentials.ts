@@ -1,3 +1,8 @@
+import type {
+  RelayEnvironmentLinkProofPayload,
+  RelayEnvironmentLinkRequest,
+  RelayManagedEndpoint,
+} from "@t3tools/contracts/relay";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -6,11 +11,9 @@ import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { and, eq, exists, isNull, ne, notExists } from "drizzle-orm";
-import { QueryBuilder } from "drizzle-orm/pg-core";
+import { api } from "@t3tools/backend/convexApi";
 
-import * as RelayDb from "../db.ts";
-import { relayEnvironmentCredentials, relayEnvironmentLinks } from "../persistence/schema.ts";
+import { RelayConvexClient } from "../db.ts";
 
 export class EnvironmentCredentialCreatePersistenceError extends Schema.TaggedErrorClass<EnvironmentCredentialCreatePersistenceError>()(
   "EnvironmentCredentialCreatePersistenceError",
@@ -68,6 +71,12 @@ export class EnvironmentCredentials extends Context.Service<
       readonly environmentId: string;
       readonly environmentPublicKey: string;
     }) => Effect.Effect<string, EnvironmentCredentialCreatePersistenceError>;
+    readonly replaceLinkAndCreate: (input: {
+      readonly userId: string;
+      readonly request: RelayEnvironmentLinkRequest;
+      readonly proof: RelayEnvironmentLinkProofPayload;
+      readonly endpoint: RelayManagedEndpoint;
+    }) => Effect.Effect<string, EnvironmentCredentialCreatePersistenceError>;
     readonly authenticate: (
       token: string,
     ) => Effect.Effect<
@@ -82,7 +91,7 @@ export class EnvironmentCredentials extends Context.Service<
 >()("pathway-relay/environments/EnvironmentCredentials") {}
 
 const make = Effect.gen(function* () {
-  const db = yield* RelayDb.RelayDb;
+  const client = yield* RelayConvexClient;
   const crypto = yield* Crypto.Crypto;
   const hashToken = (token: string) =>
     crypto
@@ -100,42 +109,45 @@ const make = Effect.gen(function* () {
       token: `t3env_${credentialId}_${secret}`,
     };
   });
+  const prepareCredential = Effect.fn("relay.environment_credentials.prepare")(function* (
+    environmentId: string,
+  ) {
+    const credential = yield* makeCredential().pipe(
+      Effect.mapError(
+        (cause) =>
+          new EnvironmentCredentialCreatePersistenceError({
+            stage: "generate-credential",
+            environmentId,
+            cause,
+          }),
+      ),
+    );
+    const credentialHash = yield* hashToken(credential.token).pipe(
+      Effect.mapError(
+        (cause) =>
+          new EnvironmentCredentialCreatePersistenceError({
+            stage: "hash-token",
+            environmentId,
+            credentialId: credential.credentialId,
+            cause,
+          }),
+      ),
+    );
+    return { ...credential, credentialHash };
+  });
 
   return EnvironmentCredentials.of({
     create: Effect.fn("relay.environment_credentials.create")(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-      const credential = yield* makeCredential().pipe(
-        Effect.mapError(
-          (cause) =>
-            new EnvironmentCredentialCreatePersistenceError({
-              stage: "generate-credential",
-              environmentId: input.environmentId,
-              cause,
-            }),
-        ),
-      );
-      const credentialHash = yield* hashToken(credential.token).pipe(
-        Effect.mapError(
-          (cause) =>
-            new EnvironmentCredentialCreatePersistenceError({
-              stage: "hash-token",
-              environmentId: input.environmentId,
-              credentialId: credential.credentialId,
-              cause,
-            }),
-        ),
-      );
+      const credential = yield* prepareCredential(input.environmentId);
       const now = DateTime.formatIso(yield* DateTime.now);
-      yield* db
-        .insert(relayEnvironmentCredentials)
-        .values({
+      yield* client
+        .mutation(api.relayPersistence.insertEnvironmentCredential, {
           credentialId: credential.credentialId,
           environmentId: input.environmentId,
           environmentPublicKey: input.environmentPublicKey,
-          credentialHash,
-          revokedAt: null,
-          createdAt: now,
-          updatedAt: now,
+          credentialHash: credential.credentialHash,
+          now,
         })
         .pipe(
           Effect.mapError(
@@ -148,33 +160,45 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      yield* db
-        .update(relayEnvironmentCredentials)
-        .set({
-          revokedAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(relayEnvironmentCredentials.environmentId, input.environmentId),
-            eq(relayEnvironmentCredentials.environmentPublicKey, input.environmentPublicKey),
-            ne(relayEnvironmentCredentials.credentialId, credential.credentialId),
-            isNull(relayEnvironmentCredentials.revokedAt),
-          ),
-        )
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentCredentialCreatePersistenceError({
-                stage: "revoke-previous-credentials",
-                environmentId: input.environmentId,
-                credentialId: credential.credentialId,
-                cause,
-              }),
-          ),
-        );
       return credential.token;
     }),
+
+    replaceLinkAndCreate: Effect.fn("relay.environment_credentials.replace_link_and_create")(
+      function* (input) {
+        const environmentId = input.proof.environmentId;
+        const credential = yield* prepareCredential(environmentId);
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* client
+          .mutation(api.relayPersistence.replaceEnvironmentLinkAndCredential, {
+            userId: input.userId,
+            environmentId,
+            environmentLabel: input.proof.descriptor.label,
+            environmentPublicKey: input.proof.environmentPublicKey,
+            endpointHttpBaseUrl: input.endpoint.httpBaseUrl,
+            endpointWsBaseUrl: input.endpoint.wsBaseUrl,
+            endpointProviderKind: input.endpoint.providerKind,
+            notificationsEnabled: input.request.notificationsEnabled,
+            liveActivitiesEnabled: input.request.liveActivitiesEnabled,
+            managedTunnelsEnabled: input.request.managedTunnelsEnabled,
+            createdByDeviceId: input.request.deviceId ?? null,
+            credentialId: credential.credentialId,
+            credentialHash: credential.credentialHash,
+            now,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new EnvironmentCredentialCreatePersistenceError({
+                  stage: "insert-credential",
+                  environmentId,
+                  credentialId: credential.credentialId,
+                  cause,
+                }),
+            ),
+          );
+        return credential.token;
+      },
+    ),
 
     authenticate: Effect.fn("relay.environment_credentials.authenticate")(function* (token) {
       const credentialHash = yield* hashToken(token).pipe(
@@ -186,38 +210,8 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      const rows = yield* db
-        .select({
-          credentialId: relayEnvironmentCredentials.credentialId,
-          environmentId: relayEnvironmentCredentials.environmentId,
-          environmentPublicKey: relayEnvironmentCredentials.environmentPublicKey,
-        })
-        .from(relayEnvironmentCredentials)
-        .where(
-          and(
-            eq(relayEnvironmentCredentials.credentialHash, credentialHash),
-            isNull(relayEnvironmentCredentials.revokedAt),
-            exists(
-              new QueryBuilder()
-                .select({ userId: relayEnvironmentLinks.userId })
-                .from(relayEnvironmentLinks)
-                .where(
-                  and(
-                    eq(
-                      relayEnvironmentLinks.environmentId,
-                      relayEnvironmentCredentials.environmentId,
-                    ),
-                    eq(
-                      relayEnvironmentLinks.environmentPublicKey,
-                      relayEnvironmentCredentials.environmentPublicKey,
-                    ),
-                    isNull(relayEnvironmentLinks.revokedAt),
-                  ),
-                ),
-            ),
-          ),
-        )
-        .limit(1)
+      const row = yield* client
+        .query(api.relayPersistence.authenticateEnvironmentCredential, { credentialHash })
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -227,7 +221,6 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      const row = rows[0];
       if (row) {
         yield* Effect.annotateCurrentSpan({ "relay.environment_id": row.environmentId });
       }
@@ -245,33 +238,10 @@ const make = Effect.gen(function* () {
     )(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
       const revokedAt = DateTime.formatIso(yield* DateTime.now);
-      const rows = yield* db
-        .update(relayEnvironmentCredentials)
-        .set({
-          revokedAt,
-          updatedAt: revokedAt,
-        })
-        .where(
-          and(
-            eq(relayEnvironmentCredentials.environmentId, input.environmentId),
-            eq(relayEnvironmentCredentials.environmentPublicKey, input.environmentPublicKey),
-            isNull(relayEnvironmentCredentials.revokedAt),
-            notExists(
-              new QueryBuilder()
-                .select({ userId: relayEnvironmentLinks.userId })
-                .from(relayEnvironmentLinks)
-                .where(
-                  and(
-                    eq(relayEnvironmentLinks.environmentId, input.environmentId),
-                    eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
-                    isNull(relayEnvironmentLinks.revokedAt),
-                  ),
-                ),
-            ),
-          ),
-        )
-        .returning({
-          credentialId: relayEnvironmentCredentials.credentialId,
+      return yield* client
+        .mutation(api.relayPersistence.revokeEnvironmentCredentialsForPublicKey, {
+          ...input,
+          now: revokedAt,
         })
         .pipe(
           Effect.mapError(
@@ -282,7 +252,6 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      return rows.length > 0;
     }),
   });
 });

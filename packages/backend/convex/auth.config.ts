@@ -15,23 +15,35 @@
 /** The audience the relay mints for. Environment tokens for any other audience are not accepted. */
 export const CONVEX_ENVIRONMENT_AUDIENCE = "pathway-convex";
 
+const relayIssuer = process.env.PATHWAY_RELAY_JWT_ISSUER;
+const relayJwks = process.env.PATHWAY_RELAY_JWKS_URL;
+
+if (relayIssuer === undefined || relayJwks === undefined) {
+  throw new Error(
+    "PATHWAY_RELAY_JWT_ISSUER and PATHWAY_RELAY_JWKS_URL are required for relay persistence and environment authentication.",
+  );
+}
+
+/**
+ * The relay Worker must publish its JWKS before this configuration is deployed. The Worker can
+ * start without calling Convex; after both variables are set, deploying Convex enables its
+ * persistence calls and environment service tokens together.
+ */
+const relayProvider = {
+  type: "customJwt" as const,
+  applicationID: CONVEX_ENVIRONMENT_AUDIENCE,
+  issuer: relayIssuer,
+  jwks: relayJwks,
+  /** Dedicated P-256 key; Convex custom JWT providers support ES256, not Ed25519. */
+  algorithm: "ES256" as const,
+};
+
 export default {
   providers: [
     {
       domain: process.env.CLERK_JWT_ISSUER_DOMAIN,
       applicationID: "convex",
     },
-    {
-      type: "customJwt",
-      applicationID: CONVEX_ENVIRONMENT_AUDIENCE,
-      issuer: process.env.PATHWAY_RELAY_JWT_ISSUER,
-      jwks: process.env.PATHWAY_RELAY_JWKS_URL,
-      /**
-       * The relay's minting key is Ed25519, matching the environment credentials it already
-       * signs. TODO(phase 2): confirm the deployment accepts EdDSA custom JWTs; if it does not,
-       * the relay mints a separate ES256 key for this audience only.
-       */
-      algorithm: "EdDSA",
-    },
+    relayProvider,
   ],
 };

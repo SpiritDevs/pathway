@@ -15,13 +15,26 @@ export interface ApnsCredentials {
 }
 
 /**
- * Cloud-sync capability configuration. Absent on every deployment until the
- * Convex backend ships, which leaves Convex service-token exchange and
- * connect-grant verification off.
+ * Cloud-sync capability configuration. Tests and legacy embedding contexts may
+ * omit it; deployed relays configure it from the Alchemy-managed P-256 key and
+ * their selected Convex deployment.
  */
 export interface RelayCloudSyncConfiguration {
   /** Enables `POST /v1/environment/convex-token`. */
   readonly serviceTokensEnabled: boolean;
+  /** Convex deployment used for relay-owned durable state. */
+  readonly convexUrl: string;
+  /** Current P-256 key used for every relay-issued `pathway-convex` token. */
+  readonly signingKey: {
+    readonly keyId: string;
+    readonly privateKey: Redacted.Redacted<string>;
+    readonly publicKey: string;
+  };
+  /** Current key first, followed by overlap keys retained during rotation. */
+  readonly verificationKeys: ReadonlyArray<{
+    readonly keyId: string;
+    readonly publicKey: string;
+  }>;
   /** Convex custom-JWT issuer trusted for connect grants. */
   readonly connectGrantIssuer: string | undefined;
   /** Ed25519 SPKI public key the Convex issuer signs connect grants with. */
@@ -41,8 +54,8 @@ export class RelayConfiguration extends Context.Service<
     readonly cloudMintPublicKey: string;
     readonly managedEndpointBaseDomain: string | undefined;
     readonly managedEndpointNamespace: string | undefined;
-    // Optional so existing deployments and tests keep their current shape while
-    // cloud sync is unbuilt; omitting it disables the capability.
+    // Optional for legacy embedding contexts and focused tests. The deployed
+    // worker always provides it; omission fails all Convex token issuance closed.
     readonly cloudSync?: RelayCloudSyncConfiguration | undefined;
   }
 >()("pathway-relay/Config/RelayConfiguration") {}

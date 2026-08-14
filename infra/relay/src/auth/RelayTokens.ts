@@ -1,5 +1,8 @@
 import {
   RelayConvexAudience,
+  RelayConvexControlPlaneSubject,
+  RelayConvexControlPlaneTokenClaims,
+  RelayConvexControlPlaneTokenKind,
   RelayConvexServiceTokenClaims,
   RelayDpopAccessTokenScope,
   RelayEnvironmentConnectScope,
@@ -13,10 +16,13 @@ import {
 import { encodeOAuthScope, parseAllowedOAuthScope } from "@t3tools/shared/oauthScope";
 import {
   normalizeRelayIssuer,
+  RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP,
   RELAY_CONVEX_SERVICE_TOKEN_TYP,
   RelayJwtError,
   signRelayJwt,
+  signRelayEs256Jwt,
   verifyRelayJwt,
+  verifyRelayEs256Jwt,
 } from "@t3tools/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -33,6 +39,7 @@ export const RELAY_DPOP_ACCESS_TOKEN_TTL = "30 minutes";
 // Shorter than the client access token: an environment can re-exchange whenever
 // it needs one, and a leaked service token is only useful while Convex accepts it.
 export const RELAY_CONVEX_SERVICE_TOKEN_TTL = "10 minutes";
+export const RELAY_CONVEX_CONTROL_PLANE_TOKEN_TTL = "2 minutes";
 
 const LinkChallengeClaims = Schema.Struct({
   kind: Schema.Literal(LINK_CHALLENGE_KIND),
@@ -66,6 +73,9 @@ export type RelayDpopAccessTokenClaims = Omit<typeof RelayDpopAccessTokenClaims.
 const decodeLinkChallengeClaims = Schema.decodeUnknownEffect(LinkChallengeClaims);
 const decodeDpopAccessTokenClaims = Schema.decodeUnknownEffect(RelayDpopAccessTokenClaims);
 const decodeConvexServiceTokenClaims = Schema.decodeUnknownEffect(RelayConvexServiceTokenClaims);
+const decodeConvexControlPlaneTokenClaims = Schema.decodeUnknownEffect(
+  RelayConvexControlPlaneTokenClaims,
+);
 
 const allowedScopesByClientId: Record<
   RelayPublicClientId,
@@ -130,6 +140,15 @@ export class RelayTokens extends Context.Service<
       readonly token: string;
       readonly nowEpochSeconds: number;
     }) => Effect.Effect<RelayConvexServiceTokenClaims | null>;
+    readonly issueConvexControlPlaneToken: (input: {
+      readonly jti: string;
+      readonly issuedAtEpochSeconds: number;
+      readonly expiresAtEpochSeconds: number;
+    }) => Effect.Effect<string, RelayJwtError>;
+    readonly verifyConvexControlPlaneToken: (input: {
+      readonly token: string;
+      readonly nowEpochSeconds: number;
+    }) => Effect.Effect<RelayConvexControlPlaneTokenClaims | null>;
   }
 >()("pathway-relay/auth/RelayTokens") {}
 
@@ -237,8 +256,17 @@ const make = Effect.gen(function* () {
     "relay.tokens.issue_convex_service_token",
   )(function* (input) {
     yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-    return yield* signRelayJwt({
-      privateKey: Redacted.value(config.cloudMintPrivateKey),
+    const cloudSync = config.cloudSync;
+    if (cloudSync === undefined) {
+      return yield* new RelayJwtError({
+        operation: "sign",
+        typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
+        cause: new Error("Relay cloud sync is not configured"),
+      });
+    }
+    return yield* signRelayEs256Jwt({
+      privateKey: Redacted.value(cloudSync.signingKey.privateKey),
+      keyId: cloudSync.signingKey.keyId,
       typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
       payload: {
         iss: issuer,
@@ -259,28 +287,74 @@ const make = Effect.gen(function* () {
   const verifyConvexServiceToken: RelayTokens["Service"]["verifyConvexServiceToken"] = Effect.fn(
     "relay.tokens.verify_convex_service_token",
   )((input) =>
-    verifyRelayJwt({
-      publicKey: config.cloudMintPublicKey,
-      token: input.token,
-      typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
-      issuer,
-      audience: RelayConvexAudience,
-      nowEpochSeconds: input.nowEpochSeconds,
-      maxTokenAge: RELAY_CONVEX_SERVICE_TOKEN_TTL,
-    }).pipe(
-      Effect.tapError((error) =>
-        Effect.annotateCurrentSpan(
-          "relay.tokens.verification_failure",
-          RelayJwtError.diagnosticCode(error),
+    config.cloudSync === undefined
+      ? Effect.succeed(null)
+      : verifyRelayEs256Jwt({
+          publicKeys: config.cloudSync.verificationKeys,
+          token: input.token,
+          typ: RELAY_CONVEX_SERVICE_TOKEN_TYP,
+          issuer,
+          audience: RelayConvexAudience,
+          nowEpochSeconds: input.nowEpochSeconds,
+          maxTokenAge: RELAY_CONVEX_SERVICE_TOKEN_TTL,
+        }).pipe(
+          Effect.tapError((error) =>
+            Effect.annotateCurrentSpan(
+              "relay.tokens.verification_failure",
+              RelayJwtError.diagnosticCode(error),
+            ),
+          ),
+          Effect.flatMap(decodeConvexServiceTokenClaims),
+          Effect.map((claims): RelayConvexServiceTokenClaims | null =>
+            claims.sub === claims.environmentId ? claims : null,
+          ),
+          Effect.orElseSucceed(() => null),
         ),
-      ),
-      Effect.flatMap(decodeConvexServiceTokenClaims),
-      Effect.map((claims): RelayConvexServiceTokenClaims | null =>
-        claims.sub === claims.environmentId ? claims : null,
-      ),
-      Effect.orElseSucceed(() => null),
-    ),
   );
+
+  const issueConvexControlPlaneToken: RelayTokens["Service"]["issueConvexControlPlaneToken"] =
+    Effect.fn("relay.tokens.issue_convex_control_plane_token")(function* (input) {
+      const cloudSync = config.cloudSync;
+      if (cloudSync === undefined) {
+        return yield* new RelayJwtError({
+          operation: "sign",
+          typ: RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP,
+          cause: new Error("Relay cloud sync is not configured"),
+        });
+      }
+      return yield* signRelayEs256Jwt({
+        privateKey: Redacted.value(cloudSync.signingKey.privateKey),
+        keyId: cloudSync.signingKey.keyId,
+        typ: RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP,
+        payload: {
+          iss: issuer,
+          aud: RelayConvexAudience,
+          sub: RelayConvexControlPlaneSubject,
+          jti: input.jti,
+          iat: input.issuedAtEpochSeconds,
+          exp: input.expiresAtEpochSeconds,
+          tokenKind: RelayConvexControlPlaneTokenKind,
+        },
+      });
+    });
+
+  const verifyConvexControlPlaneToken: RelayTokens["Service"]["verifyConvexControlPlaneToken"] =
+    Effect.fn("relay.tokens.verify_convex_control_plane_token")((input) =>
+      config.cloudSync === undefined
+        ? Effect.succeed(null)
+        : verifyRelayEs256Jwt({
+            publicKeys: config.cloudSync.verificationKeys,
+            token: input.token,
+            typ: RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP,
+            issuer,
+            audience: RelayConvexAudience,
+            nowEpochSeconds: input.nowEpochSeconds,
+            maxTokenAge: RELAY_CONVEX_CONTROL_PLANE_TOKEN_TTL,
+          }).pipe(
+            Effect.flatMap(decodeConvexControlPlaneTokenClaims),
+            Effect.orElseSucceed(() => null),
+          ),
+    );
 
   return RelayTokens.of({
     resolveDpopAccessTokenScopes,
@@ -290,6 +364,8 @@ const make = Effect.gen(function* () {
     verifyDpopAccessToken,
     issueConvexServiceToken,
     verifyConvexServiceToken,
+    issueConvexControlPlaneToken,
+    verifyConvexControlPlaneToken,
   });
 });
 

@@ -180,7 +180,7 @@ function makeLayer(input: {
         Layer.succeed(AgentActivityRows.AgentActivityRows, {
           upsert: () => Effect.void,
           remove: () => Effect.void,
-          pruneTerminal: () => Effect.void,
+          pruneTerminal: () => Effect.succeed(0),
           listForUser: () =>
             input.activityStates !== undefined
               ? Effect.succeed([...input.activityStates])

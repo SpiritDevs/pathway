@@ -93,7 +93,7 @@ function layer(replay?: Partial<DpopProofs.DpopProofReplay["Service"]>) {
           verifyAndConsume:
             replay?.verifyAndConsume ?? (() => Effect.die("unexpected DPoP proof verification")),
           consume: replay?.consume ?? (() => Effect.succeed(true)),
-          pruneExpired: replay?.pruneExpired ?? Effect.void,
+          pruneExpired: replay?.pruneExpired ?? Effect.succeed(0),
         }),
       ),
     ),

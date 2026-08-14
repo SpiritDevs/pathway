@@ -2,8 +2,16 @@ import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { decodeProtectedHeader } from "jose";
 
-import { RelayJwtError, signRelayJwt, verifyRelayJwt } from "./relayJwt.ts";
+import {
+  relayEs256PublicJwk,
+  RelayJwtError,
+  signRelayEs256Jwt,
+  signRelayJwt,
+  verifyRelayEs256Jwt,
+  verifyRelayJwt,
+} from "./relayJwt.ts";
 
 describe("relayJwt", () => {
   it.effect("preserves signing context and the JOSE cause", () =>
@@ -55,4 +63,54 @@ describe("relayJwt", () => {
     expect(RelayJwtError.diagnosticCode(error)).toBe("ERR_JWT_EXPIRED");
     expect(error.message).not.toContain("sensitive library detail");
   });
+
+  it.effect("signs ES256 JWTs with a stable kid and exports a public-only JWK", () =>
+    Effect.gen(function* () {
+      const keyPair = NodeCrypto.generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+        publicKeyEncoding: { format: "pem", type: "spki" },
+        privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      });
+      const token = yield* signRelayEs256Jwt({
+        privateKey: keyPair.privateKey,
+        keyId: "pathway-convex-test",
+        typ: "test-es256+jwt",
+        payload: {
+          iss: "https://relay.example.test",
+          aud: "pathway-convex",
+          sub: "pathway-relay",
+          iat: 100,
+          exp: 200,
+        },
+      });
+      expect(decodeProtectedHeader(token)).toMatchObject({
+        alg: "ES256",
+        kid: "pathway-convex-test",
+        typ: "test-es256+jwt",
+      });
+      expect(
+        yield* verifyRelayEs256Jwt({
+          publicKeys: [{ keyId: "pathway-convex-test", publicKey: keyPair.publicKey }],
+          token,
+          typ: "test-es256+jwt",
+          issuer: "https://relay.example.test",
+          audience: "pathway-convex",
+          nowEpochSeconds: 150,
+        }),
+      ).toMatchObject({ sub: "pathway-relay" });
+
+      const jwk = yield* relayEs256PublicJwk({
+        keyId: "pathway-convex-test",
+        publicKey: keyPair.publicKey,
+      });
+      expect(jwk).toMatchObject({
+        alg: "ES256",
+        crv: "P-256",
+        kid: "pathway-convex-test",
+        kty: "EC",
+        use: "sig",
+      });
+      expect(jwk).not.toHaveProperty("d");
+    }),
+  );
 });

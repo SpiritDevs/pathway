@@ -702,6 +702,8 @@ export type RelayDpopAccessTokenResponse = typeof RelayDpopAccessTokenResponse.T
 // both issuer and verifier. Convex is the first foreign audience: an environment
 // presents this token to Convex, which trusts the relay as a custom JWT provider.
 export const RelayConvexAudience = "pathway-convex" as const;
+export const RelayConvexControlPlaneSubject = "pathway-relay" as const;
+export const RelayConvexControlPlaneTokenKind = "relay-control-plane" as const;
 
 // RFC 8693 subject-token type for the opaque `t3env_…` credential a linked
 // environment already holds. It is relay-specific, so it uses a relay URN rather
@@ -780,6 +782,17 @@ export const RelayConvexServiceTokenClaims = Schema.Struct({
     "Claims of a relay-issued Convex service token. `sub` is the environment ID and `cnf.jkt` is the DPoP proof-key thumbprint presented at exchange.",
 });
 export type RelayConvexServiceTokenClaims = typeof RelayConvexServiceTokenClaims.Type;
+
+export const RelayConvexControlPlaneTokenClaims = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  aud: Schema.Literal(RelayConvexAudience),
+  sub: Schema.Literal(RelayConvexControlPlaneSubject),
+  tokenKind: Schema.Literal(RelayConvexControlPlaneTokenKind),
+}).annotate({
+  description:
+    "Claims of the relay's short-lived Convex control-plane token. Convex authorizes this service identity separately from environment tokens.",
+});
+export type RelayConvexControlPlaneTokenClaims = typeof RelayConvexControlPlaneTokenClaims.Type;
 
 // Permission a Convex-issued connect grant asserts for the acting user. The
 // spelling is the company vocabulary's, not a relay dialect: these literals are

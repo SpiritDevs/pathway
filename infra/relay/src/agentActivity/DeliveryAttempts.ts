@@ -1,14 +1,12 @@
+import { api } from "@t3tools/backend/convexApi";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import { and, eq, isNull } from "drizzle-orm";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 
-import * as RelayDb from "../db.ts";
-import { relayDeliveryAttempts } from "../persistence/schema.ts";
+import { RelayConvexClient } from "../db.ts";
 
 export class DeliveryAttemptRecordPersistenceError extends Schema.TaggedErrorClass<DeliveryAttemptRecordPersistenceError>()(
   "DeliveryAttemptRecordPersistenceError",
@@ -67,13 +65,7 @@ export class DeliveryAttempts extends Context.Service<
   }
 >()("pathway-relay/agentActivity/DeliveryAttempts") {}
 
-const SOURCE_JOB_CLAIM_LEASE_MINUTES = 10;
-
-function insertValues(
-  input: DeliveryAttemptInput,
-  id: string,
-  createdAt: string,
-): typeof relayDeliveryAttempts.$inferInsert {
+function insertValues(input: DeliveryAttemptInput, id: string, createdAt: string) {
   return {
     id,
     createdAt,
@@ -92,20 +84,8 @@ function insertValues(
 }
 
 export const make = Effect.gen(function* () {
-  const db = yield* RelayDb.RelayDb;
+  const client = yield* RelayConvexClient;
   const crypto = yield* Crypto.Crypto;
-
-  const isExpiredClaim = (claimedAt: string | null, now: DateTime.DateTime) => {
-    if (claimedAt === null) {
-      return true;
-    }
-    return Option.match(DateTime.make(claimedAt), {
-      onNone: () => true,
-      onSome: (dateTime) =>
-        now.epochMilliseconds - dateTime.epochMilliseconds >=
-        SOURCE_JOB_CLAIM_LEASE_MINUTES * 60 * 1_000,
-    });
-  };
 
   return DeliveryAttempts.of({
     record: Effect.fn("relay.delivery_attempts.record")(function* (input) {
@@ -119,7 +99,10 @@ export const make = Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const id = yield* crypto.randomUUIDv4;
         const createdAt = DateTime.formatIso(yield* DateTime.now);
-        yield* db.insert(relayDeliveryAttempts).values(insertValues(input, id, createdAt));
+        yield* client.mutation(
+          api.relayPersistence.recordDeliveryAttempt,
+          insertValues(input, id, createdAt),
+        );
       }).pipe(
         Effect.mapError(
           (cause) =>
@@ -148,59 +131,10 @@ export const make = Effect.gen(function* () {
         const id = yield* crypto.randomUUIDv4;
         const now = yield* DateTime.now;
         const createdAt = DateTime.formatIso(now);
-        const inserted = yield* db
-          .insert(relayDeliveryAttempts)
-          .values(insertValues(input, id, createdAt))
-          .onConflictDoNothing({ target: relayDeliveryAttempts.sourceJobId })
-          .returning({ id: relayDeliveryAttempts.id });
-        if (inserted.length > 0) {
-          return "claimed";
-        }
-
-        const existing = yield* db
-          .select({
-            createdAt: relayDeliveryAttempts.createdAt,
-            apnsStatus: relayDeliveryAttempts.apnsStatus,
-            apnsReason: relayDeliveryAttempts.apnsReason,
-            apnsId: relayDeliveryAttempts.apnsId,
-            transportError: relayDeliveryAttempts.transportError,
-          })
-          .from(relayDeliveryAttempts)
-          .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId))
-          .limit(1);
-        const row = existing[0];
-        if (!row) {
-          return "in_flight";
-        }
-        if (
-          row.apnsStatus !== null ||
-          row.apnsReason !== null ||
-          row.apnsId !== null ||
-          row.transportError !== null
-        ) {
-          return "completed";
-        }
-        if (!isExpiredClaim(row.createdAt, now)) {
-          return "in_flight";
-        }
-
-        const reclaimed = yield* db
-          .update(relayDeliveryAttempts)
-          .set({
-            createdAt,
-          })
-          .where(
-            and(
-              eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId),
-              eq(relayDeliveryAttempts.createdAt, row.createdAt),
-              isNull(relayDeliveryAttempts.apnsStatus),
-              isNull(relayDeliveryAttempts.apnsReason),
-              isNull(relayDeliveryAttempts.apnsId),
-              isNull(relayDeliveryAttempts.transportError),
-            ),
-          )
-          .returning({ id: relayDeliveryAttempts.id });
-        return reclaimed.length > 0 ? "claimed" : "in_flight";
+        return yield* client.mutation(api.relayPersistence.claimDeliverySourceJob, {
+          ...insertValues(input, id, createdAt),
+          leaseExpiresBefore: DateTime.formatIso(DateTime.subtract(now, { minutes: 10 })),
+        });
       }).pipe(
         Effect.mapError(
           (cause) =>
@@ -220,16 +154,15 @@ export const make = Effect.gen(function* () {
     completeSourceJob: Effect.fn("relay.delivery_attempts.complete_source_job")(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.delivery.job_id": input.sourceJobId });
       const completedAt = DateTime.formatIso(yield* DateTime.now);
-      yield* db
-        .update(relayDeliveryAttempts)
-        .set({
-          createdAt: completedAt,
+      yield* client
+        .mutation(api.relayPersistence.completeDeliverySourceJob, {
+          sourceJobId: input.sourceJobId,
+          completedAt,
           apnsStatus: input.apnsStatus ?? null,
           apnsReason: input.apnsReason ?? null,
           apnsId: input.apnsId ?? null,
           transportError: input.transportError ?? null,
         })
-        .where(eq(relayDeliveryAttempts.sourceJobId, input.sourceJobId))
         .pipe(
           Effect.mapError(
             (cause) =>

@@ -138,6 +138,7 @@ describe("relay environment authentication", () => {
     });
     const credentials: EnvironmentCredentials.EnvironmentCredentials["Service"] = {
       create: () => Effect.die("unused create"),
+      replaceLinkAndCreate: () => Effect.die("unused replaceLinkAndCreate"),
       authenticate: () => Effect.fail(failure),
       revokeForEnvironmentPublicKey: () => Effect.die("unused revoke"),
     };
@@ -177,19 +178,27 @@ describe("relay environment authentication", () => {
 });
 
 function relayUnlinkTestLayer(input?: {
-  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
+  readonly revoke?: (
+    args: unknown,
+  ) => Effect.Effect<
+    { readonly linkRevoked: boolean; readonly credentialsRevoked: boolean },
+    RelayDb.RelayConvexClientError
+  >;
   readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
-  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
   readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return Layer.mergeAll(
     Layer.succeed(
-      RelayDb.RelayTransactions,
-      RelayDb.RelayTransactions.of({
-        withTransaction: input?.withTransaction ?? ((effect) => effect),
-      }),
+      RelayDb.RelayConvexClient,
+      RelayDb.RelayConvexClient.of({
+        query: () => Effect.die("unused query"),
+        mutation: (_reference: unknown, args: unknown) =>
+          (
+            input?.revoke ??
+            (() => Effect.succeed({ linkRevoked: false, credentialsRevoked: false }))
+          )(args),
+      } as unknown as RelayDb.RelayConvexClient["Service"]),
     ),
     Layer.succeed(
       EnvironmentLinks.EnvironmentLinks,
@@ -200,15 +209,7 @@ function relayUnlinkTestLayer(input?: {
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
-        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentCredentials.EnvironmentCredentials,
-      EnvironmentCredentials.EnvironmentCredentials.of({
-        create: () => Effect.die("unused create"),
-        authenticate: () => Effect.die("unused authenticate"),
-        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
+        revokeForUser: () => Effect.die("unused revokeForUser"),
       }),
     ),
     Layer.succeed(
@@ -236,8 +237,8 @@ const linkedEnvironmentRecord = {
 } as const;
 
 describe("relay environment unlink", () => {
-  it.effect("revokes the link and its credentials in one database transaction", () => {
-    const calls: Array<string> = [];
+  it.effect("revokes the link and its credentials with one atomic Convex mutation", () => {
+    let mutationArgs: unknown = null;
     return Effect.gen(function* () {
       expect(
         yield* revokeEnvironmentLinkRecord({
@@ -246,23 +247,18 @@ describe("relay environment unlink", () => {
           environmentPublicKey: "public-key",
         }),
       ).toBe(true);
-      expect(calls).toEqual(["transaction", "link", "credential"]);
+      expect(mutationArgs).toMatchObject({
+        userId: "user-1",
+        environmentId: "environment-1",
+        now: "1970-01-01T00:00:00.000Z",
+      });
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
-          revokeForUser: () =>
+          revoke: (args) =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
+              mutationArgs = args;
+              return { linkRevoked: true, credentialsRevoked: true };
             }),
         }),
       ),
@@ -289,35 +285,19 @@ describe("relay environment unlink", () => {
           environmentId: "environment-1",
         }),
       ).toBe(true);
-      expect(calls).toEqual([
-        "prepare",
-        "lookup",
-        "transaction",
-        "link",
-        "credential",
-        "deprovision",
-      ]);
+      expect(calls).toEqual(["prepare", "lookup", "mutation", "deprovision"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
           getForUser: () =>
             Effect.sync(() => {
               calls.push("lookup");
               return linkedEnvironmentRecord;
             }),
-          revokeForUser: () =>
+          revoke: () =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
+              calls.push("mutation");
+              return { linkRevoked: true, credentialsRevoked: true };
             }),
           prepareDeprovision: () =>
             Effect.sync(() => {
@@ -336,8 +316,8 @@ describe("relay environment unlink", () => {
 
   it.effect("does not deprovision when database revocation fails", () => {
     const calls: Array<string> = [];
-    const failure = new EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError({
-      environmentId: "environment-1",
+    const failure = new RelayDb.RelayConvexClientError({
+      operation: "mutation",
       cause: "database unavailable",
     });
 
@@ -349,24 +329,20 @@ describe("relay environment unlink", () => {
             environmentId: "environment-1",
           }),
         ),
-      ).toBe(failure);
-      expect(calls).toEqual(["prepare", "transaction", "link", "credential"]);
+      ).toMatchObject({
+        _tag: "EnvironmentLinkRevokePersistenceError",
+        userId: "user-1",
+        environmentId: "environment-1",
+        cause: failure,
+      });
+      expect(calls).toEqual(["prepare", "mutation"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
           getForUser: () => Effect.succeed(linkedEnvironmentRecord),
-          revokeForUser: () =>
+          revoke: () =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
+              calls.push("mutation");
             }).pipe(Effect.andThen(Effect.fail(failure))),
           prepareDeprovision: () =>
             Effect.sync(() => {
@@ -410,10 +386,24 @@ describe("relay environment unlink", () => {
   });
 });
 
-const convexMintKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
+const convexMintKeyPair = NodeCrypto.generateKeyPairSync("ec", {
+  namedCurve: "P-256",
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
   publicKeyEncoding: { format: "pem", type: "spki" },
 });
+
+const enabledCloudSync = {
+  serviceTokensEnabled: true,
+  convexUrl: "https://convex.example.test",
+  signingKey: {
+    keyId: "relay-convex-test",
+    privateKey: Redacted.make(convexMintKeyPair.privateKey),
+    publicKey: convexMintKeyPair.publicKey,
+  },
+  verificationKeys: [{ keyId: "relay-convex-test", publicKey: convexMintKeyPair.publicKey }],
+  connectGrantIssuer: undefined,
+  connectGrantPublicKey: undefined,
+} satisfies RelayConfiguration.RelayCloudSyncConfiguration;
 
 // The request URL the relay reconstructs from the incoming host header, which is
 // what the DPoP proof's `htu` has to match.
@@ -504,33 +494,28 @@ function convexExchangeTestLayer(input: {
     cloudMintPublicKey: convexMintKeyPair.publicKey,
     cloudSync: input.cloudSync,
   };
-  const fakeDb = {
-    insert: () => ({
-      values: (values: { readonly thumbprint: string; readonly jti: string }) => ({
-        onConflictDoNothing: () => ({
-          returning: () =>
-            Effect.sync(() => {
-              const key = `${values.thumbprint}:${values.jti}`;
-              if (input.consumedProofs.has(key)) {
-                return [];
-              }
-              input.consumedProofs.add(key);
-              return [{ jti: values.jti }];
-            }),
-        }),
+  const fakeClient = RelayDb.RelayConvexClient.of({
+    query: () => Effect.die("unused query"),
+    mutation: (_reference: unknown, args: unknown) =>
+      Effect.sync(() => {
+        const values = args as { readonly thumbprint: string; readonly jti: string };
+        const key = `${values.thumbprint}:${values.jti}`;
+        if (input.consumedProofs.has(key)) return false;
+        input.consumedProofs.add(key);
+        return true;
       }),
-    }),
-  } as unknown as RelayDb.RelayDb["Service"];
+  } as unknown as RelayDb.RelayConvexClient["Service"]);
 
   const configLayer = RelayConfiguration.layer(settings);
   return Layer.mergeAll(
     configLayer,
     RelayTokens.layer.pipe(Layer.provide(configLayer)),
-    DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb))),
+    DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayConvexClient, fakeClient))),
     Layer.succeed(
       EnvironmentCredentials.EnvironmentCredentials,
       EnvironmentCredentials.EnvironmentCredentials.of({
         create: () => Effect.die("unused create"),
+        replaceLinkAndCreate: () => Effect.die("unused replaceLinkAndCreate"),
         authenticate:
           input.authenticate ?? (() => Effect.succeed(Option.some(environmentPrincipal))),
         revokeForEnvironmentPublicKey: () => Effect.die("unused revoke"),
@@ -589,11 +574,7 @@ describe("relay Convex service token exchange", () => {
       Effect.provide(
         convexExchangeTestLayer({
           consumedProofs,
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
@@ -649,11 +630,7 @@ describe("relay Convex service token exchange", () => {
         convexExchangeTestLayer({
           consumedProofs,
           authenticate: () => Effect.succeed(Option.none()),
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
@@ -683,11 +660,7 @@ describe("relay Convex service token exchange", () => {
       Effect.provide(
         convexExchangeTestLayer({
           consumedProofs,
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
@@ -719,11 +692,7 @@ describe("relay Convex service token exchange", () => {
       Effect.provide(
         convexExchangeTestLayer({
           consumedProofs,
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
@@ -759,11 +728,7 @@ describe("relay Convex service token exchange", () => {
       Effect.provide(
         convexExchangeTestLayer({
           consumedProofs,
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
@@ -795,11 +760,7 @@ describe("relay Convex service token exchange", () => {
       Effect.provide(
         convexExchangeTestLayer({
           consumedProofs,
-          cloudSync: {
-            serviceTokensEnabled: true,
-            connectGrantIssuer: undefined,
-            connectGrantPublicKey: undefined,
-          },
+          cloudSync: enabledCloudSync,
         }),
       ),
     );
