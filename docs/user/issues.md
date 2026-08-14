@@ -307,7 +307,10 @@ Mentions are a web and desktop feature; there is no issues surface on mobile.
 
 Coding agents get an issues toolkit automatically, whichever provider you use. They can search and
 read issues, create and update them, comment, delete, and restore, and link the thread they are
-working in to an issue.
+working in to an issue. They can also list, create, rename, reschedule, move, and delete milestones.
+Milestone tools identify one by its project and name, since the same name may exist in two projects.
+When an agent creates an issue with a project and names a milestone that does not exist there yet,
+Pathway creates the milestone while filing the issue and assigns the new issue to it.
 
 Issue reads include every image attachment in the issue-level attachment list and on the comment
 that owns it, together with that comment's body, author, and timestamp. Pathway sends a bounded set
@@ -315,9 +318,10 @@ of those images directly with the issue read so the agent can inspect them visua
 more images than fit safely in that response, the agent can read any remaining image individually
 with its attachment id. Issue attachments are images only.
 
-Agent writes are not gated behind an approval, so treat them like your own: deletes are soft and
-reversible with **Restore**, and every write is attributed in the activity feed with the provider
-that made it.
+Agent writes are not gated behind an approval, so treat them like your own. Issue deletes are soft
+and reversible with **Restore**, and issue writes are attributed in the activity feed with the
+provider that made them. Milestone changes appear immediately, but milestones have no activity feed
+of their own.
 
 ### Issue keys in chat
 

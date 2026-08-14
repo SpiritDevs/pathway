@@ -20,6 +20,7 @@ import {
   ISSUE_DESCRIPTION_MAX_CHARS,
   ISSUE_LABELS_MAX_PER_ISSUE,
   ISSUE_TITLE_MAX_CHARS,
+  IssueDate,
   IssuePriority,
   IssueRelationDirection,
   IssueRelationKind,
@@ -81,6 +82,13 @@ const clearableName = (description: string) =>
 
 const optionalDate = (description: string) =>
   Schema.optional(Schema.String.annotate({ description: `${description} Format: YYYY-MM-DD.` }));
+
+const milestoneName = (description: string) =>
+  Schema.String.check(
+    Schema.isTrimmed(),
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS),
+  ).annotate({ description });
 
 const labelNames = (description: string) =>
   Schema.optional(
@@ -260,6 +268,92 @@ export const IssuesMcpGetAttachmentResult = Schema.Struct({
 });
 export type IssuesMcpGetAttachmentResult = typeof IssuesMcpGetAttachmentResult.Type;
 
+/** A project-scoped milestone in the names-and-dates vocabulary agents can act on. */
+export const IssuesMcpMilestone = Schema.Struct({
+  name: Schema.String,
+  project: Schema.String,
+  description: Schema.NullOr(Schema.String),
+  startDate: Schema.NullOr(IssueDate),
+  targetDate: Schema.NullOr(IssueDate),
+});
+export type IssuesMcpMilestone = typeof IssuesMcpMilestone.Type;
+
+export const IssuesMcpMilestonesListInput = Schema.Struct({
+  project: optionalName(
+    "Only milestones in this project, by project name (case-insensitive). Omit to list every milestone.",
+  ),
+});
+
+export const IssuesMcpMilestonesListResult = Schema.Struct({
+  milestones: Schema.Array(IssuesMcpMilestone),
+});
+export type IssuesMcpMilestonesListResult = typeof IssuesMcpMilestonesListResult.Type;
+
+export const IssuesMcpMilestoneCreateInput = Schema.Struct({
+  project: Schema.String.annotate({
+    description: "Project the milestone belongs to, by name (case-insensitive). Required.",
+  }),
+  name: milestoneName("Milestone name. Must be unique within the project."),
+  description: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(ISSUE_DESCRIPTION_MAX_CHARS)).annotate({
+      description: "Optional markdown description of what the milestone means.",
+    }),
+  ),
+  startDate: Schema.optional(IssueDate).annotate({
+    description: "Optional start day, formatted YYYY-MM-DD.",
+  }),
+  targetDate: Schema.optional(IssueDate).annotate({
+    description: "Optional target day, formatted YYYY-MM-DD.",
+  }),
+});
+
+export const IssuesMcpMilestoneUpdateInput = Schema.Struct({
+  project: Schema.String.annotate({
+    description: "Current project containing the milestone, by name (case-insensitive).",
+  }),
+  milestone: Schema.String.annotate({
+    description: "Current milestone name (case-insensitive).",
+  }),
+  name: Schema.optional(milestoneName("Replacement milestone name.")),
+  description: Schema.optional(
+    Schema.NullOr(Schema.String.check(Schema.isMaxLength(ISSUE_DESCRIPTION_MAX_CHARS))).annotate({
+      description:
+        "Replacement markdown description. Pass null to clear it; omit the field to leave it alone.",
+    }),
+  ),
+  startDate: Schema.optional(Schema.NullOr(IssueDate)).annotate({
+    description:
+      "Replacement start day, YYYY-MM-DD. Pass null to clear it; omit the field to leave it alone.",
+  }),
+  targetDate: Schema.optional(Schema.NullOr(IssueDate)).annotate({
+    description:
+      "Replacement target day, YYYY-MM-DD. Pass null to clear it; omit the field to leave it alone.",
+  }),
+  newProject: optionalName(
+    "Move the milestone to this project. Issues left in the old project are removed from the milestone.",
+  ),
+});
+
+export const IssuesMcpMilestoneDeleteInput = Schema.Struct({
+  project: Schema.String.annotate({
+    description: "Project containing the milestone, by name (case-insensitive).",
+  }),
+  milestone: Schema.String.annotate({
+    description: "Milestone name to delete (case-insensitive).",
+  }),
+});
+
+export const IssuesMcpMilestoneResult = Schema.Struct({
+  milestone: IssuesMcpMilestone,
+});
+export type IssuesMcpMilestoneResult = typeof IssuesMcpMilestoneResult.Type;
+
+export const IssuesMcpMilestoneDeleteResult = Schema.Struct({
+  deleted: IssuesMcpMilestone,
+  clearedIssues: Schema.Int,
+});
+export type IssuesMcpMilestoneDeleteResult = typeof IssuesMcpMilestoneDeleteResult.Type;
+
 export const IssuesMcpCreateInput = Schema.Struct({
   title: Schema.String.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)).annotate({
     description: "One-line summary. Required.",
@@ -274,7 +368,9 @@ export const IssuesMcpCreateInput = Schema.Struct({
   ),
   priority: Schema.optional(IssuePriority.annotate({ description: 'Defaults to "none".' })),
   project: optionalName("Project name. Must already exist; this tool does not create projects."),
-  milestone: optionalName("Milestone name. Requires the issue to be in the milestone's project."),
+  milestone: optionalName(
+    "Milestone name. When it does not exist in the selected project, it is created while filing the issue. An existing milestone can supply the project when its name is unique; creating one requires project.",
+  ),
   cycle: optionalName("Cycle name. Cycles span every project."),
   labels: labelNames(
     "Label names. A label that does not exist yet is created with a colour from the tracker's palette.",
@@ -444,10 +540,56 @@ export const IssuesGetAttachmentTool = readonlyTrackerTool(
   }).annotate(Tool.Title, "Get issue attachment"),
 );
 
+export const IssuesMilestonesListTool = readonlyTrackerTool(
+  Tool.make("issues_milestones_list", {
+    description:
+      "List milestones in this environment, optionally within one project. Returns project-scoped names, descriptions, and dates that can be passed to the milestone write tools. Read-only.",
+    parameters: IssuesMcpMilestonesListInput,
+    success: IssuesMcpMilestonesListResult,
+    failure: IssueTrackerError,
+    dependencies,
+  }).annotate(Tool.Title, "List milestones"),
+);
+
+export const IssuesMilestoneCreateTool = writeTrackerTool(
+  Tool.make("issues_milestone_create", {
+    description:
+      "Create a milestone inside an existing project. This writes to the tracker and is visible to everyone immediately; milestone names only need to be unique within their project.",
+    parameters: IssuesMcpMilestoneCreateInput,
+    success: IssuesMcpMilestoneResult,
+    failure: IssueTrackerError,
+    dependencies,
+  }).annotate(Tool.Title, "Create milestone"),
+);
+
+export const IssuesMilestoneUpdateTool = writeTrackerTool(
+  Tool.make("issues_milestone_update", {
+    description:
+      "Rename, describe, reschedule, or move a milestone. Omitted fields stay unchanged and explicit null clears a description or date. This writes to the tracker and is visible to everyone immediately.",
+    parameters: IssuesMcpMilestoneUpdateInput,
+    success: IssuesMcpMilestoneResult,
+    failure: IssueTrackerError,
+    dependencies,
+  })
+    .annotate(Tool.Title, "Update milestone")
+    .annotate(Tool.Idempotent, true),
+);
+
+export const IssuesMilestoneDeleteTool = writeTrackerTool(
+  Tool.make("issues_milestone_delete", {
+    description:
+      "Permanently delete a milestone. Issues on it stay in their project and become unassigned from any milestone. This writes to the tracker and is visible to everyone immediately.",
+    parameters: IssuesMcpMilestoneDeleteInput,
+    success: IssuesMcpMilestoneDeleteResult,
+    failure: IssueTrackerError,
+    dependencies,
+  }).annotate(Tool.Title, "Delete milestone"),
+).annotate(Tool.Destructive, true);
+
 export const IssuesCreateTool = writeTrackerTool(
   Tool.make("issues_create", {
     description:
-      "File a new issue and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the issue's change log. Labels named here are created if they do not exist yet; projects, milestones, and cycles are not.",
+      "File a new issue and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the issue's change log. Labels are created when missing. A missing milestone is also created when the project field names where it belongs; projects and cycles must already exist.",
     parameters: IssuesMcpCreateInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
@@ -535,6 +677,10 @@ export const IssuesToolkit = Toolkit.make(
   IssuesListTool,
   IssuesGetTool,
   IssuesGetAttachmentTool,
+  IssuesMilestonesListTool,
+  IssuesMilestoneCreateTool,
+  IssuesMilestoneUpdateTool,
+  IssuesMilestoneDeleteTool,
   IssuesCreateTool,
   IssuesUpdateTool,
   IssuesCommentTool,
