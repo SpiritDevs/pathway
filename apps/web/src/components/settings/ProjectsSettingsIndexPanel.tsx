@@ -3,8 +3,7 @@
  *
  * Project settings are per-project, so this page is a directory rather than a form — it lists every
  * logical project group (the same grouping the sidebar uses) and links through to
- * `/settings/projects/$projectKey`, which renders the same panel the contextual
- * `/projects/$projectKey` route does.
+ * `/settings/projects/$projectKey`, which renders the project settings panel on its own.
  *
  * @module components/settings/ProjectsSettingsIndexPanel
  */
@@ -12,12 +11,12 @@ import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon, FolderIcon } from "lucide-react";
 
 import { ProjectFavicon } from "../ProjectFavicon";
-import { useSettingsProjectGroups } from "./ProjectSettingsPanel";
+import { useProjectGroups } from "../projects/useProjectGroups";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 export function ProjectsSettingsIndexPanel() {
-  const groups = useSettingsProjectGroups();
+  const groups = useProjectGroups();
 
   return (
     <SettingsPageContainer className="max-w-3xl">

@@ -13,6 +13,7 @@ import { Route as UsageRouteImport } from './routes/usage'
 import { Route as TimeTrackerRouteImport } from './routes/time-tracker'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as OrchestratorRouteImport } from './routes/orchestrator'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
@@ -24,8 +25,10 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ContactsRouteImport } from './routes/contacts'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as CalendarRouteImport } from './routes/calendar'
+import { Route as BrowserRouteImport } from './routes/browser'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
@@ -75,6 +78,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const RegisterRoute = RegisterRouteImport.update({
   id: '/register',
   path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsRoute = ProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PairRoute = PairRouteImport.update({
@@ -132,6 +140,11 @@ const CalendarRoute = CalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BrowserRoute = BrowserRouteImport.update({
+  id: '/browser',
+  path: '/browser',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
@@ -140,6 +153,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProjectsRoute,
 } as any)
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
@@ -234,9 +252,9 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   getParentRoute: () => SettingsRoute,
 } as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
-  id: '/projects/$projectKey',
-  path: '/projects/$projectKey',
-  getParentRoute: () => rootRouteImport,
+  id: '/$projectKey',
+  path: '/$projectKey',
+  getParentRoute: () => ProjectsRoute,
 } as any)
 const IssuesMilestonesRoute = IssuesMilestonesRouteImport.update({
   id: '/issues_/milestones',
@@ -301,6 +319,7 @@ const ChatThreadsEnvironmentIdThreadIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
@@ -312,6 +331,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
+  '/projects': typeof ProjectsRouteWithChildren
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
   '/time-tracker': typeof TimeTrackerRoute
@@ -339,6 +359,7 @@ export interface FileRoutesByFullPath {
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/projects/': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
@@ -349,6 +370,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
@@ -387,6 +409,7 @@ export interface FileRoutesByTo {
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/projects': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
@@ -399,6 +422,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_chat': typeof ChatRouteWithChildren
+  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
@@ -410,6 +434,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/orchestrator': typeof OrchestratorRoute
   '/pair': typeof PairRoute
+  '/projects': typeof ProjectsRouteWithChildren
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
   '/time-tracker': typeof TimeTrackerRoute
@@ -437,6 +462,7 @@ export interface FileRoutesById {
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/usage': typeof SettingsUsageRoute
+  '/projects/': typeof ProjectsIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
@@ -449,6 +475,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
@@ -460,6 +487,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/orchestrator'
     | '/pair'
+    | '/projects'
     | '/register'
     | '/settings'
     | '/time-tracker'
@@ -487,6 +515,7 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
+    | '/projects/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
@@ -497,6 +526,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
@@ -535,6 +565,7 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
+    | '/projects'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
@@ -546,6 +577,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_chat'
+    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
@@ -557,6 +589,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/orchestrator'
     | '/pair'
+    | '/projects'
     | '/register'
     | '/settings'
     | '/time-tracker'
@@ -584,6 +617,7 @@ export interface FileRouteTypes {
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
     | '/settings/usage'
+    | '/projects/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
     | '/issues_/milestones_/$milestoneId'
@@ -596,6 +630,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ChatRoute: typeof ChatRouteWithChildren
+  BrowserRoute: typeof BrowserRoute
   CalendarRoute: typeof CalendarRoute
   ConnectRoute: typeof ConnectRoute
   ContactsRoute: typeof ContactsRoute
@@ -607,13 +642,13 @@ export interface RootRouteChildren {
   OnboardingRoute: typeof OnboardingRoute
   OrchestratorRoute: typeof OrchestratorRoute
   PairRoute: typeof PairRoute
+  ProjectsRoute: typeof ProjectsRouteWithChildren
   RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   TimeTrackerRoute: typeof TimeTrackerRoute
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
   IssuesMilestonesRoute: typeof IssuesMilestonesRoute
-  ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
   IssuesMilestonesMilestoneIdRoute: typeof IssuesMilestonesMilestoneIdRoute
 }
 
@@ -645,6 +680,13 @@ declare module '@tanstack/react-router' {
       path: '/register'
       fullPath: '/register'
       preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/projects': {
+      id: '/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof ProjectsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/pair': {
@@ -724,6 +766,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CalendarRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/browser': {
+      id: '/browser'
+      path: '/browser'
+      fullPath: '/browser'
+      preLoaderRoute: typeof BrowserRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -737,6 +786,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/projects/': {
+      id: '/projects/'
+      path: '/'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof ProjectsIndexRouteImport
+      parentRoute: typeof ProjectsRoute
     }
     '/settings/usage': {
       id: '/settings/usage'
@@ -866,10 +922,10 @@ declare module '@tanstack/react-router' {
     }
     '/projects/$projectKey': {
       id: '/projects/$projectKey'
-      path: '/projects/$projectKey'
+      path: '/$projectKey'
       fullPath: '/projects/$projectKey'
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof ProjectsRoute
     }
     '/issues_/milestones': {
       id: '/issues_/milestones'
@@ -971,6 +1027,20 @@ const ChatRouteChildren: ChatRouteChildren = {
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
+interface ProjectsRouteChildren {
+  ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  ProjectsIndexRoute: typeof ProjectsIndexRoute
+}
+
+const ProjectsRouteChildren: ProjectsRouteChildren = {
+  ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  ProjectsIndexRoute: ProjectsIndexRoute,
+}
+
+const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
+  ProjectsRouteChildren,
+)
+
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
@@ -1024,6 +1094,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ChatRoute: ChatRouteWithChildren,
+  BrowserRoute: BrowserRoute,
   CalendarRoute: CalendarRoute,
   ConnectRoute: ConnectRoute,
   ContactsRoute: ContactsRoute,
@@ -1035,13 +1106,13 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardingRoute: OnboardingRoute,
   OrchestratorRoute: OrchestratorRoute,
   PairRoute: PairRoute,
+  ProjectsRoute: ProjectsRouteWithChildren,
   RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRouteWithChildren,
   TimeTrackerRoute: TimeTrackerRoute,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
   IssuesMilestonesRoute: IssuesMilestonesRoute,
-  ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
   IssuesMilestonesMilestoneIdRoute: IssuesMilestonesMilestoneIdRoute,
 }
 export const routeTree = rootRouteImport

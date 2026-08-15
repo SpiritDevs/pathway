@@ -2,7 +2,7 @@ import type { ChatAttachmentId, EnvironmentId } from "@t3tools/contracts";
 import { MessagesSquareIcon } from "lucide-react";
 import { useMemo } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import { useAssetUrlsState } from "~/assets/assetUrls";
 import { ImageLightbox, type ImageLightboxAction } from "../media/ImageLightbox";
 import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
 
@@ -36,7 +36,7 @@ export function IssueImageViewer({
     () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
     [attachmentIds],
   );
-  const urls = useAssetUrls(environmentId, resources);
+  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
   const ready = urls.every((url) => url !== null);
 
   // Videos play inline on the issue rather than in the image viewer, so they are skipped
@@ -86,6 +86,10 @@ export function IssueImageViewer({
       images={images}
       initialIndex={index}
       onClose={onClose}
+      onImageError={(failedImage) => {
+        const failedIndex = urls.indexOf(failedImage.src);
+        if (failedIndex >= 0) refresh(failedIndex);
+      }}
     />
   );
 }

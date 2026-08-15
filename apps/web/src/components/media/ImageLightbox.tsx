@@ -61,6 +61,7 @@ export interface ImageLightboxProps {
   /** When supplied, the footer grows a comment box that posts against the shown image. */
   readonly comment?: ImageLightboxCommentSupport;
   readonly onClose: () => void;
+  readonly onImageError?: (image: LightboxImage, index: number) => void;
 }
 
 const NO_ACTIONS: ReadonlyArray<ImageLightboxAction> = [];
@@ -118,6 +119,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   actions = NO_ACTIONS,
   comment,
   onClose,
+  onImageError,
 }: ImageLightboxProps) {
   const [index, setIndex] = useState(() => wrapImageIndex(initialIndex, images.length));
   const [zoom, setZoom] = useState<number>(MIN_IMAGE_ZOOM);
@@ -326,6 +328,7 @@ export const ImageLightbox = memo(function ImageLightbox({
             )}
             draggable={false}
             onDoubleClick={() => (zoom === MIN_IMAGE_ZOOM ? changeZoom(1) : resetView())}
+            onError={() => onImageError?.(image, index)}
             onPointerCancel={endDrag}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -382,6 +385,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                     alt=""
                     className="size-full object-cover"
                     draggable={false}
+                    onError={() => onImageError?.(thumbnail, thumbnailIndex)}
                     src={thumbnail.src}
                   />
                 </button>

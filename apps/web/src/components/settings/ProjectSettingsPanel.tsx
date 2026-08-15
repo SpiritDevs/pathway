@@ -13,7 +13,6 @@ import {
   selectProjectGroupingSettings,
 } from "../../logicalProject";
 import type {
-  ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
@@ -23,17 +22,10 @@ import type {
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@t3tools/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
-import { useCanGoBack, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { ChevronDownIcon, CopyIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { isElectron } from "../../env";
@@ -61,12 +53,11 @@ import {
 } from "../../providerInstances";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
-  buildSidebarProjectSnapshots,
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -75,6 +66,7 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProjectEmailCaptureSection } from "../email/ProjectEmailCaptureSection";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
+import { useProjectGroups } from "../projects/useProjectGroups";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -83,8 +75,6 @@ import {
   type NewProjectScriptInput,
   type ProjectScriptEditorRequest,
 } from "../projectScriptEditor";
-import { cn } from "../../lib/utils";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../../workspaceTitlebar";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -97,13 +87,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { SidebarInset } from "../ui/sidebar";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import {
-  WorkspaceBreadcrumb,
-  WorkspaceBreadcrumbItem,
-  WorkspaceBreadcrumbSeparator,
-} from "../WorkspaceBreadcrumb";
 import {
   SettingResetButton,
   SettingsPageContainer,
@@ -118,145 +102,12 @@ export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, st
   separate: "Keep separate",
 };
 
-/** Logical project groups for the settings page, sorted by display name. */
-export function useSettingsProjectGroups(): SidebarProjectSnapshot[] {
-  const projects = useProjects();
-  const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const { environments } = useEnvironments();
-  const environmentLabelById = useMemo(
-    () =>
-      new Map(
-        environments.map((environment) => [environment.environmentId, environment.label] as const),
-      ),
-    [environments],
-  );
-  return useMemo(
-    () =>
-      buildSidebarProjectSnapshots({
-        projects,
-        settings: projectGroupingSettings,
-        primaryEnvironmentId,
-        resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-      }).sort((a, b) => a.displayName.localeCompare(b.displayName)),
-    [environmentLabelById, primaryEnvironmentId, projectGroupingSettings, projects],
-  );
-}
-
 function memberKey(member: { environmentId: string; id: string }): string {
   return `${member.environmentId}:${member.id}`;
 }
 
-export function ProjectSettingsPage({ projectKey }: { projectKey: string }) {
-  const navigate = useNavigate();
-  const canGoBack = useCanGoBack();
-  const navigateBackWithinApp = useCallback(() => {
-    if (canGoBack) {
-      window.history.back();
-      return;
-    }
-    void navigate({ to: "/" });
-  }, [canGoBack, navigate]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      const activeElement = document.activeElement;
-      if (activeElement instanceof HTMLElement) {
-        activeElement.blur();
-      }
-      navigateBackWithinApp();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigateBackWithinApp]);
-
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        {!isElectron && (
-          <header
-            className={cn(
-              "workspace-topbar px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
-              COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-            )}
-          >
-            <ProjectSettingsBreadcrumb projectKey={projectKey} />
-          </header>
-        )}
-        {isElectron && (
-          <div
-            className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center px-5 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none wco:h-[env(titlebar-area-height)] wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
-              COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-            )}
-          >
-            <ProjectSettingsBreadcrumb projectKey={projectKey} />
-          </div>
-        )}
-        <ProjectSettingsPanel projectKey={projectKey} />
-      </div>
-    </SidebarInset>
-  );
-}
-
-function ProjectSettingsBreadcrumb({ projectKey }: { projectKey: string }) {
-  const groups = useSettingsProjectGroups();
-  const navigate = useNavigate();
-  const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
-  const openProjectMenu = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const api = readLocalApi();
-    if (!api) return;
-
-    const rect = event.currentTarget.getBoundingClientRect();
-    const items: ContextMenuItem<string>[] = groups.map((group) => ({
-      id: group.projectKey,
-      label: group.displayName,
-    }));
-    void settlePromise(() =>
-      api.contextMenu.show(items, { x: rect.left, y: rect.bottom + 4 }),
-    ).then((clicked) => {
-      if (clicked._tag === "Failure" || clicked.value === null) return;
-      void navigate({
-        to: "/projects/$projectKey",
-        params: { projectKey: clicked.value },
-        replace: true,
-        hashScrollIntoView: false,
-      });
-    });
-  };
-
-  return (
-    <WorkspaceBreadcrumb ariaLabel="Project settings breadcrumb">
-      <WorkspaceBreadcrumbItem>Projects</WorkspaceBreadcrumbItem>
-      <WorkspaceBreadcrumbSeparator />
-      <WorkspaceBreadcrumbItem current>
-        {selected ? (
-          <button
-            type="button"
-            aria-haspopup="menu"
-            aria-label="Switch project"
-            onClick={openProjectMenu}
-            className="group/project-title inline-flex min-w-0 max-w-64 cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="min-w-0 truncate">{selected.displayName}</span>
-            <ChevronDownIcon
-              aria-hidden
-              className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/project-title:opacity-100 group-focus-visible/project-title:opacity-100"
-            />
-          </button>
-        ) : (
-          <span className="truncate text-muted-foreground">Unavailable project</span>
-        )}
-      </WorkspaceBreadcrumbItem>
-    </WorkspaceBreadcrumb>
-  );
-}
-
 export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
-  const groups = useSettingsProjectGroups();
+  const groups = useProjectGroups();
   const navigate = useNavigate();
 
   const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
@@ -283,7 +134,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
     );
     if (successor) {
       void navigate({
-        to: "/projects/$projectKey",
+        to: "/settings/projects/$projectKey",
         params: { projectKey: successor.projectKey },
         replace: true,
         hashScrollIntoView: false,
@@ -743,10 +594,9 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         draftStore.clearProjectDraftThreadId(projectRef);
       }
 
-      // The project's settings page just deleted itself; there is no projects
-      // listing to fall back to, so leave settings entirely.
+      // The selected settings page just deleted itself; return to the project directory.
       if (isWholeGroup) {
-        void navigate({ to: "/threads", replace: true });
+        void navigate({ to: "/settings/projects", replace: true });
       }
     },
     [

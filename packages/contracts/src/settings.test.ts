@@ -84,6 +84,7 @@ describe("ClientSettings primary navigation view order", () => {
   it("defaults to the movable view order and accepts a user preference", () => {
     expect(decodeClientSettings({}).primaryNavigationViewOrder).toEqual([
       "threads",
+      "projects",
       "issues",
       "pull-requests",
       "calendar",
@@ -91,6 +92,7 @@ describe("ClientSettings primary navigation view order", () => {
       "contacts",
       "time-tracker",
       "files",
+      "browser",
     ]);
     expect(
       decodeClientSettingsPatch({ primaryNavigationViewOrder: ["email", "threads"] })

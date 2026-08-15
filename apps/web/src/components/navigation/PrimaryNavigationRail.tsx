@@ -21,7 +21,9 @@ import {
   Clock3Icon,
   ContactRoundIcon,
   FilesIcon,
+  FolderKanbanIcon,
   GitPullRequestIcon,
+  Globe2Icon,
   LayoutDashboardIcon,
   ListTodoIcon,
   MailIcon,
@@ -59,6 +61,7 @@ const PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT = 2;
 
 export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
   "threads",
+  "projects",
   "issues",
   "pull-requests",
   "calendar",
@@ -66,6 +69,7 @@ export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
   "contacts",
   "time-tracker",
   "files",
+  "browser",
 ] as const;
 
 export type MovablePrimaryNavigationDestination =
@@ -110,6 +114,7 @@ export function resolvePrimaryNavigationRailWidth(expanded: boolean): string {
 export type PrimaryNavigationDestination =
   | "dashboard"
   | "threads"
+  | "projects"
   | "issues"
   | "pull-requests"
   | "calendar"
@@ -117,6 +122,7 @@ export type PrimaryNavigationDestination =
   | "contacts"
   | "time-tracker"
   | "files"
+  | "browser"
   | "orchestrator"
   | "settings";
 
@@ -163,6 +169,9 @@ export function resolvePrimaryNavigationDestination(
   if (pathname === "/pull-requests" || pathname.startsWith("/pull-requests/")) {
     return "pull-requests";
   }
+  if (pathname === "/projects" || pathname.startsWith("/projects/")) {
+    return "projects";
+  }
   if (pathname === "/issues" || pathname.startsWith("/issues/")) {
     return "issues";
   }
@@ -180,6 +189,9 @@ export function resolvePrimaryNavigationDestination(
   }
   if (pathname === "/files" || pathname.startsWith("/files/")) {
     return "files";
+  }
+  if (pathname === "/browser" || pathname.startsWith("/browser/")) {
+    return "browser";
   }
   if (pathname === "/orchestrator" || pathname.startsWith("/orchestrator/")) {
     return "orchestrator";
@@ -521,6 +533,9 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigateToIssues = useCallback(() => {
     void navigate({ to: "/issues" });
   }, [navigate]);
+  const navigateToProjects = useCallback(() => {
+    void navigate({ to: "/projects" });
+  }, [navigate]);
   const navigateToPullRequests = useCallback(() => {
     void navigate({
       to: "/pull-requests",
@@ -545,6 +560,9 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigateToFiles = useCallback(() => {
     void navigate({ to: "/files" });
   }, [navigate]);
+  const navigateToBrowser = useCallback(() => {
+    void navigate({ to: "/browser" });
+  }, [navigate]);
   const navigateToOrchestrator = useCallback(() => {
     void navigate({ to: "/orchestrator" });
   }, [navigate]);
@@ -564,6 +582,12 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         icon: MessagesSquareIcon,
         label: "Threads",
         onNavigate: navigateToThreads,
+      },
+      projects: {
+        destination: "projects",
+        icon: FolderKanbanIcon,
+        label: "Projects",
+        onNavigate: navigateToProjects,
       },
       issues: {
         destination: "issues",
@@ -608,6 +632,12 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         label: "Files",
         onNavigate: navigateToFiles,
       },
+      browser: {
+        destination: "browser",
+        icon: Globe2Icon,
+        label: "Browser",
+        onNavigate: navigateToBrowser,
+      },
       orchestrator: {
         destination: "orchestrator",
         icon: BotIcon,
@@ -623,6 +653,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     }),
     [
       emailUnreadCount,
+      navigateToBrowser,
       navigateToCalendar,
       navigateToContacts,
       navigateToDashboard,
@@ -631,6 +662,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       navigateToIssues,
       navigateToOrchestrator,
       navigateToPullRequests,
+      navigateToProjects,
       navigateToSettings,
       navigateToThreads,
       navigateToTimeTracker,

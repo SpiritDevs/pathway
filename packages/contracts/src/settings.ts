@@ -197,6 +197,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(
       Effect.succeed([
         "threads",
+        "projects",
         "issues",
         "pull-requests",
         "calendar",
@@ -204,6 +205,7 @@ export const ClientSettingsSchema = Schema.Struct({
         "contacts",
         "time-tracker",
         "files",
+        "browser",
       ]),
     ),
   ),

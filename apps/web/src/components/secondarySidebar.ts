@@ -1,5 +1,6 @@
 export type SecondarySidebarKind =
   | "threads"
+  | "projects"
   | "settings"
   | "email"
   | "calendar"
@@ -15,6 +16,9 @@ export type SecondarySidebarKind =
 export function resolveSecondarySidebarKind(pathname: string): SecondarySidebarKind | null {
   if (pathname === "/settings" || pathname.startsWith("/settings/")) {
     return "settings";
+  }
+  if (pathname === "/projects" || pathname.startsWith("/projects/")) {
+    return "projects";
   }
   if (pathname === "/email" || pathname.startsWith("/email/")) {
     return "email";
@@ -42,7 +46,9 @@ export function resolveSecondarySidebarKind(pathname: string): SecondarySidebarK
     pathname === "/time-tracker" ||
     pathname.startsWith("/time-tracker/") ||
     pathname === "/files" ||
-    pathname.startsWith("/files/")
+    pathname.startsWith("/files/") ||
+    pathname === "/browser" ||
+    pathname.startsWith("/browser/")
   ) {
     return null;
   }

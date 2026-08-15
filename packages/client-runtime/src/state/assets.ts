@@ -1,4 +1,9 @@
-import { AssetResource, EnvironmentId, WS_METHODS } from "@t3tools/contracts";
+import {
+  type AssetCreateUrlResult,
+  AssetResource,
+  EnvironmentId,
+  WS_METHODS,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -7,7 +12,11 @@ import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
-const ASSET_URL_IDLE_TTL_MS = 60 * 60_000;
+const ASSET_URL_EXPIRY_SAFETY_WINDOW_MS = 60_000;
+// A signed asset URL is a short-lived capability, not durable client state. Dispose it as soon as
+// the last view releases it so reopening that view mints a new URL instead of reviving one that may
+// be at the end of its server-side lifetime. Mounted consumers still share and refresh one query.
+const ASSET_URL_IDLE_TTL_MS = 0;
 
 export class InvalidAssetCollectionKeyError extends Schema.TaggedErrorClass<InvalidAssetCollectionKeyError>()(
   "InvalidAssetCollectionKeyError",
@@ -41,6 +50,16 @@ export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): strin
   } catch {
     return null;
   }
+}
+
+/** Refuse a capability close enough to expiry that an asset request could race its deadline. */
+export function resolveCurrentAssetUrl(
+  httpBaseUrl: string,
+  result: AssetCreateUrlResult,
+  now: number,
+): string | null {
+  if (result.expiresAt <= now + ASSET_URL_EXPIRY_SAFETY_WINDOW_MS) return null;
+  return resolveAssetUrl(httpBaseUrl, result.relativeUrl);
 }
 
 export function createAssetEnvironmentAtoms<R, E>(

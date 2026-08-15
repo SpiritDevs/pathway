@@ -3,8 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ProjectSettingsPanel } from "../components/settings/ProjectSettingsPanel";
 
 // Escaped from the index route (`projects_`) so the subpage renders the panel on its own rather
-// than nesting inside the list; `/projects/$projectKey` keeps rendering the same panel with the
-// contextual chrome the command palette and sidebar link to.
+// than nesting inside the list.
 function SettingsProjectDetailRoute() {
   const { projectKey } = Route.useParams();
   return <ProjectSettingsPanel projectKey={projectKey} />;

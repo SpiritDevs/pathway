@@ -30,6 +30,8 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/threads", "threads"],
     ["/threads/draft/new", "threads"],
     ["/threads/environment/thread", "threads"],
+    ["/projects", "projects"],
+    ["/projects/pathway", "projects"],
     ["/issues", "issues"],
     ["/issues/assigned", "issues"],
     ["/pull-requests", "pull-requests"],
@@ -38,6 +40,7 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/contacts", "contacts"],
     ["/time-tracker", "time-tracker"],
     ["/files", "files"],
+    ["/browser", "browser"],
     ["/orchestrator", "orchestrator"],
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", "settings"],
@@ -64,12 +67,14 @@ describe("primary navigation view order", () => {
     expect(resolvePrimaryNavigationViewOrder(["email", "threads"])).toEqual([
       "email",
       "threads",
+      "projects",
       "issues",
       "pull-requests",
       "calendar",
       "contacts",
       "time-tracker",
       "files",
+      "browser",
     ]);
   });
 
@@ -85,12 +90,14 @@ describe("primary navigation view order", () => {
     ).toEqual([
       "issues",
       "threads",
+      "projects",
       "pull-requests",
       "calendar",
       "email",
       "contacts",
       "time-tracker",
       "files",
+      "browser",
     ]);
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("dashboard");
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("orchestrator");
@@ -100,18 +107,20 @@ describe("primary navigation view order", () => {
   it("moves a view one position without crossing either boundary", () => {
     const order = resolvePrimaryNavigationViewOrder([]);
 
-    expect(movePrimaryNavigationDestination(order, "issues", "up")).toEqual([
-      "issues",
+    expect(movePrimaryNavigationDestination(order, "projects", "up")).toEqual([
+      "projects",
       "threads",
+      "issues",
       "pull-requests",
       "calendar",
       "email",
       "contacts",
       "time-tracker",
       "files",
+      "browser",
     ]);
     expect(movePrimaryNavigationDestination(order, "threads", "up")).toBe(order);
-    expect(movePrimaryNavigationDestination(order, "files", "down")).toBe(order);
+    expect(movePrimaryNavigationDestination(order, "browser", "down")).toBe(order);
   });
 });
 

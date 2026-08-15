@@ -29,7 +29,7 @@ import type {
 import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import { useAssetUrlsState } from "~/assets/assetUrls";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import type { ProviderInstanceEntry } from "~/providerInstances";
@@ -168,7 +168,7 @@ function CommentAttachments({
     () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
     [attachmentIds],
   );
-  const urls = useAssetUrls(environmentId, resources);
+  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
 
   return (
     <div className="mt-1.5 flex flex-wrap gap-2">
@@ -181,6 +181,7 @@ function CommentAttachments({
             className="max-h-64 max-w-full rounded-lg border border-border/60"
             controls
             key={attachmentId}
+            onError={() => refresh(index)}
             playsInline
             preload="metadata"
             src={url}
@@ -196,6 +197,7 @@ function CommentAttachments({
             <img
               alt="Comment attachment"
               className="max-h-40 rounded-lg border border-border/60 transition-opacity hover:opacity-80"
+              onError={() => refresh(index)}
               src={url}
             />
           </button>

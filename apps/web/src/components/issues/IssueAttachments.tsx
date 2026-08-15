@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import { useAssetUrlsState } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { Button } from "../ui/button";
@@ -46,7 +46,7 @@ function AttachmentGallery({
     () => attachments.map(({ attachmentId }) => ({ _tag: "attachment" as const, attachmentId })),
     [attachments],
   );
-  const urls = useAssetUrls(environmentId, resources);
+  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
 
   return (
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
@@ -60,6 +60,7 @@ function AttachmentGallery({
                 aria-label={`Issue recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
                 controls
+                onError={() => refresh(index)}
                 playsInline
                 preload="metadata"
                 src={url}
@@ -74,6 +75,7 @@ function AttachmentGallery({
                 <img
                   alt={`Issue attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
+                  onError={() => refresh(index)}
                   src={url}
                 />
               </button>
