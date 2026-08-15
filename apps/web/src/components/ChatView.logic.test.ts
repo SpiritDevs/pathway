@@ -195,6 +195,7 @@ function editableV2Projection(
   input: {
     readonly createdBy?: "user" | "agent";
     readonly files?: ReadonlyArray<{ readonly path: string }>;
+    readonly interruptedBeforeProviderStart?: boolean;
     readonly rollbackCapable?: boolean;
   } = {},
 ): OrchestrationV2ThreadProjection {
@@ -213,11 +214,22 @@ function editableV2Projection(
       {
         id: runId,
         ordinal: 1,
-        status: "completed",
+        activeAttemptId: "attempt-editable",
+        status: input.interruptedBeforeProviderStart ? "interrupted" : "completed",
         modelSelection: { instanceId: "codex", model: "gpt-5.4" },
         providerThreadId: "provider-thread-editable",
       },
     ],
+    attempts: [
+      {
+        id: "attempt-editable",
+        providerTurnId: input.interruptedBeforeProviderStart ? null : "provider-turn-editable",
+      },
+    ],
+    providerTurns: input.interruptedBeforeProviderStart
+      ? []
+      : [{ id: "provider-turn-editable", runAttemptId: "attempt-editable" }],
+    messages: [],
     providerThreads: [
       { id: "provider-thread-editable", providerSessionId: "provider-session-editable" },
     ],
@@ -267,6 +279,14 @@ describe("resolveEditableV2UserMessageId", () => {
       resolveEditableV2UserMessageId(editableV2Projection({ files: [{ path: "src/app.ts" }] })),
     ).toBeNull();
     expect(resolveEditableV2UserMessageId(editableV2Projection({ createdBy: "agent" }))).toBeNull();
+  });
+
+  it("offers restart when an interrupted run never reached the provider", () => {
+    expect(
+      resolveEditableV2UserMessageId(
+        editableV2Projection({ interruptedBeforeProviderStart: true, rollbackCapable: false }),
+      ),
+    ).toBe("message-editable");
   });
 });
 

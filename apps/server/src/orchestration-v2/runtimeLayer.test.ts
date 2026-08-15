@@ -1165,6 +1165,36 @@ it.layer(SharedApplicationDataPlaneTestLayer)("pending provider interruption", (
       );
       assert.deepEqual(interrupted.providerTurns, []);
       assert.isFalse(yield* effectWorker.runOnce);
+
+      const editCommandId = CommandId.make("runtime-layer-pending-interrupt-edit");
+      const replacementMessageId = MessageId.make("runtime-layer-pending-interrupt-replacement");
+      const editResult = yield* orchestrator.dispatch({
+        type: "message.edit-and-restart",
+        commandId: editCommandId,
+        createdBy: "user",
+        creationSource: "web",
+        threadId,
+        messageId: MessageId.make("runtime-layer-pending-interrupt-message"),
+        replacementMessageId,
+        text: "Reach the provider with this corrected message.",
+      });
+
+      const edited = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(edited.runs.find((candidate) => candidate.id === run.id)?.status, "rolled_back");
+      assert.equal(
+        edited.runs.find((candidate) => candidate.userMessageId === replacementMessageId)?.status,
+        "starting",
+      );
+      assert.deepEqual(
+        edited.visibleTurnItems
+          .filter((row) => row.item.type === "user_message")
+          .map((row) => (row.item.type === "user_message" ? row.item.messageId : null)),
+        [replacementMessageId],
+      );
+      assert.notInclude(
+        editResult.storedEvents.map((stored) => stored.event.type),
+        "checkpoint.rollback-requested",
+      );
     }),
   );
 });

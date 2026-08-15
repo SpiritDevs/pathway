@@ -6518,6 +6518,56 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
+      const providerTurn = providerTurnForRun(projection, targetRun);
+      const rootNode = projection.nodes.find((candidate) => candidate.id === targetRun.rootNodeId);
+      const hasAssistantMessage = projection.messages.some(
+        (message) => message.runId === targetRun.id && message.role === "assistant",
+      );
+      if (
+        targetRun.status === "interrupted" &&
+        providerTurn === undefined &&
+        rootNode !== undefined &&
+        !hasAssistantMessage
+      ) {
+        const now = yield* DateTime.now;
+        const emitEvent = emit(events, command);
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: targetRun.id,
+          nodeId: rootNode.id,
+          providerInstanceId: targetRun.providerInstanceId,
+          occurredAt: now,
+          payload: { ...targetRun, status: "rolled_back", completedAt: now },
+        });
+        yield* emitEvent({
+          type: "node.updated",
+          threadId: command.threadId,
+          runId: targetRun.id,
+          nodeId: rootNode.id,
+          providerInstanceId: targetRun.providerInstanceId,
+          occurredAt: now,
+          payload: { ...rootNode, status: "rolled_back", completedAt: now },
+        });
+        yield* dispatchMessage(
+          {
+            type: "message.dispatch",
+            commandId: command.commandId,
+            createdBy: command.createdBy,
+            creationSource: command.creationSource,
+            threadId: command.threadId,
+            messageId: command.replacementMessageId,
+            text: command.text,
+            attachments: latestUserMessage.attachments,
+            modelSelection: targetRun.modelSelection,
+            dispatchMode: { type: "start_immediately" },
+          },
+          events,
+          effects,
+        );
+        return;
+      }
+
       const firstRunRootScope =
         targetRun.ordinal === 1
           ? projection.checkpointScopes.find(

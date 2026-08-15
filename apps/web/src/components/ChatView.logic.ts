@@ -284,6 +284,25 @@ export function resolveEditableV2UserMessageId(
   const run = projection.runs.find((candidate) => candidate.id === latestUserItem.runId);
   if (run === undefined || run.status === "queued" || run.status === "cancelled") return null;
   if (!modelSelectionsEqual(projection.thread.modelSelection, run.modelSelection)) return null;
+  const hasChangesAfterMessage = projection.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.status === "ready" &&
+      checkpoint.files.length > 0 &&
+      checkpoint.appRunOrdinal !== null &&
+      checkpoint.appRunOrdinal >= run.ordinal,
+  );
+  if (hasChangesAfterMessage) return null;
+  const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
+  const providerTurn = projection.providerTurns.find(
+    (candidate) =>
+      candidate.runAttemptId === run.activeAttemptId || candidate.id === attempt?.providerTurnId,
+  );
+  const hasAssistantMessage = projection.messages.some(
+    (message) => message.runId === run.id && message.role === "assistant",
+  );
+  if (run.status === "interrupted" && providerTurn === undefined && !hasAssistantMessage) {
+    return latestUserItem.messageId;
+  }
   const providerThread = projection.providerThreads.find(
     (candidate) => candidate.id === run.providerThreadId,
   );
@@ -291,17 +310,6 @@ export function resolveEditableV2UserMessageId(
     (candidate) => candidate.id === providerThread?.providerSessionId,
   );
   if (providerSession?.capabilities.checkpointing.providerCanRollbackConversation !== true) {
-    return null;
-  }
-  if (
-    projection.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.status === "ready" &&
-        checkpoint.files.length > 0 &&
-        checkpoint.appRunOrdinal !== null &&
-        checkpoint.appRunOrdinal >= run.ordinal,
-    )
-  ) {
     return null;
   }
   const firstRunScope = projection.checkpointScopes.find(
