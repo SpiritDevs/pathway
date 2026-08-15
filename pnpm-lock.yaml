@@ -615,6 +615,9 @@ importers:
       '@pierre/trees':
         specifier: 1.0.0-beta.4
         version: 1.0.0-beta.4(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@spiritdevs/backend':
+        specifier: workspace:*
+        version: link:../../packages/backend
       '@spiritdevs/client-runtime':
         specifier: workspace:*
         version: link:../../packages/client-runtime

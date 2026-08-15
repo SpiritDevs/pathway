@@ -50,6 +50,10 @@
     "./sync/protocol": {
       "types": "./src/sync/protocol.ts",
       "import": "./src/sync/protocol.ts"
+    },
+    "./sync/workflow": {
+      "types": "./src/sync/workflow.ts",
+      "import": "./src/sync/workflow.ts"
     }
   },
   "scripts": {

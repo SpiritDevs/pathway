@@ -22,6 +22,7 @@ import {
   IssueStatusEntity,
   IssueThreadLinkEntity,
   IssueTodoEntity,
+  IssueViewEntity,
   type CloudProjectSyncEntity as CloudProjectSyncEntityType,
   type IssueAttachmentEntity as IssueAttachmentEntityType,
   type IssueAuditEventEntity as IssueAuditEventEntityType,
@@ -34,6 +35,7 @@ import {
   type IssueStatusEntity as IssueStatusEntityType,
   type IssueThreadLinkEntity as IssueThreadLinkEntityType,
   type IssueTodoEntity as IssueTodoEntityType,
+  type IssueViewEntity as IssueViewEntityType,
 } from "@spiritdevs/client-runtime/sync";
 import type { IssueId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
@@ -48,6 +50,7 @@ const isIssueStatus = Schema.is(IssueStatusEntity);
 const isIssueLabel = Schema.is(IssueLabelEntity);
 const isIssueMilestone = Schema.is(IssueMilestoneEntity);
 const isIssueCycle = Schema.is(IssueCycleEntity);
+const isIssueView = Schema.is(IssueViewEntity);
 const isIssueTodo = Schema.is(IssueTodoEntity);
 const isIssueRelation = Schema.is(IssueRelationEntity);
 const isIssueComment = Schema.is(IssueCommentEntity);
@@ -63,6 +66,7 @@ export interface SyncedIssueDomainReadModel {
   readonly issueLabels: ReadonlyArray<IssueLabelEntityType>;
   readonly issueMilestones: ReadonlyArray<IssueMilestoneEntityType>;
   readonly issueCycles: ReadonlyArray<IssueCycleEntityType>;
+  readonly issueViews: ReadonlyArray<IssueViewEntityType>;
   readonly issueComments: ReadonlyArray<IssueCommentEntityType>;
   readonly issueTodos: ReadonlyArray<IssueTodoEntityType>;
   readonly issueRelations: ReadonlyArray<IssueRelationEntityType>;
@@ -90,6 +94,7 @@ export const EMPTY_SYNCED_ISSUE_DOMAIN: SyncedIssueDomainReadModel = Object.free
   issueLabels: Object.freeze([]),
   issueMilestones: Object.freeze([]),
   issueCycles: Object.freeze([]),
+  issueViews: Object.freeze([]),
   issueComments: Object.freeze([]),
   issueTodos: Object.freeze([]),
   issueRelations: Object.freeze([]),
@@ -118,6 +123,7 @@ export function syncedIssueDomainFromReplica(
   const issueLabels: IssueLabelEntityType[] = [];
   const issueMilestones: IssueMilestoneEntityType[] = [];
   const issueCycles: IssueCycleEntityType[] = [];
+  const issueViews: IssueViewEntityType[] = [];
   const issueComments: IssueCommentEntityType[] = [];
   const issueTodos: IssueTodoEntityType[] = [];
   const issueRelations: IssueRelationEntityType[] = [];
@@ -132,6 +138,7 @@ export function syncedIssueDomainFromReplica(
     else if (isIssueLabel(value)) issueLabels.push(value);
     else if (isIssueMilestone(value)) issueMilestones.push(value);
     else if (isIssueCycle(value)) issueCycles.push(value);
+    else if (isIssueView(value)) issueViews.push(value);
     else if (isIssueComment(value)) issueComments.push(value);
     else if (isIssueTodo(value)) issueTodos.push(value);
     else if (isIssueRelation(value)) issueRelations.push(value);
@@ -164,6 +171,9 @@ export function syncedIssueDomainFromReplica(
       left.endDate.localeCompare(right.endDate) ||
       byId(left, right),
   );
+  issueViews.sort(
+    (left, right) => left.position - right.position || left.id.localeCompare(right.id),
+  );
   issueComments.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
   issueTodos.sort(
     (left, right) => left.sortOrder.localeCompare(right.sortOrder) || byId(left, right),
@@ -180,6 +190,7 @@ export function syncedIssueDomainFromReplica(
     issueLabels,
     issueMilestones,
     issueCycles,
+    issueViews,
     issueComments,
     issueTodos,
     issueRelations,
@@ -235,6 +246,9 @@ export const syncedIssueMilestonesAtom = Atom.make(
 export const syncedIssueCyclesAtom = Atom.make(
   (get) => get(syncedIssueDomainAtom).issueCycles,
 ).pipe(Atom.withLabel("cloud-sync:issue-cycles"));
+export const syncedIssueViewsAtom = Atom.make((get) => get(syncedIssueDomainAtom).issueViews).pipe(
+  Atom.withLabel("cloud-sync:issue-views"),
+);
 
 export const syncedIssueDetailAtomFamily = Atom.family((issueId: IssueId) =>
   Atom.make((get) => syncedIssueDetailById(get(syncedIssueDomainAtom), issueId)).pipe(
@@ -264,6 +278,10 @@ export function useSyncedIssueMilestones() {
 
 export function useSyncedIssueCycles() {
   return useAtomValue(syncedIssueCyclesAtom);
+}
+
+export function useSyncedIssueViews() {
+  return useAtomValue(syncedIssueViewsAtom);
 }
 
 export function useSyncedIssueDetail(issueId: IssueId) {

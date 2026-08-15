@@ -71,7 +71,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
+import { companyRegistryReplicasAtom } from "../cloud/companyRegistryReplica";
+import { syncedIssueDomainAtom } from "../cloud/issueDomainReadModel";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { issuesStoreFromReplica } from "./issuesFromReplica";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
@@ -666,9 +670,25 @@ const issuesStreamViewAtom = Atom.make((get): IssuesStreamView => {
   return { state, status: AsyncResult.isSuccess(changes) ? "ready" : "loading" };
 }).pipe(Atom.withLabel("web-issues-stream-view"));
 
+/** Replica presence is the sync engine's usable-data signal; freshness is owned by the engine. */
+export function selectIssuesStoreState(
+  legacyState: IssuesStoreState,
+  replicaStore: IssuesStore | null,
+): IssuesStoreState {
+  return replicaStore === null ? legacyState : { store: replicaStore, status: "ready" };
+}
+
 export const issuesStoreStateAtom = Atom.make((get): IssuesStoreState => {
   const view = get(issuesStreamViewAtom);
-  return { store: view.state.store, status: view.status };
+  const legacyState: IssuesStoreState = { store: view.state.store, status: view.status };
+  const activeCompanyId = get(activeCompanyIdAtom);
+  if (activeCompanyId === null || !get(companyRegistryReplicasAtom).has(activeCompanyId)) {
+    return selectIssuesStoreState(legacyState, null);
+  }
+  return selectIssuesStoreState(
+    legacyState,
+    issuesStoreFromReplica(get(syncedIssueDomainAtom), legacyState.store),
+  );
 }).pipe(Atom.withLabel("web-issues-store-state"));
 
 export const issuesStoreAtom = Atom.make(

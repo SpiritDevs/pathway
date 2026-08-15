@@ -142,6 +142,54 @@ describe("syncedIssueDomainFromReplica", () => {
           createdAt: 1,
           updatedAt: 1,
         }),
+        decoded("issueView", {
+          id: "view-b",
+          ownerMembershipId: null,
+          visibility: "company",
+          teamIds: [],
+          name: "B",
+          config: {
+            tab: "active",
+            grouping: "status",
+            sortMode: "manual",
+            viewMode: "list",
+          },
+          position: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+        decoded("issueView", {
+          id: "view-a",
+          ownerMembershipId: null,
+          visibility: "company",
+          teamIds: [],
+          name: "A",
+          config: {
+            tab: "active",
+            grouping: "status",
+            sortMode: "manual",
+            viewMode: "list",
+          },
+          position: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+        decoded("issueView", {
+          id: "view-first",
+          ownerMembershipId: null,
+          visibility: "company",
+          teamIds: [],
+          name: "First",
+          config: {
+            tab: "active",
+            grouping: "status",
+            sortMode: "manual",
+            viewMode: "list",
+          },
+          position: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        }),
         issue("issue-1", 1),
       ),
     );
@@ -152,6 +200,7 @@ describe("syncedIssueDomainFromReplica", () => {
     expect(selected.issueLabels.map(({ id }) => id)).toEqual(["label-1"]);
     expect(selected.issueMilestones.map(({ id }) => id)).toEqual(["milestone-1"]);
     expect(selected.issueCycles.map(({ id }) => id)).toEqual(["cycle-1"]);
+    expect(selected.issueViews.map(({ id }) => id)).toEqual(["view-first", "view-a", "view-b"]);
   });
 });
 

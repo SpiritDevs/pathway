@@ -32,6 +32,7 @@
     "@noble/hashes": "catalog:",
     "@pierre/diffs": "catalog:",
     "@pierre/trees": "1.0.0-beta.4",
+    "@spiritdevs/backend": "workspace:*",
     "@spiritdevs/client-runtime": "workspace:*",
     "@spiritdevs/contracts": "workspace:*",
     "@spiritdevs/shared": "workspace:*",
