@@ -1129,6 +1129,20 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.startFromOrigin).toBe(false);
   });
 
+  it("keeps an issue-only draft scoped to the Issues view", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      locations: ["issues"],
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.locations).toEqual(["issues"]);
+
+    store.setDraftThreadContext(draftId, { branch: "feature/issue-chat" });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.locations).toEqual(["issues"]);
+  });
+
   it("preserves existing branch and worktree when setProjectDraftThreadId receives undefined", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {
