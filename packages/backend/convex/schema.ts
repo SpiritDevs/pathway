@@ -1110,20 +1110,27 @@ export default defineSchema({
     .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),
 
-  /** Metadata only. Bytes live in Convex file storage and never travel in operation arguments. */
+  /** Metadata only. New bytes live in UploadThing; `storageId` remains for clean-cutover imports. */
   issueAttachments: defineTable({
     id: domainId,
     companyId: v.id("companies"),
     issueId: domainId,
     commentId: v.union(domainId, v.null()),
     storageId: v.union(v.id("_storage"), v.null()),
+    /** Additive UploadThing fields. Old imported rows have only `storageId`. */
+    uploadthingFileKey: v.optional(v.string()),
+    uploadthingFileUrl: v.optional(v.string()),
+    /** Retained only while pending so an identical prepare retry returns the same signed PUT URL. */
+    uploadthingUploadUrl: v.optional(v.string()),
+    uploadthingUploadExpiresAt: v.optional(v.number()),
+    clientRequestId: v.optional(v.string()),
     fileName: v.string(),
     mimeType: v.string(),
     byteSize: v.number(),
     checksum: v.string(),
     uploadedByMembershipId: v.union(v.id("memberships"), v.null()),
     /** `pending` uploads with no comment are garbage-collected. */
-    state: v.union(v.literal("pending"), v.literal("finalized")),
+    state: v.union(v.literal("pending"), v.literal("finalized"), v.literal("ready")),
     createdAt: v.number(),
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),
@@ -1132,6 +1139,12 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_company_and_state", ["companyId", "state"])
+    .index("by_state_and_created_at", ["state", "createdAt"])
+    .index("by_company_uploader_and_request", [
+      "companyId",
+      "uploadedByMembershipId",
+      "clientRequestId",
+    ])
     /** Live rows of one issue, for the scope migration a team change performs. */
     .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_version", ["companyId", "version"]),

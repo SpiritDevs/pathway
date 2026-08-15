@@ -757,6 +757,12 @@ const handlers = {
       const actor = yield* callerActor();
       const index = yield* readIndex();
       const issue = yield* resolveIssue(index, input.key);
+      if (yield* tracker.replicaRoutable) {
+        return yield* invalid(
+          "Browser evidence attachments are not supported for cloud-synced companies yet. Add the captured file from the Pathway web comment composer instead.",
+          issue.key,
+        );
+      }
       const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
         Effect.mapError(evidenceFailure),
       );

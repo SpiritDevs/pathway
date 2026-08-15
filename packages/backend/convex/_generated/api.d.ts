@@ -10,9 +10,11 @@
 
 import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
+import type * as crons from "../crons.js";
 import type * as environmentCommands from "../environmentCommands.js";
 import type * as environments from "../environments.js";
 import type * as invitations from "../invitations.js";
+import type * as issueAttachments from "../issueAttachments.js";
 import type * as issueImport from "../issueImport.js";
 import type * as lib_capability from "../lib/capability.js";
 import type * as lib_companyApply from "../lib/companyApply.js";
@@ -34,9 +36,11 @@ import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server
 declare const fullApi: ApiFromModules<{
   companies: typeof companies;
   connectGrants: typeof connectGrants;
+  crons: typeof crons;
   environmentCommands: typeof environmentCommands;
   environments: typeof environments;
   invitations: typeof invitations;
+  issueAttachments: typeof issueAttachments;
   issueImport: typeof issueImport;
   "lib/capability": typeof lib_capability;
   "lib/companyApply": typeof lib_companyApply;

@@ -469,7 +469,8 @@ const EMPTY_ISSUE_DETAIL_PROJECTION: IssueDetailProjection = Object.freeze({
  *
  * `detail.issue` is the existence anchor but is absent from the legacy `IssueDetail` contract.
  * Attachment metadata likewise has no legacy detail slot: comment attachment ids survive, while
- * file name/type/size/checksum/state do not. Attachment byte/download behavior remains RPC-owned.
+ * file name/type/size/checksum/state do not. Replica clients resolve those ids through the
+ * permission-checked Convex attachment URL query; legacy clients keep the environment asset RPC.
  */
 export function issueDetailProjectionFromReplica(
   synced: SyncedIssueDetail | null,

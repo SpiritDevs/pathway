@@ -64,6 +64,7 @@ import {
 } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
+import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -445,7 +446,8 @@ function IssueDetailBody({
     refreshEvents();
   }, [issue.pullRequest?.updatedAt, refreshEvents]);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
-  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id);
+  const attachmentCloud = useReplicaIssueAttachmentCloud();
+  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id, attachmentCloud);
   const childRollup = useIssueChildRollup(issue.id);
   const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1294,8 +1296,10 @@ function IssueDetailBody({
               />
 
               <IssueAttachments
+                cloud={attachmentCloud}
                 comments={comments}
                 drafts={attachmentDrafts}
+                issueId={issue.id}
                 onCreateComment={handleCreateComment}
               />
 
@@ -1385,6 +1389,7 @@ function IssueDetailBody({
               ) : activeTab === "comments" ? (
                 <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
+                    cloud={attachmentCloud}
                     comments={comments}
                     instanceEntries={providerInstanceEntries}
                     isPending={detailPending}

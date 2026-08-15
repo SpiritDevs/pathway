@@ -308,7 +308,7 @@ export const IssueCommentEntity = Schema.Struct({
 export type IssueCommentEntity = typeof IssueCommentEntity.Type;
 
 /**
- * Metadata only — bytes live in Convex file storage. No operation writes this table: an
+ * Metadata only — new bytes live in UploadThing. No operation writes this table: an
  * attachment row is bound as a side effect of the comment that carries its id, so it only ever
  * arrives through the feed.
  */
@@ -321,7 +321,8 @@ const issueAttachmentEntityFields = {
   byteSize: Schema.Number,
   checksum: Schema.String,
   uploadedByMembershipId: Schema.NullOr(MembershipId),
-  state: Schema.Literals(["pending", "finalized"]),
+  /** `finalized` remains decodable for pre-cutover Convex-storage imports. */
+  state: Schema.Literals(["pending", "finalized", "ready"]),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 };

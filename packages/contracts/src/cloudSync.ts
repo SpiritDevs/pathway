@@ -847,8 +847,8 @@ export const SyncIssueRelationCreateArgs = Schema.Struct({
 export type SyncIssueRelationCreateArgs = typeof SyncIssueRelationCreateArgs.Type;
 
 /**
- * Attachment ids only. Bytes go straight to Convex file storage through a short-lived upload URL
- * and are finalized before the comment is submitted, so no file ever rides an operation argument.
+ * Attachment ids only. Bytes go straight to UploadThing through a short-lived upload URL and are
+ * finalized in Convex before the comment is submitted, so no file ever rides an operation argument.
  */
 export const SyncIssueCommentCreateArgs = Schema.Struct({
   issueId: IssueId,

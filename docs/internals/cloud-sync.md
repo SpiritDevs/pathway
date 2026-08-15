@@ -52,6 +52,22 @@ Convex accepts at most 25 operations and 512 KiB of arguments per call. Attachme
 bytes never travel in operation arguments. `sync.listChanges` returns at most 100 changes and also
 stays below a configured byte ceiling; a page can therefore end before the row limit.
 
+### Issue attachments
+
+Convex authorizes and records issue attachment metadata, while UploadThing stores the bytes. A
+member with `comments.create` prepares a public-read UploadThing upload against one visible issue,
+uploads directly from the browser, and asks Convex to finalize it. Finalization downloads the
+stored object server-side and verifies its size, MIME type, and SHA-256 checksum before the row
+becomes `ready`. Only ready attachments uploaded by the acting member can enter a comment
+operation, so the comment outbox never races the file upload.
+
+`UPLOADTHING_TOKEN` is deployment configuration, like other provider credentials: set it on the
+Convex deployment and never put it in a company vault or client bundle. Public-read is deliberate:
+the returned URL is a bearer URL suitable for review evidence. Application code obtains it only
+through `issueAttachments.urls`, which rechecks live company membership and `issues.read` on the
+owning issue. Pending uploads expire after one hour and an hourly Convex cron deletes their
+UploadThing objects and metadata.
+
 For each accepted operation, one serializable Convex mutation:
 
 1. verifies the human or service identity and its current company/team permissions;

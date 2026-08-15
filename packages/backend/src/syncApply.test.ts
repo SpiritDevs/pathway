@@ -7,7 +7,8 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
 
-import { api } from "../convex/_generated/api.js";
+import { api, internal } from "../convex/_generated/api.js";
+import { setUploadThingClient, type UploadThingClient } from "../convex/issueAttachments.ts";
 import schema from "../convex/schema.ts";
 import { encodeBootstrapCursor } from "./sync/bootstrap.ts";
 
@@ -17,6 +18,7 @@ process.env.PATHWAY_CLOUD_SYNC = "enabled";
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/issueAttachments.ts": () => import("../convex/issueAttachments.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
 
@@ -55,6 +57,7 @@ const TODO_ID = "0198c0de-8888-7888-8888-000000000001";
 const COMMENT_ID = "0198c0de-5555-7555-8555-000000000001";
 const ATTACHMENT_ID = "0198c0de-6666-7666-8666-000000000001";
 const ATTACHMENT_OTHER_ID = "0198c0de-6666-7666-8666-000000000002";
+const ATTACHMENT_FOREIGN_OWNER_ID = "0198c0de-6666-7666-8666-000000000003";
 const THREAD_LINK_ID = "0198c0de-7777-7777-8777-000000000001";
 /** A membership id no company here has ever issued. */
 const GHOST_MEMBERSHIP_ID = "0198c0de-aaaa-7aaa-8aaa-000000000909";
@@ -1751,13 +1754,14 @@ describe("bootstrap cursor", () => {
 // Reference authorization and referential integrity
 // ---------------------------------------------------------------------------
 
-/** Uploads arrive through file storage rather than an operation, so the row is written directly. */
+/** Uploads arrive through UploadThing rather than an operation, so the row is written directly. */
 async function insertAttachment(
   t: ReturnType<typeof harness>,
   input: {
     readonly id: string;
     readonly issueId: string;
-    readonly state: "pending" | "finalized";
+    readonly state: "pending" | "ready";
+    readonly uploaderMembershipId?: string;
   },
 ) {
   await t.run(async (ctx) => {
@@ -1766,6 +1770,11 @@ async function insertAttachment(
       .filter((q) => q.eq(q.field("id"), COMPANY_ID))
       .unique();
     if (company === null) throw new Error("seed the company first");
+    const uploader = await ctx.db
+      .query("memberships")
+      .filter((q) => q.eq(q.field("id"), input.uploaderMembershipId ?? WRITER_MEMBERSHIP_ID))
+      .unique();
+    if (uploader === null) throw new Error("seed the writer first");
     const now = Date.now();
     await ctx.db.insert("issueAttachments", {
       id: input.id,
@@ -1777,7 +1786,7 @@ async function insertAttachment(
       mimeType: "image/png",
       byteSize: 1024,
       checksum: "sha256-test",
-      uploadedByMembershipId: null,
+      uploadedByMembershipId: uploader._id,
       state: input.state,
       createdAt: now,
       updatedAt: now,
@@ -2372,7 +2381,7 @@ describe("issueComment attachments", () => {
     return op;
   }
 
-  it("refuses an attachment that is unfinished, on another issue, or named twice", async () => {
+  it("refuses an attachment that is unfinished, foreign-owned, on another issue, or named twice", async () => {
     const t = harness();
     await seed(t);
     const op = await twoIssues(t);
@@ -2380,7 +2389,13 @@ describe("issueComment attachments", () => {
     await insertAttachment(t, {
       id: ATTACHMENT_OTHER_ID,
       issueId: ISSUE_B,
-      state: "finalized",
+      state: "ready",
+    });
+    await insertAttachment(t, {
+      id: ATTACHMENT_FOREIGN_OWNER_ID,
+      issueId: ISSUE_A,
+      state: "ready",
+      uploaderMembershipId: READER_MEMBERSHIP_ID,
     });
 
     const unfinished = op("issueComment.create", COMMENT_ID, {
@@ -2393,6 +2408,11 @@ describe("issueComment attachments", () => {
       body: "Borrowed from another issue",
       attachmentIds: [ATTACHMENT_OTHER_ID],
     });
+    const foreignOwner = op("issueComment.create", COMMENT_ID, {
+      issueId: ISSUE_A,
+      body: "Borrowed from another member",
+      attachmentIds: [ATTACHMENT_FOREIGN_OWNER_ID],
+    });
     const doubled = op("issueComment.create", COMMENT_ID, {
       issueId: ISSUE_A,
       body: "Twice",
@@ -2400,10 +2420,10 @@ describe("issueComment attachments", () => {
     });
     const result = await asWriter(t).mutation(api.sync.applyOperations, {
       companyId: COMPANY_ID,
-      operations: [unfinished, foreign, doubled],
+      operations: [unfinished, foreign, foreignOwner, doubled],
     });
     const receipts = byOperationId(result.receipts);
-    for (const operation of [unfinished, foreign, doubled]) {
+    for (const operation of [unfinished, foreign, foreignOwner, doubled]) {
       expect(receipts.get(operation.operationId)).toMatchObject({
         status: "rejected",
         code: "invalid-arguments",
@@ -2415,11 +2435,130 @@ describe("issueComment attachments", () => {
     });
   });
 
+  it("prepares idempotently, verifies UploadThing bytes, exposes an authorized URL, and binds the ready id", async () => {
+    const t = harness();
+    await seed(t);
+    const op = await twoIssues(t);
+    const checksum = "ab".repeat(32);
+    const calls = { prepare: 0, verify: 0, delete: 0 };
+    const uploadThing: UploadThingClient = {
+      prepareUpload: async ({ customId }) => {
+        calls.prepare += 1;
+        return {
+          key: `ut-${customId}`,
+          url: `https://upload.example.test/${customId}`,
+          expiresAt: Date.now() + 60_000,
+        };
+      },
+      verifyUpload: async (key) => {
+        calls.verify += 1;
+        return {
+          key,
+          url: `https://utfs.io/f/${key}`,
+          byteSize: 4,
+          mimeType: "image/png",
+          checksum,
+        };
+      },
+      deleteFiles: async () => {
+        calls.delete += 1;
+      },
+    };
+    setUploadThingClient(uploadThing);
+    try {
+      const args = {
+        companyId: COMPANY_ID,
+        issueId: ISSUE_A,
+        uploads: [
+          {
+            clientRequestId: "browser-file-1",
+            fileName: "evidence.png",
+            mimeType: "image/png",
+            byteSize: 4,
+            checksum,
+          },
+        ],
+      };
+      const first = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
+      const retry = await asWriter(t).action(api.issueAttachments.prepareUpload, args);
+      expect(retry).toEqual(first);
+      expect(calls.prepare).toBe(1);
+
+      const attachmentId = first[0]!.attachmentId;
+      expect(first[0]).toMatchObject({ state: "upload-required" });
+      await asWriter(t).action(api.issueAttachments.finalizeUpload, {
+        companyId: COMPANY_ID,
+        attachmentId,
+      });
+      expect(calls.verify).toBe(1);
+
+      const urls = await asWriter(t).query(api.issueAttachments.urls, {
+        companyId: COMPANY_ID,
+        issueId: ISSUE_A,
+        attachmentIds: [attachmentId],
+      });
+      expect(urls).toEqual([
+        expect.objectContaining({
+          attachmentId,
+          url: `https://utfs.io/f/ut-${attachmentId}`,
+        }),
+      ]);
+
+      const created = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [
+          op("issueComment.create", COMMENT_ID, {
+            issueId: ISSUE_A,
+            body: "Verified evidence",
+            attachmentIds: [attachmentId],
+          }),
+        ],
+      });
+      expect(created.receipts[0]).toMatchObject({ status: "accepted" });
+      expect(calls.delete).toBe(0);
+
+      const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [op("issueComment.delete", COMMENT_ID, {})],
+      });
+      expect(deleted.receipts[0]).toMatchObject({ status: "accepted" });
+      await t.run(async (ctx) => {
+        const row = (await ctx.db.query("issueAttachments").collect()).find(
+          (candidate) => candidate.id === attachmentId,
+        );
+        expect(row?.deletedAt).not.toBeNull();
+      });
+    } finally {
+      setUploadThingClient(null);
+    }
+  });
+
+  it("garbage-collects expired pending rows and their UploadThing keys", async () => {
+    const t = harness();
+    await seed(t);
+    await insertAttachment(t, { id: ATTACHMENT_ID, issueId: ISSUE_A, state: "pending" });
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("issueAttachments").collect())[0]!;
+      await ctx.db.patch(row._id, {
+        uploadthingFileKey: "expired-key",
+        createdAt: Date.now() - 2 * 60 * 60 * 1000,
+      });
+    });
+    const targets = await t.mutation(internal.issueAttachments.claimExpiredPending, {
+      cutoff: Date.now() - 60 * 60 * 1000,
+    });
+    expect(targets).toEqual([expect.objectContaining({ key: "expired-key" })]);
+    await t.mutation(internal.issueAttachments.purgeDeletedRows, { targets });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("issueAttachments").collect()).toHaveLength(0);
+    });
+  });
+
   it("binds the attachment to the comment and releases it when the edit drops it", async () => {
     const t = harness();
     await seed(t);
     const op = await twoIssues(t);
-    await insertAttachment(t, { id: ATTACHMENT_ID, issueId: ISSUE_A, state: "finalized" });
+    await insertAttachment(t, { id: ATTACHMENT_ID, issueId: ISSUE_A, state: "ready" });
 
     const before = await drain(asWriter(t), 0);
     const created = await asWriter(t).mutation(api.sync.applyOperations, {
@@ -2452,7 +2591,7 @@ describe("issueComment attachments", () => {
 
     await t.run(async (ctx) => {
       const attachment = (await ctx.db.query("issueAttachments").collect())[0];
-      expect(attachment?.commentId).toBeNull();
+      expect(attachment?.deletedAt).not.toBeNull();
     });
   });
 });

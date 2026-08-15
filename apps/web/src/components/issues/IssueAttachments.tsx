@@ -1,4 +1,4 @@
-import type { ChatAttachmentId, EnvironmentId, IssueComment } from "@spiritdevs/contracts";
+import type { ChatAttachmentId, EnvironmentId, IssueComment, IssueId } from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ClipboardPasteIcon,
@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { Button } from "../ui/button";
@@ -23,48 +23,50 @@ import {
 } from "./issueCommentAttachments";
 import { PendingIssueImageAttachment } from "./useIssueImageAttachmentDrafts";
 import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachmentDrafts";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 function AttachmentGallery({
   attachmentIds,
+  cloud,
   environmentId,
+  issueId,
 }: {
   attachmentIds: ReadonlyArray<ChatAttachmentId>;
-  environmentId: EnvironmentId;
+  cloud: ReplicaIssueAttachmentCloud | null;
+  environmentId: EnvironmentId | null;
+  issueId: IssueId;
 }) {
-  const resources = useMemo(
-    () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
-    [attachmentIds],
-  );
-  const urls = useAssetUrls(environmentId, resources);
+  const resolved = useIssueAttachmentUrls({ attachmentIds, cloud, environmentId, issueId });
 
   return (
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
       {attachmentIds.map((attachmentId, index) => {
-        const url = urls[index] ?? null;
-        if (url === null) return null;
+        const attachment = resolved[index] ?? null;
+        if (attachment === null) return null;
         return (
           <li className="shrink-0" key={attachmentId}>
-            {isIssueVideoAttachmentUrl(url) ? (
+            {attachment.mimeType?.startsWith("video/") === true ||
+            isIssueVideoAttachmentUrl(attachment.url) ? (
               <video
                 aria-label={`Issue recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
                 controls
                 playsInline
                 preload="metadata"
-                src={url}
+                src={attachment.url}
               />
             ) : (
               <a
                 aria-label={`Open attachment ${index + 1}`}
                 className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={url}
+                href={attachment.url}
                 rel="noreferrer"
                 target="_blank"
               >
                 <img
                   alt={`Issue attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
-                  src={url}
+                  src={attachment.url}
                 />
               </a>
             )}
@@ -76,13 +78,17 @@ function AttachmentGallery({
 }
 
 export function IssueAttachments({
+  cloud,
   comments,
   onCreateComment,
   drafts,
+  issueId,
 }: {
+  cloud: ReplicaIssueAttachmentCloud | null;
   comments: ReadonlyArray<IssueComment>;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
   drafts: IssueImageAttachmentDraftController;
+  issueId: IssueId;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -164,9 +170,14 @@ export function IssueAttachments({
         <Menu>
           <MenuTrigger
             render={
-              <Button className="ms-auto text-muted-foreground" size="xs" variant="ghost">
+              <Button
+                className="ms-auto text-muted-foreground"
+                disabled={cloud !== null && !cloud.isOnline}
+                size="xs"
+                variant="ghost"
+              >
                 <ImagePlusIcon />
-                Add images
+                {cloud !== null && !cloud.isOnline ? "Attachments offline" : "Add images"}
                 <ChevronDownIcon className="size-3" />
               </Button>
             }
@@ -195,9 +206,20 @@ export function IssueAttachments({
         />
       </div>
 
-      {storedAttachmentIds.length === 0 || environmentId === null ? null : (
-        <AttachmentGallery attachmentIds={storedAttachmentIds} environmentId={environmentId} />
+      {storedAttachmentIds.length === 0 || (cloud === null && environmentId === null) ? null : (
+        <AttachmentGallery
+          attachmentIds={storedAttachmentIds}
+          cloud={cloud}
+          environmentId={environmentId}
+          issueId={issueId}
+        />
       )}
+
+      {cloud !== null && !cloud.isOnline ? (
+        <p className="text-[11px] text-muted-foreground/70">
+          Connect to add attachments. Text comments still queue offline.
+        </p>
+      ) : null}
 
       {attachments.length === 0 ? null : (
         <div className="flex flex-col gap-2 border-t border-border/50 pt-2">

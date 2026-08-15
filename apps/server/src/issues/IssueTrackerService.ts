@@ -3536,26 +3536,28 @@ export const makeIssueTrackerService = Effect.fn(function* (
     },
   );
 
-  const uploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] = Effect.fn(
-    "IssueTrackerService.uploadCommentAttachment",
-  )(function* (input) {
-    const parsed = parseBase64DataUrl(input.dataUrl);
-    if (parsed === null || !parsed.mimeType.startsWith("image/")) {
-      return yield* invalid("A comment attachment must be a base64 image data URL.", input.issueId);
-    }
-    const bytes = Buffer.from(parsed.base64, "base64");
-    if (bytes.byteLength === 0 || bytes.byteLength > ISSUE_COMMENT_ATTACHMENT_MAX_BYTES) {
-      return yield* invalid("The comment attachment is empty or too large.", input.issueId);
-    }
-    return yield* writeCommentAttachment({
-      issueId: input.issueId,
-      mimeType: parsed.mimeType,
-      bytes,
+  const legacyUploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] =
+    Effect.fn("IssueTrackerService.legacyUploadCommentAttachment")(function* (input) {
+      const parsed = parseBase64DataUrl(input.dataUrl);
+      if (parsed === null || !parsed.mimeType.startsWith("image/")) {
+        return yield* invalid(
+          "A comment attachment must be a base64 image data URL.",
+          input.issueId,
+        );
+      }
+      const bytes = Buffer.from(parsed.base64, "base64");
+      if (bytes.byteLength === 0 || bytes.byteLength > ISSUE_COMMENT_ATTACHMENT_MAX_BYTES) {
+        return yield* invalid("The comment attachment is empty or too large.", input.issueId);
+      }
+      return yield* writeCommentAttachment({
+        issueId: input.issueId,
+        mimeType: parsed.mimeType,
+        bytes,
+      });
     });
-  });
 
-  const storeCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = Effect.fn(
-    "IssueTrackerService.storeCommentEvidence",
+  const legacyStoreCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = Effect.fn(
+    "IssueTrackerService.legacyStoreCommentEvidence",
   )(function* (input) {
     const maximumBytes =
       input.mimeType === "image/png"
@@ -4733,6 +4735,18 @@ export const makeIssueTrackerService = Effect.fn(function* (
     fromLegacy: Effect.Effect<A, IssueTrackerError>,
   ) => routeReplicaIssueRead({ replica: replicaReader.read, fromReplica, fromLegacy });
   const replicaRoutable = replicaReader.read.pipe(Effect.map((readModel) => readModel !== null));
+  const replicaAttachmentUnsupported = () =>
+    invalid(
+      "Server-produced issue attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
+    );
+  const uploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] = (input) =>
+    Effect.flatMap(replicaRoutable, (routable) =>
+      routable ? replicaAttachmentUnsupported() : legacyUploadCommentAttachment(input),
+    );
+  const storeCommentEvidence: IssueTrackerServiceShape["storeCommentEvidence"] = (input) =>
+    Effect.flatMap(replicaRoutable, (routable) =>
+      routable ? replicaAttachmentUnsupported() : legacyStoreCommentEvidence(input),
+    );
   const memberActorForCloudUserId: IssueTrackerServiceShape["memberActorForCloudUserId"] =
     replicaReader.memberActorForCloudUserId;
   const linkedMemberActor: IssueTrackerServiceShape["linkedMemberActor"] = secretStore

@@ -61,6 +61,7 @@ import {
   type EffectiveStatus,
   type StatusIdentity,
 } from "../../src/sync/workflow.ts";
+import { internal } from "../_generated/api.js";
 import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import type { DomainApply, DomainChange, DomainOutcome } from "../sync.ts";
@@ -2435,6 +2436,7 @@ const issueRelationDelete: EnvApply = async ({ ctx, actor, company, operation, n
  */
 async function resolveCommentAttachments(
   ctx: QueryCtx,
+  actor: CompanyActor,
   company: Doc<"companies">,
   issueId: string,
   commentId: string,
@@ -2451,7 +2453,13 @@ async function resolveCommentAttachments(
     }
     listed.add(attachmentId);
     const attachment = await liveRow(ctx, "issueAttachments", company._id, attachmentId);
-    if (attachment === null || attachment.issueId !== issueId || attachment.state !== "finalized") {
+    if (
+      attachment === null ||
+      attachment.issueId !== issueId ||
+      attachment.state !== "ready" ||
+      actor.kind !== "member" ||
+      attachment.uploadedByMembershipId !== actor.membership._id
+    ) {
       return {
         ok: false,
         outcome: rejected("invalid-arguments", `No attachment ${attachmentId} on this issue.`),
@@ -2501,17 +2509,25 @@ async function bindCommentAttachments(
   };
 
   const keep = new Set(attached.map((row) => row.id));
+  const deleted: Array<{ docId: Id<"issueAttachments">; key: string | null }> = [];
   for (const previousId of previousIds) {
     if (keep.has(previousId)) continue;
     const attachment = await liveRow(ctx, "issueAttachments", company._id, previousId);
     if (attachment === null || attachment.commentId !== commentId) continue;
-    await ctx.db.patch(attachment._id, { commentId: null, updatedAt: now });
-    await publish(attachment._id);
+    await ctx.db.patch(attachment._id, { deletedAt: now, updatedAt: now });
+    if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
+    changes.push(tombstone("issueAttachment", attachment.id, issueTeams, attachment._id));
+    deleted.push({ docId: attachment._id, key: attachment.uploadthingFileKey ?? null });
   }
   for (const attachment of attached) {
     if (attachment.commentId === commentId) continue;
     await ctx.db.patch(attachment._id, { commentId, updatedAt: now });
     await publish(attachment._id);
+  }
+  if (deleted.length > 0) {
+    await ctx.scheduler.runAfter(0, internal.issueAttachments.deleteUploadThingFiles, {
+      targets: deleted,
+    });
   }
   return changes;
 }
@@ -2542,6 +2558,7 @@ const issueCommentCreate: EnvApply = async ({ ctx, actor, company, feedActor, op
   const attachmentIds = args.attachmentIds ?? [];
   const resolved = await resolveCommentAttachments(
     ctx,
+    actor,
     company,
     issue.id,
     operation.entityId,
@@ -2589,6 +2606,7 @@ const issueCommentUpdate: EnvApply = async ({ ctx, actor, company, feedActor, op
   if (args.attachmentIds !== undefined) {
     const resolved = await resolveCommentAttachments(
       ctx,
+      actor,
       company,
       comment.issueId,
       comment.id,
@@ -2636,8 +2654,24 @@ const issueCommentDelete: EnvApply = async ({ ctx, actor, company, feedActor, op
   if (!can(actor, permission, teamIds)) return denied(permission);
   if (comment.deletedAt !== null) return applied();
 
+  const attachments: Doc<"issueAttachments">[] = [];
+  for (const attachmentId of comment.attachmentIds) {
+    const attachment = await liveRow(ctx, "issueAttachments", company._id, attachmentId);
+    if (attachment !== null && attachment.commentId === comment.id) attachments.push(attachment);
+  }
   await ctx.db.patch(comment._id, { deletedAt: now, updatedAt: now });
-  return applied(tombstone("issueComment", comment.id, teamIds, comment._id));
+  const targets: Array<{ docId: Id<"issueAttachments">; key: string | null }> = [];
+  const changes: DomainChange[] = [tombstone("issueComment", comment.id, teamIds, comment._id)];
+  for (const attachment of attachments) {
+    await ctx.db.patch(attachment._id, { deletedAt: now, updatedAt: now });
+    if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
+    changes.push(tombstone("issueAttachment", attachment.id, teamIds, attachment._id));
+    targets.push({ docId: attachment._id, key: attachment.uploadthingFileKey ?? null });
+  }
+  if (targets.length > 0) {
+    await ctx.scheduler.runAfter(0, internal.issueAttachments.deleteUploadThingFiles, { targets });
+  }
+  return applied(...changes);
 };
 
 // ---------------------------------------------------------------------------

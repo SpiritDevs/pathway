@@ -360,6 +360,43 @@ describe("IssueTrackerService", () => {
     ),
   );
 
+  it.effect(
+    "refuses every legacy attachment producer when the company replica is authoritative",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* makeIssueTrackerService({
+          replicaReader: readyReplicaReader(),
+          syncEngineRegistry: null,
+        });
+        const uploadError = yield* tracker
+          .uploadCommentAttachment({
+            issueId: IssueId.make("replica-issue"),
+            dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+          })
+          .pipe(Effect.flip);
+        const evidenceError = yield* tracker
+          .storeCommentEvidence({
+            issueId: IssueId.make("replica-issue"),
+            mimeType: "image/png",
+            bytes: Buffer.from("proof"),
+          })
+          .pipe(Effect.flip);
+        for (const error of [uploadError, evidenceError]) {
+          assert.strictEqual(error.reason, "invalid");
+          assert.include(error.message, "not supported for cloud-synced companies");
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeDependencyLayer(),
+            Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+            Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+            Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+          ),
+        ),
+      ),
+  );
+
   it.effect("routes a server write to the durable outbox and reads its optimistic replica", () =>
     Effect.gen(function* () {
       const stored = yield* Ref.make<StoredSyncState>({

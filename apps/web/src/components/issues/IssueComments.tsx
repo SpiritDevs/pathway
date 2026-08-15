@@ -8,10 +8,11 @@
  * Cmd/Ctrl+Enter submits, and images arrive by paste or drop.
  *
  * **Attachments:** an image pasted or dropped on the composer is compressed to the wire cap the
- * same way the chat composer's is, read to a base64 data URL, and handed to
- * `issues.uploadCommentAttachment`, which answers with the id the comment will carry. The bytes go
- * to the attachment store, not into the comment, so what a posted comment holds is a list of ids
- * and the assets route resolves them — exactly as it already did for an id minted elsewhere.
+ * same way the chat composer's is, then handed to the active company's attachment pipeline, which
+ * answers with the id the comment will carry.
+ * Legacy companies use `issues.uploadCommentAttachment`; replica companies prepare in Convex,
+ * upload directly to UploadThing, and finalize before the draft becomes submittable. Posted
+ * comments hold only ids, resolved through the matching permission-checked URL surface.
  *
  * @module components/issues/IssueComments
  */
@@ -29,7 +30,7 @@ import type {
 import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import type { ProviderInstanceEntry } from "~/providerInstances";
@@ -42,6 +43,7 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
 import {
   issueCommentAgentRunPresentation,
@@ -66,6 +68,7 @@ import {
   PendingIssueImageAttachment,
   useIssueImageAttachmentDrafts,
 } from "./useIssueImageAttachmentDrafts";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition.label]),
@@ -148,24 +151,25 @@ function CommentAgentRun({
 
 /** A signed URL is minted per attachment, so this mounts only when there is something to fetch. */
 function CommentAttachments({
+  cloud,
   environmentId,
   attachmentIds,
+  issueId,
 }: {
-  environmentId: EnvironmentId;
-  attachmentIds: ReadonlyArray<string>;
+  cloud: ReplicaIssueAttachmentCloud | null;
+  environmentId: EnvironmentId | null;
+  attachmentIds: ReadonlyArray<ChatAttachmentId>;
+  issueId: IssueId;
 }) {
-  const resources = useMemo(
-    () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
-    [attachmentIds],
-  );
-  const urls = useAssetUrls(environmentId, resources);
+  const resolved = useIssueAttachmentUrls({ attachmentIds, cloud, environmentId, issueId });
 
   return (
     <div className="mt-1.5 flex flex-wrap gap-2">
       {attachmentIds.map((attachmentId, index) => {
-        const url = urls[index] ?? null;
-        if (url === null) return null;
-        return isIssueVideoAttachmentUrl(url) ? (
+        const attachment = resolved[index] ?? null;
+        if (attachment === null) return null;
+        return attachment.mimeType?.startsWith("video/") === true ||
+          isIssueVideoAttachmentUrl(attachment.url) ? (
           <video
             aria-label="Comment video attachment"
             className="max-h-64 max-w-full rounded-lg border border-border/60"
@@ -173,14 +177,14 @@ function CommentAttachments({
             key={attachmentId}
             playsInline
             preload="metadata"
-            src={url}
+            src={attachment.url}
           />
         ) : (
           <img
             alt="Comment attachment"
             className="max-h-40 rounded-lg border border-border/60"
             key={attachmentId}
-            src={url}
+            src={attachment.url}
           />
         );
       })}
@@ -190,6 +194,7 @@ function CommentAttachments({
 
 function CommentRow({
   comment,
+  cloud,
   environmentId,
   memberNames,
   onEdit,
@@ -198,6 +203,7 @@ function CommentRow({
   onRetryAgentRun,
 }: {
   comment: IssueComment;
+  cloud: ReplicaIssueAttachmentCloud | null;
   environmentId: EnvironmentId | null;
   memberNames: ReadonlyMap<string, string>;
   onEdit: (comment: IssueComment, body: string) => void;
@@ -313,10 +319,13 @@ function CommentRow({
         ) : (
           <>
             <ChatMarkdown className="text-[13px]" cwd={undefined} text={comment.body} />
-            {comment.attachmentIds.length === 0 || environmentId === null ? null : (
+            {comment.attachmentIds.length === 0 ||
+            (cloud === null && environmentId === null) ? null : (
               <CommentAttachments
                 attachmentIds={comment.attachmentIds}
+                cloud={cloud}
                 environmentId={environmentId}
+                issueId={comment.issueId}
               />
             )}
             {comment.agentRun == null ? null : (
@@ -334,6 +343,7 @@ function CommentRow({
 }
 
 export function IssueComments({
+  cloud,
   comments,
   isPending,
   issueId,
@@ -345,6 +355,7 @@ export function IssueComments({
   instanceEntries = EMPTY_INSTANCE_ENTRIES,
   modelOptionsByInstance = EMPTY_MODEL_OPTIONS,
 }: {
+  cloud: ReplicaIssueAttachmentCloud | null;
   /** Already chronological — the state layer sorts the read and its live patches together. */
   comments: ReadonlyArray<IssueComment>;
   isPending: boolean;
@@ -377,7 +388,7 @@ export function IssueComments({
   const [dismissedRaw, setDismissedRaw] = useState<string | null>(null);
   const [mentionSelection, setMentionSelection] = useState<ModelSelection | null>(null);
   const { attachments, addFiles, removeAttachment, clearAttachments } =
-    useIssueImageAttachmentDrafts(issueId);
+    useIssueImageAttachmentDrafts(issueId, cloud);
   const composer = issueCommentComposerState({ draft, attachments });
 
   const mentionAgents = useMemo(
@@ -442,11 +453,23 @@ export function IssueComments({
       submitted === null || selection === null
         ? composer.body
         : issueCommentMentionBody(composer.body, submitted);
-    clearComposer();
     if (submitted === null || selection === null) {
+      clearComposer();
       onCreate(body, attachmentIds);
       return;
     }
+    if (cloud !== null && attachmentIds.length > 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Comment not posted",
+          description:
+            "Cloud-synced attachments cannot start an agent run yet. Remove the agent mention or the attachments and try again.",
+        }),
+      );
+      return;
+    }
+    clearComposer();
     onCreate(body, attachmentIds, { modelSelection: selection });
   };
 
@@ -463,6 +486,7 @@ export function IssueComments({
           {comments.map((comment) => (
             <CommentRow
               comment={comment}
+              cloud={cloud}
               environmentId={environmentId}
               key={comment.id}
               memberNames={memberDirectory.names}
@@ -526,7 +550,11 @@ export function IssueComments({
             event.preventDefault();
             addFiles(files);
           }}
-          placeholder="Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
+          placeholder={
+            cloud !== null && !cloud.isOnline
+              ? "Leave a comment… (attachments unavailable offline)"
+              : "Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
+          }
           value={draft}
         />
         {/* The mention row sits between the text and the actions, and is always here when there is
