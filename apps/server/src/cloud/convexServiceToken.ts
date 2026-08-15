@@ -28,7 +28,11 @@ import {
   RelayEnvironmentCredentialTokenType,
   type RelayConvexKeyBindingPayload,
 } from "@spiritdevs/contracts/relay";
-import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@spiritdevs/shared/dpop";
+import {
+  computeDpopAccessTokenHash,
+  computeDpopJwkThumbprint,
+  type DpopPublicJwk,
+} from "@spiritdevs/shared/dpop";
 import { normalizeDpopHtu } from "@spiritdevs/shared/dpopCommon";
 import { decodeRelayJwt, normalizeRelayIssuer, signRelayJwt } from "@spiritdevs/shared/relayJwt";
 import { ConvexError } from "convex/values";
@@ -113,6 +117,7 @@ export function signDpopProof(input: {
   readonly url: string;
   readonly jti: string;
   readonly iatEpochSeconds: number;
+  readonly accessToken?: string;
 }): string {
   const header = Buffer.from(
     JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk: input.publicJwk }),
@@ -123,6 +128,7 @@ export function signDpopProof(input: {
       htu: input.url,
       jti: input.jti,
       iat: input.iatEpochSeconds,
+      ...(input.accessToken ? { ath: computeDpopAccessTokenHash(input.accessToken) } : {}),
     }),
   ).toString("base64url");
   const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
