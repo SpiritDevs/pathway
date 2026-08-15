@@ -38,6 +38,20 @@ export interface OutboxEntry<Operation> {
   readonly envelope: SyncOperationEnvelope;
   readonly operation: SyncOperation<Operation>;
   readonly status: StoredOutboxStatus;
+  /**
+   * Epoch milliseconds this operation was enqueued at, or `undefined` for a row written before the
+   * stamp existed. Replayed into every {@link SyncDomainAdapter.apply} so the overlay a pending
+   * operation produces is the same on the tenth recompute as on the first.
+   */
+  readonly occurredAt: number | undefined;
+}
+
+/** The persisted form of one entry. Only `status` ever changes after the row is written. */
+export function storedOutboxEntry<Operation>(
+  entry: OutboxEntry<Operation>,
+  status: StoredOutboxStatus,
+): StoredOutboxEntry {
+  return { envelope: entry.envelope, status, occurredAt: entry.occurredAt };
 }
 
 export function decodeOutbox<Entity, Operation>(input: {
@@ -68,6 +82,7 @@ export function decodeOutbox<Entity, Operation>(input: {
       envelope: row.envelope,
       operation: toSyncOperation(row.envelope, decoded.value),
       status: row.status,
+      occurredAt: row.occurredAt,
     });
   }
   return { entries: sortOutbox(entries), quarantined };
@@ -165,6 +180,8 @@ export function overlay<Entity, Operation>(input: {
     const outcome = input.adapter.apply({
       current: view.get(key) ?? null,
       operation: entry.operation.operation,
+      // The enqueue-time stamp, not a fresh clock read: this fold runs on every publish.
+      occurredAt: entry.occurredAt,
     });
     switch (outcome._tag) {
       case "Applied":
@@ -260,7 +277,8 @@ export function applyReceipts<Operation>(input: {
     // wrote several entities never unblocks while part of its result is still in flight.
     const status: StoredOutboxStatus = { _tag: "Acknowledged", version: receipt.lastVersion };
     entries.push({ ...entry, status });
-    updated.push({ envelope: entry.envelope, status });
+    // Rewritten with its stamp intact — dropping it here would hand the row back a live clock.
+    updated.push(storedOutboxEntry(entry, status));
   }
 
   return { entries: sortOutbox(entries), updated, rejections, removed, accepted };

@@ -29,6 +29,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { EnvironmentId } from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -61,6 +62,7 @@ import {
   overlay,
   pruneAcknowledged,
   sendableOperations,
+  storedOutboxEntry,
   toSyncOperation,
   type OutboxEntry,
 } from "./outbox.ts";
@@ -71,7 +73,7 @@ import {
   decodeConfirmedEntities,
   emptyConfirmedReplica,
 } from "./replica.ts";
-import { SyncTransport, type SyncTransportError } from "./transport.ts";
+import { SyncTransport, SyncTransportError } from "./transport.ts";
 
 export interface SyncEngineState<Entity, Operation> {
   readonly phase: SyncPhase;
@@ -191,6 +193,17 @@ export function clampSyncBound(requested: number | undefined, max: number): numb
   return whole < 1 ? 1 : Math.min(whole, max);
 }
 
+/**
+ * How many times one bootstrap restarts from scratch before it gives up on a moving authorization
+ * epoch.
+ *
+ * A restart is cheap and almost always singular: a membership change lands while the seed is
+ * paginating, the next attempt reads the new world whole. More than a couple in a row means the
+ * epoch is flapping, and continuing to restart inside the cycle would spin against the deployment
+ * with the cycle lock held. The cap is what turns that into an ordinary retryable failure.
+ */
+export const SYNC_BOOTSTRAP_MAX_ATTEMPTS = 3;
+
 /** How long {@link SyncEngine.run} waits before re-arming the first time a cycle does not settle. */
 export const SYNC_RETRY_MIN_DELAY = Duration.seconds(1);
 
@@ -223,9 +236,15 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     checkpoint !== null && checkpoint.schemaVersion === SYNC_DOCUMENT_SCHEMA_VERSION
       ? checkpoint
       : null;
+  // An unfinished seed's rows are not a replica. Only the intermediate pages of a bootstrap and an
+  // abandoned one write `bootstrapped: false`, so rows underneath it are half a snapshot, possibly
+  // half of two — the seed that wrote them stopped before it agreed with itself. Showing them until
+  // the next seed's first page lands would put rows the actor may no longer read back on screen, so
+  // this build starts from nothing and waits for the whole snapshot. The rows stay on disk until
+  // that first page resets them, which is what keeps the reseed a single atomic swap.
   const confirmed = decodeConfirmedEntities({
     adapter,
-    rows: usableCheckpoint === null ? [] : stored.entities,
+    rows: usableCheckpoint === null || !usableCheckpoint.bootstrapped ? [] : stored.entities,
     cursor: usableCheckpoint?.cursor ?? SYNC_INITIAL_VERSION,
     authorizationEpoch: usableCheckpoint?.authorizationEpoch ?? SYNC_INITIAL_EPOCH,
   });
@@ -330,11 +349,17 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   });
 
   /**
-   * Full paginated reseed: the first sync, a cursor the feed no longer retains, or an
-   * authorization-epoch change. The first page resets every confirmed row, which is what purges
-   * records the actor may no longer see.
+   * One pass over the bootstrap pages, from an empty replica.
+   *
+   * The seed is only sound if every page was filtered under the *same* authorization epoch. The
+   * bootstrap cursor is server-side pagination state and carries no epoch, so a membership change
+   * landing between page 1 and page N would otherwise leave the earlier pages' rows — chosen under
+   * permissions the actor no longer has — in the replica, under a checkpoint recording the new
+   * epoch. Every later drain would then compare equal and never reseed, so the rows would stay
+   * forever. Noticing the move and answering `EpochMoved` is what lets the caller throw the
+   * half-seed away instead.
    */
-  const bootstrap = Effect.fn("SyncEngine.bootstrap")(function* () {
+  const seedPages = Effect.fn("SyncEngine.seedPages")(function* () {
     let replica = emptyConfirmedReplica<Entity>({
       cursor: SYNC_INITIAL_VERSION,
       authorizationEpoch: SYNC_INITIAL_EPOCH,
@@ -342,6 +367,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     let cursor: string | null = null;
     let firstPage = true;
     let applied = 0;
+    let seedEpoch: AuthorizationEpoch | null = null;
 
     for (;;) {
       const page: SyncBootstrapResponse = yield* transport.bootstrap({
@@ -349,6 +375,10 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
         cursor,
         pageSize,
       });
+      if (seedEpoch === null) seedEpoch = page.authorizationEpoch;
+      else if (page.authorizationEpoch !== seedEpoch) {
+        return { _tag: "EpochMoved", from: seedEpoch, to: page.authorizationEpoch } as const;
+      }
       const result = applyConfirmedChanges({
         replica,
         adapter,
@@ -370,14 +400,62 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
         }),
       });
       firstPage = false;
-      if (page.isDone) break;
+      if (page.isDone) return { _tag: "Seeded", replica, applied } as const;
       cursor = page.cursor;
     }
+  });
 
-    yield* Ref.set(replicaRef, replica);
-    yield* Ref.set(bootstrappedRef, true);
-    yield* pruneCovered(replica.cursor);
-    return applied;
+  /** Drops every confirmed row and marks the replica unseeded, in the store and in memory. */
+  const discardReplica = Effect.fn("SyncEngine.discardReplica")(function* (
+    authorizationEpoch: AuthorizationEpoch,
+  ) {
+    yield* store.commit(companyId, {
+      resetEntities: true,
+      checkpoint: checkpointFor({
+        cursor: SYNC_INITIAL_VERSION,
+        authorizationEpoch,
+        bootstrapped: false,
+      }),
+    });
+    yield* Ref.set(
+      replicaRef,
+      emptyConfirmedReplica<Entity>({ cursor: SYNC_INITIAL_VERSION, authorizationEpoch }),
+    );
+    yield* Ref.set(bootstrappedRef, false);
+  });
+
+  /**
+   * Full paginated reseed: the first sync, a cursor the feed no longer retains, or an
+   * authorization-epoch change. The first page of each attempt resets every confirmed row, which
+   * is what purges records the actor may no longer see.
+   *
+   * An epoch that moves mid-seed restarts the whole thing from an empty replica rather than
+   * stitching two permission worlds together. The attempts are capped because the restart is
+   * driven by the server's answer: against a deployment whose epoch flaps, an uncapped loop would
+   * spin here forever inside one cycle, holding the cycle lock and never reporting. Giving up
+   * discards the half-seed and fails as retryable transport trouble, which hands the problem to
+   * the engine's own backoff — the machinery that already exists for "the server is not answering
+   * usefully right now".
+   */
+  const bootstrap = Effect.fn("SyncEngine.bootstrap")(function* () {
+    for (let attempt = 1; ; attempt += 1) {
+      const seeded = yield* seedPages();
+      if (seeded._tag === "Seeded") {
+        yield* Ref.set(replicaRef, seeded.replica);
+        yield* Ref.set(bootstrappedRef, true);
+        yield* pruneCovered(seeded.replica.cursor);
+        return seeded.applied;
+      }
+      if (attempt >= SYNC_BOOTSTRAP_MAX_ATTEMPTS) {
+        // Nothing readable survives: the rows already written came from a seed that was abandoned
+        // halfway, so they are exactly the mixed-epoch state this whole path exists to prevent.
+        yield* discardReplica(seeded.to);
+        return yield* new SyncTransportError({
+          reason: "transport",
+          message: `The authorization epoch changed during ${SYNC_BOOTSTRAP_MAX_ATTEMPTS} consecutive bootstraps (last ${seeded.from} to ${seeded.to}).`,
+        });
+      }
+    }
   });
 
   /**
@@ -581,12 +659,17 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
       kind: adapter.operationKind(input.operation),
       args: adapter.operationCodec.encode(input.operation),
     };
+    // Read once, here, and replayed from the row for the rest of the operation's life: the overlay
+    // is recomputed on every publish, so a domain reducer that read a clock instead would move a
+    // pending row's timestamps on every retry and every unrelated edit.
+    const occurredAt = yield* Clock.currentTimeMillis;
     const entry: OutboxEntry<Operation> = {
       envelope,
       operation: toSyncOperation(envelope, input.operation),
       status: { _tag: "Pending" },
+      occurredAt,
     };
-    const row: StoredOutboxEntry = { envelope, status: entry.status };
+    const row: StoredOutboxEntry = storedOutboxEntry(entry, entry.status);
     // The mark is raised in the same write that stores the row, so a crash between them cannot
     // leave a sequence issued but unrecorded.
     yield* store.commit(companyId, { upsertOutbox: [row], localSequenceHighWater: localSequence });

@@ -18,8 +18,10 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import {
@@ -356,13 +358,16 @@ describe("ConvexSyncTransport", () => {
     }),
   );
 
-  it.effect("emits every distinct head the subscription delivers", () =>
+  it.effect("emits every distinct head a keeping-up consumer is handed", () =>
     Effect.gen(function* () {
       const fake = makeFakeConvexClient();
       yield* withTransport(fake, (transport) =>
         Effect.gen(function* () {
-          const collected = yield* Effect.forkChild(
-            Stream.runCollect(Stream.take(transport.latestVersion({ companyId: COMPANY_ID }), 2)),
+          const inbox = yield* Queue.unbounded<SyncLatestVersionResponse>();
+          const running = yield* Effect.forkChild(
+            Stream.runForEach(transport.latestVersion({ companyId: COMPANY_ID }), (value) =>
+              Queue.offer(inbox, value),
+            ),
             { startImmediately: true },
           );
           yield* Effect.promise(() => fake.subscribed);
@@ -371,10 +376,63 @@ describe("ConvexSyncTransport", () => {
           expect(subscription.args).toEqual({ companyId: COMPANY_ID });
 
           subscription.emit(head(4));
-          subscription.emit(head(4)); // A replay of the same head must not wake the engine twice.
+          expect(yield* Queue.take(inbox)).toEqual(head(4));
+
+          // A reconnect replays the head the tab already has; that must not wake the engine.
+          subscription.emit(head(4));
+          yield* Effect.replicateEffect(Effect.yieldNow, 8);
+          expect(yield* Queue.size(inbox)).toBe(0);
+
           subscription.emit(head(5));
-          expect(yield* Fiber.join(collected)).toEqual([head(4), head(5)]);
-          // The stream ended at `take(2)`, which releases the subscription.
+          expect(yield* Queue.take(inbox)).toEqual(head(5));
+
+          yield* Fiber.interrupt(running);
+          expect(subscription.unsubscribed).toBe(1);
+        }),
+      );
+    }),
+  );
+
+  it.effect("coalesces a burst of heads to the newest while the consumer is busy", () =>
+    Effect.gen(function* () {
+      // Convex pushes a result per backend write, and the engine runs a whole sync cycle per
+      // emission. With the default unbounded buffer a burst — or any write arriving while a cycle
+      // is stuck retrying — queues one stale head per write and makes the engine replay a
+      // redundant cycle for each of them once it recovers. Only the newest head carries
+      // information, so the buffer keeps exactly that one.
+      const fake = makeFakeConvexClient();
+      yield* withTransport(fake, (transport) =>
+        Effect.gen(function* () {
+          const observed: Array<SyncLatestVersionResponse> = [];
+          const cycleStarted = yield* Deferred.make<void>();
+          const releaseCycle = yield* Deferred.make<void>();
+          const running = yield* Effect.forkChild(
+            Stream.runForEach(
+              Stream.take(transport.latestVersion({ companyId: COMPANY_ID }), 2),
+              (value) =>
+                Effect.gen(function* () {
+                  observed.push(value);
+                  if (observed.length === 1) {
+                    yield* Deferred.succeed(cycleStarted, undefined);
+                    yield* Deferred.await(releaseCycle);
+                  }
+                }),
+            ),
+            { startImmediately: true },
+          );
+          yield* Effect.promise(() => fake.subscribed);
+          const subscription = fake.subscriptions[0]!;
+
+          subscription.emit(head(1));
+          yield* Deferred.await(cycleStarted);
+          // The consumer is suspended mid-cycle while four more distinct heads land.
+          for (const version of [2, 3, 4, 5]) {
+            subscription.emit(head(version));
+          }
+          yield* Deferred.succeed(releaseCycle, undefined);
+
+          yield* Fiber.join(running);
+          expect(observed).toEqual([head(1), head(5)]);
           expect(subscription.unsubscribed).toBe(1);
         }),
       );

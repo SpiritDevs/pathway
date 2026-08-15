@@ -187,6 +187,32 @@ describe("IndexedDbSyncStore", () => {
     }),
   );
 
+  it.effect("carries an outbox row's enqueue stamp, and reads a row written without one", () =>
+    Effect.gen(function* () {
+      const factory = new IDBFactory();
+      const first = yield* openStore(factory);
+      yield* first.service.commit(COMPANY_A, {
+        upsertOutbox: [
+          { ...pendingEntry("op-stamped", 1), occurredAt: 1_700_000 },
+          // A row from a build that predates the field: the schema is deliberately unversioned
+          // here, so it must read back as an unstamped row rather than take the replica down.
+          pendingEntry("op-unstamped", 2),
+        ],
+        localSequenceHighWater: LocalSequence.make(2),
+      });
+
+      const reopened = yield* openStore(factory);
+      const state = yield* reopened.service.read(COMPANY_A);
+      expect(state.quarantined).toEqual([]);
+      expect(
+        state.outbox.map((entry) => [entry.envelope.operationId, entry.occurredAt] as const),
+      ).toEqual([
+        ["op-stamped", 1_700_000],
+        ["op-unstamped", undefined],
+      ]);
+    }),
+  );
+
   it.effect("round-trips quarantined rows verbatim and only discards them on request", () =>
     Effect.gen(function* () {
       const factory = new IDBFactory();

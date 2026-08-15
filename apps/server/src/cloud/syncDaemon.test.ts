@@ -731,6 +731,16 @@ liveLayer("cloud sync daemon supervision", (it) => {
   const offlineHead = () =>
     Stream.fail(new SyncTransportError({ reason: "offline", message: "stub relay is offline" }));
 
+  const refusedHead = (reason: "unauthorized" | "upgrade-required", message: string) => () =>
+    Stream.fail(new SyncTransportError({ reason, message }));
+
+  /** Runs a daemon to its own end, or fails the test if it never ends. */
+  const awaitDaemonEnd = (fiber: Fiber.Fiber<void>) =>
+    Fiber.await(fiber).pipe(
+      Effect.timeoutOption(Duration.seconds(5)),
+      Effect.map(Option.getOrUndefined),
+    );
+
   it.effect("restarts the engine after a defect, not just after a store failure", () =>
     Effect.gen(function* () {
       const { store: secrets } = makeMemorySecretStore(linkedSecrets);
@@ -806,6 +816,131 @@ liveLayer("cloud sync daemon supervision", (it) => {
       ).pipe(provideDaemon({ env: ENABLED_ENV, secrets, logger: logs.layer }));
 
       expect(logs.find("Warn", "no longer linked")).toBeDefined();
+    }),
+  );
+
+  it.effect("stops for good when the deployment answers upgrade-required", () =>
+    Effect.gen(function* () {
+      const { store: secrets } = makeMemorySecretStore(linkedSecrets);
+      const logs = makeLogCapture();
+      let subscriptions = 0;
+
+      // The deployment refuses this build outright — cloud sync switched off there, or a protocol
+      // version it will not speak. A restart timer can only reproduce the refusal.
+      const transport = makeHeadOnlyTransport(() => {
+        subscriptions += 1;
+        return refusedHead("upgrade-required", "this deployment refuses protocol version 1")();
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* startCloudSyncDaemon({
+            transport: () => Effect.succeed(transport),
+            restartDelay: Duration.millis(1),
+            linkWaitAttempts: 0,
+          });
+          expect(fiber).not.toBeNull();
+          if (fiber === null) return;
+
+          const exit = yield* awaitDaemonEnd(fiber);
+          expect(exit).toBeDefined();
+          expect(exit === undefined ? false : Exit.isSuccess(exit)).toBe(true);
+
+          // Once, and never again: the restart delay is a millisecond here, so a loop that ignored
+          // the reason would have run dozens of times by the end of this sleep.
+          expect(subscriptions).toBe(1);
+          yield* Effect.sleep(Duration.millis(50));
+          expect(subscriptions).toBe(1);
+        }),
+      ).pipe(provideDaemon({ env: ENABLED_ENV, secrets, logger: logs.layer }));
+
+      const refusal = logs.find("Warn", "will not restart");
+      expect(refusal).toBeDefined();
+      const text = refusal?.parts.map((part) => JSON.stringify(part)).join(" ") ?? "";
+      expect(text).toContain("upgrade-required");
+      expect(text).toContain(COMPANY_ID);
+      // The terminal stop is reported on its own terms, not as an unlink.
+      expect(logs.find("Warn", "no longer linked")).toBeUndefined();
+    }),
+  );
+
+  it.effect("gives a refused token a bounded number of retries, then stops for good", () =>
+    Effect.gen(function* () {
+      const { store: secrets } = makeMemorySecretStore(linkedSecrets);
+      const logs = makeLogCapture();
+      let subscriptions = 0;
+
+      // A relay that refuses the token exchange every time. The budget exists for the relink race,
+      // where the next read of the secret store carries a credential that works — this one never
+      // does, so the daemon has to give up rather than ask forever.
+      const transport = makeHeadOnlyTransport(() => {
+        subscriptions += 1;
+        return refusedHead("unauthorized", "token exchange returned HTTP 401")();
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* startCloudSyncDaemon({
+            transport: () => Effect.succeed(transport),
+            restartDelay: Duration.millis(1),
+            linkWaitAttempts: 0,
+            unauthorizedRestarts: 2,
+          });
+          expect(fiber).not.toBeNull();
+          if (fiber === null) return;
+
+          const exit = yield* awaitDaemonEnd(fiber);
+          expect(exit).toBeDefined();
+          expect(exit === undefined ? false : Exit.isSuccess(exit)).toBe(true);
+
+          // The first run plus the two the budget paid for, and nothing after that.
+          expect(subscriptions).toBe(3);
+          yield* Effect.sleep(Duration.millis(50));
+          expect(subscriptions).toBe(3);
+        }),
+      ).pipe(provideDaemon({ env: ENABLED_ENV, secrets, logger: logs.layer }));
+
+      expect(logs.entries.filter((entry) => entry.level === "Warn")).toHaveLength(3);
+      expect(logs.find("Warn", "fresh service token")).toBeDefined();
+      const refusal = logs.find("Warn", "will not restart");
+      expect(refusal).toBeDefined();
+      expect(refusal?.parts.map((part) => JSON.stringify(part)).join(" ")).toContain(
+        "unauthorized",
+      );
+    }),
+  );
+
+  it.effect("keeps restarting after a retryable stop, and forgets the refusals before it", () =>
+    Effect.gen(function* () {
+      const { store: secrets } = makeMemorySecretStore(linkedSecrets);
+      const logs = makeLogCapture();
+      let subscriptions = 0;
+
+      // Refusal, blip, refusal, blip… With a budget of one, a daemon that never forgot a refusal
+      // would stop on the third subscription; one that resets on a retryable stop runs forever.
+      const transport = makeHeadOnlyTransport(() => {
+        subscriptions += 1;
+        return subscriptions % 2 === 1
+          ? refusedHead("unauthorized", "the relay is mid-relink")()
+          : offlineHead();
+      });
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* startCloudSyncDaemon({
+            transport: () => Effect.succeed(transport),
+            restartDelay: Duration.millis(1),
+            linkWaitAttempts: 0,
+            unauthorizedRestarts: 1,
+          });
+          expect(fiber).not.toBeNull();
+          yield* awaitUntil(() => subscriptions >= 6, "the restart loop to keep turning");
+        }),
+      ).pipe(provideDaemon({ env: ENABLED_ENV, secrets, logger: logs.layer }));
+
+      expect(subscriptions).toBeGreaterThanOrEqual(6);
+      // Still running when the scope closed: nothing declared this daemon over.
+      expect(logs.find("Warn", "will not restart")).toBeUndefined();
     }),
   );
 

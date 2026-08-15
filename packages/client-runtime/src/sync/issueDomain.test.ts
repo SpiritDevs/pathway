@@ -33,6 +33,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { SyncApplyOutcome } from "./adapter.ts";
 import { CloudSyncCapability } from "./capability.ts";
@@ -1362,7 +1363,15 @@ const makeIssueSyncServer = Effect.fn("makeIssueSyncServer")(function* () {
   };
 });
 
+/**
+ * What an optimistic row is stamped with in these tests. The engine reads the ambient clock once
+ * per enqueue and replays that value, so the harness pins the clock there; the adapter's own
+ * `now` agrees, which keeps the expected value the same whichever of the two answered.
+ */
+const ENQUEUED_AT = 1_000;
+
 const makeHarness = Effect.fn("makeHarness")(function* () {
+  yield* TestClock.setTime(ENQUEUED_AT);
   const store = yield* makeMemorySyncStore();
   const server = yield* makeIssueSyncServer();
   const layer = Layer.mergeAll(
@@ -1377,7 +1386,7 @@ const openEngine = (clientId: string) =>
     companyId: COMPANY_ID,
     clientId: SyncClientId.make(clientId),
     actor: ACTOR,
-    adapter: makeIssueSyncAdapter({ actor: ACTOR, now: () => 1_000 }),
+    adapter: makeIssueSyncAdapter({ actor: ACTOR, now: () => ENQUEUED_AT }),
   });
 
 const ENABLED = { enabled: true } as const;
@@ -1416,7 +1425,7 @@ describe("issue domain on the sync engine", () => {
           entityKind: "issue",
           title: "Offline first",
           key: ISSUE_KEY_DRAFT_PLACEHOLDER,
-          createdAt: 1_000,
+          createdAt: ENQUEUED_AT,
         });
         expect(optimistic.view.has(todoKey)).toBe(true);
         expect(optimistic.confirmed.size).toBe(0);
@@ -1548,6 +1557,138 @@ describe("issue domain on the sync engine", () => {
         });
         expect(yield* harness.server.entity("issueLabel", LABEL_ID)).toBeNull();
         expect((yield* SubscriptionRef.get(restarted.state)).quarantined).toEqual([]);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("stamps a pending row once instead of on every overlay recompute", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      yield* Effect.gen(function* () {
+        let clockReads = 0;
+        // A clock that never answers the same thing twice. If the reducer kept reading one, an
+        // unsent row's `createdAt` would move on every republish and the row would crawl up any
+        // activity-sorted list on its own.
+        const drifting = () => {
+          clockReads += 1;
+          return ENQUEUED_AT + clockReads * 60_000;
+        };
+        const open = (clientId: string) =>
+          makeSyncEngine({
+            companyId: COMPANY_ID,
+            clientId: SyncClientId.make(clientId),
+            actor: ACTOR,
+            adapter: makeIssueSyncAdapter({ actor: ACTOR, now: drifting }),
+          });
+
+        const engine = yield* open("client-drift");
+        yield* engine.enqueue({
+          operationId: SyncOperationId.make("operation-create"),
+          operation: issueSyncOperation({
+            kind: "issue.create",
+            entityId: ISSUE_ID,
+            args: { title: "Written on a plane" },
+          }),
+        });
+        expect((yield* SubscriptionRef.get(engine.state)).view.get(issueKey)).toMatchObject({
+          createdAt: ENQUEUED_AT,
+          updatedAt: ENQUEUED_AT,
+        });
+
+        // An hour later, an unrelated write republishes the whole overlay.
+        yield* TestClock.adjust("1 hour");
+        yield* engine.enqueue({
+          operationId: SyncOperationId.make("operation-label"),
+          operation: issueSyncOperation({
+            kind: "issueLabel.create",
+            entityId: LABEL_ID,
+            args: { name: "regression", color: "#ef4444" },
+          }),
+        });
+        const later = yield* SubscriptionRef.get(engine.state);
+        expect(later.view.get(issueKey)).toMatchObject({
+          createdAt: ENQUEUED_AT,
+          updatedAt: ENQUEUED_AT,
+        });
+        // The stamp is per operation rather than global: the label was written an hour later and
+        // says so, which is what makes it a stamp and not a frozen constant.
+        expect(later.view.get(labelKey)).toMatchObject({
+          createdAt: ENQUEUED_AT + 3_600_000,
+          updatedAt: ENQUEUED_AT + 3_600_000,
+        });
+
+        // A restart replays the stamps from the store instead of re-reading a clock, so the rows
+        // are where the user left them however long the app was closed.
+        yield* TestClock.adjust("1 hour");
+        const restarted = yield* open("client-drift");
+        const reopened = yield* SubscriptionRef.get(restarted.state);
+        expect(reopened.view.get(issueKey)).toMatchObject({
+          createdAt: ENQUEUED_AT,
+          updatedAt: ENQUEUED_AT,
+        });
+        expect(reopened.view.get(labelKey)).toMatchObject({
+          createdAt: ENQUEUED_AT + 3_600_000,
+        });
+        // The adapter's own clock was never needed: every one of those rows came from an outbox row.
+        expect(clockReads).toBe(0);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("still reads an outbox row written before the stamp existed", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const operation = issueSyncOperation({
+        kind: "issue.create",
+        entityId: ISSUE_ID,
+        args: { title: "Queued by an older build" },
+      });
+      // Exactly what an older build persisted: an envelope and a status, and no stamp anywhere.
+      const envelope: SyncOperationEnvelope = {
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operationId: SyncOperationId.make("operation-legacy"),
+        companyId: COMPANY_ID,
+        clientId: SyncClientId.make("client-a"),
+        environmentId: null,
+        actor: ACTOR,
+        localSequence: LocalSequence.make(1),
+        baseVersion: CompanyVersion.make(0),
+        entityId: ISSUE_ID,
+        dependsOn: [],
+        kind: "issue.create",
+        args: issueSyncDomainAdapter.operationCodec.encode(operation),
+      };
+      yield* harness.store.service.commit(COMPANY_ID, {
+        upsertOutbox: [{ envelope, status: { _tag: "Pending" } }],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* makeSyncEngine({
+          companyId: COMPANY_ID,
+          clientId: SyncClientId.make("client-a"),
+          actor: ACTOR,
+          adapter: makeIssueSyncAdapter({ actor: ACTOR, now: () => ENQUEUED_AT }),
+        });
+
+        // Readable, sendable, and shown — falling back to the adapter's clock, which is the only
+        // answer that ever existed for it. Dropping the row instead would lose unsent work.
+        const state = yield* SubscriptionRef.get(engine.state);
+        expect(state.quarantined).toEqual([]);
+        expect(state.pending.map((entry) => entry.operation.operationId)).toEqual([
+          "operation-legacy",
+        ]);
+        expect(state.view.get(issueKey)).toMatchObject({
+          title: "Queued by an older build",
+          createdAt: ENQUEUED_AT,
+        });
+
+        const receipt = yield* engine.sync;
+        expect(receipt.acceptedOperations).toBe(1);
+        expect(yield* harness.server.entity("issue", ISSUE_ID)).toMatchObject({
+          title: "Queued by an older build",
+        });
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
     }),
   );

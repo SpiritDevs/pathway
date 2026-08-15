@@ -33,6 +33,10 @@
  * - A link that arrives *after* boot (`pathway connect link` against a running server, or the
  *   startup relink of a desired link) is picked up: the parked daemon re-checks for one on a
  *   bounded schedule before it gives up and asks for a restart.
+ * - A deployment that answers `upgrade-required`, or that refuses this environment for good, ends
+ *   the daemon rather than being asked again every restart interval: the supervisor reads *why*
+ *   the engine stopped off its published state and only restarts for reasons another run could
+ *   change (see {@link isRetryableSyncStop}).
  *
  * A gate that does not hold is not an error. The layer logs one line and yields nothing, so a
  * server without the flag boots exactly as it did before — no tables created, no sockets opened,
@@ -52,6 +56,7 @@ import {
   makeSyncEngine,
   SyncStore,
   SyncTransport,
+  type SyncTransportError,
 } from "@spiritdevs/client-runtime/sync";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -63,6 +68,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Config from "effect/Config";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -100,7 +106,8 @@ const CLOUD_SYNC_ENABLED = { enabled: true } as const;
  *
  * `SyncEngine.run` returns normally when the `latestVersion` subscription fails — it records the
  * transport reason as a phase and ends — so without this the first offline blip would end cloud
- * sync for the life of the process.
+ * sync for the life of the process. Only a *retryable* stop waits and comes back; see
+ * {@link isRetryableSyncStop}.
  */
 export const DEFAULT_SYNC_DAEMON_RESTART_DELAY = Duration.seconds(30);
 
@@ -115,6 +122,31 @@ export const DEFAULT_SYNC_DAEMON_RESTART_DELAY = Duration.seconds(30);
  */
 export const DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL = Duration.seconds(5);
 export const DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS = 24;
+
+/**
+ * How many times a daemon restarts after an `unauthorized` stop before it gives up for good.
+ *
+ * The web runtime treats `unauthorized` as terminal on the first answer, and for a browser that is
+ * right: its token comes from a Clerk session that a restart cannot improve. The server's does not.
+ * A server's `unauthorized` is produced in two very different places:
+ *
+ * - The deployment refused the call (`UNAUTHORIZED_CODES` in `./convexSyncTransport.ts`): not a
+ *   member, environment not registered, key mismatch. Terminal, exactly as on the web.
+ * - The *relay* refused the token exchange with 400/401/403 (`./convexServiceToken.ts` maps those
+ *   to `unauthorized`). One of those is routinely transient: `applyCloudRelayConfig` relinks by
+ *   minting a replacement environment credential, and the relay revokes the old one as it issues
+ *   the new one — so an exchange that lands in that window is refused with a credential that is
+ *   about to be replaced in the secret store. The transport's own once-only refresh does not cover
+ *   it (both attempts read the same not-yet-written credential), and the daemon is the only party
+ *   that can wait for the new secret to land.
+ *
+ * A small budget covers the second without reviving the loop the first needs stopped: three
+ * restarts spaced by {@link DEFAULT_SYNC_DAEMON_RESTART_DELAY} is a minute and a half of grace,
+ * after which the daemon stops and says so once. `upgrade-required` gets no budget at all — a
+ * deployment with cloud sync switched off, or one that refuses this protocol version, answers the
+ * same way to a process that has not been rebuilt.
+ */
+export const DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS = 3;
 
 const capabilityConfig = Config.string(CLOUD_SYNC_CAPABILITY_ENV).pipe(
   Config.withDefault(""),
@@ -409,6 +441,34 @@ export interface CloudSyncDaemonOptions {
   readonly linkWaitInterval?: Duration.Input;
   /** Defaults to {@link DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS}; `0` means "check once". */
   readonly linkWaitAttempts?: number;
+  /**
+   * Defaults to {@link DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS}; `0` makes an `unauthorized`
+   * stop terminal on the first answer, the way the web runtime treats it.
+   */
+  readonly unauthorizedRestarts?: number;
+}
+
+/**
+ * Why the engine stopped, and whether starting it again could change anything.
+ *
+ * `engine.run` does not fail on a transport error — it records the reason on its published state
+ * and returns — so the answer has to be read back off {@link SyncEngine.state} rather than caught.
+ */
+interface CloudSyncEngineStop {
+  readonly retryable: boolean;
+  readonly error: SyncTransportError | null;
+}
+
+/**
+ * Whether another run could answer differently, from the transport reason the engine ended on.
+ *
+ * The same split the web runtime makes (`apps/web/src/cloud/syncRuntime.ts`): `offline` and
+ * `transport` are the pipe, and the pipe changes. `unauthorized` and `upgrade-required` are
+ * verdicts about this environment or this build, and a timer cannot argue with either. No error at
+ * all is the ordinary "the subscription ended" stop this loop exists for.
+ */
+export function isRetryableSyncStop(error: SyncTransportError | null): boolean {
+  return error === null || error.reason === "offline" || error.reason === "transport";
 }
 
 /**
@@ -478,6 +538,10 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
   const restartDelay = options.restartDelay ?? DEFAULT_SYNC_DAEMON_RESTART_DELAY;
   const linkWaitInterval = options.linkWaitInterval ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL;
   const linkWaitAttempts = options.linkWaitAttempts ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS;
+  const unauthorizedRestarts = Math.max(
+    0,
+    options.unauthorizedRestarts ?? DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS,
+  );
 
   const daemon = Effect.gen(function* () {
     // Everything below the activation boundary, because everything below it can be written by the
@@ -533,33 +597,101 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
       convexUrl: settings.convexUrl,
     });
 
-    yield* engine.run.pipe(
+    /**
+     * One run of the engine, to a stop, with the reason it stopped.
+     *
+     * `run` returns *normally* when the head subscription fails — it records the transport reason
+     * as a phase and ends — so the reason lives on the engine's state, not in an error channel.
+     */
+    const runEngine = engine.run.pipe(
+      Effect.andThen(SubscriptionRef.get(engine.state)),
+      Effect.map(
+        ({ lastError }) =>
+          ({
+            retryable: isRetryableSyncStop(lastError),
+            error: lastError,
+          }) satisfies CloudSyncEngineStop,
+      ),
       Effect.catchCause((cause) =>
         // Interruption is the scope closing and has to pass through. Everything else — the store
         // failure `run` declares, and any defect raised under it — is a warning and another turn
         // of the loop, because a fiber that dies here is cloud sync gone for the process lifetime
-        // with nothing in the log to say so.
+        // with nothing in the log to say so. Neither is a verdict from the deployment, so both are
+        // retryable: the local replica is what broke, and it can come back.
         Cause.hasInterrupts(cause)
           ? Effect.failCause(cause)
           : Effect.logWarning("Cloud sync engine stopped; restarting", {
               companyId: settings.companyId,
               cause,
-            }),
+            }).pipe(Effect.as({ retryable: true, error: null } satisfies CloudSyncEngineStop)),
       ),
+    );
+
+    const refusals = yield* Ref.make(0);
+
+    /**
+     * One turn of the supervisor: run the engine, then decide whether there is any point running
+     * it again. `true` schedules another turn; `false` ends the daemon for the life of the process.
+     *
+     * The unlink check comes first and is unchanged: an unlink makes the token exchange fail
+     * `unauthorized` before a request leaves the process, and "this environment is no longer
+     * linked" is the accurate thing to tell an operator about that, not "the cloud refused us".
+     *
+     * After it, a stop the transport classified as terminal ends the daemon rather than being
+     * re-tried every restart interval until the process dies — which would hide the one thing
+     * the operator needs to see behind a log line repeated forever, and would keep asking a
+     * deployment that answered `upgrade-required` a question it has already answered.
+     * `unauthorized` gets a bounded budget first; see
+     * {@link DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS} for why the server differs from the web
+     * runtime here.
+     */
+    const turn = Effect.gen(function* () {
+      const stop = yield* runEngine;
+
       // The link is re-read between runs, so an unlink ends the daemon instead of leaving it to
       // retry forever against a cloud this environment left.
-      Effect.andThen(readCloudSyncLink(secrets)),
-      Effect.tap((current) =>
-        current === null
-          ? Effect.logWarning("Cloud sync stopped: this environment is no longer linked", {
-              companyId: settings.companyId,
-            })
-          : Effect.void,
-      ),
-      Effect.repeat({
-        schedule: Schedule.spaced(restartDelay),
-        while: (current) => current !== null,
-      }),
+      const current = yield* readCloudSyncLink(secrets);
+      if (current === null) {
+        yield* Effect.logWarning("Cloud sync stopped: this environment is no longer linked", {
+          companyId: settings.companyId,
+        });
+        return false;
+      }
+
+      if (stop.retryable) {
+        // A run that ended on the pipe rather than on a verdict clears the refusal budget: the
+        // next `unauthorized` is a new episode, not the continuation of an old one.
+        yield* Ref.set(refusals, 0);
+        return true;
+      }
+
+      if (stop.error?.reason === "unauthorized") {
+        const attempt = yield* Ref.updateAndGet(refusals, (count) => count + 1);
+        if (attempt <= unauthorizedRestarts) {
+          yield* Effect.logWarning("Cloud sync was refused; retrying with a fresh service token", {
+            companyId: settings.companyId,
+            attempt,
+            of: unauthorizedRestarts,
+            reason: stop.error.reason,
+            message: stop.error.message,
+          });
+          return true;
+        }
+      }
+
+      yield* Effect.logWarning(
+        "Cloud sync stopped and will not restart; re-link this environment or update this server",
+        {
+          companyId: settings.companyId,
+          reason: stop.error?.reason,
+          message: stop.error?.message,
+        },
+      );
+      return false;
+    });
+
+    yield* turn.pipe(
+      Effect.repeat({ schedule: Schedule.spaced(restartDelay), while: (again) => again }),
       Effect.asVoid,
     );
   });

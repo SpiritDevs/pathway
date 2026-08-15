@@ -6,9 +6,10 @@
  * the SQL dialect the adapter emits. Fidelity limits, deliberately accepted:
  *
  * - Only the statement shapes the adapter produces are understood (`CREATE TABLE [IF NOT EXISTS]`,
- *   `CREATE INDEX`, `INSERT [OR REPLACE] INTO ... VALUES`, the one `ON CONFLICT ... MAX` upsert,
- *   `DELETE ... WHERE` on equality, `SELECT ... WHERE company_id = ? [ORDER BY ...]`, and the two
- *   migration-table queries). Anything else throws, which doubles as a canary for new SQL.
+ *   `CREATE INDEX`, `ALTER TABLE ... ADD COLUMN`, `INSERT [OR REPLACE] INTO ... VALUES`, the one
+ *   `ON CONFLICT ... MAX` upsert, `DELETE ... WHERE` on equality,
+ *   `SELECT ... WHERE company_id = ? [ORDER BY ...]`, and the two migration-table queries).
+ *   Anything else throws, which doubles as a canary for new SQL.
  * - Primary keys come from a per-table registry rather than the DDL, and `rowid` order is array
  *   order with replace-moves-to-end — the observable behavior the adapter relies on.
  * - "Reopen" is a second `makeSqliteSyncStore` over the same fake; a real close-and-reopen of a
@@ -122,6 +123,15 @@ const makeFakeSqliteExecutor = (): FakeSqliteDatabase => {
       return [];
     }
     if (/^CREATE INDEX /.test(sql)) return [];
+
+    const alter = /^ALTER TABLE (\w+) ADD COLUMN (\w+)/.exec(sql);
+    if (alter !== null) {
+      // Columns are implicit in the fake — a row is a record — so adding one is only an existence
+      // check on the table. Rows written before it have no such key, and the SELECT projection
+      // below reads a missing key back as NULL, which is what SQLite does with a fresh column.
+      requireTable(alter[1] ?? "");
+      return [];
+    }
 
     // The single ON CONFLICT statement the adapter emits: the monotonic high-water upsert.
     if (/^INSERT INTO cloud_sync_local_sequences .* ON CONFLICT/.test(sql)) {
@@ -239,6 +249,13 @@ const makeFakeSqliteExecutor = (): FakeSqliteDatabase => {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * Every migration the adapter owns, in order — what the bookkeeping table must hold after any
+ * number of opens. Restated here rather than imported so a migration added without a thought about
+ * reopening has to be acknowledged in a test.
+ */
+const APPLIED_MIGRATIONS = [{ version: 1 }, { version: 2 }];
 
 const COMPANY_ID = CompanyId.make("company-sqlite");
 const OTHER_COMPANY_ID = CompanyId.make("company-other");
@@ -519,6 +536,56 @@ describe("SqliteSyncStore", () => {
     }),
   );
 
+  it.effect("keeps an outbox row's enqueue stamp, and reads a row written without one", () =>
+    Effect.gen(function* () {
+      const { executor } = makeFakeSqliteExecutor();
+      const store = yield* openStore(executor);
+      const stamped = envelope({ id: "op-stamped", sequence: 1 });
+
+      yield* store.commit(COMPANY_ID, {
+        upsertOutbox: [{ envelope: stamped, status: { _tag: "Pending" }, occurredAt: 1_700_000 }],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+      // What the previous schema left behind: the migration adds the column, but no build that
+      // wrote this row ever filled it. Refusing it would throw away unsent work over a timestamp.
+      yield* writeRaw(executor, "cloud_sync_outbox", {
+        company_id: COMPANY_ID,
+        operation_id: "op-unstamped",
+        local_sequence: 2,
+        envelope: storedEnvelope(envelope({ id: "op-unstamped", sequence: 2 })),
+        status_tag: "Pending",
+        acknowledged_version: null,
+      });
+
+      // Read through a second open, so the value survives the round trip rather than a live cache.
+      const reopened = yield* openStore(executor);
+      const state = yield* reopened.read(COMPANY_ID);
+      expect(state.quarantined).toEqual([]);
+      expect(
+        state.outbox.map((entry) => [entry.envelope.operationId, entry.occurredAt] as const),
+      ).toEqual([
+        ["op-stamped", 1_700_000],
+        ["op-unstamped", undefined],
+      ]);
+
+      // Acknowledging rewrites the row; the stamp is not a casualty of the status change.
+      yield* reopened.commit(COMPANY_ID, {
+        upsertOutbox: [
+          {
+            envelope: stamped,
+            status: { _tag: "Acknowledged", version: CompanyVersion.make(4) },
+            occurredAt: 1_700_000,
+          },
+        ],
+      });
+      expect((yield* reopened.read(COMPANY_ID)).outbox[0]).toEqual({
+        envelope: stamped,
+        status: { _tag: "Acknowledged", version: CompanyVersion.make(4) },
+        occurredAt: 1_700_000,
+      });
+    }),
+  );
+
   it.effect("an outbox status tag this build does not know never reads as pending", () =>
     Effect.gen(function* () {
       const { executor } = makeFakeSqliteExecutor();
@@ -630,7 +697,7 @@ describe("SqliteSyncStore", () => {
         "SELECT version FROM cloud_sync_store_migrations ORDER BY version",
         [],
       );
-      expect(versions).toEqual([{ version: 1 }]);
+      expect(versions).toEqual(APPLIED_MIGRATIONS);
     }),
   );
 
@@ -677,7 +744,7 @@ describe("SqliteSyncStore", () => {
       expect(stored.entities.map((row) => row.entityId)).toEqual(["e-raced"]);
       expect(
         yield* base.all("SELECT version FROM cloud_sync_store_migrations ORDER BY version", []),
-      ).toEqual([{ version: 1 }]);
+      ).toEqual(APPLIED_MIGRATIONS);
     }),
   );
 

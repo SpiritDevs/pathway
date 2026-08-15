@@ -22,9 +22,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CloudSyncCapability } from "./capability.ts";
+import { SYNC_DOCUMENT_SCHEMA_VERSION } from "./document.ts";
 import {
   clampSyncBound,
   makeSyncEngine,
+  SYNC_BOOTSTRAP_MAX_ATTEMPTS,
   SYNC_RETRY_MIN_DELAY,
   type SyncEngineState,
 } from "./engine.ts";
@@ -431,6 +433,175 @@ describe("SyncEngine", () => {
         expect(confirmedNote(state, NOTE_B)?.title).toBe("B");
         expect(state.cursor).toBe((yield* harness.server.head).version);
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("starts the seed over when the authorization epoch moves between bootstrap pages", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const cursors = yield* Ref.make<ReadonlyArray<string | null>>([]);
+      const revoked = yield* Ref.make(false);
+      // Access to note A is taken away between page one and page two of the very first seed. Each
+      // page is filtered on its own, and the bootstrap cursor is pagination state that carries no
+      // epoch, so page one holds a row chosen under permissions the actor no longer has.
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        bootstrap: (input) =>
+          Effect.gen(function* () {
+            yield* Ref.update(cursors, (seen) => [...seen, input.cursor]);
+            const page = yield* harness.server.transport.bootstrap(input);
+            if (!(yield* Ref.get(revoked))) {
+              yield* Ref.set(revoked, true);
+              yield* harness.server.setVisibility((note) => note.id !== NOTE_A);
+              yield* harness.server.setEpoch(AuthorizationEpoch.make(1));
+            }
+            return page;
+          }),
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "A", body: "" }),
+          operationId("op-remote-a"),
+        );
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_B, title: "B", body: "" }),
+          operationId("op-remote-b"),
+        );
+
+        const engine = yield* openEngine("client-a", { pageSize: 1 });
+        const receipt = yield* engine.sync;
+
+        expect(receipt.outcome).toBe("bootstrapped");
+        expect(receipt.authorizationEpoch).toBe(1);
+        // Only what the final epoch delivered survives. Keeping page one would have left a row the
+        // actor cannot read under a checkpoint claiming the new epoch, which every later drain
+        // would then agree with — the row would never be purged.
+        const state = yield* SubscriptionRef.get(engine.state);
+        expect(confirmedNote(state, NOTE_A)).toBeNull();
+        expect(confirmedNote(state, NOTE_B)?.title).toBe("B");
+        const stored = yield* harness.store.snapshot(COMPANY_ID);
+        expect(stored.entities.map((entity) => entity.entityId)).toEqual([NOTE_B]);
+        expect(stored.checkpoint?.authorizationEpoch).toBe(1);
+        expect(stored.checkpoint?.bootstrapped).toBe(true);
+        // The restart went back to the first page rather than resuming the abandoned pagination.
+        expect(yield* Ref.get(cursors)).toEqual([null, "1", null]);
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("shows nothing from a seed that was interrupted before it finished", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      // What a crash between two bootstrap pages leaves on disk: page one's rows, under a
+      // checkpoint that says the snapshot is not whole. Half a seed is not a replica — it may be
+      // half of two, filtered under permissions that no longer hold — so it must not be shown.
+      yield* harness.store.service.commit(COMPANY_ID, {
+        resetEntities: true,
+        upsertEntities: [
+          {
+            entityKind: "issue",
+            entityId: NOTE_A,
+            version: CompanyVersion.make(0),
+            payload: { id: NOTE_A, title: "A", body: "", tags: [], orderKey: "a0" },
+          },
+        ],
+        checkpoint: {
+          schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+          companyId: COMPANY_ID,
+          cursor: CompanyVersion.make(0),
+          authorizationEpoch: AuthorizationEpoch.make(0),
+          bootstrapped: false,
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-a");
+        const cold = yield* SubscriptionRef.get(engine.state);
+        expect(cold.bootstrapped).toBe(false);
+        expect(cold.confirmed.size).toBe(0);
+        expect(cold.view.size).toBe(0);
+
+        // The seed that follows is the only thing that puts rows back, and it puts back the
+        // server's — the abandoned row is not among them.
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_B, title: "B", body: "" }),
+          operationId("op-remote-b"),
+        );
+        expect((yield* engine.sync).outcome).toBe("bootstrapped");
+        const seeded = yield* SubscriptionRef.get(engine.state);
+        expect(confirmedNote(seeded, NOTE_A)).toBeNull();
+        expect(confirmedNote(seeded, NOTE_B)?.title).toBe("B");
+        const stored = yield* harness.store.snapshot(COMPANY_ID);
+        expect(stored.entities.map((row) => row.entityId)).toEqual([NOTE_B]);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("gives up on a bootstrap whose epoch keeps moving, and keeps nothing from it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const calls = yield* Ref.make(0);
+      const flapping = yield* Ref.make(true);
+      // A deployment whose epoch moves under every page: no attempt can ever agree with itself, so
+      // restarting without a cap would spin here forever with the cycle lock held.
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        bootstrap: (input) =>
+          Effect.gen(function* () {
+            yield* Ref.update(calls, (count) => count + 1);
+            const page = yield* harness.server.transport.bootstrap(input);
+            if ((yield* Ref.get(flapping)) && !page.isDone) {
+              yield* harness.server.setEpoch(AuthorizationEpoch.make(page.authorizationEpoch + 1));
+            }
+            return page;
+          }),
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "A", body: "" }),
+          operationId("op-remote-a"),
+        );
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_B, title: "B", body: "" }),
+          operationId("op-remote-b"),
+        );
+
+        const engine = yield* openEngine("client-a", { pageSize: 1 });
+        const receipt = yield* engine.sync;
+
+        // Reported as retryable transport trouble, which is what the engine's own backoff owns.
+        expect(receipt.outcome).toBe("offline");
+        expect(receipt.error?.reason).toBe("transport");
+        expect(receipt.error?.message).toContain("authorization epoch changed");
+        // Two pages per attempt, and no attempt beyond the cap.
+        expect(yield* Ref.get(calls)).toBe(SYNC_BOOTSTRAP_MAX_ATTEMPTS * 2);
+
+        const abandoned = yield* SubscriptionRef.get(engine.state);
+        expect(abandoned.confirmed.size).toBe(0);
+        expect(abandoned.presentation.status).toBe("offline");
+        // The half-seeds are gone rather than left behind as the mixed-epoch replica this path
+        // exists to prevent, and the checkpoint says so, so the next cycle seeds again.
+        const stored = yield* harness.store.snapshot(COMPANY_ID);
+        expect(stored.entities).toEqual([]);
+        expect(stored.checkpoint?.bootstrapped).toBe(false);
+
+        yield* Ref.set(flapping, false);
+        const settled = yield* engine.sync;
+        expect(settled.outcome).toBe("bootstrapped");
+        const live = yield* SubscriptionRef.get(engine.state);
+        expect(confirmedNote(live, NOTE_A)?.title).toBe("A");
+        expect(confirmedNote(live, NOTE_B)?.title).toBe("B");
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
     }),
   );
 

@@ -315,26 +315,38 @@ export const makeConvexSyncTransport = Effect.fn("web.convexSyncTransport.make")
      * The one live subscription. Convex re-runs the callback on every new result; the dedupe below
      * is what keeps a re-delivery of the same head (a reconnect replays the current value) from
      * waking the engine for nothing.
+     *
+     * The queue behind the callback is a *sliding buffer of one*, because only the newest head is
+     * information: every consumer of this stream reacts by syncing up to the current head, so a
+     * stale head can only produce a redundant cycle. The default unbounded buffer would grow one
+     * entry per backend write while the consumer is busy — a long retry, a slow bootstrap page —
+     * and then make the engine replay a full cycle per accumulated head after it recovers.
+     * Coalescing to the latest bounds both the memory and the catch-up work.
+     *
+     * `changesWith` still sits on top: sliding drops *older* heads, while the dedupe drops a
+     * *repeat* of the head already delivered, which is what a reconnect replay looks like.
      */
     latestVersion: (input) =>
-      Stream.callback<SyncLatestVersionResponse, SyncTransportError>((queue) =>
-        Effect.gen(function* () {
-          const unsubscribe = client.onUpdate(
-            SYNC_FUNCTION_REFERENCES.latestVersion,
-            convexArgs(input),
-            (value) => {
-              Queue.offerUnsafe(queue, value as SyncLatestVersionResponse);
-            },
-            (error) => {
-              Queue.failCauseUnsafe(queue, Cause.fail(classifyConvexSyncTransportError(error)));
-            },
-          );
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              unsubscribe();
-            }),
-          );
-        }),
+      Stream.callback<SyncLatestVersionResponse, SyncTransportError>(
+        (queue) =>
+          Effect.gen(function* () {
+            const unsubscribe = client.onUpdate(
+              SYNC_FUNCTION_REFERENCES.latestVersion,
+              convexArgs(input),
+              (value) => {
+                Queue.offerUnsafe(queue, value as SyncLatestVersionResponse);
+              },
+              (error) => {
+                Queue.failCauseUnsafe(queue, Cause.fail(classifyConvexSyncTransportError(error)));
+              },
+            );
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                unsubscribe();
+              }),
+            );
+          }),
+        { bufferSize: 1, strategy: "sliding" },
       ).pipe(
         Stream.changesWith(
           (left, right) =>

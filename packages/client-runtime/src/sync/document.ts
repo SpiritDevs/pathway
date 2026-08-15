@@ -61,6 +61,22 @@ export type StoredOutboxStatus = typeof StoredOutboxStatus.Type;
 export const StoredOutboxEntry = Schema.Struct({
   envelope: SyncOperationEnvelope,
   status: StoredOutboxStatus,
+  /**
+   * When the user made this change, in epoch milliseconds, stamped once when the operation was
+   * enqueued and never re-read.
+   *
+   * It is local bookkeeping, not protocol: it stays off {@link SyncOperationEnvelope} because
+   * Convex stamps the authoritative `createdAt`/`updatedAt` itself and would refuse an argument it
+   * never declared. What it buys is a deterministic overlay — the reducer replays this value
+   * instead of reading a wall clock on every recompute, so a pending offline write keeps one
+   * timestamp across retries and republishes instead of drifting up an activity-sorted list.
+   *
+   * Optional, and absent on every row written before the field existed. Those rows decode
+   * unchanged (the document schema version is deliberately *not* bumped, which would have thrown
+   * the whole replica away) and fall back to the adapter's own clock, which is exactly the
+   * behaviour they were written under.
+   */
+  occurredAt: Schema.optional(Schema.Number),
 });
 export type StoredOutboxEntry = typeof StoredOutboxEntry.Type;
 

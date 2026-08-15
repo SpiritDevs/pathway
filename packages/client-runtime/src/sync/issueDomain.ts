@@ -17,9 +17,10 @@
  * - **No cross-entity effects.** `apply` sees exactly one entity, so a status delete cannot
  *   reassign the issues that pointed at it and a team change cannot drop the team-scoped labels it
  *   invalidates. Those land when the server's changes do; each case below says so.
- * - **No clock and no company scope.** Timestamps come from an injected `now` so replaying the
- *   overlay is deterministic, and payload `companyId` is dropped because one engine is one
- *   company — an optimistic row would otherwise have to invent it.
+ * - **No clock and no company scope.** Timestamps come from the stamp the engine took when the
+ *   operation was enqueued (falling back to an injected `now`), so replaying the overlay is
+ *   deterministic however many times it runs, and payload `companyId` is dropped because one
+ *   engine is one company — an optimistic row would otherwise have to invent it.
  *
  * @module sync/issueDomain
  */
@@ -692,12 +693,12 @@ export function defaultIssueSortOrder(keyNumber: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Timestamp an optimistic row carries when the host supplied no clock.
+ * Timestamp an optimistic row carries when neither the outbox nor the host supplied one.
  *
- * The overlay is recomputed on every publish, so a wall clock read inside `apply` would give the
- * same pending row a different `createdAt` on each render. A host that shows the timestamp of an
- * unsent write passes its own `now`; everything else converges on the server's value as soon as
- * the operation is accepted.
+ * The engine stamps every operation it enqueues and hands that value back as `occurredAt` on each
+ * recompute, so the clock below is only reached by an operation that never went through an outbox
+ * this build wrote: a row persisted before the stamp existed, or a direct `apply` call. Whatever
+ * it produces, the row converges on the server's value as soon as the operation is accepted.
  */
 export const ISSUE_SYNC_PENDING_TIMESTAMP = 0;
 
@@ -719,7 +720,10 @@ export interface IssueSyncAdapterOptions {
    * ownership — which Convex re-derives from the token before it accepts anything.
    */
   readonly actor?: SyncActor | null;
-  /** Epoch-millisecond clock for optimistic rows; see {@link ISSUE_SYNC_PENDING_TIMESTAMP}. */
+  /**
+   * Epoch-millisecond fallback clock, read only when the engine supplied no enqueue-time stamp;
+   * see {@link ISSUE_SYNC_PENDING_TIMESTAMP}.
+   */
   readonly now?: () => number;
 }
 
@@ -768,9 +772,12 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
   const apply = (input: {
     readonly current: CloudSyncEntity | null;
     readonly operation: IssueSyncOperation;
+    readonly occurredAt?: number | undefined;
   }): SyncApplyOutcome<CloudSyncEntity> => {
     const { current, operation } = input;
-    const now = clock();
+    // The engine's enqueue-time stamp wins over the clock: this reducer runs on every overlay
+    // recompute, and a fresh reading would move a pending row's timestamps under the user.
+    const now = input.occurredAt ?? clock();
     switch (operation.kind) {
       // --- issues ---------------------------------------------------------
       case "issue.create": {

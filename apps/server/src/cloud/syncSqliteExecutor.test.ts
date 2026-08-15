@@ -97,7 +97,9 @@ layer("syncSqliteExecutor", (it) => {
         checkpoint: checkpoint({ companyId, cursor: 9 }),
         upsertEntities: [entity({ id: "e-1", version: 8 }), entity({ id: "e-2", version: 9 })],
         upsertOutbox: [
-          { envelope: pending, status: { _tag: "Pending" } },
+          // One row carries the enqueue stamp and one does not, which is what the `occurred_at`
+          // column has to survive: a build that writes it and rows an older build left behind.
+          { envelope: pending, status: { _tag: "Pending" }, occurredAt: 1_700_000 },
           {
             envelope: acknowledged,
             status: { _tag: "Acknowledged", version: CompanyVersion.make(9) },
@@ -118,10 +120,15 @@ layer("syncSqliteExecutor", (it) => {
         entity({ id: "e-1", version: 8 }),
         entity({ id: "e-2", version: 9 }),
       ]);
-      // The outbox comes back in local-sequence order regardless of write order.
+      // The outbox comes back in local-sequence order regardless of write order, and the stamp
+      // reads back as the number it was written as — SQL `NULL` on the row that had none.
       expect(stored.outbox).toEqual([
-        { envelope: acknowledged, status: { _tag: "Acknowledged", version: 9 } },
-        { envelope: pending, status: { _tag: "Pending" } },
+        {
+          envelope: acknowledged,
+          status: { _tag: "Acknowledged", version: 9 },
+          occurredAt: undefined,
+        },
+        { envelope: pending, status: { _tag: "Pending" }, occurredAt: 1_700_000 },
       ]);
       expect(stored.rejected).toEqual([
         { envelope: rejected, code: "permission-denied", message: "membership revoked" },
@@ -152,8 +159,10 @@ layer("syncSqliteExecutor", (it) => {
         localSequenceHighWater: LocalSequence.make(5),
       });
 
-      // Real SQLite would fail `CREATE TABLE cloud_sync_outbox` on a second run; the migration
-      // version guard is what makes this open succeed.
+      // Real SQLite would fail `CREATE TABLE cloud_sync_outbox` on a second run — and
+      // `ADD COLUMN occurred_at` with "duplicate column name" — so the migration version guard is
+      // what makes this open succeed. This is the fake-free half of the SQLite store's own reopen
+      // test: there, adding a column to a record is a no-op and cannot catch a re-run.
       const second = yield* makeSqliteSyncStore(executor);
       const stored = yield* second.service.read(companyId);
       expect(stored.outbox.map((entry) => entry.envelope.operationId)).toEqual(["op-keep"]);
@@ -163,7 +172,8 @@ layer("syncSqliteExecutor", (it) => {
         "SELECT version FROM cloud_sync_store_migrations ORDER BY version",
         [],
       );
-      expect(versions).toEqual([{ version: 1 }]);
+      // Every migration the store owns, applied exactly once across both opens.
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
     }),
   );
 

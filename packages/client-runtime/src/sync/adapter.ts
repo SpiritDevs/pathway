@@ -76,6 +76,17 @@ export interface SyncDomainAdapter<Entity, Operation> {
   readonly apply: (input: {
     readonly current: Entity | null;
     readonly operation: Operation;
+    /**
+     * Epoch milliseconds stamped when the operation was enqueued, replayed unchanged on every
+     * recompute. A domain that gives an optimistic row a timestamp must prefer this over any clock
+     * of its own: the overlay is recomputed on every publish, so reading a clock inside the
+     * reducer moves a pending row's `createdAt` on every render.
+     *
+     * Absent when the operation did not come from an outbox row this build stamped — a row
+     * persisted before the field existed, or a caller applying an operation directly — and the
+     * domain falls back to whatever it did before.
+     */
+    readonly occurredAt?: number | undefined;
   }) => SyncApplyOutcome<Entity>;
   /**
    * Optional hook for folding a confirmed change into the confirmed replica. The default is

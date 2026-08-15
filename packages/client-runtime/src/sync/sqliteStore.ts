@@ -165,6 +165,13 @@ const SQLITE_SYNC_STORE_MIGRATIONS: ReadonlyArray<SqliteSyncStoreMigration> = [
       )`,
     ],
   },
+  {
+    version: 2,
+    // The enqueue-time stamp `StoredOutboxEntry.occurredAt` carries. Nullable on purpose: rows
+    // written before this migration have no answer, and inventing one would date a user's unsent
+    // work to whenever they happened to upgrade.
+    statements: [`ALTER TABLE cloud_sync_outbox ADD COLUMN occurred_at INTEGER`],
+  },
 ];
 
 const migrateSqliteSyncStore = Effect.fn("migrateSqliteSyncStore")(function* (
@@ -206,6 +213,11 @@ function columnNumber(value: SqliteSyncResultValue | undefined): number {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
   throw new Error(`expected a numeric column, got ${typeof value}`);
+}
+
+/** A nullable numeric column: SQL `NULL` and a column this build's schema predates both read as absent. */
+function columnOptionalNumber(value: SqliteSyncResultValue | undefined): number | undefined {
+  return value === null || value === undefined ? undefined : columnNumber(value);
 }
 
 function columnString(value: SqliteSyncResultValue | undefined): string {
@@ -282,7 +294,11 @@ function decodeEntity(row: SqliteSyncRow): StoredSyncEntity | null {
 }
 
 function decodeOutboxRow(row: SqliteSyncRow): StoredOutboxEntry | null {
-  return decoded(() => ({ envelope: decodeEnvelope(row["envelope"]), status: decodeStatus(row) }));
+  return decoded(() => ({
+    envelope: decodeEnvelope(row["envelope"]),
+    status: decodeStatus(row),
+    occurredAt: columnOptionalNumber(row["occurred_at"]),
+  }));
 }
 
 function decodeRejectedRow(row: SqliteSyncRow): StoredSyncRejection | null {
@@ -480,7 +496,8 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
           // `operation_id` (and the outbox's `local_sequence`) are selected for salvage, not for
           // the happy path: they are what names a row whose envelope blob is unreadable.
           const outbox = yield* byCompany(
-            `SELECT operation_id, local_sequence, envelope, status_tag, acknowledged_version
+            `SELECT operation_id, local_sequence, envelope, status_tag, acknowledged_version,
+                occurred_at
               FROM cloud_sync_outbox WHERE company_id = ? ORDER BY local_sequence`,
           );
           const rejected = yield* byCompany(
@@ -611,8 +628,9 @@ function commitStatements(
     const [statusTag, acknowledgedVersion] = statusColumns(entry.status);
     statements.push([
       `INSERT OR REPLACE INTO cloud_sync_outbox
-        (company_id, operation_id, local_sequence, envelope, status_tag, acknowledged_version)
-        VALUES (?, ?, ?, ?, ?, ?)`,
+        (company_id, operation_id, local_sequence, envelope, status_tag, acknowledged_version,
+          occurred_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         companyId,
         entry.envelope.operationId,
@@ -620,6 +638,7 @@ function commitStatements(
         encodeJson(entry.envelope),
         statusTag,
         acknowledgedVersion,
+        entry.occurredAt ?? null,
       ],
     ]);
   }
