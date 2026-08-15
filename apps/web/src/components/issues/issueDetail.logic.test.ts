@@ -173,6 +173,23 @@ describe("issueAssigneeOptions", () => {
   it("gives unassigned the empty value a radio group can carry", () => {
     expect(options[0]?.value).toBe(ISSUE_ASSIGNEE_NONE_VALUE);
   });
+
+  it("uses the signed-in membership for You and offers active teammates by name", () => {
+    const memberOptions = issueAssigneeOptions(
+      [],
+      [
+        { membershipId: MEMBER_A, label: "Ada" },
+        { membershipId: MEMBER_B, label: "Grace" },
+      ],
+      MEMBER_A,
+    );
+    expect(memberOptions.map((option) => option.label)).toEqual(["Unassigned", "You", "Grace"]);
+    expect(memberOptions[1]?.assignee).toEqual({ kind: "member", membershipId: MEMBER_A });
+    expect(issueAssigneeOptions([], [], MEMBER_A)[1]?.assignee).toEqual({
+      kind: "member",
+      membershipId: MEMBER_A,
+    });
+  });
 });
 
 describe("sameIssueAssignee", () => {
@@ -292,7 +309,7 @@ describe("issueActorLabel", () => {
     expect(issueActorLabel({ kind: "member", membershipId: MEMBER_A }, naming)).toBe("Ada");
     // Never a bare "Member": two teammates sharing one line is two people losing their words.
     expect(issueActorLabel({ kind: "member", membershipId: MEMBER_B }, naming)).toBe(
-      "membership-b",
+      "Unknown member",
     );
   });
 
@@ -399,7 +416,7 @@ describe("describeIssueEvent", () => {
           after: "member:membership-b",
         }),
       ).summary,
-    ).toBe("assigned this to membership-b");
+    ).toBe("assigned this to Unknown member");
   });
 
   it("names a project by title and falls back to the raw id", () => {

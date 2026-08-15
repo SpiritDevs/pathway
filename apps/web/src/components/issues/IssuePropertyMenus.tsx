@@ -21,7 +21,6 @@ import { PlusIcon } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import {
   Menu,
   MenuCheckboxItem,
@@ -40,7 +39,8 @@ import {
   IssuePriorityIcon,
   IssueStatusDot,
 } from "./IssueGlyphs";
-import { issueAssigneeOptionValue, issueAssigneeOptions } from "./issueDetail.logic";
+import { issueAssigneeOptionValue } from "./issueDetail.logic";
+import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import {
   ISSUE_PRIORITY_LABELS,
   ISSUE_PRIORITY_ORDER,
@@ -65,8 +65,6 @@ export function IssuePropertyGuard({ children }: { children: ReactNode }) {
   );
 }
 
-const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
-
 /** Shared assignment menu for triage and other property surfaces. */
 export function IssueAssigneeMenu({
   value,
@@ -79,6 +77,7 @@ export function IssueAssigneeMenu({
   trigger: ReactElement;
   align?: "start" | "center" | "end";
 }) {
+  const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
   const current = issueAssigneeOptionValue(value);
   return (
     <IssuePropertyGuard>
@@ -97,7 +96,11 @@ export function IssueAssigneeMenu({
               {ASSIGNEE_OPTIONS.map((option) => (
                 <MenuRadioItem closeOnClick key={option.value} value={option.value}>
                   <span className="flex min-w-0 items-center gap-2">
-                    <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                    <IssueAssigneeGlyph
+                      assignee={option.assignee}
+                      className="size-4"
+                      label={option.label}
+                    />
                     <span className="truncate">{option.label}</span>
                   </span>
                 </MenuRadioItem>

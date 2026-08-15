@@ -74,6 +74,7 @@ export function IssueGroupHeader({
 
 export interface IssueListRowProps {
   readonly issue: Issue;
+  readonly assigneeLabel?: string | undefined;
   readonly status: IssueStatus | null;
   readonly statuses: ReadonlyArray<IssueStatus>;
   readonly labels: ReadonlyArray<IssueLabel>;
@@ -108,6 +109,7 @@ export interface IssueListRowProps {
 
 function IssueListRowImpl({
   issue,
+  assigneeLabel,
   status,
   statuses,
   labels,
@@ -265,7 +267,7 @@ function IssueListRowImpl({
         </span>
       )}
 
-      <IssueAssigneeGlyph assignee={issue.assignee} className="shrink-0" />
+      <IssueAssigneeGlyph assignee={issue.assignee} className="shrink-0" label={assigneeLabel} />
     </div>
   );
 }

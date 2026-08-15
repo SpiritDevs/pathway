@@ -18,7 +18,8 @@ import {
   type StoredSyncState,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { IssueMemberActor } from "@spiritdevs/contracts";
+import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 
 import { resolveCloudSyncConfig } from "../cloud/syncDaemon.ts";
@@ -29,6 +30,43 @@ export interface IssueReplicaReader {
   readonly companyId: CompanyId | null;
   /** Null means legacy fallback; a ready replica may legitimately project to an empty domain. */
   readonly read: Effect.Effect<SyncedIssueDomainReadModel | null>;
+  /** Resolves an active cloud user without guessing when the replica is absent or incomplete. */
+  readonly memberActorForCloudUserId: (
+    cloudUserId: string,
+  ) => Effect.Effect<IssueMemberActor | null>;
+}
+
+export function issueMemberActorFromStoredReplica(
+  stored: StoredSyncState,
+  cloudUserId: string,
+): IssueMemberActor | null {
+  const checkpoint = stored.checkpoint;
+  if (
+    checkpoint === null ||
+    !checkpoint.bootstrapped ||
+    checkpoint.bootstrapGeneration !== SYNC_BOOTSTRAP_GENERATION ||
+    stored.quarantined.length > 0
+  ) {
+    return null;
+  }
+  const decoded = decodeConfirmedEntities({
+    adapter: makeIssueSyncAdapter(),
+    rows: stored.entities,
+    cursor: checkpoint.cursor,
+    authorizationEpoch: checkpoint.authorizationEpoch,
+  });
+  if (decoded.quarantined !== 0) return null;
+  for (const confirmed of decoded.replica.entities.values()) {
+    const entity = confirmed.entity;
+    if (
+      entity.entityKind === "membership" &&
+      entity.userId === cloudUserId &&
+      entity.state === "active"
+    ) {
+      return { kind: "member", membershipId: MembershipId.make(entity.id) };
+    }
+  }
+  return null;
 }
 
 /**
@@ -89,6 +127,7 @@ export function routeReplicaIssueRead<A, E, R>(input: {
 const unavailableReader: IssueReplicaReader = {
   companyId: null,
   read: Effect.succeed(null),
+  memberActorForCloudUserId: () => Effect.succeed(null),
 };
 
 /**
@@ -112,7 +151,12 @@ export const makeIssueReplicaReader = Effect.gen(function* () {
       }).pipe(Effect.as(null)),
     ),
   );
-  return { companyId, read };
+  const memberActorForCloudUserId = (cloudUserId: string) =>
+    store.service.read(companyId).pipe(
+      Effect.map((stored) => issueMemberActorFromStoredReplica(stored, cloudUserId)),
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+  return { companyId, read, memberActorForCloudUserId };
 }).pipe(
   Effect.catchCause((cause) =>
     Effect.logWarning("Failed to open the company issue replica; using legacy issue reads", {

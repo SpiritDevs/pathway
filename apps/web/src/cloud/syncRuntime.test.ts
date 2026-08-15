@@ -331,6 +331,10 @@ describe("runCloudSyncEngines", () => {
         readonly companyId: CompanyId;
         readonly phase: string | null;
       }>();
+      const publishedMemberships = yield* Queue.unbounded<{
+        readonly companyId: CompanyId;
+        readonly membershipId: MembershipId | null;
+      }>();
       const supervisor = yield* Effect.forkChild(
         runCloudSyncEngines({
           clientId: SyncClientId.make("client-1"),
@@ -338,17 +342,27 @@ describe("runCloudSyncEngines", () => {
           connect: Effect.succeed(connectionTo(transport, listings)),
           publishCompanySyncStatus: (companyId, status) =>
             Queue.offer(published, { companyId, phase: status?.phase ?? null }),
+          publishCompanyRegistryMembershipId: (companyId, membershipId) =>
+            Queue.offer(publishedMemberships, { companyId, membershipId }),
         }).pipe(Effect.provideService(SyncStore, store.service)),
         { startImmediately: true },
       );
 
       yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      expect(yield* Queue.take(publishedMemberships)).toEqual({
+        companyId: COMPANY_A,
+        membershipId: "membership-a",
+      });
       expect(yield* Queue.take(published)).toEqual({
         companyId: COMPANY_A,
         phase: "bootstrapping",
       });
 
       yield* Queue.offer(listings, cleanListing());
+      expect(yield* Queue.take(publishedMemberships)).toEqual({
+        companyId: COMPANY_A,
+        membershipId: null,
+      });
       expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, phase: null });
       yield* Fiber.interrupt(supervisor);
     }),

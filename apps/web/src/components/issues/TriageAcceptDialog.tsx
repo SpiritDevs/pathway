@@ -51,6 +51,7 @@ import {
   IssueStatusMenu,
 } from "./IssuePropertyMenus";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS } from "./issueEnrichment.logic";
+import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 import {
@@ -65,22 +66,6 @@ import {
 
 const PICKER_CLASS =
   "flex h-8 w-full items-center gap-1.5 rounded-md border border-input px-2 text-[13px] text-foreground outline-none hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring";
-
-/**
- * What the picker reads as. A teammate falls back to their membership rather than to a bare
- * "Member": the picker's whole job is saying which one of them is about to own this.
- */
-function assigneeLabel(assignee: IssueAssignee | null): string {
-  if (assignee === null) return "Unassigned";
-  switch (assignee.kind) {
-    case "user":
-      return "You";
-    case "member":
-      return assignee.membershipId;
-    case "agent":
-      return PROVIDER_CLIENT_DEFINITION_BY_VALUE[assignee.provider]?.label ?? assignee.provider;
-  }
-}
 
 export function TriageAcceptDialog({
   open,
@@ -105,6 +90,7 @@ export function TriageAcceptDialog({
   const acceptTriage = useTriageAccept();
   const investigatedIssueIds = useInvestigatedIssueIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const memberDirectory = useIssueMemberDirectory();
   const [draft, setDraft] = useState<TriageAcceptDraft>({
     statusId: null,
     projectId: null,
@@ -176,7 +162,11 @@ export function TriageAcceptDialog({
   });
   const selectedStatus = statuses.find((status) => status.id === draft.statusId) ?? null;
   const selectedProject = projects.find((project) => project.id === draft.projectId) ?? null;
-  const selectedAssigneeLabel = assigneeLabel(draft.assignee);
+  const selectedAssigneeLabel =
+    draft.assignee?.kind === "agent"
+      ? (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
+        draft.assignee.provider)
+      : issueAssigneeDisplayName(memberDirectory, draft.assignee);
   const alreadyInvestigated =
     singleIssue !== null && issueHasCompletedInvestigation(singleIssue, enrichmentRuns);
   const submitting = submittingAction !== null;
@@ -299,7 +289,11 @@ export function TriageAcceptDialog({
                 onSelect={(assignee: IssueAssignee | null) => patch({ assignee })}
                 trigger={
                   <button className={PICKER_CLASS} disabled={submitting} type="button">
-                    <IssueAssigneeGlyph assignee={draft.assignee} className="size-3.5" />
+                    <IssueAssigneeGlyph
+                      assignee={draft.assignee}
+                      className="size-3.5"
+                      label={selectedAssigneeLabel}
+                    />
                     <span
                       className={cn("truncate", draft.assignee === null && "text-muted-foreground")}
                     >

@@ -1,4 +1,5 @@
 import { IssueId, IssueStatusId, ThreadId, type Issue } from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -28,10 +29,11 @@ const issue: Issue = {
   deletedAt: null,
 };
 
-function renderRow(investigating: boolean, rowIssue: Issue = issue) {
+function renderRow(investigating: boolean, rowIssue: Issue = issue, assigneeLabel?: string) {
   return renderToStaticMarkup(
     <IssueListRow
       active={false}
+      assigneeLabel={assigneeLabel}
       childRollup={null}
       investigating={investigating}
       issue={rowIssue}
@@ -83,5 +85,19 @@ describe("IssueListRow investigation badge", () => {
     expect(html).toContain("PR #42");
     expect(html).toContain('href="https://github.com/t3dotgg/pathway/pull/42"');
     expect(html.indexOf("PR #42")).toBeGreaterThan(html.indexOf(issue.title));
+  });
+
+  it("uses the resolved member name without exposing the membership id", () => {
+    const html = renderRow(
+      false,
+      {
+        ...issue,
+        assignee: { kind: "member", membershipId: MembershipId.make("membership-departed") },
+      },
+      "Grace (departed)",
+    );
+
+    expect(html).toContain("Assigned to Grace (departed)");
+    expect(html).not.toContain("membership-departed");
   });
 });

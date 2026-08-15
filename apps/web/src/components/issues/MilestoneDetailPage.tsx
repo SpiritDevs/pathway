@@ -75,6 +75,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { IssueDetailSheet } from "./IssueDetailSheet";
 import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
+import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { MilestoneBurnUpChart } from "./MilestoneBurnUpChart";
 import { NewIssueDialog } from "./NewIssueDialog";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
@@ -180,6 +181,7 @@ function MilestoneDetailShell({ name, children }: { name: string | null; childre
 }
 
 function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
+  const memberDirectory = useIssueMemberDirectory();
   const store = useIssuesStore();
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
@@ -319,6 +321,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
       <IssueGroupHeader onToggle={toggleGroup} row={item} />
     ) : (
       <IssueListRow
+        assigneeLabel={issueAssigneeDisplayName(memberDirectory, item.issue.assignee)}
         active={detailIssueKey === item.issue.key}
         childRollup={null}
         investigating={investigatingIssueIds.has(item.issue.id)}

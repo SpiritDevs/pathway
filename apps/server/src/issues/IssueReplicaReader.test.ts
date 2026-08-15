@@ -26,7 +26,11 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { issueReadModelFromStoredReplica, routeReplicaIssueRead } from "./IssueReplicaReader.ts";
+import {
+  issueMemberActorFromStoredReplica,
+  issueReadModelFromStoredReplica,
+  routeReplicaIssueRead,
+} from "./IssueReplicaReader.ts";
 
 const COMPANY_ID = CompanyId.make("company-server-issue-reads");
 
@@ -178,6 +182,39 @@ describe("issueReadModelFromStoredReplica", () => {
         id: "issue-replica",
       }),
     ]);
+  });
+});
+
+describe("issueMemberActorFromStoredReplica", () => {
+  it("resolves only an active membership from a ready replica", () => {
+    const active = realCodecEntity("membership", {
+      id: "membership-active",
+      userId: "user-active",
+      state: "active",
+      displayNameSnapshot: "Corey",
+      emailSnapshot: "corey@example.com",
+      invitedByMembershipId: null,
+      joinedAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const left = realCodecEntity("membership", {
+      id: "membership-left",
+      userId: "user-left",
+      state: "left",
+      displayNameSnapshot: "Grace",
+      emailSnapshot: "grace@example.com",
+      invitedByMembershipId: null,
+      joinedAt: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const stored = replica({ entities: [...replica().entities, active, left] });
+    expect(issueMemberActorFromStoredReplica(stored, "user-active")).toEqual({
+      kind: "member",
+      membershipId: "membership-active",
+    });
+    expect(issueMemberActorFromStoredReplica(stored, "user-left")).toBeNull();
   });
 });
 

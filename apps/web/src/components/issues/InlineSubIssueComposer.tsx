@@ -13,7 +13,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { useCreateIssue } from "~/state/issues";
-import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -32,15 +31,14 @@ import {
   IssueStatusDot,
 } from "./IssueGlyphs";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
-import { issueAssigneeOptions, issueAssigneeOptionValue } from "./issueDetail.logic";
+import { issueAssigneeOptionValue } from "./issueDetail.logic";
+import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { IssuePriorityMenu, IssueStatusMenu } from "./IssuePropertyMenus";
 import { ISSUE_PRIORITY_LABELS, toggleIssueLabelIds } from "./issuesList.logic";
 import { subIssueCreateInput } from "./issueSubIssues.logic";
 
 const COMPOSER_CHIP_CLASS =
   "flex min-h-7 max-w-40 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring";
-
-const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
 
 function DraftAssigneeMenu({
   value,
@@ -49,6 +47,7 @@ function DraftAssigneeMenu({
   value: IssueAssignee | null;
   onSelect: (assignee: IssueAssignee | null) => void;
 }) {
+  const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
   const current = issueAssigneeOptionValue(value);
   const selected = ASSIGNEE_OPTIONS.find((option) => option.value === current);
 
@@ -57,7 +56,7 @@ function DraftAssigneeMenu({
       <MenuTrigger
         render={
           <button className={COMPOSER_CHIP_CLASS} type="button">
-            <IssueAssigneeGlyph assignee={value} className="size-3.5" />
+            <IssueAssigneeGlyph assignee={value} className="size-3.5" label={selected?.label} />
             <span className="truncate">{selected?.label ?? "Assignee"}</span>
           </button>
         }
@@ -75,7 +74,11 @@ function DraftAssigneeMenu({
             {ASSIGNEE_OPTIONS.map((option) => (
               <MenuRadioItem key={option.value} value={option.value}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                  <IssueAssigneeGlyph
+                    assignee={option.assignee}
+                    className="size-4"
+                    label={option.label}
+                  />
                   <span className="truncate">{option.label}</span>
                 </span>
               </MenuRadioItem>

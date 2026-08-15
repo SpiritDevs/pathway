@@ -38,6 +38,7 @@ import {
   issueIdsInRows,
   issueLabelSelectionState,
   issueRangeIds,
+  resolveIssuesFilterUserAssignee,
   issueSelectModeForModifiers,
   issueSortModeHint,
   issuesFilterHasValue,
@@ -453,6 +454,21 @@ describe("matchesIssuesFilter", () => {
     expect(matchesIssuesFilter(theirs, filter, TODAY)).toBe(false);
   });
 
+  it("maps the legacy user filter to the signed-in member in replica mode", () => {
+    const legacy = withIssuesFilterValues(NO_ISSUES_LIST_FILTER, "assignee", ["user"]);
+    const resolved = resolveIssuesFilterUserAssignee(legacy, "membership-a");
+    expect(resolved.assignees).toEqual(["member:membership-a"]);
+    expect(
+      matchesIssuesFilter(
+        issue("mine", {
+          assignee: { kind: "member", membershipId: MembershipId.make("membership-a") },
+        }),
+        resolved,
+        TODAY,
+      ),
+    ).toBe(true);
+  });
+
   it("buckets due dates around today", () => {
     const rows = {
       late: issue("late", { dueDate: "2026-08-11" }),
@@ -611,11 +627,11 @@ describe("buildIssuesView", () => {
       ]),
     });
 
-    // An unnamed teammate falls back to their membership, the way an agent falls back to its slug.
+    // An unnamed teammate never leaks their opaque membership id into the UI.
     expect(view.groups.map((group) => group.label)).toEqual([
       "You",
       "Ada",
-      "membership-b",
+      "Unknown member",
       "Codex",
       "Unassigned",
     ]);

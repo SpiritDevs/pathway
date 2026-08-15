@@ -41,6 +41,8 @@ import type {
   IssueRelationLabel,
   IssuesStoreStatus,
 } from "~/state/issues";
+import type { MembershipId } from "@spiritdevs/contracts/company";
+import type { IssueMemberOption } from "./issueMemberDirectory";
 import {
   ISSUE_ASSIGNEE_AGENT_PREFIX,
   ISSUE_ASSIGNEE_MEMBER_PREFIX,
@@ -94,10 +96,29 @@ export interface IssueAssigneeOption {
  */
 export function issueAssigneeOptions(
   providers: ReadonlyArray<{ readonly value: ProviderDriverKind; readonly label: string }>,
+  members: ReadonlyArray<IssueMemberOption> = [],
+  currentMembershipId: MembershipId | null = null,
 ): ReadonlyArray<IssueAssigneeOption> {
+  const humanOptions: ReadonlyArray<IssueAssigneeOption> =
+    currentMembershipId === null
+      ? [{ value: ISSUE_ASSIGNEE_USER_VALUE, label: "You", assignee: { kind: "user" } }]
+      : [
+          {
+            value: `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${currentMembershipId}`,
+            label: "You",
+            assignee: { kind: "member", membershipId: currentMembershipId } as const,
+          },
+          ...members
+            .filter((member) => member.membershipId !== currentMembershipId)
+            .map((member) => ({
+              value: `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${member.membershipId}`,
+              label: member.label,
+              assignee: { kind: "member", membershipId: member.membershipId } as const,
+            })),
+        ];
   return [
     { value: ISSUE_ASSIGNEE_NONE_VALUE, label: "Unassigned", assignee: null },
-    { value: ISSUE_ASSIGNEE_USER_VALUE, label: "You", assignee: { kind: "user" } },
+    ...humanOptions,
     ...providers.map((provider) => ({
       value: `${ISSUE_ASSIGNEE_AGENT_PREFIX}${provider.value}`,
       label: provider.label,
@@ -254,10 +275,9 @@ export function issueActorLabel(
   switch (actor.kind) {
     case "user":
       return "You";
-    // A teammate reads as a person, never as the company: the membership is the fallback name for
-    // the same reason the provider slug is an agent's, so two people never share one line.
+    // A teammate reads as a person, never as an opaque membership identifier.
     case "member":
-      return naming.memberNames?.get(actor.membershipId) ?? actor.membershipId;
+      return naming.memberNames?.get(actor.membershipId) ?? "Unknown member";
     case "agent":
       return naming.providerLabels?.get(actor.provider) ?? actor.provider;
     case "system":
@@ -282,7 +302,7 @@ function assigneeEventLabel(value: string | null, naming: IssueEventNaming): str
   }
   if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
     const membershipId = value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
-    return naming.memberNames?.get(membershipId) ?? membershipId;
+    return naming.memberNames?.get(membershipId) ?? "Unknown member";
   }
   return value;
 }

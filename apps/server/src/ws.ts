@@ -163,6 +163,22 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(() => [])),
   );
 
+export const resolveIssueConnectionActor = Effect.fn("ws.issues.resolveActor")(function* (
+  session: Pick<EnvironmentAuth.AuthenticatedSession, "subject">,
+  tracker: Pick<
+    IssueTrackerService.IssueTrackerServiceShape,
+    "linkedMemberActor" | "memberActorForCloudUserId"
+  >,
+) {
+  const member =
+    session.subject === "cloud-connect"
+      ? yield* tracker.linkedMemberActor
+      : yield* tracker.memberActorForCloudUserId(session.subject);
+  // Pairing/bootstrap subjects have no company identity. Keeping the legacy actor is intentional:
+  // inventing a membership would make audit history confidently wrong.
+  return member ?? ({ kind: "user" } as const satisfies IssueActor);
+});
+
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
@@ -506,9 +522,7 @@ const makeWsRpcLayer = (
       });
       const emailCapture = yield* EmailCapture.EmailCaptureService;
       const emailTriggers = yield* EmailTrigger.EmailTriggerService;
-      // The only actor stage 1 has. The service takes one so the stage 4 MCP toolkit can pass an
-      // agent without every handler changing shape.
-      const issueActor: IssueActor = { kind: "user" };
+      const issueActor = yield* resolveIssueConnectionActor(currentSession, issueTracker);
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,

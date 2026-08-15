@@ -36,7 +36,7 @@ import {
   TagIcon,
   XIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
@@ -80,15 +80,13 @@ import {
   issueLabelCreateName,
   nextIssueLabelColor,
 } from "./issueDetail.logic";
+import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 
 const ROW_CONTROL_CLASS =
   "flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-start text-[13px] text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring";
 
 const PLACEHOLDER_CLASS = "text-muted-foreground";
-
-/** The driver list is a module constant, so the options built from it can be one too. */
-const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
 
 function PropertyRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -106,16 +104,27 @@ function IssueAssigneeMenu({
   value: IssueAssignee | null;
   onSelect: (assignee: IssueAssignee | null) => void;
 }) {
+  const memberDirectory = useIssueMemberDirectory();
+  const ASSIGNEE_OPTIONS = useMemo(
+    () =>
+      issueAssigneeOptions(
+        PROVIDER_CLIENT_DEFINITIONS,
+        memberDirectory.assignableMembers,
+        memberDirectory.currentMembershipId,
+      ),
+    [memberDirectory.assignableMembers, memberDirectory.currentMembershipId],
+  );
   const current = issueAssigneeOptionValue(value);
   const selected = ASSIGNEE_OPTIONS.find((option) => option.value === current);
+  const selectedLabel = selected?.label ?? issueAssigneeDisplayName(memberDirectory, value);
   return (
     <Menu>
       <MenuTrigger
         render={
           <button className={ROW_CONTROL_CLASS} type="button">
-            <IssueAssigneeGlyph assignee={value} className="size-4" />
+            <IssueAssigneeGlyph assignee={value} className="size-4" label={selectedLabel} />
             <span className={cn("truncate", value === null && PLACEHOLDER_CLASS)}>
-              {selected?.label ?? "Unassigned"}
+              {selectedLabel}
             </span>
           </button>
         }
@@ -133,7 +142,11 @@ function IssueAssigneeMenu({
             {ASSIGNEE_OPTIONS.map((option) => (
               <MenuRadioItem key={option.value} value={option.value}>
                 <span className="flex min-w-0 items-center gap-2">
-                  <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                  <IssueAssigneeGlyph
+                    assignee={option.assignee}
+                    className="size-4"
+                    label={option.label}
+                  />
                   <span className="truncate">{option.label}</span>
                 </span>
               </MenuRadioItem>

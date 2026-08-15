@@ -89,6 +89,7 @@ import {
 import { IssueLabelDot, IssueProgressRing } from "./IssueGlyphs";
 import { NewCycleDialog } from "./NewCycleDialog";
 import {
+  ISSUE_ASSIGNEE_MEMBER_PREFIX,
   ISSUE_ASSIGNEE_USER_VALUE,
   NO_ISSUES_LIST_FILTER,
   applyIssuesFilter,
@@ -111,11 +112,13 @@ import {
   summarizeIssueViewConfig,
 } from "./issuesViews.logic";
 import { isMilestonesPathname, milestoneIdInPathname } from "./milestonesOverview.logic";
+import { useIssueMemberDirectory } from "./issueMemberDirectory";
 
 /** A stable empty array: the milestone rows are memo-free, but a fresh `[]` per render is noise. */
 const NO_MILESTONE_IDS: ReadonlyArray<string> = [];
 
 export function IssuesSidebar() {
+  const memberDirectory = useIssueMemberDirectory();
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const rawSearch = useLocation({ select: (location) => location.search });
@@ -145,6 +148,10 @@ export function IssuesSidebar() {
   const today = useMemo(() => todayIssueDate(), []);
 
   const filter = issuesSearchFilter(search);
+  const currentMemberAssigneeValue =
+    memberDirectory.currentMembershipId === null
+      ? null
+      : `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${memberDirectory.currentMembershipId}`;
 
   /**
    * `triage` is cleared unless the patch names it: every row here is a lens on the *list*, and
@@ -193,7 +200,13 @@ export function IssuesSidebar() {
   // Which row lights up is a question about the params, not about what was last pressed: edit one
   // chip on an applied view and it stops being that view, which is what the sidebar should say.
   const activeView =
-    onIssues && !onTriage ? findIssueViewForConfig(views, issuesSearchViewConfig(search)) : null;
+    onIssues && !onTriage
+      ? findIssueViewForConfig(
+          views,
+          issuesSearchViewConfig(search, memberDirectory.currentMembershipId),
+          memberDirectory.currentMembershipId,
+        )
+      : null;
 
   const writeView = (title: string, run: () => Promise<AtomCommandResult<unknown, unknown>>) => {
     void (async () => {
@@ -246,7 +259,9 @@ export function IssuesSidebar() {
                 isActive={
                   onIssues &&
                   !onTriage &&
-                  issuesFilterHasValue(filter, "assignee", ISSUE_ASSIGNEE_USER_VALUE)
+                  (issuesFilterHasValue(filter, "assignee", ISSUE_ASSIGNEE_USER_VALUE) ||
+                    (currentMemberAssigneeValue !== null &&
+                      issuesFilterHasValue(filter, "assignee", currentMemberAssigneeValue)))
                 }
                 onClick={() => applyFilter("assignee", ISSUE_ASSIGNEE_USER_VALUE)}
               >

@@ -41,6 +41,7 @@ import {
   ThreadId,
   isProviderDriverKind,
 } from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 
 import {
@@ -164,6 +165,12 @@ export const parseIssueAssignee = (
   if (lowered === "user" || lowered === "me" || lowered === "human") return { kind: "user" };
   if (lowered === "agent" || lowered === "self" || lowered === "you") {
     return { kind: "agent", provider: self };
+  }
+  if (lowered.startsWith("member:")) {
+    const membershipId = token.slice("member:".length).trim();
+    return membershipId.length === 0
+      ? undefined
+      : { kind: "member", membershipId: MembershipId.make(membershipId) };
   }
   const slug = lowered.startsWith("agent:") ? token.slice("agent:".length).trim() : token;
   if (!isProviderDriverKind(slug)) return undefined;
@@ -332,20 +339,30 @@ const resolveCycle = (
       );
 };
 
-const resolveAssignee = (
+export const resolveIssueAssignee = (
+  tracker: Pick<IssueTrackerServiceShape, "replicaRoutable" | "linkedMemberActor">,
   value: string,
   self: ProviderDriverKind,
-): Effect.Effect<IssueAssignee | null, IssueTrackerError> => {
-  const parsed = parseIssueAssignee(value, self);
-  return parsed === undefined
-    ? Effect.fail(
-        invalid(
-          `Cannot read "${value.trim()}" as an assignee. Use "user" for the human on this environment, "agent" for yourself, "agent:<driver>" for another provider such as "agent:codex", or "none" to leave it unassigned.`,
-          value.trim(),
-        ),
-      )
-    : Effect.succeed(parsed);
-};
+): Effect.Effect<IssueAssignee | null, IssueTrackerError> =>
+  Effect.gen(function* () {
+    const parsed = parseIssueAssignee(value, self);
+    if (parsed === undefined) {
+      return yield* invalid(
+        `Cannot read "${value.trim()}" as an assignee. Use "user" for the bound company member, "member:<membership-id>" for an explicit member, "agent" for yourself, "agent:<driver>" for another provider such as "agent:codex", or "none" to leave it unassigned.`,
+        value.trim(),
+      );
+    }
+    if (parsed?.kind !== "user") return parsed;
+    if (!(yield* tracker.replicaRoutable)) return parsed;
+    const member = yield* tracker.linkedMemberActor;
+    return (
+      member ??
+      (yield* invalid(
+        'This environment has no active bound company membership. Pass an explicit "member:<membership-id>" assignee.',
+        value.trim(),
+      ))
+    );
+  });
 
 /**
  * Names to label ids, minting the ones that do not exist yet. Labels are flat and
@@ -497,6 +514,7 @@ const byRecency = (left: Issue, right: Issue): number =>
 const handlers = {
   issues_list: (input) =>
     Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
       const invocation = yield* McpInvocationContext.McpInvocationContext;
       const index = yield* readIndex();
       const status = input.status === undefined ? null : yield* resolveStatus(index, input.status);
@@ -505,7 +523,7 @@ const handlers = {
       const assignee =
         input.assignee === undefined
           ? undefined
-          : yield* resolveAssignee(input.assignee, invocation.providerDriverKind);
+          : yield* resolveIssueAssignee(tracker, input.assignee, invocation.providerDriverKind);
       let labelId: IssueLabelId | null = null;
       if (input.label !== undefined) {
         const wanted = normalizeName(input.label);
@@ -545,7 +563,10 @@ const handlers = {
               issue.assignee.kind !== assignee.kind ||
               (assignee.kind === "agent" &&
                 issue.assignee.kind === "agent" &&
-                issue.assignee.provider !== assignee.provider)
+                issue.assignee.provider !== assignee.provider) ||
+              (assignee.kind === "member" &&
+                issue.assignee.kind === "member" &&
+                issue.assignee.membershipId !== assignee.membershipId)
             ) {
               return false;
             }
@@ -620,7 +641,7 @@ const handlers = {
       const assignee =
         input.assignee === undefined
           ? undefined
-          : yield* resolveAssignee(input.assignee, actor.provider);
+          : yield* resolveIssueAssignee(tracker, input.assignee, actor.provider);
       const labelIds =
         input.labels === undefined
           ? undefined
@@ -669,7 +690,9 @@ const handlers = {
       if (input.priority !== undefined) patch.priority = input.priority;
       if (input.assignee !== undefined) {
         patch.assignee =
-          input.assignee === null ? null : yield* resolveAssignee(input.assignee, actor.provider);
+          input.assignee === null
+            ? null
+            : yield* resolveIssueAssignee(tracker, input.assignee, actor.provider);
       }
       if (input.project !== undefined) {
         patch.projectId =

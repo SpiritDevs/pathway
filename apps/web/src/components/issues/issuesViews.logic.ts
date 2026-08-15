@@ -74,8 +74,15 @@ export const DEFAULT_ISSUE_VIEW_CONFIG: IssueViewConfig = {
  * is not one, taking the whole save down with it. A membership is opaque, so the only thing to
  * check is that the token carries one at all — an empty or padded id would fail the same way.
  */
-export function parseIssueAssigneeValue(value: string): IssueAssignee | null {
-  if (value === ISSUE_ASSIGNEE_USER_VALUE) return { kind: "user" };
+export function parseIssueAssigneeValue(
+  value: string,
+  currentMembershipId: MembershipId | null = null,
+): IssueAssignee | null {
+  if (value === ISSUE_ASSIGNEE_USER_VALUE) {
+    return currentMembershipId === null
+      ? { kind: "user" }
+      : { kind: "member", membershipId: currentMembershipId };
+  }
   if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
     const membershipId = value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
     if (membershipId.length === 0 || membershipId !== membershipId.trim()) return null;
@@ -91,10 +98,13 @@ export function parseIssueAssigneeValue(value: string): IssueAssignee | null {
  * absent key rather than an empty array — an empty array would round-trip as a chip that is on the
  * bar and matches nothing.
  */
-export function issuesSearchViewConfig(search: IssuesSearch): IssueViewConfig {
+export function issuesSearchViewConfig(
+  search: IssuesSearch,
+  currentMembershipId: MembershipId | null = null,
+): IssueViewConfig {
   const filter = issuesSearchFilter(search);
   const assignees = filter.assignees.flatMap((value) => {
-    const assignee = parseIssueAssigneeValue(value);
+    const assignee = parseIssueAssigneeValue(value, currentMembershipId);
     return assignee === null ? [] : [assignee];
   });
   return {
@@ -170,7 +180,11 @@ function sameValues(left: ReadonlyArray<string>, right: ReadonlyArray<string>): 
  * so an absent chip and an empty one are the same thing and an assignee is compared as the value
  * the URL spells rather than as an object identity.
  */
-export function sameIssueViewConfig(left: IssueViewConfig, right: IssueViewConfig): boolean {
+export function sameIssueViewConfig(
+  left: IssueViewConfig,
+  right: IssueViewConfig,
+  currentMembershipId: MembershipId | null = null,
+): boolean {
   if (
     left.tab !== right.tab ||
     left.grouping !== right.grouping ||
@@ -181,6 +195,14 @@ export function sameIssueViewConfig(left: IssueViewConfig, right: IssueViewConfi
   }
   const leftFilter = issueViewConfigFilter(left);
   const rightFilter = issueViewConfigFilter(right);
+  const canonicalAssignees = (values: ReadonlyArray<string>) =>
+    currentMembershipId === null
+      ? values
+      : values.map((value) =>
+          value === ISSUE_ASSIGNEE_USER_VALUE
+            ? `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${currentMembershipId}`
+            : value,
+        );
   return (
     leftFilter.dueFilter === rightFilter.dueFilter &&
     sameValues(leftFilter.statusIds, rightFilter.statusIds) &&
@@ -188,7 +210,10 @@ export function sameIssueViewConfig(left: IssueViewConfig, right: IssueViewConfi
     sameValues(leftFilter.labelIds, rightFilter.labelIds) &&
     sameValues(leftFilter.milestoneIds, rightFilter.milestoneIds) &&
     sameValues(leftFilter.cycleIds, rightFilter.cycleIds) &&
-    sameValues(leftFilter.assignees, rightFilter.assignees) &&
+    sameValues(
+      canonicalAssignees(leftFilter.assignees),
+      canonicalAssignees(rightFilter.assignees),
+    ) &&
     sameValues(leftFilter.priorities, rightFilter.priorities)
   );
 }
@@ -205,8 +230,11 @@ export function isIssueViewConfigDirty(config: IssueViewConfig): boolean {
 export function findIssueViewForConfig(
   views: ReadonlyArray<IssueView>,
   config: IssueViewConfig,
+  currentMembershipId: MembershipId | null = null,
 ): IssueView | null {
-  return views.find((view) => sameIssueViewConfig(view.config, config)) ?? null;
+  return (
+    views.find((view) => sameIssueViewConfig(view.config, config, currentMembershipId)) ?? null
+  );
 }
 
 /** Case-insensitively, the way the server's conflict check reads it. */

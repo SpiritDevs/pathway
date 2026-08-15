@@ -53,6 +53,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
 import {
   CloudSyncEngineRegistry,
   type CloudSyncEngineRegistryShape,
@@ -118,7 +119,11 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
     localSequenceHighWater: LocalSequence.make(0),
   });
   if (readModel === null) throw new Error("The ready replica fixture did not decode.");
-  return { companyId: ROUTED_COMPANY_ID, read: Effect.succeed(readModel) };
+  return {
+    companyId: ROUTED_COMPANY_ID,
+    read: Effect.succeed(readModel),
+    memberActorForCloudUserId: () => Effect.succeed(null),
+  };
 }
 
 function routedStoredEntity(
@@ -326,6 +331,35 @@ const LINEAR_EXPORT = [
 ].join("\n");
 
 describe("IssueTrackerService", () => {
+  it.effect("resolves the linked cloud identity to its active replica membership", () =>
+    Effect.gen(function* () {
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("user-a"));
+      const replicaReader = readyReplicaReader();
+      const tracker = yield* makeIssueTrackerService({
+        replicaReader: {
+          ...replicaReader,
+          memberActorForCloudUserId: (userId) =>
+            Effect.succeed(userId === "user-a" ? MEMBER_A : null),
+        },
+        syncEngineRegistry: null,
+      });
+
+      assert.deepStrictEqual(yield* tracker.linkedMemberActor, MEMBER_A);
+      assert.deepStrictEqual(yield* tracker.memberActorForCloudUserId("user-a"), MEMBER_A);
+      assert.isNull(yield* tracker.memberActorForCloudUserId("user-b"));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeDependencyLayer(),
+          Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+          Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+          Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+        ),
+      ),
+    ),
+  );
+
   it.effect("routes a server write to the durable outbox and reads its optimistic replica", () =>
     Effect.gen(function* () {
       const stored = yield* Ref.make<StoredSyncState>({
@@ -405,6 +439,7 @@ describe("IssueTrackerService", () => {
       const replicaReader: IssueReplicaReader = {
         companyId: ROUTED_COMPANY_ID,
         read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
+        memberActorForCloudUserId: () => Effect.succeed(null),
       };
 
       const tracker = yield* makeIssueTrackerService({
@@ -2417,9 +2452,10 @@ describe("IssueTrackerService", () => {
           body: "[@Claude](mention:agent:claudeAgent) what broke?",
           agentMention: { modelSelection: ENRICHMENT_MODEL },
         },
-        ACTOR,
+        MEMBER_A,
       );
 
+      assert.deepStrictEqual(comment.author, MEMBER_A);
       assert.strictEqual(comment.agentRun?.state, "queued");
       assert.strictEqual(comment.agentRun?.transcript, "");
       assert.isNull(comment.agentRun?.phase ?? null);
@@ -2445,7 +2481,7 @@ describe("IssueTrackerService", () => {
       yield* tracker.commentCreate({ issueId: issue.id, body: "Never mind" }, ACTOR);
       yield* tracker.commentUpdate(
         { commentId: comment.id, patch: { body: "[@Claude](mention:agent:claudeAgent) again?" } },
-        ACTOR,
+        MEMBER_A,
       );
       assert.strictEqual((yield* Ref.get(requests)).length, 1);
     }).pipe(Effect.provide(makeDependencyLayer())),

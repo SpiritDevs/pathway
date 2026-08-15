@@ -55,7 +55,10 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { publishCompanyRegistryReplica } from "./companyRegistryReplica";
+import {
+  publishCompanyRegistryMembershipId,
+  publishCompanyRegistryReplica,
+} from "./companyRegistryReplica";
 import {
   publishCompanySyncEngineHandle,
   type CompanySyncEngineMutationHandle,
@@ -366,6 +369,11 @@ export interface CloudSyncEnginesOptions {
     companyId: CompanyId,
     replica: { readonly view: ReadonlyMap<string, unknown> } | null,
   ) => Effect.Effect<void>;
+  /** Publishes the actor membership beside the replica so issue UI never invents human identity. */
+  readonly publishCompanyRegistryMembershipId?: (
+    companyId: CompanyId,
+    membershipId: MembershipId | null,
+  ) => Effect.Effect<void>;
   /** Publishes the narrow mutation surface only while its engine is alive in this leader tab. */
   readonly publishCompanySyncEngineHandle?: (
     companyId: CompanyId,
@@ -536,11 +544,20 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
         Effect.all(
           [
             options.publishCompanyRegistryReplica?.(company.companyId, null),
+            options.publishCompanyRegistryMembershipId?.(company.companyId, null),
             options.publishCompanySyncStatus?.(company.companyId, null),
           ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
           { discard: true },
         ),
       );
+      if (company.actor.kind === "member") {
+        yield* (
+          options.publishCompanyRegistryMembershipId?.(
+            company.companyId,
+            company.actor.membershipId,
+          ) ?? Effect.void
+        );
+      }
       yield* superviseCompany(company).pipe(
         Effect.provideService(SyncTransport, connection.transport),
         Effect.forkIn(scope),
@@ -703,6 +720,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
     election,
     connect,
     publishCompanyRegistryReplica,
+    publishCompanyRegistryMembershipId,
     publishCompanySyncEngineHandle,
     publishCompanySyncStatus,
     ...(options.restartDelay === undefined ? {} : { restartDelay: options.restartDelay }),

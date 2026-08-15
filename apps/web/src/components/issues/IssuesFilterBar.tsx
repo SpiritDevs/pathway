@@ -134,7 +134,9 @@ export function IssuesFilterBar({
       assignee: assigneeOptions.map((option) => ({
         value: option.value,
         label: option.label,
-        icon: <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />,
+        icon: (
+          <IssueAssigneeGlyph assignee={option.assignee} className="size-4" label={option.label} />
+        ),
       })),
       priority: ISSUE_PRIORITY_ORDER.map((priority) => ({
         value: priority,

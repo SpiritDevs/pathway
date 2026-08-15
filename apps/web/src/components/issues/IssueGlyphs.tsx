@@ -230,9 +230,11 @@ export function IssueLabelDot({ color, className }: { color: string; className?:
 /** A person is a circle; an agent wears its provider's mark, which is how threads name them too. */
 export function IssueAssigneeGlyph({
   assignee,
+  label,
   className,
 }: {
   assignee: IssueAssignee | null;
+  label?: string | undefined;
   className?: string;
 }) {
   if (assignee === null) {
@@ -264,12 +266,11 @@ export function IssueAssigneeGlyph({
     );
   }
   // A teammate is a person, so the same circle as you, without the "this is mine" accent. The
-  // membership rides the label because it is the only thing that tells two teammates apart until
-  // the member directory lands.
+  // accessible label carries the replica-resolved name; an opaque membership id is never UI copy.
   if (assignee.kind === "member") {
     return (
       <span
-        aria-label={`Assigned to ${assignee.membershipId}`}
+        aria-label={`Assigned to ${label ?? "Unknown member"}`}
         className={cn(
           "flex size-5 items-center justify-center rounded-full bg-muted text-foreground/80",
           className,

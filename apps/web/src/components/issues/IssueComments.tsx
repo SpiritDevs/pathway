@@ -60,6 +60,7 @@ import {
 } from "./IssueCommentMentionControls";
 import { issueCommentMentionBody, resolveIssueCommentMention } from "./issueCommentMention.logic";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
+import { useIssueMemberDirectory } from "./issueMemberDirectory";
 import { resolveIssueStartWorkModelSelection } from "./issueStartWork.logic";
 import {
   PendingIssueImageAttachment,
@@ -69,8 +70,6 @@ import {
 const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition.label]),
 );
-
-const COMMENT_NAMING: IssueEventNaming = { providerLabels: PROVIDER_LABELS };
 
 const EMPTY_INSTANCE_ENTRIES: ReadonlyArray<ProviderInstanceEntry> = [];
 const EMPTY_MODEL_OPTIONS: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>> = new Map();
@@ -192,6 +191,7 @@ function CommentAttachments({
 function CommentRow({
   comment,
   environmentId,
+  memberNames,
   onEdit,
   onDelete,
   onCancelAgentRun,
@@ -199,11 +199,13 @@ function CommentRow({
 }: {
   comment: IssueComment;
   environmentId: EnvironmentId | null;
+  memberNames: ReadonlyMap<string, string>;
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
   onCancelAgentRun: (commentId: IssueCommentId) => void;
   onRetryAgentRun: (commentId: IssueCommentId) => void;
 }) {
+  const naming: IssueEventNaming = { providerLabels: PROVIDER_LABELS, memberNames };
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.body);
@@ -230,12 +232,17 @@ function CommentRow({
         <IssueAssigneeGlyph
           assignee={comment.author.kind === "system" ? null : comment.author}
           className="mt-0.5 size-5 shrink-0"
+          label={
+            comment.author.kind === "member"
+              ? memberNames.get(comment.author.membershipId)
+              : undefined
+          }
         />
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="text-[13px] font-medium text-foreground">
-            {issueActorLabel(comment.author, COMMENT_NAMING)}
+            {issueActorLabel(comment.author, naming)}
           </span>
           <time
             className="text-[11px] text-muted-foreground/70"
@@ -358,6 +365,7 @@ export function IssueComments({
   modelOptionsByInstance?: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
 }) {
   const environmentId = usePrimaryEnvironmentId();
+  const memberDirectory = useIssueMemberDirectory();
   // No draft persistence: the sheet's body is keyed on the issue id, so walking the list with `j`
   // discards a half-written comment rather than carrying it to the next issue. Staged images go
   // with it — they are already in the store, and an orphan there costs a file, not a row.
@@ -457,6 +465,7 @@ export function IssueComments({
               comment={comment}
               environmentId={environmentId}
               key={comment.id}
+              memberNames={memberDirectory.names}
               onCancelAgentRun={onCancelAgentRun}
               onDelete={onDelete}
               onEdit={onEdit}

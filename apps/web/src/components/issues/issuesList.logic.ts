@@ -132,6 +132,24 @@ export function issueAssigneeValue(assignee: IssueAssignee | null): string | nul
   }
 }
 
+/** Legacy `user` means the current person once a company-scoped replica supplies their membership. */
+export function resolveIssuesFilterUserAssignee(
+  filter: IssuesListFilter,
+  currentMembershipId: string | null,
+): IssuesListFilter {
+  if (currentMembershipId === null || !filter.assignees.includes(ISSUE_ASSIGNEE_USER_VALUE)) {
+    return filter;
+  }
+  return {
+    ...filter,
+    assignees: filter.assignees.map((value) =>
+      value === ISSUE_ASSIGNEE_USER_VALUE
+        ? `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${currentMembershipId}`
+        : value,
+    ),
+  };
+}
+
 /** The token without its prefix: a provider slug, a membership, or `user` as it stands. */
 export function issueAssigneeValueId(value: string): string {
   if (value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX)) {
@@ -531,7 +549,15 @@ export function issuesFilterValueLabels(
   values: ReadonlyArray<string>,
   options: ReadonlyArray<IssuesFilterOption>,
 ): ReadonlyArray<string> {
-  return values.map((value) => options.find((option) => option.value === value)?.label ?? value);
+  return values.map(
+    (value) =>
+      options.find((option) => option.value === value)?.label ??
+      (value === ISSUE_ASSIGNEE_USER_VALUE
+        ? "You"
+        : value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)
+          ? "Unknown member"
+          : value),
+  );
 }
 
 /** `Bug`, or `Bug +2`. The chip is one line in a header row, so only the first name fits. */
@@ -869,10 +895,14 @@ function assigneeGroups(
   for (const [value, bucket] of buckets) {
     if (value === null || value === ISSUE_ASSIGNEE_USER_VALUE) continue;
     // The token carries the membership, so one row per teammate rather than one row per company.
-    // Until the member directory lands the id is the only name there is, same as a provider slug.
+    // Until the member directory lands, keep the opaque membership identifier out of the UI.
     const group: IssuesViewGroup = {
       id: `assignee:${value}`,
-      label: assigneeLabels?.get(value) ?? issueAssigneeValueId(value),
+      label:
+        assigneeLabels?.get(value) ??
+        (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)
+          ? "Unknown member"
+          : issueAssigneeValueId(value)),
       status: null,
       priority: null,
       issues: bucket.sort(compare),

@@ -212,6 +212,7 @@ import {
   toSafeIssueAttachmentSegment,
 } from "../attachmentStore.ts";
 import { ServerSecretStore, type SecretStoreError } from "../auth/ServerSecretStore.ts";
+import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
 import {
   CloudSyncEngineRegistry,
   type CloudSyncIssueEngineHandle,
@@ -412,6 +413,15 @@ export interface IssueIntakeCommentResult {
 export interface IssueTrackerServiceShape {
   /** Whether the complete company replica is the authority for issue reads in this environment. */
   readonly replicaRoutable: Effect.Effect<boolean>;
+  /** Specific active membership for a cloud identity, or null outside a ready company replica. */
+  readonly memberActorForCloudUserId: (
+    cloudUserId: string,
+  ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null>;
+  /** The environment owner's membership, used by local MCP aliases and local cloud sessions. */
+  readonly linkedMemberActor: Effect.Effect<Extract<
+    IssueActor,
+    { readonly kind: "member" }
+  > | null>;
   /** Full durable source model used only by the explicit cloud migration preview/executor. */
   readonly readLocalIssueSnapshot: Effect.Effect<LocalIssueSnapshot, IssueTrackerRepositoryError>;
   /**
@@ -3079,7 +3089,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     // person waiting on the answer. Resolved before the row is written, so an unknown instance
     // refuses the whole comment rather than leaving a run nobody can attribute.
     const mention =
-      input.agentMention === undefined || actor.kind !== "user"
+      input.agentMention === undefined || (actor.kind !== "user" && actor.kind !== "member")
         ? null
         : yield* commentAgentEngine.resolveMention({
             modelSelection: input.agentMention.modelSelection,
@@ -4723,6 +4733,18 @@ export const makeIssueTrackerService = Effect.fn(function* (
     fromLegacy: Effect.Effect<A, IssueTrackerError>,
   ) => routeReplicaIssueRead({ replica: replicaReader.read, fromReplica, fromLegacy });
   const replicaRoutable = replicaReader.read.pipe(Effect.map((readModel) => readModel !== null));
+  const memberActorForCloudUserId: IssueTrackerServiceShape["memberActorForCloudUserId"] =
+    replicaReader.memberActorForCloudUserId;
+  const linkedMemberActor: IssueTrackerServiceShape["linkedMemberActor"] = secretStore
+    .get(CLOUD_LINKED_USER_ID)
+    .pipe(
+      Effect.flatMap((stored) =>
+        Option.isNone(stored)
+          ? Effect.succeed(null)
+          : memberActorForCloudUserId(new TextDecoder().decode(stored.value)),
+      ),
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
   const plans = (
     operations: ReadonlyArray<IssueSyncOperation>,
   ): ReadonlyArray<ReplicaOperationPlan> => operations.map((operation) => ({ operation }));
@@ -5399,6 +5421,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   return {
     replicaRoutable,
+    memberActorForCloudUserId,
+    linkedMemberActor,
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,
     getDetail,

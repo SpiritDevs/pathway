@@ -67,6 +67,17 @@ describe("parseIssueAssigneeValue", () => {
     expect(parseIssueAssigneeValue(issueAssigneeValue(MEMBER) ?? "")).toEqual(MEMBER);
   });
 
+  it("converts the legacy user spelling to the current membership when replica-routed", () => {
+    expect(parseIssueAssigneeValue("user", MembershipId.make("membership-current"))).toEqual({
+      kind: "member",
+      membershipId: "membership-current",
+    });
+    expect(
+      issuesSearchViewConfig(search({ assignee: "user" }), MembershipId.make("membership-current"))
+        .assignees,
+    ).toEqual([{ kind: "member", membershipId: "membership-current" }]);
+  });
+
   it("drops a value that is not an assignee, so a hand-edited URL cannot poison a save", () => {
     expect(parseIssueAssigneeValue("agent:")).toBeNull();
     expect(parseIssueAssigneeValue("agent:not a slug")).toBeNull();
@@ -361,6 +372,15 @@ describe("findIssueViewForConfig", () => {
   it("recognises the params a view was saved from, whatever order the chips are in", () => {
     const applied = search({ assignee: "user", label: "bug" });
     expect(findIssueViewForConfig([mine, board], issuesSearchViewConfig(applied))?.id).toBe("v1");
+  });
+
+  it("recognises a legacy user view as the current member in replica mode", () => {
+    const membershipId = MembershipId.make("membership-current");
+    const applied = issuesSearchViewConfig(
+      search({ assignee: "user", label: "bug" }),
+      membershipId,
+    );
+    expect(findIssueViewForConfig([mine, board], applied, membershipId)?.id).toBe("v1");
   });
 
   it("stops recognising it once a chip moves", () => {

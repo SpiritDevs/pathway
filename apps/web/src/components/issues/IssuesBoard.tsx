@@ -70,6 +70,7 @@ const COLUMN_WIDTH_CLASS = "w-72";
 
 export interface IssuesBoardProps {
   readonly columns: ReadonlyArray<IssuesBoardColumn>;
+  readonly assigneeNames: ReadonlyMap<string, string>;
   readonly labelsById: ReadonlyMap<IssueLabelId, IssueLabel>;
   readonly childRollups: ReadonlyMap<IssueId, IssueChildRollup>;
   /** Issues with an investigation in flight, read once for the board rather than once per card. */
@@ -91,6 +92,7 @@ export interface IssuesBoardProps {
 
 export function IssuesBoard({
   columns,
+  assigneeNames,
   labelsById,
   childRollups,
   investigatingIssueIds,
@@ -153,6 +155,7 @@ export function IssuesBoard({
       >
         {columns.map((column) => (
           <BoardColumn
+            assigneeNames={assigneeNames}
             childRollups={childRollups}
             column={column}
             investigatingIssueIds={investigatingIssueIds}
@@ -170,6 +173,11 @@ export function IssuesBoard({
       <DragOverlay dropAnimation={null}>
         {activeIssue === null ? null : (
           <IssueBoardCard
+            assigneeLabel={
+              activeIssue.assignee?.kind === "member"
+                ? assigneeNames.get(activeIssue.assignee.membershipId)
+                : undefined
+            }
             childRollup={childRollups.get(activeIssue.id) ?? null}
             dragging
             investigating={investigatingIssueIds.has(activeIssue.id)}
@@ -185,6 +193,7 @@ export function IssuesBoard({
 
 function BoardColumn({
   column,
+  assigneeNames,
   labelsById,
   childRollups,
   investigatingIssueIds,
@@ -195,6 +204,7 @@ function BoardColumn({
   onNewIssue,
 }: {
   column: IssuesBoardColumn;
+  assigneeNames: ReadonlyMap<string, string>;
   labelsById: ReadonlyMap<IssueLabelId, IssueLabel>;
   childRollups: ReadonlyMap<IssueId, IssueChildRollup>;
   investigatingIssueIds: ReadonlySet<IssueId>;
@@ -240,6 +250,7 @@ function BoardColumn({
         >
           {column.issues.map((issue) => (
             <SortableBoardCard
+              assigneeNames={assigneeNames}
               childRollup={childRollups.get(issue.id) ?? null}
               investigating={investigatingIssueIds.has(issue.id)}
               issue={issue}
@@ -270,6 +281,7 @@ function BoardColumn({
 
 function SortableBoardCard({
   issue,
+  assigneeNames,
   labelsById,
   childRollup,
   investigating,
@@ -279,6 +291,7 @@ function SortableBoardCard({
   onContextMenu,
 }: {
   issue: Issue;
+  assigneeNames: ReadonlyMap<string, string>;
   labelsById: ReadonlyMap<IssueLabelId, IssueLabel>;
   childRollup: IssueChildRollup | null;
   investigating: boolean;
@@ -302,6 +315,11 @@ function SortableBoardCard({
 
   return (
     <IssueBoardCard
+      assigneeLabel={
+        issue.assignee?.kind === "member"
+          ? assigneeNames.get(issue.assignee.membershipId)
+          : undefined
+      }
       childRollup={childRollup}
       investigating={investigating}
       // `attributes` already carries the tabIndex and the button role, so the card is reachable by
@@ -329,6 +347,7 @@ type SortableBindings = ReturnType<typeof useSortable>;
 
 function IssueBoardCardImpl({
   issue,
+  assigneeLabel,
   labelsById,
   childRollup,
   investigating,
@@ -345,6 +364,7 @@ function IssueBoardCardImpl({
   onKeyDown,
 }: {
   issue: Issue;
+  assigneeLabel?: string | undefined;
   labelsById: ReadonlyMap<IssueLabelId, IssueLabel>;
   childRollup: IssueChildRollup | null;
   investigating: boolean;
@@ -386,7 +406,11 @@ function IssueBoardCardImpl({
           {issue.key}
         </span>
         {investigating ? <IssueInvestigatingChip compact /> : null}
-        <IssueAssigneeGlyph assignee={issue.assignee} className="ms-auto shrink-0" />
+        <IssueAssigneeGlyph
+          assignee={issue.assignee}
+          className="ms-auto shrink-0"
+          label={assigneeLabel}
+        />
       </div>
 
       <span className="line-clamp-2 text-[13px] leading-snug text-foreground">{issue.title}</span>
