@@ -287,7 +287,7 @@ export type SyncChangeEnvelope = typeof SyncChangeEnvelope.Type;
 // ---------------------------------------------------------------------------
 
 /**
- * What the feed carries for the eight company-domain kinds the client replica decodes.
+ * What the feed carries for the company-administration kinds whose payload contracts live here.
  *
  * Company, membership, team, and role administration is online-only — none of it has an operation
  * kind and none of it ever enters an outbox — but the records still ride the change feed so a

@@ -8,8 +8,8 @@
  * change feed, so a member list, a team picker, and a permission-greyed toolbar all render with no
  * connection.
  *
- * That makes the domain deliberately small. It declares the eight entity shapes the feed delivers
- * and the codecs that decode them, and it stops there:
+ * That makes the domain deliberately small. It declares the read-only entity shapes the feed
+ * delivers and the codecs that decode them, and it stops there:
  *
  * - **No `apply`.** There are no company operations to apply. The adapter in
  *   {@link module:sync/issueDomain} rejects any envelope naming a company kind rather than folding
@@ -38,6 +38,8 @@ import {
   SyncTeamPayload,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
+import { CloudProjectId, EnvironmentBindingId } from "@spiritdevs/contracts/cloudProject";
+import { CloudTimestamp, TeamId, WorkflowOwner } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -48,8 +50,8 @@ import type { SyncCodec } from "./codec.ts";
 // ---------------------------------------------------------------------------
 
 /**
- * The tables this domain replicates: every company-administration kind in the protocol, which is
- * the complement of {@link module:sync/issueDomain}'s twelve.
+ * The tables this domain replicates: company administration and project discovery, which are the
+ * read-only complement of {@link module:sync/issueDomain}'s twelve editable issue tables.
  */
 export const COMPANY_SYNC_ENTITY_KINDS = [
   "company",
@@ -60,6 +62,7 @@ export const COMPANY_SYNC_ENTITY_KINDS = [
   "role",
   "roleAssignment",
   "environmentRegistration",
+  "cloudProject",
 ] as const satisfies ReadonlyArray<SyncEntityKind>;
 export type CompanySyncEntityKind = (typeof COMPANY_SYNC_ENTITY_KINDS)[number];
 
@@ -133,6 +136,27 @@ export const EnvironmentRegistrationEntity = Schema.Struct({
 });
 export type EnvironmentRegistrationEntity = typeof EnvironmentRegistrationEntity.Type;
 
+/**
+ * A company-owned project identity. Bindings may come and go independently; issues retain this
+ * stable id. The wire omits `companyId`, `deletedAt`, and `version` like every other replica row.
+ */
+const cloudProjectSyncEntityFields = {
+  id: CloudProjectId,
+  name: Schema.String,
+  description: Schema.String,
+  teamIds: Schema.Array(TeamId),
+  defaultWorkflowOwner: Schema.NullOr(WorkflowOwner),
+  preferredBindingId: Schema.NullOr(EnvironmentBindingId),
+  archivedAt: Schema.NullOr(CloudTimestamp),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+};
+export const CloudProjectSyncEntity = Schema.Struct({
+  entityKind: Schema.Literal("cloudProject"),
+  ...cloudProjectSyncEntityFields,
+});
+export type CloudProjectSyncEntity = typeof CloudProjectSyncEntity.Type;
+
 /** One replicated company-domain row, tagged with the kind that selected its shape. */
 export const CompanySyncEntity = Schema.Union([
   CompanyEntity,
@@ -143,6 +167,7 @@ export const CompanySyncEntity = Schema.Union([
   RoleEntity,
   RoleAssignmentEntity,
   EnvironmentRegistrationEntity,
+  CloudProjectSyncEntity,
 ]);
 export type CompanySyncEntity = typeof CompanySyncEntity.Type;
 
@@ -198,6 +223,7 @@ export const COMPANY_ENTITY_CODECS: Record<CompanySyncEntityKind, SyncCodec<Comp
     "environmentRegistration",
     SyncEnvironmentRegistrationPayload,
   ),
+  cloudProject: taggedEntityCodec("cloudProject", Schema.Struct(cloudProjectSyncEntityFields)),
 };
 
 /** Codec for one entity kind, or `null` for a kind this domain does not replicate. */

@@ -38,6 +38,8 @@ const OTHER_MEMBERSHIP_ID = "0191f0a0-0000-7000-8000-0000000000m2";
 const TEAM_ID = "0191f0a0-0000-7000-8000-0000000000t1";
 const ROLE_ID = "0191f0a0-0000-7000-8000-0000000000r1";
 const ASSIGNMENT_ID = "0191f0a0-0000-7000-8000-0000000000a1";
+const CLOUD_PROJECT_ID = "0191f0a0-0000-7000-8000-0000000000p1";
+const ENVIRONMENT_BINDING_ID = "0191f0a0-0000-7000-8000-0000000000b1";
 const ENVIRONMENT_REGISTRATION_ID = "0191f0a0-0000-7000-8000-0000000000e1";
 const ENVIRONMENT_ID = "environment-1";
 
@@ -136,6 +138,17 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
     createdAt: 1_000,
     updatedAt: 2_000,
   },
+  cloudProject: {
+    id: CLOUD_PROJECT_ID,
+    name: "Pathway",
+    description: "The agent client",
+    teamIds: [TEAM_ID],
+    defaultWorkflowOwner: { kind: "team", teamId: TEAM_ID },
+    preferredBindingId: ENVIRONMENT_BINDING_ID,
+    archivedAt: null,
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -143,11 +156,12 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
 // ---------------------------------------------------------------------------
 
 describe("company entity kinds", () => {
-  it("covers the protocol's company-administration tables and no issue table", () => {
+  it("covers the protocol's company read-domain tables and no issue table", () => {
     expect([...COMPANY_SYNC_ENTITY_KINDS].sort()).toEqual(
       [
         "company",
         "companySettings",
+        "cloudProject",
         "environmentRegistration",
         "membership",
         "role",
@@ -208,6 +222,19 @@ describe("company entity codecs", () => {
       const decoded = codec?.decode({ ...ENTITY_PAYLOADS["company"], owners });
       expect(decoded !== undefined && Option.isSome(decoded)).toBe(true);
     }
+  });
+
+  it("accepts both nullable cloud-project owner and binding fields", () => {
+    const codec = companyEntityCodec("cloudProject");
+    const payload = {
+      ...ENTITY_PAYLOADS["cloudProject"],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      archivedAt: 9_000,
+    };
+    const decoded = codec?.decode(payload);
+    expect(decoded !== undefined && Option.isSome(decoded)).toBe(true);
+    expect(codec?.encode(Option.getOrThrow(decoded ?? Option.none()))).toEqual(payload);
   });
 
   it("survives a permission this build does not know rather than losing the role", () => {
@@ -273,8 +300,8 @@ describe("the widened adapter", () => {
         isCompanySyncEntityKind(kind) || ISSUE_SYNC_ENTITY_KINDS.includes(kind as never);
       expect(adapter.entityCodec(kind) === null ? "none" : "codec").toBe(known ? "codec" : "none");
     }
-    // Cloud projects and the remaining environment tables are neither domain's yet.
-    expect(adapter.entityCodec("cloudProject")).toBeNull();
+    expect(adapter.entityCodec("cloudProject")).not.toBeNull();
+    expect(adapter.entityCodec("futureEntity" as SyncEntityKind)).toBeNull();
   });
 
   it("decodes a company row through the company codec and an issue row through the issue one", () => {
@@ -386,6 +413,30 @@ describe("company rows in the confirmed replica", () => {
         payload: ENTITY_PAYLOADS["membership"],
       },
     ]);
+  });
+
+  it("materializes a cloud-project feed row instead of quarantine-skipping it", () => {
+    const result = foldInto(adapter, [
+      change({
+        version: 1,
+        entityKind: "cloudProject",
+        entityId: CLOUD_PROJECT_ID,
+        payload: ENTITY_PAYLOADS["cloudProject"],
+      }),
+    ]);
+    expect(result.quarantined).toBe(0);
+    expect(
+      result.replica.entities.get(
+        syncEntityKey({
+          entityKind: "cloudProject",
+          entityId: SyncEntityId.make(CLOUD_PROJECT_ID),
+        }),
+      )?.entity,
+    ).toMatchObject({
+      entityKind: "cloudProject",
+      id: CLOUD_PROJECT_ID,
+      preferredBindingId: ENVIRONMENT_BINDING_ID,
+    });
   });
 
   it("is exactly what the issue-only adapter used to do differently", () => {

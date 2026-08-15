@@ -36,9 +36,11 @@ export const SYNC_DOCUMENT_SCHEMA_VERSION = 1 as const;
  * away only the reproducible confirmed replica and forces one full seed; the outbox keeps decoding
  * under the same document schema, so pending user writes survive the upgrade and are sent after
  * the seed. Generation 1 was implicit. Generation 2 covers the expanded 19-kind replica;
- * generation 3 adds company environment registrations to the client replica.
+ * generation 3 adds company environment registrations to the client replica; generation 4 adds
+ * cloud projects. Older clients quarantined those rows while still advancing their cursor, so an
+ * upgrade must reseed to materialize projects that have not changed since bootstrap.
  */
-export const SYNC_BOOTSTRAP_GENERATION = 3 as const;
+export const SYNC_BOOTSTRAP_GENERATION = 4 as const;
 
 export const StoredSyncCheckpoint = Schema.Struct({
   schemaVersion: Schema.Literal(SYNC_DOCUMENT_SCHEMA_VERSION),
