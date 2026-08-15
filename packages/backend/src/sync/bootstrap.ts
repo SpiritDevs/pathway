@@ -62,6 +62,10 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   "teamMembership",
   "role",
   "roleAssignment",
+  // The registry joined the feed after company administration. Keep these at the tail: persisted
+  // cursors from the previous deployment may already have walked every kind above.
+  "environmentRegistration",
+  "environmentBinding",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

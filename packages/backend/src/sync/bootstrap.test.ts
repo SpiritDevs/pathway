@@ -38,6 +38,8 @@ const COMPANY_DOMAIN_WALK = [
   "teamMembership",
   "role",
   "roleAssignment",
+  "environmentRegistration",
+  "environmentBinding",
 ] as const;
 
 describe("BOOTSTRAP_ENTITY_ORDER", () => {
@@ -61,14 +63,9 @@ describe("BOOTSTRAP_ENTITY_ORDER", () => {
 
   it("leaves the kinds no mutation seeds out of the walk", () => {
     // Seeding a kind nothing appends to the feed hands clients rows the drain can never update.
-    // Environment registration and project records are still server-query-only.
+    // Project and command records are still server-query-only.
     const walked = new Set<string>(BOOTSTRAP_ENTITY_ORDER);
-    for (const kind of [
-      "cloudProject",
-      "environmentRegistration",
-      "environmentBinding",
-      "environmentCommand",
-    ]) {
+    for (const kind of ["cloudProject", "environmentCommand"]) {
       expect(walked.has(kind)).toBe(false);
     }
   });

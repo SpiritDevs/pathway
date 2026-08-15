@@ -18,8 +18,9 @@
  * reserving its own contiguous run off the same company head, by the same rule.
  *
  * None of these tables carry a `deletedAt`: a membership departure is a state patch (attribution
- * outlives the person), a team archive is a timestamp, and the two rows that really are deleted —
- * `teamMemberships` and `roleAssignments` — become `tombstone` changes with no row left to stamp.
+ * outlives the person), a team archive is a timestamp, and environment deactivation is a soft
+ * `revoked` row whose feed representation is a tombstone. The two rows that really are deleted —
+ * `teamMemberships` and `roleAssignments` — become tombstones with no row left to stamp.
  *
  * @module lib/companyApply
  */
@@ -50,6 +51,8 @@ export type CompanyEntityKind = Extract<
   | "teamMembership"
   | "role"
   | "roleAssignment"
+  | "environmentRegistration"
+  | "environmentBinding"
 >;
 
 /** The company-domain tables whose rows carry a `version` column this writer stamps. */
@@ -60,7 +63,9 @@ export type CompanyVersionedTable =
   | "teams"
   | "teamMemberships"
   | "roles"
-  | "roleAssignments";
+  | "roleAssignments"
+  | "environmentRegistrations"
+  | "environmentBindings";
 
 /**
  * The `version` a company row reads as. Optional in storage so the columns could be added to live
@@ -119,6 +124,15 @@ async function requireTeamDomainId(ctx: QueryCtx, id: Id<"teams">): Promise<stri
 async function requireRoleDomainId(ctx: QueryCtx, id: Id<"roles">): Promise<string> {
   const doc = await ctx.db.get(id);
   if (doc === null) throw backendError("entity-not-found", "Referenced role is missing.");
+  return doc.id;
+}
+
+async function requireCloudProjectDomainId(
+  ctx: QueryCtx,
+  id: Id<"cloudProjects">,
+): Promise<string> {
+  const doc = await ctx.db.get(id);
+  if (doc === null) throw backendError("entity-not-found", "Referenced cloud project is missing.");
   return doc.id;
 }
 
@@ -274,6 +288,48 @@ export async function encodeRoleAssignment(
         ? { kind: "company" }
         : { kind: "team", teamId: doc.teamId },
     createdAt: doc.createdAt,
+  };
+}
+
+/** Public registry shape shared by direct reads, feed changes, and bootstrap snapshots. */
+export async function encodeEnvironmentRegistration(
+  ctx: QueryCtx,
+  doc: Doc<"environmentRegistrations">,
+) {
+  return {
+    id: doc.id,
+    environmentId: doc.environmentId,
+    publicKeyThumbprint: doc.publicKeyThumbprint,
+    descriptor: doc.descriptor,
+    relayLinkState: doc.relayLinkState,
+    managedEndpointAvailable: doc.managedEndpointAvailable,
+    lastSeenAt: doc.lastSeenAt,
+    serviceRoleIds: doc.serviceRoleIds,
+    teamIds: doc.teamIds,
+    state: doc.state,
+    registeredByMembershipId:
+      doc.registeredByMembershipId === null
+        ? null
+        : await requireMembershipDomainId(ctx, doc.registeredByMembershipId),
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export async function encodeEnvironmentBinding(
+  ctx: QueryCtx,
+  doc: Doc<"environmentBindings">,
+): Promise<unknown> {
+  return {
+    id: doc.id,
+    cloudProjectId: await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
+    environmentId: doc.environmentId,
+    localProjectId: doc.localProjectId,
+    localWorkspaceRoot: doc.localWorkspaceRoot,
+    status: doc.status,
+    lastSeenAt: doc.lastSeenAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
   };
 }
 

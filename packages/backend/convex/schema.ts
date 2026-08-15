@@ -414,8 +414,11 @@ export default defineSchema({
     registeredByMembershipId: v.union(v.id("memberships"), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last published registry change; heartbeats do not advance it. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_environment", ["environmentId"]),
@@ -437,8 +440,11 @@ export default defineSchema({
     lastSeenAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last change touching this row. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_environment", ["environmentId"]),

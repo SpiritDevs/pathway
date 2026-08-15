@@ -73,6 +73,8 @@ import {
   companySettingsDomainId,
   encodeCompany,
   encodeCompanySettings,
+  encodeEnvironmentBinding,
+  encodeEnvironmentRegistration,
   encodeMembership,
   encodeRole,
   encodeRoleAssignment,
@@ -3045,7 +3047,9 @@ type CompanyBootstrapTable =
   | "teams"
   | "teamMemberships"
   | "roles"
-  | "roleAssignments";
+  | "roleAssignments"
+  | "environmentRegistrations"
+  | "environmentBindings";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3081,12 +3085,12 @@ function encodedCompanyDomainId(payload: unknown): string {
  * Lifts a page of company-domain rows.
  *
  * Three things differ from the issue lift and each is a property of the domain rather than an
- * omission. None of these tables carries a `deletedAt` — the two rows that are really deleted
- * (`teamMemberships`, `roleAssignments`) leave nothing behind to seed — so nothing here is a
- * tombstone. None is owner-private: company administration records are gated by permission, and by
- * self-visibility in `src/sync/visibility`, never by ownership. And every one is company-wide
- * (`teamIds: []`), byte-for-byte the scope `appendCompanyChanges` writes, so a team-scoped grant is
- * refused the same row by the seed and by the feed.
+ * omission. None of these tables carries a `deletedAt`; deleted join rows leave nothing behind to
+ * seed, while a revoked environment registration is consumed by the walker as deleted below. None
+ * is owner-private: company administration records are gated by permission, and by self-visibility
+ * in `src/sync/visibility`, never by ownership. And every one is company-wide (`teamIds: []`),
+ * byte-for-byte the scope `appendCompanyChanges` writes, so a team-scoped grant is refused the same
+ * row by the seed and by the feed.
  *
  * `version` reads through {@link companyRowVersion}, which is `row.version ?? 0`. Zero is the value
  * that cannot skip a later feed row: the seed's resume cursor is the company head captured on page
@@ -3281,6 +3285,28 @@ export async function readBootstrapRows(
       return liftCompanyRows(
         await pageOf(ctx, "roleAssignments", company._id, afterId, limit),
         (row) => encodeRoleAssignment(ctx, row),
+      );
+    case "environmentRegistration": {
+      const rows = await pageOf(ctx, "environmentRegistrations", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          // A revoked registration stays in authoritative storage for audit and re-registration,
+          // but discovery replicas treat deactivation as deletion.
+          deleted: row.state !== "active",
+          teamIds: [],
+          ownerMembershipId: null,
+          payload: row.state === "active" ? await encodeEnvironmentRegistration(ctx, row) : null,
+        });
+      }
+      return lifted;
+    }
+    case "environmentBinding":
+      return liftCompanyRows(
+        await pageOf(ctx, "environmentBindings", company._id, afterId, limit),
+        (row) => encodeEnvironmentBinding(ctx, row),
       );
   }
 }
