@@ -8,8 +8,9 @@
  * @module components/issues/IssuesListPage
  */
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { threadIsVisibleAt } from "@t3tools/contracts";
 import type {
   Issue,
   IssueCycleId,
@@ -20,16 +21,17 @@ import type {
   IssuePriority,
   IssueStatusId,
   ProjectId,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { ColumnsIcon, ListTodoIcon, PlusIcon, Rows3Icon } from "lucide-react";
+import { ColumnsIcon, ListTodoIcon, PanelRightIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
-import { cn } from "~/lib/utils";
-import { useComposerDraftStore, type DraftId } from "~/composerDraftStore";
-import { useProjects } from "~/state/entities";
+import { cn, newThreadId } from "~/lib/utils";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { useProjects, useThreadShells } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
   issueChildRollups,
@@ -62,6 +64,7 @@ import {
 } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { Toggle } from "../ui/toggle";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
@@ -70,7 +73,8 @@ import { IssueDetailSheet } from "./IssueDetailSheet";
 import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
-import { IssuesAssistantPanel, type IssuesAssistantDraft } from "./IssuesAssistantPanel";
+import { IssuesAssistantPanel, type IssuesAssistantTab } from "./IssuesAssistantPanel";
+import { upsertIssuesAssistantIssueTab } from "./issuesAssistantPanel.logic";
 import { IssuesFilterBar } from "./IssuesFilterBar";
 import { IssuesTriageView } from "./IssuesTriageView";
 import { IssuesViewOptions } from "./IssuesViewOptions";
@@ -182,6 +186,7 @@ function IssuesListView({
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const threads = useThreadShells();
   const milestones = useIssueMilestones();
   const cycles = useIssueCycles();
   const grouping = useIssuesGrouped(tab);
@@ -200,8 +205,13 @@ function IssuesListView({
   /** The right-click menu's target, or null while it is shut. One menu for every row and card. */
   const [contextMenu, setContextMenu] = useState<IssueContextMenuTarget | null>(null);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
-  const [assistantDrafts, setAssistantDrafts] = useState<ReadonlyArray<IssuesAssistantDraft>>([]);
-  const [activeAssistantDraftId, setActiveAssistantDraftId] = useState<DraftId | null>(null);
+  const [assistantTabs, setAssistantTabs] = useState<ReadonlyArray<IssuesAssistantTab>>([]);
+  const [closedAssistantThreadIds, setClosedAssistantThreadIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  const [activeAssistantTabId, setActiveAssistantTabId] = useState<string | null>(null);
+  const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
+  const [issuesPreviewThreadId] = useState<ThreadId>(newThreadId);
   const [assistantDraftPending, setAssistantDraftPending] = useState(false);
   /** Set by a column's `+`, which is the only path that names a status the filter did not. */
   const [newIssueStatusId, setNewIssueStatusId] = useState<IssueStatusId | null>(null);
@@ -209,6 +219,54 @@ function IssuesListView({
   const scrollToActiveRef = useRef(false);
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const issuesPreviewThreadRef = useMemo(
+    () =>
+      primaryEnvironmentId === null
+        ? null
+        : scopeThreadRef(primaryEnvironmentId, issuesPreviewThreadId),
+    [issuesPreviewThreadId, primaryEnvironmentId],
+  );
+  useEffect(() => {
+    const issueThreads = threads.filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        threadIsVisibleAt(thread, "issues") &&
+        !closedAssistantThreadIds.has(thread.id),
+    );
+    setAssistantTabs((current) => {
+      const eligibleThreadIds = new Set(issueThreads.map((thread) => thread.id));
+      let changed = current.some(
+        (tab) => tab.kind === "thread" && !eligibleThreadIds.has(tab.threadId),
+      );
+      const next = current.filter(
+        (tab) => tab.kind !== "thread" || eligibleThreadIds.has(tab.threadId),
+      );
+      for (const thread of issueThreads) {
+        const id = `thread:${thread.id}` as const;
+        const index = next.findIndex((tab) => tab.id === id);
+        const tab = {
+          id,
+          kind: "thread",
+          environmentId: thread.environmentId,
+          threadId: thread.id,
+          title: thread.title,
+        } as const satisfies IssuesAssistantTab;
+        if (index < 0) {
+          next.push(tab);
+          changed = true;
+        } else if (
+          next[index]?.kind === "draft" ||
+          (next[index]?.kind === "thread" &&
+            (next[index].title !== tab.title || next[index].environmentId !== tab.environmentId))
+        ) {
+          next[index] = tab;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [closedAssistantThreadIds, threads]);
   const filter = useMemo(() => issuesSearchFilter(search), [search]);
   const viewMode = issuesSearchViewMode(search);
   const groupBy = effectiveIssuesGrouping(issuesSearchGrouping(search), viewMode);
@@ -546,6 +604,7 @@ function IssuesListView({
           branch: null,
           envMode: "local",
           forceNew: true,
+          locations: ["issues"],
           navigate: false,
           startFromOrigin: false,
           worktreePath: null,
@@ -563,16 +622,23 @@ function IssuesListView({
             : issues.length === 2
               ? issues.map((issue) => issue.key).join(" + ")
               : `${issues.length} issues`;
-        setAssistantDrafts((current) => [
-          ...current,
-          {
-            draftId: opened.draftId,
-            environmentId: project.environmentId,
-            threadId: opened.threadId,
-            title,
-          },
-        ]);
-        setActiveAssistantDraftId(opened.draftId);
+        const assistantTab = {
+          id: `thread:${opened.threadId}`,
+          kind: "draft",
+          draftId: opened.draftId,
+          environmentId: project.environmentId,
+          threadId: opened.threadId,
+          title,
+        } as const satisfies IssuesAssistantTab;
+        setClosedAssistantThreadIds((current) => {
+          if (!current.has(opened.threadId)) return current;
+          const next = new Set(current);
+          next.delete(opened.threadId);
+          return next;
+        });
+        setAssistantTabs((current) => [...current, assistantTab]);
+        setActiveAssistantTabId(assistantTab.id);
+        setAssistantPanelOpen(true);
       } catch (error) {
         toastManager.add(
           stackedThreadToast({
@@ -587,16 +653,77 @@ function IssuesListView({
     })();
   };
 
-  const closeAssistantDraft = (draftId: DraftId) => {
-    setAssistantDrafts((current) => {
-      const index = current.findIndex((draft) => draft.draftId === draftId);
+  const addAssistantSideChat = async (): Promise<string | null> => {
+    if (assistantDraftPending) return null;
+    const project = investigationProjects[0];
+    if (project === undefined) return null;
+    setAssistantDraftPending(true);
+    try {
+      const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+        branch: null,
+        envMode: "local",
+        forceNew: true,
+        locations: ["issues"],
+        navigate: false,
+        startFromOrigin: false,
+        worktreePath: null,
+      });
+      if (opened === null) throw new Error("The issue side chat draft could not be created.");
+      const tab = {
+        id: `thread:${opened.threadId}`,
+        kind: "draft",
+        draftId: opened.draftId,
+        environmentId: project.environmentId,
+        threadId: opened.threadId,
+        title: "Side chat",
+      } as const satisfies IssuesAssistantTab;
+      setClosedAssistantThreadIds((current) => {
+        if (!current.has(opened.threadId)) return current;
+        const next = new Set(current);
+        next.delete(opened.threadId);
+        return next;
+      });
+      setAssistantTabs((current) => [...current, tab]);
+      setActiveAssistantTabId(tab.id);
+      setAssistantPanelOpen(true);
+      return tab.id;
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to start the issue side chat",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+      return null;
+    } finally {
+      setAssistantDraftPending(false);
+    }
+  };
+
+  const closeAssistantTab = (tabId: string) => {
+    setAssistantTabs((current) => {
+      const index = current.findIndex((tab) => tab.id === tabId);
       if (index < 0) return current;
-      const next = current.filter((draft) => draft.draftId !== draftId);
-      setActiveAssistantDraftId((active) =>
-        active !== draftId ? active : (next[Math.min(index, next.length - 1)]?.draftId ?? null),
+      const closing = current[index];
+      if (closing?.kind === "draft" || closing?.kind === "thread") {
+        setClosedAssistantThreadIds((closed) => new Set([...closed, closing.threadId]));
+      }
+      const next = current.filter((tab) => tab.id !== tabId);
+      setActiveAssistantTabId((active) =>
+        active !== tabId ? active : (next[Math.min(index, next.length - 1)]?.id ?? null),
       );
       return next;
     });
+  };
+
+  const openAssistantIssue = (issueKey: string, contextTitle?: string) => {
+    const liveIssue = Array.from(store.issuesById.values()).find((issue) => issue.key === issueKey);
+    const title = contextTitle?.trim() || liveIssue?.title || issueKey;
+    const id = `issue:${issueKey}` as const;
+    setAssistantTabs((current) => upsertIssuesAssistantIssueTab(current, issueKey, title));
+    setActiveAssistantTabId(id);
+    setAssistantPanelOpen(true);
   };
 
   // One write for both halves of a kanban drag: the contract carries `statusId` alongside the key
@@ -836,6 +963,15 @@ function IssuesListView({
                 <ColumnsIcon />
               </Button>
             </div>
+            <Toggle
+              aria-label="Toggle issues sidebar"
+              onPressedChange={setAssistantPanelOpen}
+              pressed={assistantPanelOpen}
+              size="sm"
+              variant="ghost"
+            >
+              <PanelRightIcon className="size-3.5" />
+            </Toggle>
             <Button onClick={() => openNewIssue(null)} size="xs" variant="outline">
               <PlusIcon />
               New issue
@@ -1017,25 +1153,64 @@ function IssuesListView({
       />
 
       <IssuesAssistantPanel
-        activeDraftId={activeAssistantDraftId}
-        drafts={assistantDrafts}
-        onActivate={setActiveAssistantDraftId}
-        onClose={closeAssistantDraft}
+        activeTabId={activeAssistantTabId}
+        onAddSideChat={addAssistantSideChat}
+        tabs={assistantTabs}
+        open={assistantPanelOpen}
+        panelThreadRef={issuesPreviewThreadRef}
+        sideChatAvailable={investigationProjects.length > 0 && !assistantDraftPending}
+        onActivate={setActiveAssistantTabId}
+        onClose={closeAssistantTab}
         onCloseAll={() => {
-          setAssistantDrafts([]);
-          setActiveAssistantDraftId(null);
+          setClosedAssistantThreadIds(
+            (closed) =>
+              new Set([
+                ...closed,
+                ...assistantTabs.flatMap((tab) =>
+                  tab.kind === "draft" || tab.kind === "thread" ? [tab.threadId] : [],
+                ),
+              ]),
+          );
+          setAssistantTabs([]);
+          setActiveAssistantTabId(null);
         }}
-        onCloseOthers={(draftId) => {
-          setAssistantDrafts((current) => current.filter((draft) => draft.draftId === draftId));
-          setActiveAssistantDraftId(draftId);
+        onCloseOthers={(tabId) => {
+          setClosedAssistantThreadIds(
+            (closed) =>
+              new Set([
+                ...closed,
+                ...assistantTabs.flatMap((tab) =>
+                  tab.id !== tabId && (tab.kind === "draft" || tab.kind === "thread")
+                    ? [tab.threadId]
+                    : [],
+                ),
+              ]),
+          );
+          setAssistantTabs((current) => current.filter((tab) => tab.id === tabId));
+          setActiveAssistantTabId(tabId);
         }}
-        onCloseToRight={(draftId) => {
-          setAssistantDrafts((current) => {
-            const index = current.findIndex((draft) => draft.draftId === draftId);
+        onCloseToRight={(tabId) => {
+          setAssistantTabs((current) => {
+            const index = current.findIndex((tab) => tab.id === tabId);
+            if (index >= 0) {
+              setClosedAssistantThreadIds(
+                (closed) =>
+                  new Set([
+                    ...closed,
+                    ...current
+                      .slice(index + 1)
+                      .flatMap((tab) =>
+                        tab.kind === "draft" || tab.kind === "thread" ? [tab.threadId] : [],
+                      ),
+                  ]),
+              );
+            }
             return index < 0 ? current : current.slice(0, index + 1);
           });
-          setActiveAssistantDraftId(draftId);
+          setActiveAssistantTabId(tabId);
         }}
+        onOpenChange={setAssistantPanelOpen}
+        onOpenIssue={openAssistantIssue}
       />
     </SidebarInset>
   );

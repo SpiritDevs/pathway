@@ -238,7 +238,7 @@ import {
   type ElementContextDraft,
   formatElementContextLabel,
 } from "../lib/elementContext";
-import { appendIssueContextsToPrompt } from "../lib/issueContext";
+import { appendIssueContextsToPrompt, type IssueContextSelection } from "../lib/issueContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
@@ -272,6 +272,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { IssueDetailSheet } from "./issues/IssueDetailSheet";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ImageLightbox } from "./media/ImageLightbox";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -567,6 +568,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      onOpenIssueContext?: (context: IssueContextSelection) => void;
       presentation?: "page" | "panel";
       panelOwnerThreadRef?: ScopedThreadRef;
       routeKind: "server";
@@ -578,6 +580,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      onOpenIssueContext?: (context: IssueContextSelection) => void;
       presentation?: "page" | "panel";
       panelOwnerThreadRef?: never;
       routeKind: "draft";
@@ -1306,6 +1309,17 @@ function ChatViewContent(props: ChatViewProps) {
     presentation = "page",
   } = props;
   const isPanelPresentation = presentation === "panel";
+  const [localIssueDetailKey, setLocalIssueDetailKey] = useState<string | null>(null);
+  const openIssueContext = useCallback(
+    (context: IssueContextSelection) => {
+      if (props.onOpenIssueContext) {
+        props.onOpenIssueContext(context);
+        return;
+      }
+      setLocalIssueDetailKey(context.key);
+    },
+    [props.onOpenIssueContext],
+  );
   const panelOwnerThreadRef = routeKind === "server" ? props.panelOwnerThreadRef : undefined;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
@@ -6051,6 +6065,7 @@ function ChatViewContent(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
+                      locations: activeThread.locations ?? ["agents"],
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -7374,6 +7389,7 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenFilePreview={openFileSurface}
+                onOpenIssueContext={openIssueContext}
                 onPanelSurfaceOpen={revealPanelThreadAsPage}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
@@ -7558,6 +7574,7 @@ function ChatViewContent(props: ChatViewProps) {
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
+                            onOpenIssueContext={openIssueContext}
                           />
                         </div>
                       </div>
@@ -7817,6 +7834,13 @@ function ChatViewContent(props: ChatViewProps) {
           onClose={closeExpandedImage}
         />
       )}
+      {props.onOpenIssueContext === undefined && localIssueDetailKey !== null ? (
+        <IssueDetailSheet
+          issueKey={localIssueDetailKey}
+          onClose={() => setLocalIssueDetailKey(null)}
+          onOpenIssueKey={setLocalIssueDetailKey}
+        />
+      ) : null}
       <ContinuationDialog
         open={continuationRequest !== null}
         kind={continuationRequest?.kind ?? "continue"}

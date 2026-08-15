@@ -649,6 +649,7 @@ export interface ChatComposerProps {
   scheduleComposerFocus: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
+  onOpenIssueContext: (context: IssueContextDraft) => void;
 }
 
 // --------------------------------------------------------------------------
@@ -724,6 +725,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     scheduleComposerFocus,
     setThreadError,
     onExpandImage,
+    onOpenIssueContext,
   } = props;
   const composerControlsDisabledReason = composerControlsLocked
     ? PROVIDER_NATIVE_SUBAGENT_CONTROLS_LOCKED_REASON
@@ -3066,6 +3068,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               composerIssueContexts.length > 0 && (
                 <ComposerPendingIssueContexts
                   contexts={composerIssueContexts}
+                  onOpen={onOpenIssueContext}
                   onRemove={(contextId) =>
                     removeComposerDraftIssueContext(composerDraftTarget, contextId)
                   }

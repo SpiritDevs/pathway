@@ -174,6 +174,7 @@ interface TimelineRowSharedState {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview: (relativePath: string, line?: number) => void;
+  onOpenIssueContext: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
@@ -210,6 +211,7 @@ const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
 const EMPTY_TIMELINE_SUBAGENTS: ReadonlyArray<SubagentTimelineModel> = [];
 const NOOP_OPEN_FILE_PREVIEW = (_relativePath: string, _line?: number) => undefined;
+const NOOP_OPEN_ISSUE_CONTEXT = (_context: IssueContextSelection) => undefined;
 const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 
 // ---------------------------------------------------------------------------
@@ -235,6 +237,7 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview?: (relativePath: string, line?: number) => void;
+  onOpenIssueContext?: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen?: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
@@ -298,6 +301,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
+  onOpenIssueContext = NOOP_OPEN_ISSUE_CONTEXT,
   onPanelSurfaceOpen = NOOP_PANEL_SURFACE_OPEN,
   onOpenThread,
   parentThreadLink = null,
@@ -645,6 +649,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
+      onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
@@ -675,6 +680,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
+      onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
@@ -2187,16 +2193,22 @@ const UserMessageElementContextChip = memo(function UserMessageElementContextChi
 const UserMessageIssueContextChip = memo(function UserMessageIssueContextChip(props: {
   context: IssueContextSelection;
 }) {
+  const ctx = use(TimelineRowCtx);
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className="inline-flex max-w-72 items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-xs text-foreground/85">
+          <button
+            type="button"
+            aria-label={`Open ${props.context.key}`}
+            className="inline-flex max-w-72 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-xs text-foreground/85 outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => ctx.onOpenIssueContext(props.context)}
+          >
             <CircleDotIcon className="size-3 shrink-0" aria-hidden />
             <span className="truncate">
               {props.context.key} {props.context.title}
             </span>
-          </span>
+          </button>
         }
       />
       <TooltipPopup side="top" className="max-w-96 whitespace-normal leading-tight">

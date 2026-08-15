@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { ContextMenuItem } from "@t3tools/contracts";
+import { threadIsVisibleAt, type ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import { isPullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
 import {
@@ -103,7 +103,7 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "title"> & {
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "locations" | "title"> & {
     environmentId: string;
     projectId: string;
   },
@@ -111,6 +111,7 @@ export function filterSidebarV2VisibleThreads<
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
+      threadIsVisibleAt(thread, "agents") &&
       thread.lineage.relationshipToParent === null &&
       !isPullRequestReviewThreadTitle(thread.title) &&
       (scopedProjectKeys === null ||

@@ -15,6 +15,7 @@ import {
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
+  ThreadLocation,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -227,6 +228,7 @@ const PersistedDraftThreadState = Schema.Struct({
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  locations: Schema.optionalKey(Schema.Array(ThreadLocation)),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
@@ -334,6 +336,7 @@ export interface DraftSessionState {
   createdAt: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  locations: ReadonlyArray<ThreadLocation>;
   branch: string | null;
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
@@ -402,6 +405,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      locations?: ReadonlyArray<ThreadLocation>;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -417,6 +421,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      locations?: ReadonlyArray<ThreadLocation>;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -431,6 +436,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      locations?: ReadonlyArray<ThreadLocation>;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1482,6 +1488,7 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    locations?: ReadonlyArray<ThreadLocation>;
   },
 ): DraftThreadState {
   // A project change (including switching environments within a logical
@@ -1517,6 +1524,7 @@ function createDraftThreadState(
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
     interactionMode:
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
+    locations: options?.locations ?? existingThread?.locations ?? ["agents"],
     branch: nextBranch,
     worktreePath: nextWorktreePath,
     envMode:
@@ -1550,6 +1558,8 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
+    left.locations.length === right.locations.length &&
+    left.locations.every((location, index) => location === right.locations[index]) &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
@@ -2101,7 +2111,10 @@ function partializeComposerDraftStoreState(
     if (!keptSessionKeys.has(threadKey)) {
       continue;
     }
-    persistedDraftThreadsByThreadKey[threadKey] = draftThread;
+    persistedDraftThreadsByThreadKey[threadKey] = {
+      ...draftThread,
+      locations: [...draftThread.locations],
+    };
   }
   return {
     draftsByThreadKey: persistedDraftsByThreadKey,
@@ -2359,6 +2372,7 @@ function toHydratedDraftThreadState(
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
     interactionMode: persistedDraftThread.interactionMode,
+    locations: persistedDraftThread.locations ?? ["agents"],
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
@@ -2592,6 +2606,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   : options.createdAt || existing.createdAt,
               runtimeMode: options.runtimeMode ?? existing.runtimeMode,
               interactionMode: options.interactionMode ?? existing.interactionMode,
+              locations: options.locations ?? existing.locations,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
               envMode:
@@ -2606,6 +2621,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&
               nextDraftThread.interactionMode === existing.interactionMode &&
+              nextDraftThread.locations.length === existing.locations.length &&
+              nextDraftThread.locations.every(
+                (location, index) => location === existing.locations[index],
+              ) &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&

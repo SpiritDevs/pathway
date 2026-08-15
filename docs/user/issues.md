@@ -20,7 +20,12 @@ and the whole list stays fast at thousands of rows.
 - Shift-click to select a range. A bar appears with bulk **Status**, **Priority**, **Labels**,
   **Investigate**, **Ask AI**, and **Delete** for everything selected. **Ask AI** opens a draft with
   one compact badge per issue, leaving the prompt clear for your question while the agent receives
-  the selected issue context. `Escape` clears the selection.
+  the selected issue context. Select a badge in the Issues assistant to review that issue in a
+  neighbouring tab and then return to the conversation. In a regular agent conversation, selecting
+  the same badge opens the issue detail sheet for a quick review. `Escape` clears the selection.
+- Use the panel button beside the view controls to open or close the Issues sidebar. Its **Side
+  chat** conversations belong to Issues and stay out of the agent thread list; **Browser** tabs are
+  also available in the desktop app.
 
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.

@@ -153,6 +153,7 @@ export function buildLocalDraftThread(
     worktreePath: draftThread.worktreePath,
     activeProviderThreadId: null,
     lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+    locations: draftThread.locations,
     forkedFrom: null,
     createdBy: "user",
     creationSource: "web",

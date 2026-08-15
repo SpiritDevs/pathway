@@ -53,6 +53,7 @@ import { cn, randomUUID } from "~/lib/utils";
 import {
   useCreateIssue,
   useCreateIssueComment,
+  useCreateIssueLabel,
   useIssueCycles,
   useIssueMilestonesForProject,
   useIssuesStore,
@@ -76,18 +77,14 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
-import {
-  IssueAssigneeGlyph,
-  IssueLabelDot,
-  IssuePriorityIcon,
-  IssueStatusDot,
-} from "./IssueGlyphs";
+import { IssueAssigneeGlyph, IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
 import {
   IssueCyclePicker,
   IssueMilestonePicker,
   IssueSearchList,
   IssueStatusGlyphFor,
 } from "./IssueSelectors";
+import { IssueLabelsPicker } from "./IssueLabelsPicker";
 import {
   buildIssueTreeIndex,
   issueAncestorDepth,
@@ -290,6 +287,7 @@ export function NewIssueDialog({
 }) {
   const createIssue = useCreateIssue();
   const createComment = useCreateIssueComment();
+  const createLabel = useCreateIssueLabel();
   const uploadAttachment = useUploadIssueCommentAttachment();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
@@ -407,6 +405,17 @@ export function NewIssueDialog({
     [statuses],
   );
   const canSubmit = title.trim().length > 0 && !submitting;
+
+  const handleCreateLabel = useCallback(
+    async (input: { readonly name: string; readonly color: string }) => {
+      const created = await createLabel(input);
+      if (reportIssueWriteFailure("Failed to create the label", created)) return false;
+      if (!AsyncResult.isSuccess(created)) return false;
+      setLabelIds((current) => [...current, created.value.label.id]);
+      return true;
+    },
+    [createLabel],
+  );
 
   const reportAttachmentRejection = useCallback((message: string) => {
     toastManager.add(
@@ -815,7 +824,13 @@ export function NewIssueDialog({
                 )}
               </PickerPopover>
 
-              <PickerPopover
+              <IssueLabelsPicker
+                labels={labels}
+                onCreate={handleCreateLabel}
+                onToggle={(labelId) =>
+                  setLabelIds((current) => toggleIssueLabelIds(current, labelId))
+                }
+                selectedLabelIds={labelIds}
                 title="Labels"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
@@ -827,28 +842,7 @@ export function NewIssueDialog({
                         : `${selectedLabels[0]?.name} +${selectedLabels.length - 1}`}
                   </button>
                 }
-              >
-                {() =>
-                  labels.length === 0 ? (
-                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                      No labels yet — add them in Settings → Labels.
-                    </p>
-                  ) : (
-                    labels.map((label) => (
-                      <PickerOption
-                        key={label.id}
-                        onSelect={() =>
-                          setLabelIds((current) => toggleIssueLabelIds(current, label.id))
-                        }
-                        selected={labelIds.includes(label.id)}
-                      >
-                        <IssueLabelDot color={label.color} />
-                        <span className="truncate">{label.name}</span>
-                      </PickerOption>
-                    ))
-                  )
-                }
-              </PickerPopover>
+              />
 
               <button
                 aria-label={showMore ? "Hide more issue properties" : "Show more issue properties"}

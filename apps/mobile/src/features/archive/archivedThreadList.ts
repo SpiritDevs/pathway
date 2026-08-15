@@ -5,7 +5,7 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { threadIsVisibleAt, type EnvironmentId } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
@@ -46,7 +46,7 @@ export function buildArchivedThreadGroups(input: {
     const environmentLabel = input.environmentLabels[entry.environmentId] ?? null;
     const threadsByProjectId = new Map<string, EnvironmentThreadShell[]>();
     for (const thread of entry.snapshot.threads) {
-      if (thread.archivedAt === null) {
+      if (thread.archivedAt === null || !threadIsVisibleAt(thread, "agents")) {
         continue;
       }
       const threads = threadsByProjectId.get(thread.projectId) ?? [];

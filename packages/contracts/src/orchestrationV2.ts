@@ -45,6 +45,7 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { ThreadLocation } from "./threadLocation.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -357,6 +358,7 @@ export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
 });
 export type OrchestrationV2ThreadPreviewActivity = typeof OrchestrationV2ThreadPreviewActivity.Type;
 
+/** Product views in which a thread is intentionally discoverable. */
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -372,6 +374,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   lineage: OrchestrationV2AppThreadLineage,
   /** Distinguishes user-created side chats from ordinary conversation forks. */
   forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
+  /** A multi-select marker for the product views that should list this thread. */
+  locations: Schema.optional(Schema.Array(ThreadLocation)),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -1366,6 +1370,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   lineage: OrchestrationV2AppThreadLineage,
   forkKind: OrchestrationV2AppThread.fields.forkKind,
+  locations: OrchestrationV2AppThread.fields.locations,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   latestRunId: Schema.NullOr(RunId),
@@ -2080,6 +2085,7 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    locations: Schema.optional(Schema.Array(ThreadLocation)),
     branch: Schema.NullOr(TrimmedNonEmptyString),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   }),
@@ -2525,6 +2531,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  locations: Schema.optional(Schema.Array(ThreadLocation)),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   initialMessage: Schema.optional(
     Schema.Struct({

@@ -874,6 +874,7 @@ export function threadShellFromProjection(
     worktreePath: projection.thread.worktreePath,
     lineage: projection.thread.lineage,
     forkKind: projection.thread.forkKind,
+    locations: projection.thread.locations,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     latestRunId: latestRun?.id ?? null,

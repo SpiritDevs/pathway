@@ -10,6 +10,7 @@ import {
   ProjectId,
   type RunId,
   type RuntimeMode,
+  type ThreadLocation,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -65,6 +66,7 @@ export interface ThreadLaunchInput {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly locations?: ReadonlyArray<ThreadLocation>;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly createdBy: OrchestrationV2Actor;
@@ -487,6 +489,7 @@ export const make = Effect.gen(function* () {
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
                 interactionMode: input.interactionMode,
+                ...(input.locations === undefined ? {} : { locations: input.locations }),
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
                 createdBy: input.createdBy,

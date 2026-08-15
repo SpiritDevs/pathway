@@ -30,7 +30,12 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { Issue, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  threadIsVisibleAt,
+  type Issue,
+  type ScopedThreadRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -627,7 +632,11 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       const session = store.getDraftSession(draftId);
       const composer = store.getComposerDraft(draftId);
       row =
-        session && session.promotedTo == null && composer && composerDraftHasUserContent(composer)
+        session &&
+        session.promotedTo == null &&
+        threadIsVisibleAt(session, "agents") &&
+        composer &&
+        composerDraftHasUserContent(composer)
           ? { draftId, session, composer }
           : null;
     }
@@ -640,6 +649,9 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     // unmapped, so the mapping only knows about the latest per project.
     for (const [draftKey, session] of Object.entries(draftThreadsByThreadKey)) {
       if (session.promotedTo != null) {
+        continue;
+      }
+      if (!threadIsVisibleAt(session, "agents")) {
         continue;
       }
       if (
@@ -1702,6 +1714,10 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const agentThreads = useMemo(
+    () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
+    [threads],
+  );
   const startWorkIssuesByThread = useStartWorkIssuesByThread();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -1865,8 +1881,9 @@ export default function Sidebar() {
     ],
   );
   const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+    () =>
+      sortLogicalProjectsForSidebar(unsortedProjectGroups, agentThreads, sidebarProjectSortOrder),
+    [agentThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
@@ -2006,6 +2023,9 @@ export default function Sidebar() {
       if (session.promotedTo != null) {
         continue;
       }
+      if (!threadIsVisibleAt(session, "agents")) {
+        continue;
+      }
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
         continue;
       }
@@ -2063,7 +2083,7 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+    const visible = filterSidebarV2VisibleThreads(agentThreads, scopedProjectKeys);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -2135,7 +2155,7 @@ export default function Sidebar() {
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
-    threads,
+    agentThreads,
   ]);
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device

@@ -13,6 +13,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { isPullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
+import { threadIsVisibleAt } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Platform, Pressable, StyleSheet, TextInput, View, useColorScheme } from "react-native";
@@ -195,7 +196,11 @@ function ThreadNavigationSidebarPane(
   const projects = useProjects();
   const allThreads = useThreadShells();
   const threads = useMemo(
-    () => allThreads.filter((thread) => !isPullRequestReviewThreadTitle(thread.title)),
+    () =>
+      allThreads.filter(
+        (thread) =>
+          threadIsVisibleAt(thread, "agents") && !isPullRequestReviewThreadTitle(thread.title),
+      ),
     [allThreads],
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();

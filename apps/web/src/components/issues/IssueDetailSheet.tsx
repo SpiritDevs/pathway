@@ -135,7 +135,7 @@ import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { ScrollArea } from "../ui/scroll-area";
-import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
+import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
@@ -230,6 +230,7 @@ export function IssueDetailSheet({
   onClose,
   onOpenInIssues,
   onOpenIssueKey,
+  presentation = "sheet",
   startWorkRequestProvider = null,
   startWorkRequestProjectId = null,
   onStartWorkRequestHandled,
@@ -241,6 +242,8 @@ export function IssueDetailSheet({
   onOpenInIssues?: (key: string) => void;
   /** Reopens the sheet on an undone delete, which arrives after the sheet has already closed. */
   onOpenIssueKey: (key: string) => void;
+  /** Inline fills a right-panel tab; sheet keeps the normal non-modal overlay behavior. */
+  presentation?: "sheet" | "inline";
   /** A triage Start Task press waiting for the accepted assignment to reach this sheet. */
   startWorkRequestProvider?: ProviderDriverKind | null;
   startWorkRequestProjectId?: ProjectId | null;
@@ -324,6 +327,45 @@ export function IssueDetailSheet({
     "--right-panel-sheet-max-width": `${maxWidth}px`,
   } as CSSProperties;
 
+  const content =
+    issue === null ? (
+      <IssueDetailPlaceholder
+        issueKey={issueKey}
+        onClose={onClose}
+        showCloseButton={presentation === "sheet"}
+        state={state}
+      />
+    ) : (
+      <IssueDetailBody
+        issue={issue}
+        key={issue.id}
+        canGoBack={historyMatchesIssue && history.index > 0}
+        canGoForward={historyMatchesIssue && history.index < history.entries.length - 1}
+        onBack={() => moveThroughHistory(-1)}
+        onClose={onClose}
+        onOpenInIssues={onOpenInIssues}
+        onForward={() => moveThroughHistory(1)}
+        onOpenIssueKey={openFromSheet}
+        onStartWorkRequestHandled={onStartWorkRequestHandled}
+        propertiesMaxWidth={propertiesMaxWidth}
+        propertiesSize={propertiesSize}
+        showHeaderCloseButton={presentation === "sheet"}
+        startWorkRequestProvider={startWorkRequestProvider}
+        startWorkRequestProjectId={startWorkRequestProjectId}
+      />
+    );
+
+  if (presentation === "inline") {
+    return (
+      <div
+        className="@container/issue-detail flex min-h-0 flex-1 flex-col bg-background"
+        style={sheetStyle}
+      >
+        {content}
+      </div>
+    );
+  }
+
   return (
     <Sheet
       modal={false}
@@ -347,26 +389,7 @@ export function IssueDetailSheet({
       >
         <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
         <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Issue"}</SheetTitle>
-        {issue === null ? (
-          <IssueDetailPlaceholder issueKey={issueKey} state={state} />
-        ) : (
-          <IssueDetailBody
-            issue={issue}
-            key={issue.id}
-            canGoBack={historyMatchesIssue && history.index > 0}
-            canGoForward={historyMatchesIssue && history.index < history.entries.length - 1}
-            onBack={() => moveThroughHistory(-1)}
-            onClose={onClose}
-            onOpenInIssues={onOpenInIssues}
-            onForward={() => moveThroughHistory(1)}
-            onOpenIssueKey={openFromSheet}
-            onStartWorkRequestHandled={onStartWorkRequestHandled}
-            propertiesMaxWidth={propertiesMaxWidth}
-            propertiesSize={propertiesSize}
-            startWorkRequestProvider={startWorkRequestProvider}
-            startWorkRequestProjectId={startWorkRequestProjectId}
-          />
-        )}
+        {content}
       </SheetPopup>
     </Sheet>
   );
@@ -379,6 +402,8 @@ function SheetHeaderBar({
   onTitleClick,
   titleActionLabel,
   titleActionComplete = false,
+  onClose,
+  showCloseButton = true,
 }: {
   title: string;
   children?: ReactNode;
@@ -386,6 +411,8 @@ function SheetHeaderBar({
   onTitleClick?: () => void;
   titleActionLabel?: string;
   titleActionComplete?: boolean;
+  onClose: () => void;
+  showCloseButton?: boolean;
 }) {
   return (
     <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
@@ -414,27 +441,35 @@ function SheetHeaderBar({
         {titleAccessory}
       </div>
       {children}
-      <SheetClose
-        aria-label="Close issue"
-        className="[-webkit-app-region:no-drag]"
-        render={<Button size="icon-xs" variant="ghost" />}
-      >
-        <XIcon />
-      </SheetClose>
+      {showCloseButton ? (
+        <Button
+          aria-label="Close issue"
+          className="[-webkit-app-region:no-drag]"
+          onClick={onClose}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <XIcon />
+        </Button>
+      ) : null}
     </div>
   );
 }
 
 function IssueDetailPlaceholder({
   issueKey,
+  onClose,
+  showCloseButton,
   state,
 }: {
   issueKey: string | null;
+  onClose: () => void;
+  showCloseButton: boolean;
   state: ReturnType<typeof resolveIssueDetailState>;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar title={issueKey ?? ""} />
+      <SheetHeaderBar onClose={onClose} showCloseButton={showCloseButton} title={issueKey ?? ""} />
       {state === "loading" ? (
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-4 text-muted-foreground" />
@@ -471,6 +506,7 @@ function IssueDetailBody({
   onForward,
   propertiesMaxWidth,
   propertiesSize,
+  showHeaderCloseButton,
   startWorkRequestProvider,
   startWorkRequestProjectId,
   onStartWorkRequestHandled,
@@ -485,6 +521,7 @@ function IssueDetailBody({
   onForward: () => void;
   propertiesMaxWidth: number;
   propertiesSize: ReturnType<typeof useResizableWidth>;
+  showHeaderCloseButton: boolean;
   startWorkRequestProvider: ProviderDriverKind | null;
   startWorkRequestProjectId: ProjectId | null;
   onStartWorkRequestHandled: (() => void) | undefined;
@@ -1365,6 +1402,8 @@ function IssueDetailBody({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SheetHeaderBar
+        onClose={onClose}
+        showCloseButton={showHeaderCloseButton}
         onTitleClick={() => copyIssueKey(issue.key, undefined)}
         title={issue.key}
         titleActionComplete={issueKeyCopied}

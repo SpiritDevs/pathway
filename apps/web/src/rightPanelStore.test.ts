@@ -249,6 +249,36 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("drops Issues workspace tabs from persisted thread panels", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issue:ISS-27",
+            surfaces: [
+              {
+                id: "issue:ISS-27",
+                kind: "issue",
+                issueKey: "ISS-27",
+                title: "Make the issue detail taller",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: false,
+          activeSurfaceId: null,
+          surfaces: [],
+        },
+      },
+      threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
   it("persists inline preference without restoring an open popover", () => {
     expect(
       migratePersistedRightPanelState({

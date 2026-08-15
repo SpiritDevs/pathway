@@ -231,6 +231,25 @@ function waitUntil<E, R>(predicate: () => Effect.Effect<boolean, E, R>): Effect.
   });
 }
 
+it.effect("persists the views selected for a launched thread", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:issues-location",
+        thread: "thread:launch:issues-location",
+      });
+
+      const launched = yield* launches.launch({ ...input, locations: ["issues"] });
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+
+      assert.deepEqual(projection.thread.locations, ["issues"]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
 it.effect("returns a visible preparing message while provisioning is still blocked", () =>
   Effect.gen(function* () {
     const worktreeEntered = yield* Deferred.make<void>();
