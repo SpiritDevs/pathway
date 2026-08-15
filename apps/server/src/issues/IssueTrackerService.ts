@@ -410,6 +410,8 @@ export interface IssueIntakeCommentResult {
 }
 
 export interface IssueTrackerServiceShape {
+  /** Whether the complete company replica is the authority for issue reads in this environment. */
+  readonly replicaRoutable: Effect.Effect<boolean>;
   /** Full durable source model used only by the explicit cloud migration preview/executor. */
   readonly readLocalIssueSnapshot: Effect.Effect<LocalIssueSnapshot, IssueTrackerRepositoryError>;
   /**
@@ -796,6 +798,18 @@ const invalid = (message: string, subject?: string) =>
 
 const storage = (operation: string) => (cause: IssueTrackerRepositoryError) =>
   new IssueTrackerError({ reason: "storage", message: `${operation}: ${cause.message}` });
+
+/** Local corners the replica-aware client still intentionally receives from the legacy stream. */
+export function isReplicaIssueStreamEventAllowed(event: IssuesStreamEvent): boolean {
+  return (
+    event._tag === "ConfigChanged" ||
+    event._tag === "SlackWatchesChanged" ||
+    event._tag === "SlackStatusChanged" ||
+    // Enrichment remains a deliberately local feature. The current replica client still seeds
+    // and follows its run panel through this event until runs sync.
+    event._tag === "EnrichmentRunChanged"
+  );
+}
 
 const categoryRank = (category: IssueStatusCategory) => CATEGORY_ORDER.indexOf(category);
 
@@ -4708,6 +4722,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     fromReplica: (readModel: SyncedIssueDomainReadModel) => Effect.Effect<A, IssueTrackerError>,
     fromLegacy: Effect.Effect<A, IssueTrackerError>,
   ) => routeReplicaIssueRead({ replica: replicaReader.read, fromReplica, fromLegacy });
+  const replicaRoutable = replicaReader.read.pipe(Effect.map((readModel) => readModel !== null));
   const plans = (
     operations: ReadonlyArray<IssueSyncOperation>,
   ): ReadonlyArray<ReplicaOperationPlan> => operations.map((operation) => ({ operation }));
@@ -5383,6 +5398,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   );
 
   return {
+    replicaRoutable,
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,
     getDetail,
@@ -5455,6 +5471,28 @@ export const makeIssueTrackerService = Effect.fn(function* (
           // reach this client, whereas a repeated upsert is a no-op. Opening the stream is also a
           // read of the tracker, so it carries any lazy cycle finalisation with it.
           const subscription = yield* PubSub.subscribe(changes);
+          const readModel = yield* replicaReader.read;
+          if (readModel !== null) {
+            const [slackWatches, status, config] = yield* Effect.all([
+              listSlackWatches(),
+              Ref.get(slackStatus),
+              readConfig(),
+            ]);
+            const initial: ReadonlyArray<IssuesStreamEvent> = [
+              { _tag: "StatusesChanged", statuses: [] },
+              { _tag: "LabelsChanged", labels: [] },
+              { _tag: "MilestonesChanged", milestones: [] },
+              { _tag: "CyclesChanged", cycles: [] },
+              { _tag: "ViewsChanged", views: [] },
+              { _tag: "SlackWatchesChanged", watches: slackWatches },
+              { _tag: "SlackStatusChanged", status },
+              { _tag: "ConfigChanged", config },
+            ];
+            const legacyCorners = Stream.fromSubscription(subscription).pipe(
+              Stream.filter(isReplicaIssueStreamEventAllowed),
+            );
+            return Stream.concat(Stream.fromIterable(initial), legacyCorners);
+          }
           const snapshot = yield* finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot()));
           const threadLinks = yield* listThreadLinks();
           const threadLinksByIssue = new Map<IssueId, Array<IssueThreadLink>>();
@@ -5479,7 +5517,14 @@ export const makeIssueTrackerService = Effect.fn(function* (
               links,
             })),
           ];
-          return Stream.concat(Stream.fromIterable(initial), Stream.fromSubscription(subscription));
+          const live = Stream.fromSubscription(subscription).pipe(
+            Stream.filterEffect((event) =>
+              isReplicaIssueStreamEventAllowed(event)
+                ? Effect.succeed(true)
+                : replicaReader.read.pipe(Effect.map((readModel) => readModel === null)),
+            ),
+          );
+          return Stream.concat(Stream.fromIterable(initial), live);
         }),
       );
     },

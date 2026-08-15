@@ -1581,7 +1581,10 @@ export const WsIssuesTriageRejectRpc = Rpc.make(ISSUES_WS_METHODS.triageReject, 
 });
 
 export const WsIssuesStreamRpc = Rpc.make(ISSUES_WS_METHODS.stream, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    /** C8 capability: absent means a pre-cutover client that may only receive the safe stream. */
+    clientProtocolVersion: Schema.optionalKey(Schema.Literal(1)),
+  }),
   success: IssuesStreamEvent,
   error: IssuesRpcError,
   stream: true,

@@ -125,6 +125,7 @@ import {
 import { receiptMappedResult, routeIssueMutationCommand } from "./issueMutationRouting";
 import {
   issueDetailProjectionFromReplica,
+  issueThreadLinksFromReplica,
   issuesStoreFromReplica,
   selectReplicaRoutedIssueRead,
 } from "./issuesFromReplica";
@@ -679,7 +680,7 @@ const issuesConnectionGenerationAtom = Atom.family((environmentId: EnvironmentId
 const issuesChanges = createEnvironmentSubscriptionAtomFamily(connectionAtomRuntime, {
   label: "environment-data:issues:changes",
   subscribe: (_generation: number) =>
-    subscribe(ISSUES_WS_METHODS.stream, {}).pipe(
+    subscribe(ISSUES_WS_METHODS.stream, { clientProtocolVersion: 1 }).pipe(
       Stream.chunks,
       Stream.mapAccum(
         () => EMPTY_ISSUES_STREAM_STATE,
@@ -796,6 +797,27 @@ const issueAgentStateAtom = Atom.make(
   (get): IssueAgentState => get(issuesStreamViewAtom).state.agents,
 ).pipe(Atom.withLabel("web-issue-agent-state"));
 
+export function groupIssueThreadLinksByIssue(
+  links: ReadonlyArray<IssueThreadLink>,
+): ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>> {
+  const byIssue = new Map<IssueId, Array<IssueThreadLink>>();
+  for (const link of links) {
+    const current = byIssue.get(link.issueId);
+    if (current === undefined) byIssue.set(link.issueId, [link]);
+    else current.push(link);
+  }
+  return byIssue;
+}
+
+/** Replica mode must not depend on the legacy stream for issue-owned thread links. */
+const effectiveIssueThreadLinksByIssueAtom = Atom.make((get) =>
+  get(activeCompanyReplicaRoutingAtom) === null
+    ? get(issueAgentStateAtom).linksByIssue
+    : groupIssueThreadLinksByIssue(
+        issueThreadLinksFromReplica(get(syncedIssueDomainAtom).issueThreadLinks),
+      ),
+).pipe(Atom.withLabel("web-effective-issue-thread-links-by-issue"));
+
 /**
  * The issue that created each work thread. Manual links remain a detail-sheet concern: the
  * sidebar code is provenance, matching the thread-details issue panel.
@@ -825,7 +847,10 @@ export function startWorkIssuesByThread(
 
 const startWorkIssuesByThreadAtom = Atom.make(
   (get): ReadonlyMap<ThreadId, Issue> =>
-    startWorkIssuesByThread(get(issuesStoreAtom).issuesById, get(issueAgentStateAtom).linksByIssue),
+    startWorkIssuesByThread(
+      get(issuesStoreAtom).issuesById,
+      get(effectiveIssueThreadLinksByIssueAtom),
+    ),
 ).pipe(Atom.withLabel("web-start-work-issues-by-thread"));
 
 /**
@@ -1750,25 +1775,27 @@ export function useIssueLinksForThread(
   threadId: ThreadId | null,
   enabled = true,
 ): IssueLinksForThreadView {
+  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || threadId === null || !enabled
+    replicaCompanyId !== null || environmentId === null || threadId === null || !enabled
       ? null
       : issueLinksForThreadQuery({ environmentId, input: { threadId } }),
   );
-  const patchesByIssue = useAtomValue(issueAgentStateAtom).linksByIssue;
+  const linksByIssue = useAtomValue(effectiveIssueThreadLinksByIssueAtom);
   const links = useMemo(
     () =>
       threadId === null
         ? EMPTY_THREAD_LINKS
-        : mergeIssueLinksForThread(
-            query.data?.links ?? EMPTY_THREAD_LINKS,
-            patchesByIssue,
-            threadId,
-          ),
-    [patchesByIssue, query.data, threadId],
+        : mergeIssueLinksForThread(query.data?.links ?? EMPTY_THREAD_LINKS, linksByIssue, threadId),
+    [linksByIssue, query.data, threadId],
   );
-  return { links, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return {
+    links,
+    isPending: replicaCompanyId === null ? query.isPending : false,
+    error: replicaCompanyId === null ? query.error : null,
+    refresh: replicaCompanyId === null ? query.refresh : NOOP_REPLICA_REFRESH,
+  };
 }
 
 /** For the list and the board: one subscription, membership-stable, no per-row reads. */

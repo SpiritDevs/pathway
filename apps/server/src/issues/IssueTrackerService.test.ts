@@ -101,6 +101,26 @@ const ROOTLESS_PROJECT = ProjectId.make("project-rootless");
 const ROUTED_COMPANY_ID = CompanyId.make("company-routed-issue-writes");
 const ROUTED_ENVIRONMENT_ID = EnvironmentId.make("environment-routed-issue-writes");
 
+function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): IssueReplicaReader {
+  const readModel = issueReadModelFromStoredReplica({
+    checkpoint: {
+      schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+      bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+      companyId: ROUTED_COMPANY_ID,
+      cursor: CompanyVersion.make(1),
+      authorizationEpoch: AuthorizationEpoch.make(1),
+      bootstrapped: true,
+    },
+    entities,
+    outbox: [],
+    rejected: [],
+    quarantined: [],
+    localSequenceHighWater: LocalSequence.make(0),
+  });
+  if (readModel === null) throw new Error("The ready replica fixture did not decode.");
+  return { companyId: ROUTED_COMPANY_ID, read: Effect.succeed(readModel) };
+}
+
 function routedStoredEntity(
   entityKind: SyncEntityKind,
   payload: Record<string, unknown>,
@@ -423,6 +443,68 @@ describe("IssueTrackerService", () => {
         ),
       ),
     ),
+  );
+
+  it.effect(
+    "limits a replica-routed issue stream to empty issue state and local client corners",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* makeIssueTrackerService({
+          replicaReader: readyReplicaReader(),
+          syncEngineRegistry: null,
+        });
+
+        const events = yield* Stream.runCollect(
+          Stream.take(tracker.stream, 11).pipe(
+            Stream.merge(
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  yield* tracker.importCsv({ csvText: "ID,Title\nPAT-1,Legacy intake\n" }, ACTOR);
+                  yield* tracker.slackWatchCreate({
+                    channelId: "C1",
+                    channelName: "triage",
+                  });
+                  yield* tracker.slackRecordPoll({ error: null });
+                }),
+              ).pipe(Stream.drain),
+            ),
+          ),
+        );
+
+        assert.deepStrictEqual(
+          events.map((event) => event._tag),
+          [
+            "StatusesChanged",
+            "LabelsChanged",
+            "MilestonesChanged",
+            "CyclesChanged",
+            "ViewsChanged",
+            "SlackWatchesChanged",
+            "SlackStatusChanged",
+            "ConfigChanged",
+            "ConfigChanged",
+            "SlackWatchesChanged",
+            "SlackStatusChanged",
+          ],
+        );
+        assert.isFalse(events.some((event) => event._tag === "IssueUpserted"));
+        for (const event of events.slice(0, 5)) {
+          if (event._tag === "StatusesChanged") assert.deepStrictEqual(event.statuses, []);
+          if (event._tag === "LabelsChanged") assert.deepStrictEqual(event.labels, []);
+          if (event._tag === "MilestonesChanged") assert.deepStrictEqual(event.milestones, []);
+          if (event._tag === "CyclesChanged") assert.deepStrictEqual(event.cycles, []);
+          if (event._tag === "ViewsChanged") assert.deepStrictEqual(event.views, []);
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeDependencyLayer(),
+            Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+            Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+            Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+          ),
+        ),
+      ),
   );
 
   it.effect("allocates keys in order and appends each issue after the last in its column", () =>

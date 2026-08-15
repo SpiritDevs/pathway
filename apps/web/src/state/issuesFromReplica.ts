@@ -14,6 +14,7 @@ export {
   issueCollectionProjectionFromReplica,
   issueDetailProjectionFromReplica,
   issueFromReplica,
+  issueThreadLinksFromReplica,
   selectReplicaRoutedIssueRead,
   type IssueCollectionProjection,
   type IssueDetailProjection,
