@@ -181,10 +181,24 @@ export default defineSchema({
     syncVersion: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /**
+     * Feed version of the last `company` change, distinct from {@link syncVersion}: that is the
+     * head of the whole feed, this is where this one row last moved. Optional because rows written
+     * before the company domain joined the feed have none; `lib/companyApply` stamps it on the
+     * first write and `?? 0` reads the rest as never-changed.
+     */
+    version: v.optional(v.number()),
   }).index("by_domain_id", ["id"]),
 
   companySettings: defineTable({
     companyId: v.id("companies"),
+    /**
+     * The owning company's domain id. Settings are a singleton per company, so they borrow its
+     * identity rather than mint one — the feed still needs an `entityId`, and a second id for a row
+     * that can only ever exist once would be a second thing to keep in step. Optional for rows
+     * written before the column existed; `lib/companyApply` stamps it on the next write.
+     */
+    id: v.optional(domainId),
     /**
      * `OfflineAccessDays` from `contracts/company`: `OFFLINE_ACCESS_MIN_DAYS` to
      * `OFFLINE_ACCESS_MAX_DAYS`, which is 0-90. Zero means company data cannot be opened at all
@@ -194,7 +208,11 @@ export default defineSchema({
     updatedByMembershipId: v.union(domainId, v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_company", ["companyId"]),
+    /** Feed version of the last change touching this row; optional for the reason above. */
+    version: v.optional(v.number()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"]),
 
   memberships: defineTable({
     id: domainId,
@@ -208,9 +226,12 @@ export default defineSchema({
     joinedAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last change touching this row; optional for pre-feed rows. */
+    version: v.optional(v.number()),
   })
     .index("by_domain_id", ["id"])
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_user", ["companyId", "userId"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_user", ["userId"]),
@@ -237,17 +258,30 @@ export default defineSchema({
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last change touching this row; optional for pre-feed rows. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"]),
 
   teamMemberships: defineTable({
     companyId: v.id("companies"),
+    /**
+     * Domain id for the join row itself, so it can be a change-feed entity like every other kind.
+     * The composite `${teamId}:${membershipId}` (`teamMembershipDomainId` in `lib/companyApply`,
+     * matching `teamMembershipSyncEntityId` in `contracts/cloudSync`) rather than a minted id, so a
+     * removal tombstone names the id its upsert used and re-adding a member converges on the same
+     * entity. Optional for rows written before the column existed; stamped on the next write.
+     */
+    id: v.optional(domainId),
     teamId: v.id("teams"),
     membershipId: v.id("memberships"),
     createdAt: v.number(),
+    /** Feed version of the last change touching this row; optional for pre-feed rows. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_team", ["teamId"])
     .index("by_membership", ["membershipId"])
     .index("by_team_and_membership", ["teamId", "membershipId"]),
@@ -268,6 +302,8 @@ export default defineSchema({
     seeded: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last change touching this row; optional for pre-feed rows. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"]),
@@ -288,8 +324,11 @@ export default defineSchema({
      */
     teamId: v.union(domainId, v.null()),
     createdAt: v.number(),
+    /** Feed version of the last change touching this row; optional for pre-feed rows. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_membership", ["membershipId"])
     .index("by_membership_and_scope", ["membershipId", "scope"])
     .index("by_role", ["roleId"])

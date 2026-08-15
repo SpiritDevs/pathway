@@ -54,6 +54,7 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { requireCloudSyncEnabled } from "./lib/capability.ts";
+import type { CompanyVersionedTable } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor, type CompanyActor } from "./lib/identity.ts";
 import {
@@ -72,14 +73,19 @@ import {
 } from "./lib/validators.ts";
 
 /**
- * The identity half of change-feed filtering. An environment identity owns nothing, so it carries no
- * membership and reaches no owner-private row; a human carries theirs, which is what delivers their
- * private saved views however narrow their team grants are.
+ * The identity half of change-feed filtering. An environment identity owns nothing and is nobody's
+ * member, so it carries neither key and reaches no owner-private row and no self row; a human
+ * carries both, which is what delivers their private saved views and their own company-domain
+ * records however narrow their team grants are.
+ *
+ * The two membership keys are two id spaces, not a duplicate: saved-view ownership is recorded as a
+ * Convex id, company-domain payloads and entity ids are written in domain ids.
  */
 function changeViewer(actor: CompanyActor): ChangeViewer {
   return {
     permissions: actor.permissions,
     membershipId: actor.kind === "member" ? actor.membership._id : null,
+    membershipDomainId: actor.kind === "member" ? actor.membership.id : null,
   };
 }
 
@@ -200,7 +206,9 @@ export const listChanges = query({
       isVisible: (row) =>
         isChangeVisible(viewer, {
           entityKind: row.entityKind,
+          entityId: row.entityId,
           teamIds: row.teamIds,
+          payload: row.payload,
           ownerMembershipId: feedRowOwnerBinding(row, ownerBindings),
         }),
     });
@@ -319,7 +327,9 @@ export const bootstrap = query({
           !row.deleted &&
           isChangeVisible(viewer, {
             entityKind: kind,
+            entityId: row.id,
             teamIds: row.teamIds,
+            payload: row.payload,
             ownerMembershipId: row.ownerMembershipId,
           })
         ) {
@@ -422,8 +432,15 @@ export const reserveIssueKeys = mutation({
 // Operation application
 // ---------------------------------------------------------------------------
 
-/** The tables whose rows carry a `version` column the change feed stamps. */
-type VersionedTable =
+/**
+ * The tables whose rows carry a `version` column the change feed stamps.
+ *
+ * The company-domain half comes from `lib/companyApply`: those tables are versioned too, but no
+ * {@link DomainApply} handler writes them — company administration is online-only and appends to
+ * the same feed through its own mutations. One union keeps "stampable row" defined once.
+ */
+export type VersionedTable =
+  | CompanyVersionedTable
   | "issues"
   | "issueStatuses"
   | "issueLabels"

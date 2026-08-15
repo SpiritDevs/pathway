@@ -11,6 +11,35 @@ import {
 } from "./bootstrap.ts";
 import { SYNC_ENTITY_KINDS } from "./protocol.ts";
 
+/**
+ * The walk as the deployment before the company domain joined it minted cursors against. Kept as a
+ * literal so the append-only rule is checked against history rather than against itself.
+ */
+const ISSUE_DOMAIN_WALK = [
+  "issueStatus",
+  "issueLabel",
+  "issueMilestone",
+  "issueCycle",
+  "issue",
+  "issueTodo",
+  "issueRelation",
+  "issueComment",
+  "issueAttachment",
+  "issueView",
+  "issueThreadLink",
+  "issueAuditEvent",
+] as const;
+
+const COMPANY_DOMAIN_WALK = [
+  "company",
+  "companySettings",
+  "membership",
+  "team",
+  "teamMembership",
+  "role",
+  "roleAssignment",
+] as const;
+
 describe("BOOTSTRAP_ENTITY_ORDER", () => {
   it("names only known entity kinds, each once", () => {
     const known = new Set<string>(SYNC_ENTITY_KINDS);
@@ -18,9 +47,30 @@ describe("BOOTSTRAP_ENTITY_ORDER", () => {
     expect(new Set(BOOTSTRAP_ENTITY_ORDER).size).toBe(BOOTSTRAP_ENTITY_ORDER.length);
   });
 
-  it("walks every issue-domain kind and nothing from the company domain", () => {
-    const issueDomain = SYNC_ENTITY_KINDS.filter((kind) => kind.startsWith("issue"));
-    expect([...BOOTSTRAP_ENTITY_ORDER].sort()).toEqual([...issueDomain].sort());
+  it("walks both replicated domains, issue kinds then company kinds", () => {
+    expect([...BOOTSTRAP_ENTITY_ORDER]).toEqual([...ISSUE_DOMAIN_WALK, ...COMPANY_DOMAIN_WALK]);
+  });
+
+  it("grew append-only: the previous walk is still a prefix of this one", () => {
+    // Inserting a kind mid-list silently skips that table for every cursor already past the
+    // insertion point, and the miss surfaces only as a replica that is quietly short a table.
+    expect([...BOOTSTRAP_ENTITY_ORDER].slice(0, ISSUE_DOMAIN_WALK.length)).toEqual([
+      ...ISSUE_DOMAIN_WALK,
+    ]);
+  });
+
+  it("leaves the kinds no mutation seeds out of the walk", () => {
+    // Seeding a kind nothing appends to the feed hands clients rows the drain can never update.
+    // Environment registration and project records are still server-query-only.
+    const walked = new Set<string>(BOOTSTRAP_ENTITY_ORDER);
+    for (const kind of [
+      "cloudProject",
+      "environmentRegistration",
+      "environmentBinding",
+      "environmentCommand",
+    ]) {
+      expect(walked.has(kind)).toBe(false);
+    }
   });
 });
 
@@ -107,7 +157,9 @@ describe("decodeBootstrapCursor refusals", () => {
     ["a fractional version", tampered("v", 1.5)],
     ["a version past the safe-integer range", tampered("v", 1e21)],
     ["an unknown entity kind", tampered("k", "holograms")],
-    ["a company-domain entity kind", tampered("k", "membership")],
+    // A real entity kind the walk does not cover: known to the protocol, but not a table this seed
+    // pages, so a token naming it has no walk position to resume from.
+    ["an entity kind outside the walk", tampered("k", "environmentCommand")],
     ["a non-string afterId", tampered("a", 7)],
     ["an untrimmed afterId the walk could never stop on", tampered("a", " 0198aaaa-1")],
     ["an afterId past the id ceiling", tampered("a", "z".repeat(129))],

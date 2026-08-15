@@ -64,6 +64,21 @@ import {
 import type { Doc, Id } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import type { DomainApply, DomainChange, DomainOutcome } from "../sync.ts";
+// The company domain's encoders, used only by `readBootstrapRows` below: a seeded company record
+// and the same record delivered by `lib/companyApply`'s feed writer must be byte-identical, which
+// only holds if there is one encoder. The dependency is one-way — nothing in `companyApply` reaches
+// back here.
+import {
+  companyRowVersion,
+  companySettingsDomainId,
+  encodeCompany,
+  encodeCompanySettings,
+  encodeMembership,
+  encodeRole,
+  encodeRoleAssignment,
+  encodeTeam,
+  encodeTeamMembership,
+} from "./companyApply.ts";
 import { actorRecord, type CompanyActor } from "./identity.ts";
 
 type FeedActor = ReturnType<typeof actorRecord>;
@@ -3021,7 +3036,18 @@ async function cachedProjectTeams(
   return teamIds;
 }
 
-function pageOf<TableName extends IssueDomainTable>(
+/**
+ * The company-domain tables a bootstrap pages by domain id. `companies` and `companySettings` are
+ * absent because they are singletons per company and are read directly rather than walked.
+ */
+type CompanyBootstrapTable =
+  | "memberships"
+  | "teams"
+  | "teamMemberships"
+  | "roles"
+  | "roleAssignments";
+
+function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
   table: TableName,
   companyId: Id<"companies">,
@@ -3037,10 +3063,68 @@ function pageOf<TableName extends IssueDomainTable>(
 }
 
 /**
+ * The domain id an encoded company payload declares. Every company encoder emits one, and it is the
+ * same value the feed writer uses as the change row's `entityId`, so taking the walk position from
+ * the payload rather than from the raw row makes "the id the seed pages by" and "the id the client
+ * files the entity under" the same string by construction — including for the two tables whose id
+ * column is optional in storage.
+ */
+function encodedCompanyDomainId(payload: unknown): string {
+  const id = (payload as { readonly id?: unknown }).id;
+  if (typeof id !== "string" || id === "") {
+    throw new Error("A company payload was encoded without a domain id.");
+  }
+  return id;
+}
+
+/**
+ * Lifts a page of company-domain rows.
+ *
+ * Three things differ from the issue lift and each is a property of the domain rather than an
+ * omission. None of these tables carries a `deletedAt` — the two rows that are really deleted
+ * (`teamMemberships`, `roleAssignments`) leave nothing behind to seed — so nothing here is a
+ * tombstone. None is owner-private: company administration records are gated by permission, and by
+ * self-visibility in `src/sync/visibility`, never by ownership. And every one is company-wide
+ * (`teamIds: []`), byte-for-byte the scope `appendCompanyChanges` writes, so a team-scoped grant is
+ * refused the same row by the seed and by the feed.
+ *
+ * `version` reads through {@link companyRowVersion}, which is `row.version ?? 0`. Zero is the value
+ * that cannot skip a later feed row: the seed's resume cursor is the company head captured on page
+ * one, so every change to this row after the seed arrives on the drain carrying a *higher* version
+ * than the payload declares and folds as an ordinary upsert. Reporting a version the row has not
+ * actually reached is the failure mode — a replica that then discards the real change as stale.
+ *
+ * One lifted row per input row, always: the pager reads "fewer rows than asked for" as "this table
+ * is exhausted", so dropping one here would end the kind's walk early.
+ */
+async function liftCompanyRows<Row extends { readonly version?: number }>(
+  rows: readonly Row[],
+  encode: (row: Row) => Promise<unknown> | unknown,
+): Promise<readonly BootstrapRow[]> {
+  const lifted: BootstrapRow[] = [];
+  for (const row of rows) {
+    const payload = await encode(row);
+    lifted.push({
+      id: encodedCompanyDomainId(payload),
+      version: companyRowVersion(row),
+      deleted: false,
+      teamIds: [],
+      ownerMembershipId: null,
+      payload,
+    });
+  }
+  return lifted;
+}
+
+/**
  * Reads the next raw slice of one entity kind's table, ascending by domain id from `afterId`, and
  * lifts each row for the pager. Deleted rows come back too — with no payload — because the walk
  * has to advance its cursor over them; the pager skips them without delivering anything, exactly
  * like the change feed skips rows the caller cannot see.
+ *
+ * The switch is exhaustive over `BootstrapEntityKind` with no `default`, deliberately: appending a
+ * kind to `BOOTSTRAP_ENTITY_ORDER` without teaching this function to read it is a compile error
+ * rather than a table the seed silently skips.
  */
 export async function readBootstrapRows(
   ctx: QueryCtx,
@@ -3148,6 +3232,55 @@ export async function readBootstrapRows(
         await pageOf(ctx, "issueAuditEvents", company._id, afterId, limit),
         (row) => cachedIssueTeams(ctx, company, cache, row.issueId),
         (row) => encodeIssueAuditEvent(company, row),
+      );
+
+    // --- company domain -----------------------------------------------------
+    // The two singletons are read directly rather than walked: there is exactly one of each per
+    // company, so a range scan would be a page of at most one row behind an index. They still
+    // honour `afterId` so the pager's "the table is exhausted" signal works the same way — once the
+    // walk has passed the row's id, the kind yields nothing and the walk moves on.
+    case "company":
+      return afterId >= company.id
+        ? []
+        : liftCompanyRows([company], (row) => encodeCompany(ctx, row));
+    case "companySettings": {
+      if (afterId >= companySettingsDomainId(company)) return [];
+      // `first` rather than `unique`: a duplicated settings row is a data fault that must not take
+      // a client's whole seed down with it, and the company is a singleton by construction anyway.
+      const settings = await ctx.db
+        .query("companySettings")
+        .withIndex("by_company", (q) => q.eq("companyId", company._id))
+        .first();
+      // A company with no settings row yet seeds none; the client falls back to its own defaults
+      // and picks the row up from the feed the moment one is written.
+      if (settings === null) return [];
+      return liftCompanyRows([settings], (row) => encodeCompanySettings(company, row));
+    }
+    case "membership":
+      return liftCompanyRows(await pageOf(ctx, "memberships", company._id, afterId, limit), (row) =>
+        encodeMembership(row),
+      );
+    case "team":
+      return liftCompanyRows(await pageOf(ctx, "teams", company._id, afterId, limit), (row) =>
+        encodeTeam(row),
+      );
+    case "teamMembership":
+      // The id column is `v.optional` in storage, and Convex sorts a missing field *before* every
+      // string on the index, so a join row written before the company domain joined the feed is not
+      // reachable from `afterId >= ""` and is not seeded. It becomes reachable the moment anything
+      // stamps it, which `appendCompanyChanges` does on the row's next write.
+      return liftCompanyRows(
+        await pageOf(ctx, "teamMemberships", company._id, afterId, limit),
+        (row) => encodeTeamMembership(ctx, row),
+      );
+    case "role":
+      return liftCompanyRows(await pageOf(ctx, "roles", company._id, afterId, limit), (row) =>
+        encodeRole(row),
+      );
+    case "roleAssignment":
+      return liftCompanyRows(
+        await pageOf(ctx, "roleAssignments", company._id, afterId, limit),
+        (row) => encodeRoleAssignment(ctx, row),
       );
   }
 }

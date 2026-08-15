@@ -82,13 +82,30 @@ access to those records would stall permanently. Unauthorized payloads are never
 explain a version gap. `sync.bootstrap` applies the same predicate to the same row shapes, so a seed
 and a drain never disagree about what an actor may hold.
 
-Three visibility classes exist, not one:
+Four visibility classes exist, not one:
 
 - **Team-scoped records** are reachable through any attached team, and a record attached to no team
   is company-wide — only a company-scoped grant reaches it.
 - **Company catalog** — company base statuses, company labels, company cycles, and milestones of
   company-wide projects — is attached to no team but reaches any actor holding `issues.read` in at
   least one team, because every team board resolves its issues against that vocabulary.
+- **Company-domain records** — company, company settings, memberships, teams, team memberships,
+  roles, and role assignments — are administration records delivered as a permission-filtered read
+  cache. Administration of them is online-only; nothing about them ever enters the outbox. Every one
+  of them is company-wide, so the first rule already says a team-scoped `members.read` sees no
+  member rows at all, and that stays true. On top of it sits one narrow widening, **self
+  visibility**: an active member always receives the `company` and `companySettings` singletons, and
+  always receives the `membership`, `teamMembership`, and `roleAssignment` rows that are about
+  _them_. Without it a member holding no administration switch replicates a company it cannot name,
+  cannot find itself in, and has no `offlineAccessDays` budget to enforce against itself while
+  disconnected. It widens nothing else: a foreign membership, a team, or a role still needs the
+  kind's read switch at company scope. The subject of a row is read from its entity id where the id
+  is the answer (a membership names itself; a team membership is the `${teamId}:${membershipId}`
+  composite) and from the payload for a role assignment, whose id is minted — so a role-assignment
+  _tombstone_ has no legible subject and is withheld. That is safe rather than merely tolerated:
+  every role-assignment write bumps the authorization epoch, so the revoked client reseeds instead
+  of waiting for a row it would not be shown. An environment identity is nobody's member and
+  receives no self rows at all.
 - **Owner-private rows** — private saved views — reach their owning membership and nobody else,
   whatever anyone's team or company grants. The owner binding is read from the entity's current
   state on every page, so a view that becomes private stops being delivered by its history too.
@@ -106,6 +123,39 @@ epoch is not a substitute for checking every query and mutation at the backend.
 A cursor older than the retained feed is expired. The client discards its confirmed replica and
 performs a full paginated bootstrap. Pending operations remain in the outbox and are rebased over
 the new confirmed snapshot before submission.
+
+### The bootstrap walk order
+
+A seed walks the replicated tables in the fixed order named by `BOOTSTRAP_ENTITY_ORDER`
+(`packages/backend/src/sync/bootstrap.ts`), ascending by domain id within each table, and suspends
+between pages in a cursor token that records exactly that position: company, snapshot version,
+entity kind, last id consumed. The token is opaque to clients, checksummed against corruption rather
+than signed, and refused outright when it names a kind this build does not walk — a refusal restarts
+the seed, which is the safe outcome; silently accepting one would finish a seed that delivered
+nothing.
+
+Three rules govern that list, and each exists because breaking it fails quietly rather than loudly.
+
+- **Append only.** Clients hold cursors across a deployment. Inserting a kind before the position an
+  in-flight cursor already passed skips that whole table for that client — the walk never goes
+  backwards — and the result is a replica quietly short one table. Appending is always safe: a
+  cursor from the previous deployment resumes where it stopped and then walks on into the new kinds,
+  and a client whose seed already finished is carried by the incremental feed instead.
+- **Grow it together with the reader.** `readBootstrapRows`
+  (`packages/backend/convex/lib/issueApply.ts`) switches exhaustively over the list with no
+  `default`, so widening the list without teaching the reader is a compile error. The reverse is not
+  checked, which is why the pairing is written down here.
+- **Never seed a kind nothing appends.** A kind that a seed delivers but no mutation ever writes a
+  change row for hands clients rows the incremental drain can never update or remove — worse than
+  not seeding them. The company domain was appended only once `lib/companyApply` began appending its
+  rows to the same feed, off the same company head.
+
+Seeded rows carry the entity's own stamped version, or zero for a row written before its table
+joined the feed. Zero is the value that cannot lose a later change: the seed's resume cursor is the
+company head captured on the _first_ page, so anything written during or after the seed arrives on
+the drain carrying a higher version and folds as an ordinary idempotent upsert. Reporting a version
+a row has not actually reached is the failure mode, because a replica would then discard the real
+change as stale.
 
 ## Local replica
 

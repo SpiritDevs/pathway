@@ -15,12 +15,21 @@ import {
   SyncApplyOperationsRequest,
   SyncApplyOperationsResponse,
   SyncChangeEnvelope,
+  SyncCompanyPayload,
+  SyncCompanySettingsPayload,
   SyncListChangesResponse,
+  SyncMembershipPayload,
   SyncOperation,
   SyncOperationEnvelope,
   SyncPresentation,
+  SyncRoleAssignmentPayload,
+  SyncRolePayload,
+  SyncTeamMembershipPayload,
+  SyncTeamPayload,
+  grantedCompanyPermissions,
   isSyncOperationKind,
   shouldReplenishIssueKeys,
+  teamMembershipSyncEntityId,
 } from "./cloudSync.ts";
 import { IssueActor, IssueAssignee } from "./issues.ts";
 
@@ -46,6 +55,13 @@ const decodeApplyResponse = Schema.decodeUnknownSync(SyncApplyOperationsResponse
 const decodeIssueKeyBlock = Schema.decodeUnknownSync(IssueKeyBlock);
 const decodePresentation = Schema.decodeUnknownSync(SyncPresentation);
 const decodeActor = Schema.decodeUnknownSync(IssueActor);
+const decodeCompany = Schema.decodeUnknownSync(SyncCompanyPayload);
+const decodeCompanySettings = Schema.decodeUnknownSync(SyncCompanySettingsPayload);
+const decodeMembership = Schema.decodeUnknownSync(SyncMembershipPayload);
+const decodeTeam = Schema.decodeUnknownSync(SyncTeamPayload);
+const decodeTeamMembership = Schema.decodeUnknownSync(SyncTeamMembershipPayload);
+const decodeRole = Schema.decodeUnknownSync(SyncRolePayload);
+const decodeRoleAssignment = Schema.decodeUnknownSync(SyncRoleAssignmentPayload);
 const decodeAssignee = Schema.decodeUnknownSync(IssueAssignee);
 
 describe("sync bounds", () => {
@@ -225,6 +241,186 @@ describe("applyOperations", () => {
         authorizationEpoch: 3,
       }),
     ).toThrow();
+  });
+});
+
+describe("company-domain change payloads", () => {
+  const OWNER = "0191f0a0-0000-7000-8000-0000000000m1";
+  const OTHER = "0191f0a0-0000-7000-8000-0000000000m2";
+  const TEAM = "0191f0a0-0000-7000-8000-0000000000t1";
+  const ROLE = "0191f0a0-0000-7000-8000-0000000000r1";
+
+  it("carries the company with its owners embedded and its protocol columns left out", () => {
+    const company = decodeCompany({
+      id: header.companyId,
+      name: "Spirit Devs",
+      issueKeyPrefix: "PAT",
+      lifecycleState: "active",
+      deletionScheduledAt: null,
+      purgeAfter: null,
+      owners: [{ membershipId: OWNER, grantedByMembershipId: null, createdAt: 1_000 }],
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    expect(company.owners.map((owner) => owner.membershipId)).toEqual([OWNER]);
+    // `syncVersion`, `authorizationEpoch`, and `nextIssueNumber` are protocol and lease state, not
+    // administered fields: they arrive on `sync.latestVersion` and would be stale here.
+    expect(Object.keys(SyncCompanyPayload.fields).sort()).toEqual([
+      "createdAt",
+      "deletionScheduledAt",
+      "id",
+      "issueKeyPrefix",
+      "lifecycleState",
+      "name",
+      "owners",
+      "purgeAfter",
+      "updatedAt",
+    ]);
+  });
+
+  it("takes a company mid-deletion, and refuses a prefix that is not an issue-key prefix", () => {
+    const scheduled = decodeCompany({
+      id: header.companyId,
+      name: "Spirit Devs",
+      issueKeyPrefix: "PAT",
+      lifecycleState: "deletionScheduled",
+      deletionScheduledAt: 5_000,
+      purgeAfter: 9_000,
+      owners: [],
+      createdAt: 1_000,
+      updatedAt: 5_000,
+    });
+    expect(scheduled.purgeAfter).toBe(9_000);
+    expect(() =>
+      decodeCompany({
+        id: header.companyId,
+        name: "Spirit Devs",
+        issueKeyPrefix: "pat-1",
+        lifecycleState: "active",
+        deletionScheduledAt: null,
+        purgeAfter: null,
+        owners: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      }),
+    ).toThrow();
+  });
+
+  it("keys the settings row by its company, because there is exactly one", () => {
+    const settings = decodeCompanySettings({
+      id: header.companyId,
+      offlineAccessDays: 0,
+      updatedByMembershipId: null,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    expect(settings.id).toBe(header.companyId);
+    expect(() =>
+      decodeCompanySettings({
+        id: header.companyId,
+        offlineAccessDays: 91,
+        updatedByMembershipId: null,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      }),
+    ).toThrow();
+  });
+
+  it("keeps the membership snapshots that outlive the person", () => {
+    const membership = decodeMembership({
+      id: OWNER,
+      userId: "user-1",
+      state: "left",
+      displayNameSnapshot: "Ada Lovelace",
+      emailSnapshot: "ada@example.com",
+      invitedByMembershipId: OTHER,
+      joinedAt: 1_000,
+      createdAt: 1_000,
+      updatedAt: 8_000,
+    });
+    expect(membership.state).toBe("left");
+    expect(membership.displayNameSnapshot).toBe("Ada Lovelace");
+  });
+
+  it("treats an archived team as a live row with a timestamp", () => {
+    expect(
+      decodeTeam({
+        id: TEAM,
+        name: "Platform",
+        description: "",
+        archivedAt: 9_000,
+        createdAt: 1_000,
+        updatedAt: 9_000,
+      }).archivedAt,
+    ).toBe(9_000);
+  });
+
+  it("gives the join table a composite id both sides derive the same way", () => {
+    const id = teamMembershipSyncEntityId(TEAM, OWNER);
+    expect(id).toBe(`${TEAM}:${OWNER}`);
+    expect(decodeTeamMembership({ id, teamId: TEAM, membershipId: OWNER, createdAt: 1 }).id).toBe(
+      id,
+    );
+  });
+
+  it("keeps a role readable when it names a switch this build does not know", () => {
+    const role = decodeRole({
+      id: ROLE,
+      name: "Manager",
+      description: "",
+      permissions: ["issues.read", "warpDrive.engage"],
+      seeded: false,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    expect(role.permissions).toEqual(["issues.read", "warpDrive.engage"]);
+    expect(grantedCompanyPermissions(role.permissions)).toEqual(["issues.read"]);
+  });
+
+  it("tags the assignment scope rather than splitting it the way storage does", () => {
+    expect(
+      decodeRoleAssignment({
+        id: "0191f0a0-0000-7000-8000-0000000000a1",
+        membershipId: OWNER,
+        roleId: ROLE,
+        scope: { kind: "company" },
+        createdAt: 1_000,
+      }).scope.kind,
+    ).toBe("company");
+    const scoped = decodeRoleAssignment({
+      id: "0191f0a0-0000-7000-8000-0000000000a1",
+      membershipId: OWNER,
+      roleId: ROLE,
+      scope: { kind: "team", teamId: TEAM },
+      createdAt: 1_000,
+    });
+    expect(scoped.scope.kind === "team" && scoped.scope.teamId).toBe(TEAM);
+    // A team-scoped grant with no team is what the storage split would let through; the wire shape
+    // cannot express it.
+    expect(() =>
+      decodeRoleAssignment({
+        id: "0191f0a0-0000-7000-8000-0000000000a1",
+        membershipId: OWNER,
+        roleId: ROLE,
+        scope: { kind: "team" },
+        createdAt: 1_000,
+      }),
+    ).toThrow();
+  });
+
+  it("names no field that would carry company scope or secret material", () => {
+    const fields = [
+      SyncCompanyPayload,
+      SyncCompanySettingsPayload,
+      SyncMembershipPayload,
+      SyncTeamPayload,
+      SyncTeamMembershipPayload,
+      SyncRolePayload,
+      SyncRoleAssignmentPayload,
+    ].flatMap((payload) => Object.keys(payload.fields));
+    for (const forbidden of ["companyId", "version", "deletedAt", "tokenHash", "token"]) {
+      expect(fields).not.toContain(forbidden);
+    }
   });
 });
 

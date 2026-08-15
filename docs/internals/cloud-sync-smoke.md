@@ -48,6 +48,14 @@ authentication. In order:
 The two tombstoned `issueLabels` rows are the only authoritative rows the run leaves behind; they
 are removed with the company by `smoke:cleanup`, whose sweep list already covers `issueLabels`.
 
+The seed the two bootstrap steps page through is not issue-only. `BOOTSTRAP_ENTITY_ORDER` walks the
+company domain after the issue domain — the company itself, its settings, memberships, teams, team
+memberships, roles, and role assignments — so a one-row-per-page walk of even an empty smoke company
+takes a page for each of the rows its own setup created. That is why `SMOKE_BOOTSTRAP_MAX_PAGES`
+exists and why it is a ceiling rather than an expected count: it catches a walk that is not
+advancing, not a walk that has more kinds than it used to. Growing the walk order means checking
+that ceiling still has headroom.
+
 ## Prerequisites
 
 - **Pathway Connect CLI credential** on this machine: run `pathway connect login` first. The harness

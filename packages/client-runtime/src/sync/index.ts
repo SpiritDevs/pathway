@@ -13,6 +13,7 @@
 export * from "./adapter.ts";
 export * from "./capability.ts";
 export * from "./codec.ts";
+export * from "./companyDomain.ts";
 export * from "./document.ts";
 export * from "./engine.ts";
 export * from "./issueDomain.ts";

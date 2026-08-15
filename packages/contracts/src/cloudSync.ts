@@ -25,7 +25,21 @@ import {
 } from "./baseSchemas.ts";
 import { ChatAttachmentId } from "./chatAttachment.ts";
 import { CloudProjectId } from "./cloudProject.ts";
-import { CompanyId, MembershipId, TeamId } from "./company.ts";
+import {
+  CloudTimestamp,
+  CloudUserId,
+  CompanyId,
+  CompanyLifecycleState,
+  MembershipId,
+  MembershipState,
+  OfflineAccessDays,
+  RoleAssignmentId,
+  RoleAssignmentScope,
+  RoleId,
+  TeamId,
+  isCompanyPermission,
+  type CompanyPermission,
+} from "./company.ts";
 import {
   ISSUE_COMMENT_MAX_ATTACHMENTS,
   ISSUE_COMMENT_MAX_CHARS,
@@ -254,6 +268,193 @@ export const SyncChangeEnvelope = Schema.Struct({
   payload: Schema.Unknown,
 });
 export type SyncChangeEnvelope = typeof SyncChangeEnvelope.Type;
+
+// ---------------------------------------------------------------------------
+// Company-domain change payloads
+// ---------------------------------------------------------------------------
+
+/**
+ * What the feed carries for the seven company-administration kinds.
+ *
+ * Company, membership, team, and role administration is online-only — none of it has an operation
+ * kind and none of it ever enters an outbox — but the records still ride the change feed so a
+ * client can render a member list, a team picker, and a permission-greyed toolbar with no
+ * connection. They are a permission-filtered read cache: `sync/visibility.ts` gates each kind on
+ * the same switch its admin screen uses, and the confirmed row always wins locally because there
+ * is no optimistic company state to merge with.
+ *
+ * Four conventions, all shared with the issue-domain payloads in
+ * `client-runtime/src/sync/issueDomain.ts`:
+ *
+ * - **No `companyId`.** A replica is one company by construction, and the id would be the same
+ *   value on every row of every page.
+ * - **No `version` and no `deletedAt`.** The envelope carries the version, and a delete is a
+ *   payloadless `tombstone` rather than a flag inside a payload.
+ * - **Timestamps are epoch milliseconds** ({@link CloudTimestamp}), matching what Convex stores.
+ * - **Free text is not validated.** Names, descriptions, and the membership snapshots decode as
+ *   plain strings: the check belongs on the mutation that writes them, and quarantining a whole
+ *   member row over a long display name would take the offline member list away instead.
+ *
+ * Two kinds are deliberately absent. `companyOwner` has no wire kind — ownership is a small,
+ * always-loaded relation, so it embeds into {@link SyncCompanyPayload.owners} rather than
+ * fragmenting the "who runs this company" answer across two feed rows that can arrive apart. And
+ * invitations never ride the feed at all: they are query-only (`invitations.list`), because a
+ * pending invitation is administration state with a secret behind it, not something a client needs
+ * offline. No payload here carries secret material — `companyInvitations.tokenHash` has no wire
+ * form anywhere in the protocol.
+ */
+
+/**
+ * One owner, embedded in its company's payload. `companyId` is dropped as everywhere else, and
+ * `membershipId` is the domain id so it joins against a {@link SyncMembershipPayload} the client
+ * already holds.
+ */
+export const SyncCompanyOwnerGrant = Schema.Struct({
+  membershipId: MembershipId,
+  /** Null for the founding owner, who was granted ownership by provisioning rather than a person. */
+  grantedByMembershipId: Schema.NullOr(MembershipId),
+  createdAt: CloudTimestamp,
+});
+export type SyncCompanyOwnerGrant = typeof SyncCompanyOwnerGrant.Type;
+
+/**
+ * The company record itself, owners included.
+ *
+ * Three stored columns are deliberately not here. `syncVersion` is the feed head this very row is
+ * appended to, so a copy inside the payload would be stale before it was written; a client reads
+ * the head from `sync.latestVersion`. `authorizationEpoch` arrives on the same query and on every
+ * page and bootstrap response, and a second copy that lagged by one change is exactly the
+ * disagreement that would stop a client reseeding when it must. `nextIssueNumber` is the issue-key
+ * lease counter: it moves on every `sync.reserveIssueKeys`, so putting it here would mean a
+ * company change row per lease, and no client has any use for it.
+ */
+export const SyncCompanyPayload = Schema.Struct({
+  id: CompanyId,
+  name: Schema.String,
+  /** The human half of every issue key in the company; immutable once keys are handed out. */
+  issueKeyPrefix: IssueKeyPrefix,
+  lifecycleState: CompanyLifecycleState,
+  deletionScheduledAt: Schema.NullOr(CloudTimestamp),
+  purgeAfter: Schema.NullOr(CloudTimestamp),
+  /** The `companyOwners` rows for this company; ownership has no wire kind of its own. */
+  owners: Schema.Array(SyncCompanyOwnerGrant),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncCompanyPayload = typeof SyncCompanyPayload.Type;
+
+/**
+ * The company's settings row. There is exactly one per company and the `companySettings` table has
+ * no domain id of its own, so `id` *is* the company's domain id and the change envelope's
+ * `entityId` is that same value.
+ */
+export const SyncCompanySettingsPayload = Schema.Struct({
+  id: CompanyId,
+  offlineAccessDays: OfflineAccessDays,
+  updatedByMembershipId: Schema.NullOr(MembershipId),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncCompanySettingsPayload = typeof SyncCompanySettingsPayload.Type;
+
+/**
+ * One person's membership. `userId` is the identity behind it, which is what lets two memberships
+ * in two companies be recognised as the same human; the snapshots are what keep a departed member
+ * readable in audit history, so they are historical text and are never re-derived.
+ */
+export const SyncMembershipPayload = Schema.Struct({
+  id: MembershipId,
+  userId: CloudUserId,
+  state: MembershipState,
+  displayNameSnapshot: Schema.String,
+  /** Normalized when written; loose here so a historical address can never quarantine a member. */
+  emailSnapshot: Schema.String,
+  invitedByMembershipId: Schema.NullOr(MembershipId),
+  joinedAt: CloudTimestamp,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncMembershipPayload = typeof SyncMembershipPayload.Type;
+
+/** A team. Archiving is a timestamp rather than a delete, so its records keep resolving. */
+export const SyncTeamPayload = Schema.Struct({
+  id: TeamId,
+  name: Schema.String,
+  description: Schema.String,
+  archivedAt: Schema.NullOr(CloudTimestamp),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncTeamPayload = typeof SyncTeamPayload.Type;
+
+/**
+ * Membership of a team. The `teamMemberships` table is a pure join with no domain id, so the wire
+ * id is the composite {@link teamMembershipSyncEntityId} — stable, derivable from either side, and
+ * therefore idempotent under redelivery.
+ */
+export const SyncTeamMembershipPayload = Schema.Struct({
+  id: SyncEntityId,
+  teamId: TeamId,
+  membershipId: MembershipId,
+  createdAt: CloudTimestamp,
+});
+export type SyncTeamMembershipPayload = typeof SyncTeamMembershipPayload.Type;
+
+/**
+ * The entity id for a team-membership feed row.
+ *
+ * Both halves are UUIDv7 domain ids, so neither can contain the separator and the composite is
+ * unambiguous. Producers and consumers must agree on it exactly: it is the key a tombstone for a
+ * removed team member has to match.
+ */
+export function teamMembershipSyncEntityId(teamId: string, membershipId: string): SyncEntityId {
+  return SyncEntityId.make(`${teamId}:${membershipId}`);
+}
+
+/**
+ * A role: an allow-only bundle of {@link CompanyPermission} switches.
+ *
+ * `permissions` decodes as plain strings for the reason the `roles` table stores it that way — a
+ * role written by a newer deployment must survive a rollback rather than quarantine the row and
+ * take the whole permission list with it. Read it through {@link grantedCompanyPermissions}, which
+ * drops the switches this build does not know; an unknown switch grants nothing either way, so the
+ * failure mode is a greyed button rather than an opened door.
+ */
+export const SyncRolePayload = Schema.Struct({
+  id: RoleId,
+  name: Schema.String,
+  description: Schema.String,
+  permissions: Schema.Array(Schema.String),
+  /** Provenance only. The seeded Admin/Manager/Member roles stay ordinary editable roles. */
+  seeded: Schema.Boolean,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncRolePayload = typeof SyncRolePayload.Type;
+
+/** The switches this build understands, in the order the role listed them. */
+export function grantedCompanyPermissions(
+  permissions: ReadonlyArray<string>,
+): ReadonlyArray<CompanyPermission> {
+  return permissions.filter(isCompanyPermission);
+}
+
+/**
+ * One role granted to one membership, company-wide or within a single team.
+ *
+ * `scope` is the tagged union from `contracts/company`, not the table's literal-plus-nullable-column
+ * split: that split exists so both "everything for this membership" and "everything through this
+ * team" are single index reads, and it is storage-only. A team-scoped grant never confers company
+ * administration — `resolveEffectivePermissions` applies that carve-out on both sides.
+ */
+export const SyncRoleAssignmentPayload = Schema.Struct({
+  id: RoleAssignmentId,
+  membershipId: MembershipId,
+  roleId: RoleId,
+  scope: RoleAssignmentScope,
+  createdAt: CloudTimestamp,
+});
+export type SyncRoleAssignmentPayload = typeof SyncRoleAssignmentPayload.Type;
 
 // ---------------------------------------------------------------------------
 // Operations

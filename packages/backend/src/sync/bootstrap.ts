@@ -1,7 +1,8 @@
 /**
  * Cursor protocol for `sync.bootstrap`, the paginated full seed.
  *
- * A bootstrap walks the issue-domain tables in a fixed order, within each table ascending by
+ * A bootstrap walks the replicated tables — the issue domain, then the company domain — in a fixed
+ * order, within each table ascending by
  * domain id — the one ordering every table can serve from its `by_company_and_domain_id` index
  * without ever revisiting or skipping a row as writes land mid-seed. The cursor token encodes the
  * walk position plus the company head captured on the first page; that head is the version the
@@ -18,14 +19,25 @@ import { SYNC_MAX_ID_CHARS } from "./operations.ts";
 import type { SyncEntityKind } from "./protocol.ts";
 
 /**
- * The tables a bootstrap seeds, in walk order. Only issue-domain kinds appear: the company-domain
- * mutations do not emit change-feed rows yet, so seeding those kinds here would hand clients rows
- * the incremental feed could never update — worse than not seeding them. The two lists must grow
- * together (see `docs/internals/cloud-sync.md`).
+ * The tables a bootstrap seeds, in walk order.
  *
- * References come before referents where cheap (statuses before issues, issues before their
- * sub-entities), but the client folds envelopes idempotently so the order is a nicety, not a
- * protocol guarantee.
+ * **Append-only.** A cursor names its walk position by entity kind, and clients hold cursors across
+ * a deployment. Inserting a kind *before* the position an in-flight cursor already passed silently
+ * skips that whole table for that client — the walk never goes backwards — and the miss is invisible
+ * until someone notices a replica with no teams in it. Appending is always safe: a cursor minted by
+ * the previous deployment resumes where it stopped and then walks on into the new kinds, and a
+ * finished seed's client is carried by the incremental feed instead. So new kinds go at the end,
+ * and only at the end.
+ *
+ * The list must also stay in step with two things that cannot be derived from it: the
+ * `readBootstrapRows` switch in `convex/lib/issueApply` (exhaustive, so widening this list without
+ * it is a compile error — but not the reverse) and whatever *writes* the kind's change rows. A kind
+ * seeded here but never appended to the feed hands clients rows the incremental drain can never
+ * update, which is worse than not seeding it at all. See `docs/internals/cloud-sync.md`.
+ *
+ * Within a domain, references come before referents where cheap (statuses before issues, issues
+ * before their sub-entities; the company before the memberships and teams that hang off it), but
+ * the client folds envelopes idempotently so the order is a nicety, not a protocol guarantee.
  */
 export const BOOTSTRAP_ENTITY_ORDER = [
   "issueStatus",
@@ -40,6 +52,16 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   "issueView",
   "issueThreadLink",
   "issueAuditEvent",
+  // The company domain, appended when its mutations began emitting feed rows (`lib/companyApply`).
+  // Administration of these records is online-only; they ride the feed as a permission-filtered
+  // read cache so a replica can render its own member list, teams, and roles offline.
+  "company",
+  "companySettings",
+  "membership",
+  "team",
+  "teamMembership",
+  "role",
+  "roleAssignment",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

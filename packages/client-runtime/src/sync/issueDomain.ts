@@ -99,6 +99,11 @@ import {
   type SyncDomainAdapter,
 } from "./adapter.ts";
 import type { SyncCodec } from "./codec.ts";
+import {
+  COMPANY_ENTITY_CODECS,
+  COMPANY_SYNC_ENTITY_KINDS,
+  type CompanySyncEntity,
+} from "./companyDomain.ts";
 import type { SyncEntityKey } from "./model.ts";
 import { syncOrderKeyAfter } from "./orderKey.ts";
 
@@ -108,8 +113,8 @@ import { syncOrderKeyAfter } from "./orderKey.ts";
 
 /**
  * The tables this domain replicates. The protocol's entity kinds also cover company
- * administration, which is online-only and never reaches an outbox, so those kinds decode to
- * `null` here and their feed rows are quarantined rather than folded.
+ * administration, which this domain does not own: {@link issueEntityCodec} answers `null` for
+ * those, and {@link module:sync/companyDomain} supplies their codecs to the widened adapter.
  */
 export const ISSUE_SYNC_ENTITY_KINDS = [
   "issue",
@@ -448,6 +453,57 @@ export function issueEntityCodec(entityKind: SyncEntityKind): SyncCodec<IssueSyn
   return isIssueSyncEntityKind(entityKind) ? ENTITY_CODECS[entityKind] : null;
 }
 
+/**
+ * Everything one replica holds: the issue domain's twelve tables plus the company domain's seven.
+ *
+ * They share an engine rather than getting one each because a replica has exactly one checkpoint
+ * and one outbox per company — a second engine would fight the first over both. So the replicated
+ * *entity* type is a union while the *operation* type stays issues-only, which is precisely the
+ * shape of the rule: issues are edited offline, company administration is not.
+ */
+export type CloudSyncEntity = IssueSyncEntity | CompanySyncEntity;
+
+/**
+ * Widens one domain's codec to the union the engine holds.
+ *
+ * `SyncCodec` is invariant — `encode` takes the entity — so a per-domain codec cannot simply be
+ * handed over. Only `encode` needs the narrowing, and it is sound for the reason the dispatch
+ * exists at all: the engine encodes an entity through the codec its own `entityKind` selected,
+ * which is the codec that decoded it in the first place.
+ */
+function widenEntityCodec<Narrow extends CloudSyncEntity>(
+  codec: SyncCodec<Narrow>,
+): SyncCodec<CloudSyncEntity> {
+  return {
+    decode: (input) => codec.decode(input),
+    encode: (value) => codec.encode(value as Narrow),
+  };
+}
+
+/**
+ * Built once rather than per lookup: the confirmed fold asks for a codec on every row of every
+ * page, and a wrapper allocated there would be one object per change.
+ */
+const CLOUD_ENTITY_CODECS: ReadonlyMap<string, SyncCodec<CloudSyncEntity>> = new Map<
+  string,
+  SyncCodec<CloudSyncEntity>
+>([
+  ...ISSUE_SYNC_ENTITY_KINDS.map((kind) => [kind, widenEntityCodec(ENTITY_CODECS[kind])] as const),
+  ...COMPANY_SYNC_ENTITY_KINDS.map(
+    (kind) => [kind, widenEntityCodec(COMPANY_ENTITY_CODECS[kind])] as const,
+  ),
+]);
+
+/**
+ * Codec for one entity kind across both domains, or `null` for a kind this build cannot read.
+ *
+ * The two kind sets are disjoint by construction, so the dispatch cannot be ambiguous: a kind is an
+ * issue table, a company table, or unknown to this build and therefore quarantined.
+ */
+export function cloudEntityCodec(entityKind: SyncEntityKind): SyncCodec<CloudSyncEntity> | null {
+  return CLOUD_ENTITY_CODECS.get(entityKind) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
@@ -585,7 +641,15 @@ const issueOperationCodec: SyncCodec<IssueSyncOperation> = {
   decode: () => Option.none(),
 };
 
-/** Recovers a stored or rejected operation from its envelope, kind included. */
+/**
+ * Recovers a stored or rejected operation from its envelope, kind included.
+ *
+ * This is also where a company-kind envelope dies. `SYNC_OPERATION_KINDS` contains no company verb
+ * — administration is online-only and never enters an outbox — so `membership.setState` and its
+ * neighbours are not operation kinds at all and answer `none`, which the engine quarantines. The
+ * company domain therefore reaches the replica only through the change feed, never through
+ * {@link IssueSyncAdapter.apply}.
+ */
 export function decodeIssueSyncOperation(
   envelope: SyncOperationEnvelope,
 ): Option.Option<IssueSyncOperation> {
@@ -659,10 +723,18 @@ export interface IssueSyncAdapterOptions {
   readonly now?: () => number;
 }
 
-export type IssueSyncAdapter = SyncDomainAdapter<IssueSyncEntity, IssueSyncOperation>;
+/**
+ * The one adapter an application wires into the engine: both domains' entities, the issue domain's
+ * operations.
+ *
+ * {@link IssueSyncAdapter} is kept as the name because the *operation* half is still issues-only —
+ * `apply`, `operationKind`, `operationTarget`, and `operationCodec` all speak
+ * {@link IssueSyncOperation} and nothing else. Only the replicated entity type widened.
+ */
+export type IssueSyncAdapter = SyncDomainAdapter<CloudSyncEntity, IssueSyncOperation>;
 
 function entityOf<K extends IssueSyncEntityKind>(
-  current: IssueSyncEntity | null,
+  current: CloudSyncEntity | null,
   entityKind: K,
 ): IssueSyncEntityOf<K> | null {
   return current !== null && current.entityKind === entityKind
@@ -674,13 +746,18 @@ const missing = (label: string): SyncApplyOutcome<IssueSyncEntity> =>
   blocked(`This ${label} was deleted before the change applied.`);
 
 /**
- * Builds the issue adapter.
+ * Builds the adapter: the issue reducer, over both domains' entities.
  *
  * The reducer is total over the thirty-three operation kinds and structural only: it never asks
  * whether the actor may write, because the server answers that and a rejection returns through
  * the outbox. Creates are idempotent (re-applying one over the confirmed row is a no-op, which is
  * what an acknowledged create replays as), updates against a missing or tombstoned row block with
  * a visible reason, and deletes tombstone unconditionally.
+ *
+ * The company kinds it now decodes never reach the reducer. They have no operation kind, so no
+ * envelope naming one survives {@link decodeIssueSyncOperation}; a forged one is quarantined by the
+ * engine instead of applied. That is the plan's rule — company administration is online-only —
+ * enforced at the one boundary an operation can enter through.
  */
 export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSyncAdapter {
   const actor = options?.actor ?? null;
@@ -689,9 +766,9 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
     actor !== null && actor.kind === "member" ? MembershipId.make(actor.membershipId) : null;
 
   const apply = (input: {
-    readonly current: IssueSyncEntity | null;
+    readonly current: CloudSyncEntity | null;
     readonly operation: IssueSyncOperation;
-  }): SyncApplyOutcome<IssueSyncEntity> => {
+  }): SyncApplyOutcome<CloudSyncEntity> => {
     const { current, operation } = input;
     const now = clock();
     switch (operation.kind) {
@@ -1114,7 +1191,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
 
   return {
     domain: "issues",
-    entityCodec: issueEntityCodec,
+    entityCodec: cloudEntityCodec,
     operationCodec: issueOperationCodec,
     operationKind: (operation) => operation.kind,
     operationTarget: issueSyncOperationTarget,

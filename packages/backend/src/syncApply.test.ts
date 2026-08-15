@@ -558,11 +558,27 @@ describe("sync.bootstrap", () => {
 
     // The reader sees the status and the two live issues — not the deleted issue, and not the
     // audit events its missing `audit.read` gates.
-    expect(entities.map((e) => [e.entityKind, e.entityId]).sort()).toEqual(
+    const issueRows = entities.filter((e) => e.entityKind.startsWith("issue"));
+    expect(issueRows.map((e) => [e.entityKind, e.entityId]).sort()).toEqual(
       [
         ["issueStatus", STATUS_ID],
         ["issue", ISSUE_A],
         ["issue", ISSUE_C],
+      ].sort(),
+    );
+    // The walk continues into the company domain (`BOOTSTRAP_ENTITY_ORDER`). The reader holds no
+    // administration switch, so it receives exactly its self rows: the company it is a member of,
+    // and its own membership and role assignment. No foreign membership and no role definition.
+    expect(
+      entities
+        .filter((e) => !e.entityKind.startsWith("issue"))
+        .map((e) => [e.entityKind, e.entityId])
+        .sort(),
+    ).toEqual(
+      [
+        ["company", COMPANY_ID],
+        ["membership", READER_MEMBERSHIP_ID],
+        ["roleAssignment", "0198c0de-aaaa-7aaa-8aaa-000000000301"],
       ].sort(),
     );
     for (const entity of entities) expect(entity.changeKind).toBe("upsert");
@@ -589,14 +605,26 @@ describe("sync.bootstrap", () => {
     expect(revised?.payload).toMatchObject({ id: ISSUE_C, title: "Third, revised" });
   });
 
-  it("an empty company bootstraps to done in one page, at version zero", async () => {
+  it("bootstraps a company with no issue history to done in one page, at version zero", async () => {
     const t = harness();
     await seed(t);
     const response = await asWriter(t).query(api.sync.bootstrap, {
       companyId: COMPANY_ID,
       cursor: null,
     });
-    expect(response).toMatchObject({ version: 0, entities: [], cursor: null, isDone: true });
+    expect(response).toMatchObject({ version: 0, cursor: null, isDone: true });
+    // Not literally empty any more: the walk covers the company domain, and the harness seeds one
+    // company, two memberships, and the reader's role and assignment. Every one is at version zero
+    // because no change has ever been appended for it, which is the value that cannot shadow the
+    // first real change to the row.
+    expect(response.entities.map((e) => e.entityKind).sort()).toEqual([
+      "company",
+      "membership",
+      "membership",
+      "role",
+      "roleAssignment",
+    ]);
+    for (const entity of response.entities) expect(entity.version).toBe(0);
   });
 });
 
@@ -1401,6 +1429,17 @@ describe("company catalog visibility", () => {
   const kinds = (rows: readonly { entityKind: string }[]) =>
     [...new Set(rows.map((row) => row.entityKind))].sort();
 
+  /**
+   * The company-domain rows a seed hands *any* active member, grants or not: the company, and the
+   * member's own membership and role assignment. Self visibility (`src/sync/visibility`) exists so
+   * a client can name its company and find itself offline, and it is unrelated to the catalog rule
+   * under test — hence a constant added to these expectations rather than a change to them.
+   *
+   * They appear only in the seed here: nothing in this file appends company-domain *change* rows,
+   * so the incremental drains stay issue-only.
+   */
+  const SELF_KINDS = ["company", "membership", "roleAssignment"];
+
   it("reaches a reader scoped to one team, on the feed and in the seed", async () => {
     const t = harness();
     await seedCatalog(t);
@@ -1412,7 +1451,9 @@ describe("company catalog visibility", () => {
       "issueLabel",
       "issueStatus",
     ]);
-    expect(kinds(await seedFor(asBeta(t)))).toEqual(["issueCycle", "issueLabel", "issueStatus"]);
+    expect(kinds(await seedFor(asBeta(t)))).toEqual(
+      [...SELF_KINDS, "issueCycle", "issueLabel", "issueStatus"].sort(),
+    );
   });
 
   it("does not widen company-wide records generally", async () => {
@@ -1447,8 +1488,9 @@ describe("company catalog visibility", () => {
 
     // The catalog widens *scope*, not the switch: with `issues.read` gone the statuses, labels, and
     // cycles go with it, and the audit events beta can now name are company-wide rather than team's.
+    // What is left in the seed is only what beta is entitled to as itself.
     expect(kinds((await drain(asBeta(t), 0)).changes)).toEqual([]);
-    expect(kinds(await seedFor(asBeta(t)))).toEqual([]);
+    expect(kinds(await seedFor(asBeta(t)))).toEqual([...SELF_KINDS].sort());
   });
 });
 

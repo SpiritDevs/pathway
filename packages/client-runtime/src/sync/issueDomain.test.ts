@@ -40,6 +40,7 @@ import { makeSyncEngine } from "./engine.ts";
 import {
   ISSUE_SYNC_APPEND_POSITION,
   ISSUE_SYNC_ENTITY_KINDS,
+  cloudEntityCodec,
   decodeIssueSyncOperation,
   defaultIssueSortOrder,
   isIssueSyncEntityKind,
@@ -50,6 +51,7 @@ import {
   issueSyncOperationEntityKind,
   issueSyncOperationTarget,
   makeIssueSyncAdapter,
+  type CloudSyncEntity,
   type IssueSyncEntity,
   type IssueSyncEntityKind,
   type IssueSyncEntityOf,
@@ -255,7 +257,7 @@ const THREAD_LINK = decodeFixture("issueThreadLink");
 
 const adapter = makeIssueSyncAdapter({ actor: ACTOR, now: () => 1_000 });
 
-function appliedEntity(outcome: SyncApplyOutcome<IssueSyncEntity>): IssueSyncEntity {
+function appliedEntity(outcome: SyncApplyOutcome<CloudSyncEntity>): CloudSyncEntity {
   if (outcome._tag !== "Applied") {
     throw new Error(`Expected Applied, got ${outcome._tag}.`);
   }
@@ -263,7 +265,7 @@ function appliedEntity(outcome: SyncApplyOutcome<IssueSyncEntity>): IssueSyncEnt
 }
 
 function appliedOf<K extends IssueSyncEntityKind>(
-  outcome: SyncApplyOutcome<IssueSyncEntity>,
+  outcome: SyncApplyOutcome<CloudSyncEntity>,
   entityKind: K,
 ): IssueSyncEntityOf<K> {
   const entity = appliedEntity(outcome);
@@ -271,8 +273,14 @@ function appliedOf<K extends IssueSyncEntityKind>(
   return entity as IssueSyncEntityOf<K>;
 }
 
-const applyTo = (current: IssueSyncEntity | null, operation: IssueSyncOperation) =>
-  adapter.apply({ current, operation });
+// The adapter answers over the widened `CloudSyncEntity` because it also decodes the company
+// domain's read-cache rows. Its reducer is still issues-only, so every outcome reachable from an
+// issue operation is an issue entity, and the cases below stay typed as such.
+const applyTo = (
+  current: IssueSyncEntity | null,
+  operation: IssueSyncOperation,
+): SyncApplyOutcome<IssueSyncEntity> =>
+  adapter.apply({ current, operation }) as SyncApplyOutcome<IssueSyncEntity>;
 
 // ---------------------------------------------------------------------------
 // Entity codecs
@@ -1187,7 +1195,7 @@ interface ServerChange {
   readonly version: CompanyVersion;
   readonly entityKind: SyncEntityKind;
   readonly entityId: SyncEntityId;
-  readonly entity: IssueSyncEntity | null;
+  readonly entity: CloudSyncEntity | null;
 }
 
 /**
@@ -1197,7 +1205,7 @@ interface ServerChange {
  */
 const makeIssueSyncServer = Effect.fn("makeIssueSyncServer")(function* () {
   const server = makeIssueSyncAdapter({ actor: OTHER_ACTOR, now: () => SERVER_NOW });
-  const entities = yield* Ref.make(new Map<string, IssueSyncEntity>());
+  const entities = yield* Ref.make(new Map<string, CloudSyncEntity>());
   const changes = yield* Ref.make<ReadonlyArray<ServerChange>>([]);
   const receipts = yield* Ref.make(new Map<SyncOperationId, SyncOperationReceipt>());
   const version = yield* Ref.make(CompanyVersion.make(0));
@@ -1272,7 +1280,7 @@ const makeIssueSyncServer = Effect.fn("makeIssueSyncServer")(function* () {
   const encodePayload = (change: ServerChange): unknown =>
     change.entity === null
       ? null
-      : (issueEntityCodec(change.entityKind)?.encode(change.entity) ?? null);
+      : (cloudEntityCodec(change.entityKind)?.encode(change.entity) ?? null);
 
   const transport = SyncTransport.of({
     bootstrap: () =>
