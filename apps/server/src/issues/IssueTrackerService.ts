@@ -149,7 +149,48 @@ import {
   issueDetailProjectionFromReplica,
   issueThreadLinksFromReplica,
 } from "@spiritdevs/backend/sync/issueLegacyProjection";
-import { syncedIssueDetailById } from "@spiritdevs/client-runtime/sync";
+import {
+  issueBulkUpdateOperations,
+  issueCommentCreateOperation,
+  issueCommentDeleteOperation,
+  issueCommentUpdateOperation,
+  issueCreateOperation,
+  issueCycleCreateOperation,
+  issueCycleDeleteOperation,
+  issueCycleUpdateOperation,
+  issueDeleteOperation,
+  issueLabelCreateOperation,
+  issueLabelDeleteOperation,
+  issueLabelUpdateOperation,
+  issueMilestoneCreateOperation,
+  issueMilestoneDeleteOperation,
+  issueMilestonesReorderOperations,
+  issueMilestoneUpdateOperation,
+  issueRelationCreateOperation,
+  issueRelationDeleteOperation,
+  issueRestoreOperation,
+  issueSetSortOrderOperation,
+  issueStatusCreateOperation,
+  issueStatusDeleteOperation,
+  issueStatusesReorderOperation,
+  issueStatusUpdateOperation,
+  issueThreadLinkCreateOperation,
+  issueThreadLinkDeleteOperation,
+  issueTodoCreateOperation,
+  issueTodoCreateSortOrder,
+  issueTodoDeleteOperation,
+  issueTodosReorderOperations,
+  issueTodoUpdateOperation,
+  issueUpdateOperation,
+  issueViewCreateOperation,
+  issueViewDeleteOperation,
+  issueViewsReorderOperations,
+  issueViewUpdateOperation,
+  syncedIssueDetailById,
+  type IssueSyncOperation,
+  type SyncedIssueDomainReadModel,
+} from "@spiritdevs/client-runtime/sync";
+import { SyncEntityId, SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -171,6 +212,10 @@ import {
   toSafeIssueAttachmentSegment,
 } from "../attachmentStore.ts";
 import { ServerSecretStore, type SecretStoreError } from "../auth/ServerSecretStore.ts";
+import {
+  CloudSyncEngineRegistry,
+  type CloudSyncIssueEngineHandle,
+} from "../cloud/CloudSyncEngineRegistry.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import type { IssueTrackerRepositoryError } from "../persistence/Errors.ts";
@@ -212,7 +257,11 @@ import {
 } from "./csvImport.ts";
 import { milestoneHistory } from "./milestoneHistory.ts";
 import { issueSortOrderAfter } from "./sortOrder.ts";
-import { makeIssueReplicaReader, routeReplicaIssueRead } from "./IssueReplicaReader.ts";
+import {
+  makeIssueReplicaReader,
+  routeReplicaIssueRead,
+  type IssueReplicaReader,
+} from "./IssueReplicaReader.ts";
 import {
   readLocalIssueSnapshotFrom,
   type LocalIssueSnapshot,
@@ -1167,8 +1216,19 @@ function applyIssuePatch(input: {
   };
 }
 
-export const make = Effect.gen(function* () {
-  const replicaReader = yield* makeIssueReplicaReader;
+export interface IssueTrackerServiceOptions {
+  readonly replicaReader?: IssueReplicaReader;
+  readonly syncEngineRegistry?: CloudSyncEngineRegistry["Service"] | null;
+}
+
+export const makeIssueTrackerService = Effect.fn(function* (
+  options: IssueTrackerServiceOptions = {},
+) {
+  const replicaReader = options.replicaReader ?? (yield* makeIssueReplicaReader);
+  const syncEngineRegistry =
+    options.syncEngineRegistry === undefined
+      ? Option.getOrNull(yield* Effect.serviceOption(CloudSyncEngineRegistry))
+      : options.syncEngineRegistry;
   const crypto = yield* Crypto.Crypto;
   const issueRepository = yield* IssueRepository;
   const statusRepository = yield* IssueStatusRepository;
@@ -1259,6 +1319,77 @@ export const make = Effect.gen(function* () {
         }),
     ),
   );
+
+  type ReplicaOperationPlan = {
+    readonly operation: IssueSyncOperation;
+    readonly operationId?: SyncOperationId;
+  };
+
+  const syncWriteFailure = (message: string) =>
+    new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
+
+  const requireSyncEngine = Effect.fn("IssueTrackerService.requireSyncEngine")(function* () {
+    if (replicaReader.companyId === null || syncEngineRegistry === null) {
+      return yield* syncWriteFailure(
+        "the replica is routable but its daemon engine is unavailable",
+      );
+    }
+    const engine = yield* syncEngineRegistry.issueEngine(replicaReader.companyId);
+    if (engine === null) {
+      return yield* syncWriteFailure(
+        "the replica is routable but its daemon engine is unavailable",
+      );
+    }
+    return engine;
+  });
+
+  const enqueueReplicaOperations = Effect.fn("IssueTrackerService.enqueueReplicaOperations")(
+    function* (plans: ReadonlyArray<ReplicaOperationPlan>) {
+      const engine = yield* requireSyncEngine();
+      const operationIds: SyncOperationId[] = [];
+      for (const plan of plans) {
+        const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
+        const receipt = yield* engine
+          .enqueue({ operationId, operation: plan.operation })
+          .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
+        if (!receipt.accepted) {
+          return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
+        }
+        operationIds.push(operationId);
+      }
+      const readModel = yield* replicaReader.read;
+      if (readModel === null) {
+        return yield* syncWriteFailure(
+          "the durable outbox was written but its optimistic replica could not be read",
+        );
+      }
+      return { engine, operationIds, readModel };
+    },
+  );
+
+  const flushReplicaOperation = Effect.fn("IssueTrackerService.flushReplicaOperation")(function* (
+    engine: CloudSyncIssueEngineHandle,
+    operationId: SyncOperationId,
+  ) {
+    const completed = yield* engine.sync.pipe(
+      Effect.mapError((error) => syncWriteFailure(error.message)),
+      Effect.timeoutOption("15 seconds"),
+    );
+    if (Option.isNone(completed)) {
+      return yield* syncWriteFailure(
+        `operation ${operationId} is still durably queued after the 15 second confirmation timeout`,
+      );
+    }
+    const disposition = yield* engine.operationDisposition(operationId);
+    if (disposition._tag === "Rejected") {
+      return yield* invalid(disposition.message, disposition.code);
+    }
+    if (disposition._tag === "Pending") {
+      return yield* syncWriteFailure(
+        `operation ${operationId} remains queued because cloud sync is ${completed.value.outcome}`,
+      );
+    }
+  });
 
   const publish = (event: IssuesStreamEvent) => PubSub.publish(changes, event);
   const publishAll = (events: ReadonlyArray<IssuesStreamEvent>) =>
@@ -1642,7 +1773,7 @@ export const make = Effect.gen(function* () {
     return { issue };
   });
 
-  const create: IssueTrackerServiceShape["create"] = (input, actor) =>
+  const legacyCreate: IssueTrackerServiceShape["create"] = (input, actor) =>
     createIssue(input, actor, null);
 
   /**
@@ -1717,7 +1848,7 @@ export const make = Effect.gen(function* () {
       return issue;
     });
 
-  const update: IssueTrackerServiceShape["update"] = Effect.fn("IssueTrackerService.update")(
+  const legacyUpdate: IssueTrackerServiceShape["update"] = Effect.fn("IssueTrackerService.update")(
     function* (input, actor) {
       const [statuses, labels, records, milestones, cycles] = yield* Effect.all([
         listStatuses(),
@@ -1760,7 +1891,7 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const bulkUpdate: IssueTrackerServiceShape["bulkUpdate"] = Effect.fn(
+  const legacyBulkUpdate: IssueTrackerServiceShape["bulkUpdate"] = Effect.fn(
     "IssueTrackerService.bulkUpdate",
   )(function* (input, actor) {
     const [statuses, labels, records, byIssue, milestones, cycles] = yield* Effect.all([
@@ -1809,7 +1940,7 @@ export const make = Effect.gen(function* () {
     return { issues };
   });
 
-  const setSortOrder: IssueTrackerServiceShape["setSortOrder"] = Effect.fn(
+  const legacySetSortOrder: IssueTrackerServiceShape["setSortOrder"] = Effect.fn(
     "IssueTrackerService.setSortOrder",
   )(function* (input, actor) {
     const [statuses, records] = yield* Effect.all([listStatuses(), listRecords()]);
@@ -1858,7 +1989,7 @@ export const make = Effect.gen(function* () {
     return { issue };
   });
 
-  const remove: IssueTrackerServiceShape["remove"] = Effect.fn("IssueTrackerService.remove")(
+  const legacyRemove: IssueTrackerServiceShape["remove"] = Effect.fn("IssueTrackerService.remove")(
     function* (input, actor) {
       const records = yield* listRecords();
       const record = yield* requireRecord(records, input.issueId);
@@ -1886,30 +2017,30 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const restore: IssueTrackerServiceShape["restore"] = Effect.fn("IssueTrackerService.restore")(
-    function* (input, actor) {
-      const records = yield* listRecords();
-      const record = yield* requireRecord(records, input.issueId);
-      const labelIds = yield* labelsOf(input.issueId);
-      if (record.deletedAt === null) return { issue: { ...record, labelIds } };
+  const legacyRestore: IssueTrackerServiceShape["restore"] = Effect.fn(
+    "IssueTrackerService.restore",
+  )(function* (input, actor) {
+    const records = yield* listRecords();
+    const record = yield* requireRecord(records, input.issueId);
+    const labelIds = yield* labelsOf(input.issueId);
+    if (record.deletedAt === null) return { issue: { ...record, labelIds } };
 
-      const updatedAt = yield* nowIso;
-      yield* issueRepository
-        .restore({ issueId: input.issueId, updatedAt })
-        .pipe(Effect.mapError(storage("Failed to restore the issue")));
-      yield* appendChangeLog({
-        issueId: input.issueId,
-        actor,
-        createdAt: updatedAt,
-        kind: "restored",
-        changes: WHOLE_ISSUE_CHANGE,
-      });
+    const updatedAt = yield* nowIso;
+    yield* issueRepository
+      .restore({ issueId: input.issueId, updatedAt })
+      .pipe(Effect.mapError(storage("Failed to restore the issue")));
+    yield* appendChangeLog({
+      issueId: input.issueId,
+      actor,
+      createdAt: updatedAt,
+      kind: "restored",
+      changes: WHOLE_ISSUE_CHANGE,
+    });
 
-      const issue: Issue = { ...record, labelIds, deletedAt: null, updatedAt };
-      yield* publish({ _tag: "IssueUpserted", issue });
-      return { issue };
-    },
-  );
+    const issue: Issue = { ...record, labelIds, deletedAt: null, updatedAt };
+    yield* publish({ _tag: "IssueUpserted", issue });
+    return { issue };
+  });
 
   const publishStatuses = () =>
     listStatuses().pipe(
@@ -1917,7 +2048,7 @@ export const make = Effect.gen(function* () {
       Effect.map((statuses) => ({ statuses })),
     );
 
-  const createStatus: IssueTrackerServiceShape["createStatus"] = Effect.fn(
+  const legacyCreateStatus: IssueTrackerServiceShape["createStatus"] = Effect.fn(
     "IssueTrackerService.createStatus",
   )(function* (input) {
     const statuses = yield* listStatuses();
@@ -1943,7 +2074,7 @@ export const make = Effect.gen(function* () {
     return { status, statuses: next };
   });
 
-  const updateStatus: IssueTrackerServiceShape["updateStatus"] = Effect.fn(
+  const legacyUpdateStatus: IssueTrackerServiceShape["updateStatus"] = Effect.fn(
     "IssueTrackerService.updateStatus",
   )(function* (input) {
     const statuses = yield* listStatuses();
@@ -1979,7 +2110,7 @@ export const make = Effect.gen(function* () {
     return { status, statuses: next };
   });
 
-  const deleteStatus: IssueTrackerServiceShape["deleteStatus"] = Effect.fn(
+  const legacyDeleteStatus: IssueTrackerServiceShape["deleteStatus"] = Effect.fn(
     "IssueTrackerService.deleteStatus",
   )(function* (input, actor) {
     const [statuses, records, byIssue] = yield* Effect.all([
@@ -2046,7 +2177,7 @@ export const make = Effect.gen(function* () {
     return result;
   });
 
-  const reorderStatuses: IssueTrackerServiceShape["reorderStatuses"] = Effect.fn(
+  const legacyReorderStatuses: IssueTrackerServiceShape["reorderStatuses"] = Effect.fn(
     "IssueTrackerService.reorderStatuses",
   )(function* (input) {
     const statuses = yield* listStatuses();
@@ -2082,7 +2213,7 @@ export const make = Effect.gen(function* () {
       Effect.map((labels) => ({ labels })),
     );
 
-  const createLabel: IssueTrackerServiceShape["createLabel"] = Effect.fn(
+  const legacyCreateLabel: IssueTrackerServiceShape["createLabel"] = Effect.fn(
     "IssueTrackerService.createLabel",
   )(function* (input) {
     const labels = yield* listLabels();
@@ -2104,7 +2235,7 @@ export const make = Effect.gen(function* () {
     return { label, labels: next };
   });
 
-  const updateLabel: IssueTrackerServiceShape["updateLabel"] = Effect.fn(
+  const legacyUpdateLabel: IssueTrackerServiceShape["updateLabel"] = Effect.fn(
     "IssueTrackerService.updateLabel",
   )(function* (input) {
     const labels = yield* listLabels();
@@ -2137,7 +2268,7 @@ export const make = Effect.gen(function* () {
     return { label, labels: next };
   });
 
-  const deleteLabel: IssueTrackerServiceShape["deleteLabel"] = Effect.fn(
+  const legacyDeleteLabel: IssueTrackerServiceShape["deleteLabel"] = Effect.fn(
     "IssueTrackerService.deleteLabel",
   )(function* (input) {
     const [labels, records, byIssue] = yield* Effect.all([
@@ -2218,7 +2349,7 @@ export const make = Effect.gen(function* () {
       Effect.map((milestones) => ({ milestones })),
     );
 
-  const milestoneCreate: IssueTrackerServiceShape["milestoneCreate"] = Effect.fn(
+  const legacyMilestoneCreate: IssueTrackerServiceShape["milestoneCreate"] = Effect.fn(
     "IssueTrackerService.milestoneCreate",
   )(function* (input) {
     const milestones = yield* listMilestones();
@@ -2256,7 +2387,7 @@ export const make = Effect.gen(function* () {
     return { milestone, milestones: next };
   });
 
-  const milestoneUpdate: IssueTrackerServiceShape["milestoneUpdate"] = Effect.fn(
+  const legacyMilestoneUpdate: IssueTrackerServiceShape["milestoneUpdate"] = Effect.fn(
     "IssueTrackerService.milestoneUpdate",
   )(function* (input, actor) {
     const milestones = yield* listMilestones();
@@ -2349,7 +2480,7 @@ export const make = Effect.gen(function* () {
     return { milestone, milestones: next };
   });
 
-  const milestoneDelete: IssueTrackerServiceShape["milestoneDelete"] = Effect.fn(
+  const legacyMilestoneDelete: IssueTrackerServiceShape["milestoneDelete"] = Effect.fn(
     "IssueTrackerService.milestoneDelete",
   )(function* (input, actor) {
     const [milestones, records, byIssue] = yield* Effect.all([
@@ -2405,7 +2536,7 @@ export const make = Effect.gen(function* () {
     return result;
   });
 
-  const milestonesReorder: IssueTrackerServiceShape["milestonesReorder"] = Effect.fn(
+  const legacyMilestonesReorder: IssueTrackerServiceShape["milestonesReorder"] = Effect.fn(
     "IssueTrackerService.milestonesReorder",
   )(function* (input) {
     const milestones = yield* listMilestones();
@@ -2481,7 +2612,7 @@ export const make = Effect.gen(function* () {
       Effect.map((cycles) => ({ cycles })),
     );
 
-  const cycleCreate: IssueTrackerServiceShape["cycleCreate"] = Effect.fn(
+  const legacyCycleCreate: IssueTrackerServiceShape["cycleCreate"] = Effect.fn(
     "IssueTrackerService.cycleCreate",
   )(function* (input) {
     if (input.endDate < input.startDate) {
@@ -2505,7 +2636,7 @@ export const make = Effect.gen(function* () {
     return { cycle, cycles };
   });
 
-  const cycleUpdate: IssueTrackerServiceShape["cycleUpdate"] = Effect.fn(
+  const legacyCycleUpdate: IssueTrackerServiceShape["cycleUpdate"] = Effect.fn(
     "IssueTrackerService.cycleUpdate",
   )(function* (input) {
     const cycles = yield* listCycles();
@@ -2535,7 +2666,7 @@ export const make = Effect.gen(function* () {
     return { cycle, cycles: next };
   });
 
-  const cycleDelete: IssueTrackerServiceShape["cycleDelete"] = Effect.fn(
+  const legacyCycleDelete: IssueTrackerServiceShape["cycleDelete"] = Effect.fn(
     "IssueTrackerService.cycleDelete",
   )(function* (input, actor) {
     const [cycles, records, byIssue, watches] = yield* Effect.all([
@@ -2703,7 +2834,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const todoCreate: IssueTrackerServiceShape["todoCreate"] = Effect.fn(
+  const legacyTodoCreate: IssueTrackerServiceShape["todoCreate"] = Effect.fn(
     "IssueTrackerService.todoCreate",
   )(function* (input) {
     yield* requireIssueRecord(input.issueId);
@@ -2721,7 +2852,7 @@ export const make = Effect.gen(function* () {
     return yield* publishTodos(input.issueId);
   });
 
-  const todoUpdate: IssueTrackerServiceShape["todoUpdate"] = Effect.fn(
+  const legacyTodoUpdate: IssueTrackerServiceShape["todoUpdate"] = Effect.fn(
     "IssueTrackerService.todoUpdate",
   )(function* (input) {
     const current = yield* requireTodo(input.todoId);
@@ -2736,7 +2867,7 @@ export const make = Effect.gen(function* () {
     return yield* publishTodos(current.issueId);
   });
 
-  const todoDelete: IssueTrackerServiceShape["todoDelete"] = Effect.fn(
+  const legacyTodoDelete: IssueTrackerServiceShape["todoDelete"] = Effect.fn(
     "IssueTrackerService.todoDelete",
   )(function* (input) {
     const current = yield* requireTodo(input.todoId);
@@ -2746,7 +2877,7 @@ export const make = Effect.gen(function* () {
     return yield* publishTodos(current.issueId);
   });
 
-  const todosReorder: IssueTrackerServiceShape["todosReorder"] = Effect.fn(
+  const legacyTodosReorder: IssueTrackerServiceShape["todosReorder"] = Effect.fn(
     "IssueTrackerService.todosReorder",
   )(function* (input) {
     const todos = yield* listTodos(input.issueId);
@@ -2812,7 +2943,7 @@ export const make = Effect.gen(function* () {
     ]);
   };
 
-  const relationCreate: IssueTrackerServiceShape["relationCreate"] = Effect.fn(
+  const legacyRelationCreate: IssueTrackerServiceShape["relationCreate"] = Effect.fn(
     "IssueTrackerService.relationCreate",
   )(function* (input, actor) {
     if (input.issueId === input.relatedIssueId) {
@@ -2862,7 +2993,7 @@ export const make = Effect.gen(function* () {
     return yield* publishRelations([input.issueId, input.relatedIssueId]);
   });
 
-  const relationDelete: IssueTrackerServiceShape["relationDelete"] = Effect.fn(
+  const legacyRelationDelete: IssueTrackerServiceShape["relationDelete"] = Effect.fn(
     "IssueTrackerService.relationDelete",
   )(function* (input, actor) {
     const found = yield* relationRepository
@@ -2921,7 +3052,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const commentCreate: IssueTrackerServiceShape["commentCreate"] = Effect.fn(
+  const legacyCommentCreate: IssueTrackerServiceShape["commentCreate"] = Effect.fn(
     "IssueTrackerService.commentCreate",
   )(function* (input, actor) {
     yield* requireIssueRecord(input.issueId);
@@ -2977,7 +3108,7 @@ export const make = Effect.gen(function* () {
     return { comment };
   });
 
-  const commentUpdate: IssueTrackerServiceShape["commentUpdate"] = Effect.fn(
+  const legacyCommentUpdate: IssueTrackerServiceShape["commentUpdate"] = Effect.fn(
     "IssueTrackerService.commentUpdate",
   )(function* (input, actor) {
     const current = yield* requireComment(input.commentId);
@@ -3006,7 +3137,7 @@ export const make = Effect.gen(function* () {
     return { comment };
   });
 
-  const commentDelete: IssueTrackerServiceShape["commentDelete"] = Effect.fn(
+  const legacyCommentDelete: IssueTrackerServiceShape["commentDelete"] = Effect.fn(
     "IssueTrackerService.commentDelete",
   )(function* (input, actor) {
     const current = yield* requireComment(input.commentId);
@@ -3418,7 +3549,7 @@ export const make = Effect.gen(function* () {
       Effect.map((views) => ({ views })),
     );
 
-  const viewCreate: IssueTrackerServiceShape["viewCreate"] = Effect.fn(
+  const legacyViewCreate: IssueTrackerServiceShape["viewCreate"] = Effect.fn(
     "IssueTrackerService.viewCreate",
   )(function* (input) {
     const views = yield* listViews();
@@ -3443,7 +3574,7 @@ export const make = Effect.gen(function* () {
     return { view, views: next };
   });
 
-  const viewUpdate: IssueTrackerServiceShape["viewUpdate"] = Effect.fn(
+  const legacyViewUpdate: IssueTrackerServiceShape["viewUpdate"] = Effect.fn(
     "IssueTrackerService.viewUpdate",
   )(function* (input) {
     const views = yield* listViews();
@@ -3478,7 +3609,7 @@ export const make = Effect.gen(function* () {
     return { view, views: next };
   });
 
-  const viewDelete: IssueTrackerServiceShape["viewDelete"] = Effect.fn(
+  const legacyViewDelete: IssueTrackerServiceShape["viewDelete"] = Effect.fn(
     "IssueTrackerService.viewDelete",
   )(function* (input) {
     const views = yield* listViews();
@@ -3493,7 +3624,7 @@ export const make = Effect.gen(function* () {
     return yield* publishViews();
   });
 
-  const viewsReorder: IssueTrackerServiceShape["viewsReorder"] = Effect.fn(
+  const legacyViewsReorder: IssueTrackerServiceShape["viewsReorder"] = Effect.fn(
     "IssueTrackerService.viewsReorder",
   )(function* (input) {
     const views = yield* listViews();
@@ -3793,7 +3924,7 @@ export const make = Effect.gen(function* () {
   const publishThreadLinks = (issueId: IssueId, links: ReadonlyArray<IssueThreadLink>) =>
     publish({ _tag: "IssueThreadLinksChanged", issueId, links });
 
-  const linkThread: IssueTrackerServiceShape["linkThread"] = Effect.fn(
+  const legacyLinkThread: IssueTrackerServiceShape["linkThread"] = Effect.fn(
     "IssueTrackerService.linkThread",
   )(function* (input, actor) {
     const record = yield* requireIssueRecord(input.issueId);
@@ -3841,7 +3972,7 @@ export const make = Effect.gen(function* () {
     return { issueId: record.id, links };
   });
 
-  const unlinkThread: IssueTrackerServiceShape["unlinkThread"] = Effect.fn(
+  const legacyUnlinkThread: IssueTrackerServiceShape["unlinkThread"] = Effect.fn(
     "IssueTrackerService.unlinkThread",
   )(function* (input, actor) {
     const record = yield* requireIssueRecord(input.issueId);
@@ -4245,7 +4376,7 @@ export const make = Effect.gen(function* () {
     const authorName = nullableTrimmed(input.authorName);
     const body = authorName === null ? input.body : `**${authorName}:** ${input.body}`;
     const attachmentIds = input.attachmentIds ?? [];
-    const { comment } = yield* commentCreate(
+    const { comment } = yield* legacyCommentCreate(
       { issueId, body, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
       SLACK_ACTOR,
     );
@@ -4567,6 +4698,623 @@ export const make = Effect.gen(function* () {
     return { created: linked.length, skipped };
   });
 
+  const routedCollection = (readModel: SyncedIssueDomainReadModel) =>
+    issueCollectionProjectionFromReplica(readModel);
+  const routedIssue = (readModel: SyncedIssueDomainReadModel, issueId: IssueId) =>
+    routedCollection(readModel).issues.find((issue) => issue.id === issueId);
+  const routedDetail = (readModel: SyncedIssueDomainReadModel, issueId: IssueId) =>
+    issueDetailProjectionFromReplica(syncedIssueDetailById(readModel, issueId));
+  const routeWrite = <A>(
+    fromReplica: (readModel: SyncedIssueDomainReadModel) => Effect.Effect<A, IssueTrackerError>,
+    fromLegacy: Effect.Effect<A, IssueTrackerError>,
+  ) => routeReplicaIssueRead({ replica: replicaReader.read, fromReplica, fromLegacy });
+  const plans = (
+    operations: ReadonlyArray<IssueSyncOperation>,
+  ): ReadonlyArray<ReplicaOperationPlan> => operations.map((operation) => ({ operation }));
+
+  const create: IssueTrackerServiceShape["create"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const issueId = IssueId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCreateOperation(input, issueId)]),
+          );
+          const issue = routedIssue(written.readModel, issueId);
+          return issue === undefined
+            ? yield* syncWriteFailure(
+                `created issue ${issueId} is absent from the optimistic replica`,
+              )
+            : { issue };
+        }),
+      legacyCreate(input, actor),
+    );
+
+  const update: IssueTrackerServiceShape["update"] = (input, actor) =>
+    input.patch.automationAssignment !== undefined
+      ? legacyUpdate(input, actor)
+      : routeWrite(
+          () =>
+            Effect.gen(function* () {
+              const written = yield* enqueueReplicaOperations(plans([issueUpdateOperation(input)]));
+              const issue = routedIssue(written.readModel, input.issueId);
+              return issue === undefined
+                ? yield* notFound(input.issueId, `No issue with id ${input.issueId}.`)
+                : { issue };
+            }),
+          legacyUpdate(input, actor),
+        );
+
+  const bulkUpdate: IssueTrackerServiceShape["bulkUpdate"] = (input, actor) =>
+    input.patch.automationAssignment !== undefined
+      ? legacyBulkUpdate(input, actor)
+      : routeWrite(
+          () =>
+            Effect.gen(function* () {
+              const written = yield* enqueueReplicaOperations(
+                plans(issueBulkUpdateOperations(input)),
+              );
+              const byId = new Map(
+                routedCollection(written.readModel).issues.map((issue) => [issue.id, issue]),
+              );
+              return { issues: input.issueIds.flatMap((issueId) => byId.get(issueId) ?? []) };
+            }),
+          legacyBulkUpdate(input, actor),
+        );
+
+  const setSortOrder: IssueTrackerServiceShape["setSortOrder"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueSetSortOrderOperation(input)]),
+          );
+          const issue = routedIssue(written.readModel, input.issueId);
+          return issue === undefined
+            ? yield* notFound(input.issueId, `No issue with id ${input.issueId}.`)
+            : { issue };
+        }),
+      legacySetSortOrder(input, actor),
+    );
+
+  const remove: IssueTrackerServiceShape["remove"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = routedIssue(readModel, input.issueId);
+          if (current === undefined)
+            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+          yield* enqueueReplicaOperations(plans([issueDeleteOperation(input)]));
+          const deletedAt = yield* nowIso;
+          return { issue: { ...current, updatedAt: deletedAt, deletedAt } };
+        }),
+      legacyRemove(input, actor),
+    );
+
+  const restore: IssueTrackerServiceShape["restore"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(plans([issueRestoreOperation(input)]));
+          const operationId = written.operationIds[0]!;
+          yield* flushReplicaOperation(written.engine, operationId);
+          const confirmed = yield* replicaReader.read;
+          const issue = confirmed === null ? undefined : routedIssue(confirmed, input.issueId);
+          return issue === undefined
+            ? yield* syncWriteFailure(`restore ${operationId} completed without a readable issue`)
+            : { issue };
+        }),
+      legacyRestore(input, actor),
+    );
+
+  const createStatus: IssueTrackerServiceShape["createStatus"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const statusId = IssueStatusId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueStatusCreateOperation(input, statusId)]),
+          );
+          const statuses = routedCollection(written.readModel).statuses;
+          const status = statuses.find((candidate) => candidate.id === statusId);
+          return status === undefined
+            ? yield* syncWriteFailure(`created status ${statusId} is absent`)
+            : { status, statuses };
+        }),
+      legacyCreateStatus(input),
+    );
+
+  const updateStatus: IssueTrackerServiceShape["updateStatus"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueStatusUpdateOperation(input)]),
+          );
+          const statuses = routedCollection(written.readModel).statuses;
+          const status = statuses.find((candidate) => candidate.id === input.statusId);
+          return status === undefined
+            ? yield* notFound(input.statusId, `No issue status with id ${input.statusId}.`)
+            : { status, statuses };
+        }),
+      legacyUpdateStatus(input),
+    );
+
+  const deleteStatus: IssueTrackerServiceShape["deleteStatus"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueStatusDeleteOperation(input)]),
+          );
+          return { statuses: routedCollection(written.readModel).statuses };
+        }),
+      legacyDeleteStatus(input, actor),
+    );
+
+  const reorderStatuses: IssueTrackerServiceShape["reorderStatuses"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueStatusesReorderOperation(input)]),
+          );
+          return { statuses: routedCollection(written.readModel).statuses };
+        }),
+      legacyReorderStatuses(input),
+    );
+
+  const createLabel: IssueTrackerServiceShape["createLabel"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const labelId = IssueLabelId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueLabelCreateOperation(input, labelId)]),
+          );
+          const labels = routedCollection(written.readModel).labels;
+          const label = labels.find((candidate) => candidate.id === labelId);
+          return label === undefined
+            ? yield* syncWriteFailure(`created label ${labelId} is absent`)
+            : { label, labels };
+        }),
+      legacyCreateLabel(input),
+    );
+
+  const updateLabel: IssueTrackerServiceShape["updateLabel"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueLabelUpdateOperation(input)]),
+          );
+          const labels = routedCollection(written.readModel).labels;
+          const label = labels.find((candidate) => candidate.id === input.labelId);
+          return label === undefined
+            ? yield* notFound(input.labelId, `No issue label with id ${input.labelId}.`)
+            : { label, labels };
+        }),
+      legacyUpdateLabel(input),
+    );
+
+  const deleteLabel: IssueTrackerServiceShape["deleteLabel"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueLabelDeleteOperation(input)]),
+          );
+          return { labels: routedCollection(written.readModel).labels };
+        }),
+      legacyDeleteLabel(input),
+    );
+
+  const milestoneCreate: IssueTrackerServiceShape["milestoneCreate"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const milestoneId = IssueMilestoneId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueMilestoneCreateOperation(input, milestoneId)]),
+          );
+          const milestones = routedCollection(written.readModel).milestones;
+          const milestone = milestones.find((candidate) => candidate.id === milestoneId);
+          return milestone === undefined
+            ? yield* syncWriteFailure(`created milestone ${milestoneId} is absent`)
+            : { milestone, milestones };
+        }),
+      legacyMilestoneCreate(input),
+    );
+
+  const milestoneUpdate: IssueTrackerServiceShape["milestoneUpdate"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueMilestoneUpdateOperation(input)]),
+          );
+          const milestones = routedCollection(written.readModel).milestones;
+          const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
+          return milestone === undefined
+            ? yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`)
+            : { milestone, milestones };
+        }),
+      legacyMilestoneUpdate(input, actor),
+    );
+
+  const milestoneDelete: IssueTrackerServiceShape["milestoneDelete"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueMilestoneDeleteOperation(input)]),
+          );
+          return { milestones: routedCollection(written.readModel).milestones };
+        }),
+      legacyMilestoneDelete(input, actor),
+    );
+
+  const milestonesReorder: IssueTrackerServiceShape["milestonesReorder"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans(issueMilestonesReorderOperations(input)),
+          );
+          return { milestones: routedCollection(written.readModel).milestones };
+        }),
+      legacyMilestonesReorder(input),
+    );
+
+  const cycleCreate: IssueTrackerServiceShape["cycleCreate"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const cycleId = IssueCycleId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCycleCreateOperation(input, cycleId)]),
+          );
+          const cycles = routedCollection(written.readModel).cycles;
+          const cycle = cycles.find((candidate) => candidate.id === cycleId);
+          return cycle === undefined
+            ? yield* syncWriteFailure(`created cycle ${cycleId} is absent`)
+            : { cycle, cycles };
+        }),
+      legacyCycleCreate(input),
+    );
+
+  const cycleUpdate: IssueTrackerServiceShape["cycleUpdate"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCycleUpdateOperation(input)]),
+          );
+          const cycles = routedCollection(written.readModel).cycles;
+          const cycle = cycles.find((candidate) => candidate.id === input.cycleId);
+          return cycle === undefined
+            ? yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`)
+            : { cycle, cycles };
+        }),
+      legacyCycleUpdate(input),
+    );
+
+  const cycleDelete: IssueTrackerServiceShape["cycleDelete"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCycleDeleteOperation(input)]),
+          );
+          return { cycles: routedCollection(written.readModel).cycles };
+        }),
+      legacyCycleDelete(input, actor),
+    );
+
+  const todoCreate: IssueTrackerServiceShape["todoCreate"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const todoId = IssueTodoId.make(yield* newId);
+          const existing = readModel.issueTodos.filter((todo) => todo.issueId === input.issueId);
+          const sortOrder = issueTodoCreateSortOrder(input.position, existing);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueTodoCreateOperation(input, todoId, sortOrder)]),
+          );
+          return {
+            issueId: input.issueId,
+            todos: routedDetail(written.readModel, input.issueId).detail?.todos ?? [],
+          };
+        }),
+      legacyTodoCreate(input),
+    );
+
+  const todoUpdate: IssueTrackerServiceShape["todoUpdate"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = readModel.issueTodos.find((todo) => todo.id === input.todoId);
+          if (current === undefined)
+            return yield* notFound(input.todoId, `No issue todo with id ${input.todoId}.`);
+          const written = yield* enqueueReplicaOperations(plans([issueTodoUpdateOperation(input)]));
+          return {
+            issueId: current.issueId,
+            todos: routedDetail(written.readModel, current.issueId).detail?.todos ?? [],
+          };
+        }),
+      legacyTodoUpdate(input),
+    );
+
+  const todoDelete: IssueTrackerServiceShape["todoDelete"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = readModel.issueTodos.find((todo) => todo.id === input.todoId);
+          if (current === undefined)
+            return yield* notFound(input.todoId, `No issue todo with id ${input.todoId}.`);
+          const written = yield* enqueueReplicaOperations(plans([issueTodoDeleteOperation(input)]));
+          return {
+            issueId: current.issueId,
+            todos: routedDetail(written.readModel, current.issueId).detail?.todos ?? [],
+          };
+        }),
+      legacyTodoDelete(input),
+    );
+
+  const todosReorder: IssueTrackerServiceShape["todosReorder"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans(issueTodosReorderOperations(input)),
+          );
+          return {
+            issueId: input.issueId,
+            todos: routedDetail(written.readModel, input.issueId).detail?.todos ?? [],
+          };
+        }),
+      legacyTodosReorder(input),
+    );
+
+  const relationCreate: IssueTrackerServiceShape["relationCreate"] = (input, actor) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const relationId = IssueRelationId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueRelationCreateOperation(input, relationId)]),
+          );
+          return {
+            affected: [input.issueId, input.relatedIssueId].map((issueId) => ({
+              issueId,
+              relations: routedDetail(written.readModel, issueId).detail?.relations ?? [],
+            })),
+          };
+        }),
+      legacyRelationCreate(input, actor),
+    );
+
+  const relationDelete: IssueTrackerServiceShape["relationDelete"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = readModel.issueRelations.find(
+            (relation) => relation.id === input.relationId,
+          );
+          if (current === undefined)
+            return yield* notFound(
+              input.relationId,
+              `No issue relation with id ${input.relationId}.`,
+            );
+          const written = yield* enqueueReplicaOperations(
+            plans([issueRelationDeleteOperation(input)]),
+          );
+          return {
+            affected: [current.issueId, current.relatedIssueId].map((issueId) => ({
+              issueId,
+              relations: routedDetail(written.readModel, issueId).detail?.relations ?? [],
+            })),
+          };
+        }),
+      legacyRelationDelete(input, actor),
+    );
+
+  const commentCreate: IssueTrackerServiceShape["commentCreate"] = (input, actor) =>
+    input.agentMention !== undefined
+      ? legacyCommentCreate(input, actor)
+      : routeWrite(
+          () =>
+            Effect.gen(function* () {
+              const commentId = IssueCommentId.make(yield* newId);
+              const written = yield* enqueueReplicaOperations(
+                plans([issueCommentCreateOperation(input, commentId)]),
+              );
+              const comment = routedDetail(written.readModel, input.issueId).comments.find(
+                (candidate) => candidate.id === commentId,
+              );
+              return comment === undefined
+                ? yield* syncWriteFailure(`created comment ${commentId} is absent`)
+                : { comment };
+            }),
+          legacyCommentCreate(input, actor),
+        );
+
+  const commentUpdate: IssueTrackerServiceShape["commentUpdate"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = readModel.issueComments.find((comment) => comment.id === input.commentId);
+          if (current === undefined)
+            return yield* notFound(input.commentId, `No issue comment with id ${input.commentId}.`);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCommentUpdateOperation(input)]),
+          );
+          const comment = routedDetail(written.readModel, current.issueId).comments.find(
+            (candidate) => candidate.id === input.commentId,
+          );
+          return comment === undefined
+            ? yield* syncWriteFailure(`updated comment ${input.commentId} is absent`)
+            : { comment };
+        }),
+      legacyCommentUpdate(input, actor),
+    );
+
+  const commentDelete: IssueTrackerServiceShape["commentDelete"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = readModel.issueComments.find((comment) => comment.id === input.commentId);
+          if (current === undefined)
+            return yield* notFound(input.commentId, `No issue comment with id ${input.commentId}.`);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCommentDeleteOperation(input)]),
+          );
+          return {
+            issueId: current.issueId,
+            comments: routedDetail(written.readModel, current.issueId).comments,
+          };
+        }),
+      legacyCommentDelete(input, actor),
+    );
+
+  const viewCreate: IssueTrackerServiceShape["viewCreate"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const viewId = IssueViewId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans([issueViewCreateOperation(input, viewId)]),
+          );
+          const views = routedCollection(written.readModel).views;
+          const view = views.find((candidate) => candidate.id === viewId);
+          return view === undefined
+            ? yield* syncWriteFailure(`created view ${viewId} is absent`)
+            : { view, views };
+        }),
+      legacyViewCreate(input),
+    );
+
+  const viewUpdate: IssueTrackerServiceShape["viewUpdate"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(plans([issueViewUpdateOperation(input)]));
+          const views = routedCollection(written.readModel).views;
+          const view = views.find((candidate) => candidate.id === input.viewId);
+          return view === undefined
+            ? yield* notFound(input.viewId, `No issue view with id ${input.viewId}.`)
+            : { view, views };
+        }),
+      legacyViewUpdate(input),
+    );
+
+  const viewDelete: IssueTrackerServiceShape["viewDelete"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(plans([issueViewDeleteOperation(input)]));
+          return { views: routedCollection(written.readModel).views };
+        }),
+      legacyViewDelete(input),
+    );
+
+  const viewsReorder: IssueTrackerServiceShape["viewsReorder"] = (input) =>
+    routeWrite(
+      () =>
+        Effect.gen(function* () {
+          const written = yield* enqueueReplicaOperations(
+            plans(issueViewsReorderOperations(input)),
+          );
+          return { views: routedCollection(written.readModel).views };
+        }),
+      legacyViewsReorder(input),
+    );
+
+  const linkThread: IssueTrackerServiceShape["linkThread"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const engine = yield* requireSyncEngine();
+          const existing = readModel.issueThreadLinks.find(
+            (link) =>
+              link.issueId === input.issueId &&
+              link.threadId === input.threadId &&
+              link.environmentId === engine.environmentId,
+          );
+          const origin = strongerThreadLinkOrigin(existing?.origin, input.origin);
+          if (existing !== undefined && existing.origin === origin) {
+            return {
+              issueId: input.issueId,
+              links: routedDetail(readModel, input.issueId).threadLinks,
+            };
+          }
+          const createId = SyncEntityId.make(yield* newId);
+          if (existing === undefined) {
+            const written = yield* enqueueReplicaOperations(
+              plans([
+                issueThreadLinkCreateOperation(
+                  { ...input, origin },
+                  createId,
+                  engine.environmentId,
+                ),
+              ]),
+            );
+            return {
+              issueId: input.issueId,
+              links: routedDetail(written.readModel, input.issueId).threadLinks,
+            };
+          }
+          const deleteOperationId = SyncOperationId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations([
+            {
+              operationId: deleteOperationId,
+              operation: issueThreadLinkDeleteOperation(SyncEntityId.make(existing.id)),
+            },
+            {
+              operation: issueThreadLinkCreateOperation(
+                { ...input, origin },
+                createId,
+                engine.environmentId,
+                [deleteOperationId],
+              ),
+            },
+          ]);
+          return {
+            issueId: input.issueId,
+            links: routedDetail(written.readModel, input.issueId).threadLinks,
+          };
+        }),
+      legacyLinkThread(input, actor),
+    );
+
+  const unlinkThread: IssueTrackerServiceShape["unlinkThread"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const engine = yield* requireSyncEngine();
+          const existing = readModel.issueThreadLinks.find(
+            (link) =>
+              link.issueId === input.issueId &&
+              link.threadId === input.threadId &&
+              link.environmentId === engine.environmentId,
+          );
+          if (existing === undefined) {
+            return {
+              issueId: input.issueId,
+              links: routedDetail(readModel, input.issueId).threadLinks,
+            };
+          }
+          const written = yield* enqueueReplicaOperations(
+            plans([issueThreadLinkDeleteOperation(SyncEntityId.make(existing.id))]),
+          );
+          return {
+            issueId: input.issueId,
+            links: routedDetail(written.readModel, input.issueId).threadLinks,
+          };
+        }),
+      legacyUnlinkThread(input, actor),
+    );
+
   // Once at startup, before anybody can subscribe: a run is a live process, so whatever was
   // queued or running when this server stopped is dead. Leaving those rows in flight would block
   // every one of their issues from ever being investigated again.
@@ -4737,6 +5485,8 @@ export const make = Effect.gen(function* () {
     },
   } satisfies IssueTrackerServiceShape;
 });
+
+export const make = makeIssueTrackerService();
 
 /**
  * Where a new status lands when the caller did not say. Categories are the workflow's order, so a

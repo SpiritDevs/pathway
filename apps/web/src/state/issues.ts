@@ -121,7 +121,7 @@ import {
   issueViewDeleteOperation,
   issueViewsReorderOperations,
   issueViewUpdateOperation,
-} from "./issueOperationsFromRpc";
+} from "@spiritdevs/client-runtime/sync";
 import { receiptMappedResult, routeIssueMutationCommand } from "./issueMutationRouting";
 import {
   issueDetailProjectionFromReplica,

@@ -117,6 +117,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
+import { cloudSyncEngineRegistryLayer } from "./cloud/CloudSyncEngineRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -834,6 +835,13 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(PlatformServicesLive),
+      // One process-local handle shared by the daemon that owns the engine (under
+      // serverApplicationLayer) and the issue tracker that writes through it (under
+      // runtimeServicesLive). It must wrap the whole composition: both resolve it via optional
+      // service access, so a narrower provide would silently leave one side without the other's
+      // registry instead of failing the build. The registry itself cannot construct a second
+      // engine or open a competing store.
+      Layer.provide(cloudSyncEngineRegistryLayer),
     );
   }),
 );

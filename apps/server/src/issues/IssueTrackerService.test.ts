@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EnvironmentId,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   IssueCommentAgentRunId,
   IssueEnrichmentRunId,
@@ -18,7 +19,27 @@ import {
   type IssueViewConfig,
   type ModelSelection,
 } from "@spiritdevs/contracts";
-import { MembershipId } from "@spiritdevs/contracts/company";
+import {
+  applySyncStoreBatch,
+  cloudEntityCodec,
+  issueSyncDomainAdapter,
+  SYNC_BOOTSTRAP_GENERATION,
+  SYNC_DOCUMENT_SCHEMA_VERSION,
+  type CloudSyncEntity,
+  type StoredSyncEntity,
+  type StoredSyncState,
+} from "@spiritdevs/client-runtime/sync";
+import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import {
+  AuthorizationEpoch,
+  CompanyVersion,
+  LocalSequence,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientId,
+  SyncEntityId,
+  SyncOperationId,
+  type SyncEntityKind,
+} from "@spiritdevs/contracts/cloudSync";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -26,11 +47,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import {
+  CloudSyncEngineRegistry,
+  type CloudSyncEngineRegistryShape,
+  type CloudSyncIssueEngineHandle,
+} from "../cloud/CloudSyncEngineRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import { IssueCommentRepositoryLive } from "../persistence/Layers/IssueComments.ts";
 import { IssueCycleRepositoryLive } from "../persistence/Layers/IssueCycles.ts";
@@ -58,7 +85,8 @@ import {
 } from "./IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentEngineShape } from "./IssueEnrichmentEngine.ts";
 import { SlackIntakeEngine, type SlackIntakeEngineShape } from "./slack/SlackIntakeEngine.ts";
-import { IssueTrackerService, layer } from "./IssueTrackerService.ts";
+import { IssueTrackerService, layer, makeIssueTrackerService } from "./IssueTrackerService.ts";
+import { issueReadModelFromStoredReplica, type IssueReplicaReader } from "./IssueReplicaReader.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
 const AGENT: IssueActor = { kind: "agent", provider: ProviderDriverKind.make("claudeAgent") };
@@ -69,6 +97,24 @@ const PROJECT = ProjectId.make("project-alpha");
 const OTHER_PROJECT = ProjectId.make("project-beta");
 /** Created from a name alone, never given a directory: the case enrichment has to refuse. */
 const ROOTLESS_PROJECT = ProjectId.make("project-rootless");
+
+const ROUTED_COMPANY_ID = CompanyId.make("company-routed-issue-writes");
+const ROUTED_ENVIRONMENT_ID = EnvironmentId.make("environment-routed-issue-writes");
+
+function routedStoredEntity(
+  entityKind: SyncEntityKind,
+  payload: Record<string, unknown>,
+): StoredSyncEntity {
+  const codec = cloudEntityCodec(entityKind);
+  if (codec === null) throw new Error(`Missing codec for ${entityKind}.`);
+  const decoded: CloudSyncEntity = Option.getOrThrow(codec.decode(payload));
+  return {
+    entityKind,
+    entityId: SyncEntityId.make(payload["id"] as string),
+    version: CompanyVersion.make(1),
+    payload: codec.encode(decoded),
+  };
+}
 
 /**
  * Cycle finalisation compares against the local calendar day, so the fixtures are relative to it:
@@ -260,6 +306,125 @@ const LINEAR_EXPORT = [
 ].join("\n");
 
 describe("IssueTrackerService", () => {
+  it.effect("routes a server write to the durable outbox and reads its optimistic replica", () =>
+    Effect.gen(function* () {
+      const stored = yield* Ref.make<StoredSyncState>({
+        checkpoint: {
+          schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+          bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+          companyId: ROUTED_COMPANY_ID,
+          cursor: CompanyVersion.make(1),
+          authorizationEpoch: AuthorizationEpoch.make(1),
+          bootstrapped: true,
+        },
+        entities: [
+          routedStoredEntity("issueStatus", {
+            id: "status-routed",
+            scope: "company",
+            teamId: null,
+            baseStatusId: null,
+            name: "Ready",
+            color: "#123456",
+            category: "unstarted",
+            position: 0,
+            hidden: false,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+        ],
+        outbox: [],
+        rejected: [],
+        quarantined: [],
+        localSequenceHighWater: LocalSequence.make(0),
+      });
+      const sequence = yield* Ref.make(0);
+      const handle: CloudSyncIssueEngineHandle = {
+        companyId: ROUTED_COMPANY_ID,
+        environmentId: ROUTED_ENVIRONMENT_ID,
+        enqueue: ({ operationId, operation }) =>
+          Effect.gen(function* () {
+            const localSequence = LocalSequence.make(
+              yield* Ref.updateAndGet(sequence, (n) => n + 1),
+            );
+            const envelope = {
+              protocolVersion: SYNC_PROTOCOL_VERSION,
+              operationId,
+              companyId: ROUTED_COMPANY_ID,
+              clientId: SyncClientId.make("server-routed-test"),
+              environmentId: ROUTED_ENVIRONMENT_ID,
+              actor: { kind: "environment" as const, environmentId: ROUTED_ENVIRONMENT_ID },
+              localSequence,
+              baseVersion: CompanyVersion.make(1),
+              kind: operation.kind,
+              entityId: operation.entityId,
+              args: issueSyncDomainAdapter.operationCodec.encode(operation),
+              dependsOn: operation.dependsOn ?? [],
+            };
+            yield* Ref.update(stored, (current) =>
+              applySyncStoreBatch(current, {
+                upsertOutbox: [
+                  { envelope, status: { _tag: "Pending" }, occurredAt: 1_700_000_001_000 },
+                ],
+                localSequenceHighWater: localSequence,
+              }),
+            );
+            return {
+              accepted: true,
+              operationId,
+              localSequence,
+              status: { _tag: "Pending" as const },
+            };
+          }),
+        sync: Effect.die(new Error("restore is not used by this test")),
+        operationDisposition: () => Effect.succeed({ _tag: "Pending" }),
+      };
+      const registry = CloudSyncEngineRegistry.of({
+        registerIssueEngine: () => Effect.void,
+        issueEngine: () => Effect.succeed(handle),
+      } satisfies CloudSyncEngineRegistryShape);
+      const replicaReader: IssueReplicaReader = {
+        companyId: ROUTED_COMPANY_ID,
+        read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
+      };
+
+      const tracker = yield* makeIssueTrackerService({
+        replicaReader,
+        syncEngineRegistry: registry,
+      });
+      const created = yield* tracker.create(
+        { title: "Server-routed", statusId: IssueStatusId.make("status-routed") },
+        AGENT,
+      );
+      assert.strictEqual(created.issue.key, "Draft");
+      assert.strictEqual(created.issue.title, "Server-routed");
+      const snapshot = yield* tracker.getSnapshot();
+      assert.strictEqual(snapshot.issues[0]?.id, created.issue.id);
+
+      const comment = yield* tracker.commentCreate(
+        { issueId: created.issue.id, body: "Written by MCP" },
+        AGENT,
+      );
+      assert.deepStrictEqual(comment.comment.author, { kind: "system", source: "automation" });
+      assert.strictEqual(
+        (yield* tracker.commentsList({ issueId: created.issue.id })).comments.length,
+        1,
+      );
+
+      const local = yield* tracker.readLocalIssueSnapshot;
+      assert.strictEqual(local.issues.length, 0);
+      assert.strictEqual(local.comments.length, 0);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeDependencyLayer(),
+          Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+          Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+          Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+        ),
+      ),
+    ),
+  );
+
   it.effect("allocates keys in order and appends each issue after the last in its column", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;

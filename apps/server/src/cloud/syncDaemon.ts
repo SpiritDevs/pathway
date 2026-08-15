@@ -85,6 +85,7 @@ import {
   type DpopKeyPair,
 } from "./convexServiceToken.ts";
 import { makeConvexSyncTransport } from "./convexSyncTransport.ts";
+import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { convexUrlConfig } from "./publicConfig.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
@@ -534,6 +535,11 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* serverEnvironment.getEnvironmentId;
+  const engineRegistry =
+    Option.match(yield* Effect.serviceOption(CloudSyncEngineRegistry), {
+      onNone: () => null,
+      onSome: (registry) => registry,
+    }) ?? (yield* makeCloudSyncEngineRegistry);
 
   const restartDelay = options.restartDelay ?? DEFAULT_SYNC_DAEMON_RESTART_DELAY;
   const linkWaitInterval = options.linkWaitInterval ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL;
@@ -590,6 +596,7 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
       Effect.provideService(SyncStore, store.service),
       Effect.provideService(SyncTransport, transport),
     );
+    yield* engineRegistry.registerIssueEngine({ environmentId, engine });
 
     yield* Effect.logInfo("Cloud sync daemon started", {
       companyId: settings.companyId,

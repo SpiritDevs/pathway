@@ -51,6 +51,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
+import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
 import {
   CLOUD_SYNC_CAPABILITY_ENV,
   CLOUD_SYNC_COMPANY_ID_ENV,
@@ -668,13 +669,21 @@ layer("cloud sync daemon", (it) => {
       });
 
       const server = yield* makeFakeConvexServer();
+      const registry = yield* makeCloudSyncEngineRegistry;
 
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* startCloudSyncDaemon({ transport: () => Effect.succeed(server.transport) });
           yield* Deferred.await(server.secondCycleStarted);
         }),
-      ).pipe(provideDaemon({ env: ENABLED_ENV, secrets }));
+      ).pipe(
+        provideDaemon({ env: ENABLED_ENV, secrets }),
+        Effect.provideService(CloudSyncEngineRegistry, registry),
+      );
+
+      const shared = yield* registry.issueEngine(COMPANY_ID);
+      expect(shared).not.toBeNull();
+      expect(shared?.environmentId).toBe(ENVIRONMENT_ID);
 
       // Outbound: the pending operation was submitted exactly as it was stored.
       const submitted = yield* Ref.get(server.submissions);

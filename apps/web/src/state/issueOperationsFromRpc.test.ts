@@ -1,5 +1,6 @@
 import {
   ChatAttachmentId,
+  EnvironmentId,
   IssueCommentId,
   IssueCycleId,
   IssueId,
@@ -10,8 +11,20 @@ import {
   IssueTodoId,
   IssueViewId,
   ProjectId,
+  ThreadId,
   type IssueViewConfig,
 } from "@spiritdevs/contracts";
+import { decodeIssueSyncOperation, issueSyncDomainAdapter } from "@spiritdevs/client-runtime/sync";
+import {
+  CompanyVersion,
+  LocalSequence,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientId,
+  SyncEntityId,
+  SyncOperationId,
+} from "@spiritdevs/contracts/cloudSync";
+import { CompanyId } from "@spiritdevs/contracts/company";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -39,6 +52,8 @@ import {
   issueStatusDeleteOperation,
   issueStatusesReorderOperation,
   issueStatusUpdateOperation,
+  issueThreadLinkCreateOperation,
+  issueThreadLinkDeleteOperation,
   issueTodoCreateOperation,
   issueTodoCreateSortOrder,
   issueTodoDeleteOperation,
@@ -49,7 +64,7 @@ import {
   issueViewDeleteOperation,
   issueViewsReorderOperations,
   issueViewUpdateOperation,
-} from "./issueOperationsFromRpc";
+} from "@spiritdevs/client-runtime/sync";
 
 const ISSUE = IssueId.make("issue-1");
 const ISSUE_2 = IssueId.make("issue-2");
@@ -337,5 +352,44 @@ describe("issue RPC operation translation", () => {
       { kind: "issueView.update", entityId: VIEW_2, args: { position: 1 } },
       { kind: "issueView.update", entityId: VIEW, args: { position: 2 } },
     ]);
+  });
+
+  it("maps thread links and round-trips translated arguments through the production codec", () => {
+    const environmentId = EnvironmentId.make("environment-c7");
+    const linkId = SyncEntityId.make("thread-link-c7");
+    const dependency = SyncOperationId.make("delete-old-link");
+    const operation = issueThreadLinkCreateOperation(
+      { issueId: ISSUE, threadId: ThreadId.make("thread-c7"), origin: "manual" },
+      linkId,
+      environmentId,
+      [dependency],
+    );
+    expect(operation).toEqual({
+      kind: "issueThreadLink.create",
+      entityId: linkId,
+      args: { issueId: ISSUE, environmentId, threadId: "thread-c7", origin: "manual" },
+      dependsOn: [dependency],
+    });
+    expect(issueThreadLinkDeleteOperation(linkId)).toEqual({
+      kind: "issueThreadLink.delete",
+      entityId: linkId,
+      args: {},
+    });
+
+    const decoded = decodeIssueSyncOperation({
+      protocolVersion: SYNC_PROTOCOL_VERSION,
+      operationId: SyncOperationId.make("create-new-link"),
+      companyId: CompanyId.make("company-c7"),
+      clientId: SyncClientId.make("client-c7"),
+      environmentId,
+      actor: { kind: "environment", environmentId },
+      localSequence: LocalSequence.make(1),
+      baseVersion: CompanyVersion.make(4),
+      kind: operation.kind,
+      entityId: operation.entityId,
+      args: issueSyncDomainAdapter.operationCodec.encode(operation),
+      dependsOn: [dependency],
+    });
+    expect(Option.getOrThrow(decoded)).toEqual(operation);
   });
 });

@@ -8,9 +8,11 @@
  * @module issues/IssueReplicaReader
  */
 import {
+  decodeOutbox,
   decodeConfirmedEntities,
-  issueSyncDomainAdapter,
+  makeIssueSyncAdapter,
   makeSqliteSyncStore,
+  overlay,
   syncedIssueDomainFromEntities,
   SYNC_BOOTSTRAP_GENERATION,
   type StoredSyncState,
@@ -47,16 +49,28 @@ export function issueReadModelFromStoredReplica(
     return null;
   }
 
+  if (stored.quarantined.length > 0) return null;
+
+  // One engine owns this store and stamps one actor on every envelope. Reading it from the durable
+  // row preserves environment attribution on optimistic comments instead of presenting them as
+  // the legacy anonymous human while they wait for confirmation.
+  const adapter = makeIssueSyncAdapter({ actor: stored.outbox[0]?.envelope.actor ?? null });
   const decoded = decodeConfirmedEntities({
-    adapter: issueSyncDomainAdapter,
+    adapter,
     rows: stored.entities,
     cursor: checkpoint.cursor,
     authorizationEpoch: checkpoint.authorizationEpoch,
   });
   if (decoded.quarantined !== 0) return null;
-  return syncedIssueDomainFromEntities(
-    [...decoded.replica.entities.values()].map((entity) => entity.entity),
-  );
+  const decodedOutbox = decodeOutbox({ adapter, rows: stored.outbox });
+  if (decodedOutbox.quarantined.length > 0) return null;
+  const optimistic = overlay({
+    replica: decoded.replica,
+    entries: decodedOutbox.entries,
+    adapter,
+    rejected: stored.rejected,
+  });
+  return syncedIssueDomainFromEntities(optimistic.view.values());
 }
 
 /** Chooses one source once; entity absence inside a ready replica never falls through to legacy. */

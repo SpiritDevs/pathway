@@ -3,20 +3,20 @@
  *
  * Create ids are supplied by the caller so translation stays deterministic and tests can prove
  * the exact row the optimistic overlay and Convex will share. The routing layer mints those ids
- * with the web app's UUID utility before calling these functions.
+ * with its platform UUID utility before calling these functions.
  *
- * @module state/issueOperationsFromRpc
+ * @module sync/issueOperationsFromRpc
  */
 import {
   issueSyncOperation,
-  syncOrderKeyAfter,
-  syncOrderKeyBetween,
   type IssueSyncOperation,
   type IssueSyncOperationOf,
-} from "@spiritdevs/client-runtime/sync";
-import { SyncEntityId } from "@spiritdevs/contracts/cloudSync";
+} from "./issueDomain.ts";
+import { syncOrderKeyAfter, syncOrderKeyBetween } from "./orderKey.ts";
+import { SyncEntityId, type SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import type {
+  EnvironmentId,
   IssueBulkUpdateInput,
   IssueCommentCreateInput,
   IssueCommentDeleteInput,
@@ -51,6 +51,7 @@ import type {
   IssueTodoId,
   IssueTodosReorderInput,
   IssueTodoUpdateInput,
+  IssueThreadLinkInput,
   IssueUpdateInput,
   IssueViewCreateInput,
   IssueViewDeleteInput,
@@ -402,6 +403,29 @@ export const issueViewsReorderOperations = (
     }),
   );
 
+export const issueThreadLinkCreateOperation = (
+  input: IssueThreadLinkInput,
+  id: SyncEntityId,
+  environmentId: EnvironmentId,
+  dependsOn?: ReadonlyArray<SyncOperationId>,
+): IssueSyncOperationOf<"issueThreadLink.create"> =>
+  issueSyncOperation({
+    kind: "issueThreadLink.create",
+    entityId: id,
+    args: {
+      issueId: input.issueId,
+      environmentId,
+      threadId: input.threadId,
+      origin: input.origin,
+    },
+    ...(dependsOn === undefined ? {} : { dependsOn }),
+  });
+
+export const issueThreadLinkDeleteOperation = (
+  id: SyncEntityId,
+): IssueSyncOperationOf<"issueThreadLink.delete"> =>
+  issueSyncOperation({ kind: "issueThreadLink.delete", entityId: id, args: {} });
+
 export type IssueMutationRoute =
   | { readonly route: "sync"; readonly operations: ReadonlyArray<IssueSyncOperation["kind"]> }
   | {
@@ -465,8 +489,8 @@ export const ISSUE_MUTATION_ROUTING_TABLE = {
   uploadCommentAttachment: { route: "legacy-always", reason: "attachment byte upload" },
   startEnrichment: { route: "legacy-always", reason: "environment enrichment run" },
   cancelEnrichment: { route: "legacy-always", reason: "environment enrichment run" },
-  linkThread: { route: "legacy-always", reason: "thread links deferred to a later slice" },
-  unlinkThread: { route: "legacy-always", reason: "thread links deferred to a later slice" },
+  linkThread: { route: "legacy-always", reason: "web routing remains environment-owned" },
+  unlinkThread: { route: "legacy-always", reason: "web routing remains environment-owned" },
   slackSetToken: { route: "legacy-always", reason: "environment Slack integration" },
   slackListChannels: { route: "legacy-always", reason: "environment Slack integration" },
   slackWatchCreate: { route: "legacy-always", reason: "environment Slack integration" },

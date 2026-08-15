@@ -17,6 +17,7 @@ export * from "./companyDomain.ts";
 export * from "./document.ts";
 export * from "./engine.ts";
 export * from "./issueDomain.ts";
+export * from "./issueOperationsFromRpc.ts";
 export * from "./issueReadModel.ts";
 export * from "./memoryStore.ts";
 export * from "./model.ts";

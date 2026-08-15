@@ -3,17 +3,24 @@ import { issueCollectionProjectionFromReplica } from "@spiritdevs/backend/sync/i
 import {
   cloudEntityCodec,
   EMPTY_STORED_SYNC_STATE,
+  issueCreateOperation,
+  issueSyncDomainAdapter,
   SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type CloudSyncEntity,
   type StoredSyncEntity,
+  type StoredOutboxEntry,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   AuthorizationEpoch,
   CompanyVersion,
+  LocalSequence,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientId,
   SyncEntityId,
+  SyncOperationId,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
 import * as Effect from "effect/Effect";
@@ -134,6 +141,43 @@ describe("issueReadModelFromStoredReplica", () => {
         entities: [{ ...stored.entities[0]!, payload: { id: "status-ready" } }],
       }),
     ).toBeNull();
+  });
+
+  it("folds a real-codec pending outbox operation into the routed read model", () => {
+    const operation = issueCreateOperation(
+      { title: "Queued on the server", statusId: "status-ready" as never },
+      "issue-pending" as never,
+    );
+    const outbox: StoredOutboxEntry = {
+      envelope: {
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        operationId: SyncOperationId.make("operation-pending"),
+        companyId: COMPANY_ID,
+        clientId: SyncClientId.make("server-reader-test"),
+        environmentId: "environment-reader-test" as never,
+        actor: { kind: "environment", environmentId: "environment-reader-test" as never },
+        localSequence: LocalSequence.make(1),
+        baseVersion: CompanyVersion.make(1),
+        kind: operation.kind,
+        entityId: operation.entityId,
+        args: issueSyncDomainAdapter.operationCodec.encode(operation),
+        dependsOn: [],
+      },
+      status: { _tag: "Pending" },
+      occurredAt: 1_700_000_001_000,
+    };
+
+    const readModel = issueReadModelFromStoredReplica(replica({ outbox: [outbox] }));
+    expect(readModel?.issues).toEqual([
+      expect.objectContaining({
+        id: "issue-pending",
+        key: "Draft",
+        title: "Queued on the server",
+      }),
+      expect.objectContaining({
+        id: "issue-replica",
+      }),
+    ]);
   });
 });
 
