@@ -16,7 +16,8 @@ const viewer = (
   permissions: ChangeViewer["permissions"],
   membershipId: string | null = null,
   membershipDomainId: string | null = null,
-): ChangeViewer => ({ permissions, membershipId, membershipDomainId });
+  ownRoleDomainIds: ReadonlySet<string> = new Set(),
+): ChangeViewer => ({ permissions, membershipId, membershipDomainId, ownRoleDomainIds });
 
 /** Entity ids are load-bearing only for the company domain; issue rows get a stable filler. */
 const row = (
@@ -166,8 +167,10 @@ describe("isChangeVisible", () => {
       assignments: [{ roleId: "role-members", scope: { kind: "company" } }],
     });
 
-    const self = (permissions: ChangeViewer["permissions"]) =>
-      viewer(permissions, "convex-self", SELF);
+    const self = (
+      permissions: ChangeViewer["permissions"],
+      ownRoleDomainIds: ReadonlySet<string> = new Set(),
+    ) => viewer(permissions, "convex-self", SELF, ownRoleDomainIds);
     const environment = (permissions: ChangeViewer["permissions"]) =>
       viewer(permissions, null, null);
 
@@ -223,6 +226,12 @@ describe("isChangeVisible", () => {
       });
       expect(isChangeVisible(self(ungranted), assignment(SELF))).toBe(true);
       expect(isChangeVisible(self(ungranted), assignment(OTHER))).toBe(false);
+    });
+
+    it("delivers exactly the roles referenced by their own assignments", () => {
+      const granted = self(ungranted, new Set(["role-self"]));
+      expect(isChangeVisible(granted, row("role", [], { entityId: "role-self" }))).toBe(true);
+      expect(isChangeVisible(granted, row("role", [], { entityId: "role-other" }))).toBe(false);
     });
 
     it("withholds a role-assignment tombstone, which carries no payload to name a subject", () => {

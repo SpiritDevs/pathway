@@ -382,9 +382,11 @@ export async function appendCompanyChanges(
   } = {};
   if (assignment.nextHead !== headBefore) companyPatch.syncVersion = assignment.nextHead;
   if (options.bumpEpoch === true) companyPatch.authorizationEpoch = company.authorizationEpoch + 1;
-  if (companyUpsert) companyPatch.version = assignment.lastVersion;
-  if (Object.keys(companyPatch).length > 0) {
+  if (companyUpsert) {
+    companyPatch.version = assignment.lastVersion;
     companyPatch.updatedAt = now;
+  }
+  if (Object.keys(companyPatch).length > 0) {
     await ctx.db.patch(company._id, companyPatch);
   }
   const patched: Doc<"companies"> = { ...company, ...companyPatch };
@@ -460,6 +462,6 @@ export async function bumpAuthorizationEpoch(
   const company = await ctx.db.get(companyId);
   if (company === null) throw backendError("entity-not-found", "Company is missing.");
   const authorizationEpoch = company.authorizationEpoch + 1;
-  await ctx.db.patch(company._id, { authorizationEpoch, updatedAt: Date.now() });
+  await ctx.db.patch(company._id, { authorizationEpoch });
   return authorizationEpoch;
 }

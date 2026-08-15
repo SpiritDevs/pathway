@@ -58,6 +58,7 @@ const ATTACHMENT_OTHER_ID = "0198c0de-6666-7666-8666-000000000002";
 const THREAD_LINK_ID = "0198c0de-7777-7777-8777-000000000001";
 /** A membership id no company here has ever issued. */
 const GHOST_MEMBERSHIP_ID = "0198c0de-aaaa-7aaa-8aaa-000000000909";
+const READER_ROLE_ID = "0198c0de-aaaa-7aaa-8aaa-000000000201";
 
 const ENVIRONMENT_ONE = "environment-one";
 const ENVIRONMENT_TWO = "environment-two";
@@ -134,7 +135,7 @@ async function seed(t: ReturnType<typeof harness>) {
       updatedAt: now,
     });
     const readerRoleId = await ctx.db.insert("roles", {
-      id: "0198c0de-aaaa-7aaa-8aaa-000000000201",
+      id: READER_ROLE_ID,
       companyId: companyDocId,
       name: "Reader",
       description: "",
@@ -568,7 +569,8 @@ describe("sync.bootstrap", () => {
     );
     // The walk continues into the company domain (`BOOTSTRAP_ENTITY_ORDER`). The reader holds no
     // administration switch, so it receives exactly its self rows: the company it is a member of,
-    // and its own membership and role assignment. No foreign membership and no role definition.
+    // and its own membership, role assignment, and the role definition that assignment references.
+    // No foreign membership or unrelated role definition is included.
     expect(
       entities
         .filter((e) => !e.entityKind.startsWith("issue"))
@@ -578,6 +580,7 @@ describe("sync.bootstrap", () => {
       [
         ["company", COMPANY_ID],
         ["membership", READER_MEMBERSHIP_ID],
+        ["role", READER_ROLE_ID],
         ["roleAssignment", "0198c0de-aaaa-7aaa-8aaa-000000000301"],
       ].sort(),
     );
@@ -1431,14 +1434,15 @@ describe("company catalog visibility", () => {
 
   /**
    * The company-domain rows a seed hands *any* active member, grants or not: the company, and the
-   * member's own membership and role assignment. Self visibility (`src/sync/visibility`) exists so
-   * a client can name its company and find itself offline, and it is unrelated to the catalog rule
-   * under test — hence a constant added to these expectations rather than a change to them.
+   * member's own membership and role assignment, plus the role definition that assignment needs
+   * for offline permission evaluation. Self visibility (`src/sync/visibility`) exists so a client
+   * can name its company and find itself offline, and it is unrelated to the catalog rule under
+   * test — hence a constant added to these expectations rather than a change to them.
    *
    * They appear only in the seed here: nothing in this file appends company-domain *change* rows,
    * so the incremental drains stay issue-only.
    */
-  const SELF_KINDS = ["company", "membership", "roleAssignment"];
+  const SELF_KINDS = ["company", "membership", "role", "roleAssignment"];
 
   it("reaches a reader scoped to one team, on the feed and in the seed", async () => {
     const t = harness();

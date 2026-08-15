@@ -74,9 +74,9 @@ import {
 
 /**
  * The identity half of change-feed filtering. An environment identity owns nothing and is nobody's
- * member, so it carries neither key and reaches no owner-private row and no self row; a human
- * carries both, which is what delivers their private saved views and their own company-domain
- * records however narrow their team grants are.
+ * member, so it carries neither membership key nor assigned-role set and reaches no owner-private
+ * row and no self row; a human carries all three, which delivers their private saved views and the
+ * company-domain rows required to resolve their own authorization however narrow their grants are.
  *
  * The two membership keys are two id spaces, not a duplicate: saved-view ownership is recorded as a
  * Convex id, company-domain payloads and entity ids are written in domain ids.
@@ -84,6 +84,7 @@ import {
 function changeViewer(actor: CompanyActor): ChangeViewer {
   return {
     permissions: actor.permissions,
+    ownRoleDomainIds: actor.kind === "member" ? actor.ownRoleDomainIds : new Set(),
     membershipId: actor.kind === "member" ? actor.membership._id : null,
     membershipDomainId: actor.kind === "member" ? actor.membership.id : null,
   };
@@ -407,7 +408,6 @@ export const reserveIssueKeys = mutation({
 
     await ctx.db.patch(actor.company._id, {
       nextIssueNumber: reservation.nextIssueNumber,
-      updatedAt: now,
     });
     await ctx.db.insert("issueKeyReservations", {
       companyId: actor.company._id,
@@ -734,7 +734,6 @@ export const applyOperations = mutation({
     if (assignment.nextHead !== headBefore) {
       await ctx.db.patch(actor.company._id, {
         syncVersion: assignment.nextHead,
-        updatedAt: now,
       });
     }
 

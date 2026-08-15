@@ -313,6 +313,8 @@ export const record = internalMutation({
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "members.invite");
+    if (args.roleIds.length > 0) requirePermission(actor, "roles.manage");
+    if (args.teamIds.length > 0) requirePermission(actor, "teams.manage");
     if (actor.kind !== "member") {
       // The table records an inviting membership, and an environment has none. Nor should it: an
       // invitation is a person vouching for a person.

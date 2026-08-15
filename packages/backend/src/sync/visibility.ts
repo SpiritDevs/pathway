@@ -107,6 +107,8 @@ const MEMBER_BASELINE_KINDS: ReadonlySet<SyncEntityKind> = new Set<SyncEntityKin
 /** Who is asking. Split from {@link VisibilityCandidate} so one actor filters a whole page. */
 export interface ChangeViewer {
   readonly permissions: EffectivePermissions;
+  /** Domain ids of roles referenced by this member's own role assignments. */
+  readonly ownRoleDomainIds: ReadonlySet<string>;
   /**
    * Identifies the acting membership for owner-private rows; `null` for an environment identity,
    * which owns nothing and therefore reaches no owner-private row. Any stable membership key works
@@ -210,17 +212,19 @@ function selfSubjectMembershipId(change: VisibilityCandidate): string | null {
 /**
  * Whether a company-domain row is one the viewer receives as *themselves* rather than through a
  * grant: the two company singletons for any active member, and the rows that describe this
- * member's own identity, team memberships, and role assignments.
+ * member's own identity, team memberships, role assignments, and exactly the roles those
+ * assignments reference.
  *
  * Without it, a member holding no `members.read`/`teams.read`/`roles.read` switch replicates a
  * company they cannot name, cannot find themselves in, and cannot evaluate their own offline budget
- * for. Nothing here widens the audience of a *foreign* row: the subject must be the viewer.
+ * for. Nothing here widens the audience of another member's rows or an unrelated role.
  */
 function isSelfCompanyRow(viewer: ChangeViewer, change: VisibilityCandidate): boolean {
   const self = viewer.membershipDomainId;
   // An environment identity is nobody's member; it reaches the company domain only through grants.
   if (self === null) return false;
   if (MEMBER_BASELINE_KINDS.has(change.entityKind as SyncEntityKind)) return true;
+  if (change.entityKind === "role") return viewer.ownRoleDomainIds.has(change.entityId);
   return selfSubjectMembershipId(change) === self;
 }
 
@@ -237,9 +241,10 @@ export function isChangeVisible(viewer: ChangeViewer, change: VisibilityCandidat
     return viewer.membershipId !== null && viewer.membershipId === owner;
   }
 
-  // Widens the company domain and nothing else, and only onto rows about the viewer themselves. A
-  // foreign membership, team, or role still needs the kind's switch at company scope, because every
-  // company-domain row is company-wide and `hasRecordPermission` refuses those to a team grant.
+  // Widens the company domain and nothing else, and only onto rows about the viewer themselves or a
+  // role their own assignment references. Foreign rows and unrelated roles still need the kind's
+  // switch at company scope, because every company-domain row is company-wide and
+  // `hasRecordPermission` refuses those to a team grant.
   if (
     COMPANY_ENTITY_KINDS.has(change.entityKind as SyncEntityKind) &&
     isSelfCompanyRow(viewer, change)

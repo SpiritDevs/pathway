@@ -52,6 +52,7 @@ const PLAIN_MEMBERSHIP_ID = "0198c0de-aaaa-7aaa-8aaa-000000000102";
 const STRANGER_MEMBERSHIP_ID = "0198c0de-aaaa-7aaa-8aaa-000000000103";
 const TEAM_ID = "0198c0de-dddd-7ddd-8ddd-000000000001";
 const ROLE_ID = "0198c0de-aaaa-7aaa-8aaa-000000000201";
+const OTHER_ROLE_ID = "0198c0de-aaaa-7aaa-8aaa-000000000202";
 const PLAIN_ASSIGNMENT_ID = "0198c0de-aaaa-7aaa-8aaa-000000000301";
 const STRANGER_ASSIGNMENT_ID = "0198c0de-aaaa-7aaa-8aaa-000000000302";
 const STATUS_ID = "0198c0de-bbbb-7bbb-8bbb-000000000001";
@@ -167,6 +168,16 @@ async function seed(t: ReturnType<typeof harness>) {
       createdAt: now,
       updatedAt: now,
     });
+    const otherRoleDocId = await ctx.db.insert("roles", {
+      id: OTHER_ROLE_ID,
+      companyId: companyDocId,
+      name: "Somebody else's role",
+      description: "Not referenced by the plain member",
+      permissions: [],
+      seeded: false,
+      createdAt: now,
+      updatedAt: now,
+    });
     const plainAssignmentDocId = await ctx.db.insert("roleAssignments", {
       id: PLAIN_ASSIGNMENT_ID,
       companyId: companyDocId,
@@ -180,7 +191,7 @@ async function seed(t: ReturnType<typeof harness>) {
       id: STRANGER_ASSIGNMENT_ID,
       companyId: companyDocId,
       membershipId: strangerMembershipId,
-      roleId: roleDocId,
+      roleId: otherRoleDocId,
       scope: "company",
       teamId: null,
       createdAt: now,
@@ -223,6 +234,7 @@ async function seed(t: ReturnType<typeof harness>) {
       plainTeamMembershipDocId,
       strangerTeamMembershipDocId,
       roleDocId,
+      otherRoleDocId,
       plainAssignmentDocId,
       strangerAssignmentDocId,
     };
@@ -489,6 +501,7 @@ describe("company-domain self visibility", () => {
     ["companySettings", COMPANY_ID],
     ["membership", PLAIN_MEMBERSHIP_ID],
     ["teamMembership", PLAIN_TEAM_MEMBERSHIP_ID],
+    ["role", ROLE_ID],
     ["roleAssignment", PLAIN_ASSIGNMENT_ID],
   ] as const;
 
@@ -507,13 +520,17 @@ describe("company-domain self visibility", () => {
     // Their own team membership does not carry the team it names: `teams.read` gates that, and no
     // self rule widens a record that is about the company rather than about them.
     expect(kindsOf(seedResult.entities)).not.toContain("team");
-    expect(kindsOf(seedResult.entities)).not.toContain("role");
+    expect(idsOfKind(seedResult.entities, "role")).toEqual([ROLE_ID]);
     expect(kindsOf(seedResult.entities)).not.toContain("issueStatus");
   });
 
-  it("delivers the same set through listChanges, row for row", async () => {
+  it("keeps bootstrap and listChanges in parity for self rows and referenced roles", async () => {
     const t = harness();
     const seeded = await seed(t);
+    const bootstrapped = (await drainSeed(asMember(t, "user_plain"))).entities.map((entity) => [
+      entity.entityKind,
+      entity.entityId,
+    ]);
 
     // Re-append every company row through the real feed writer, so the drain sees exactly what an
     // administration mutation would have produced.
@@ -565,15 +582,17 @@ describe("company-domain self visibility", () => {
             payload: await encodeTeamMembership(ctx, doc),
           });
         }
-        const role = await ctx.db.get(seeded.roleDocId);
-        if (role === null) throw new Error("role vanished");
-        changes.push({
-          entityKind: "role" as const,
-          entityId: role.id,
-          changeKind: "upsert" as const,
-          versionDocId: role._id,
-          payload: encodeRole(role),
-        });
+        for (const docId of [seeded.roleDocId, seeded.otherRoleDocId]) {
+          const role = await ctx.db.get(docId);
+          if (role === null) throw new Error("role vanished");
+          changes.push({
+            entityKind: "role" as const,
+            entityId: role.id,
+            changeKind: "upsert" as const,
+            versionDocId: role._id,
+            payload: encodeRole(role),
+          });
+        }
         for (const docId of [seeded.plainAssignmentDocId, seeded.strangerAssignmentDocId]) {
           const doc = await ctx.db.get(docId);
           if (doc === null) throw new Error("assignment vanished");
@@ -602,12 +621,14 @@ describe("company-domain self visibility", () => {
     });
     expect(drained._tag).toBe("Changes");
     const delivered = (drained.changes ?? []).map((change) => [change.entityKind, change.entityId]);
+    expect(delivered.slice().sort()).toEqual(bootstrapped.slice().sort());
     for (const row of SELF_ROWS) expect(delivered).toContainEqual([...row]);
     expect(delivered).not.toContainEqual(["membership", STRANGER_MEMBERSHIP_ID]);
     expect(delivered).not.toContainEqual(["teamMembership", STRANGER_TEAM_MEMBERSHIP_ID]);
     expect(delivered).not.toContainEqual(["roleAssignment", STRANGER_ASSIGNMENT_ID]);
     expect(delivered).not.toContainEqual(["team", TEAM_ID]);
-    expect(delivered).not.toContainEqual(["role", ROLE_ID]);
+    expect(delivered).toContainEqual(["role", ROLE_ID]);
+    expect(delivered).not.toContainEqual(["role", OTHER_ROLE_ID]);
   });
 
   it("gives an owner the whole company domain through both paths", async () => {
@@ -616,6 +637,6 @@ describe("company-domain self visibility", () => {
     const seedResult = await drainSeed(asMember(t, "user_owner"));
     expect(idsOfKind(seedResult.entities, "membership")).toHaveLength(3);
     expect(idsOfKind(seedResult.entities, "teamMembership")).toHaveLength(2);
-    expect(idsOfKind(seedResult.entities, "role")).toEqual([ROLE_ID]);
+    expect(idsOfKind(seedResult.entities, "role").sort()).toEqual([ROLE_ID, OTHER_ROLE_ID].sort());
   });
 });

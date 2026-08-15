@@ -93,15 +93,10 @@ async function findSmokeRegistration(
 }
 
 /** Any authorization-relevant change bumps the epoch, exactly as the real admin surface would. */
-async function bumpAuthorizationEpoch(
-  ctx: MutationCtx,
-  company: Doc<"companies">,
-  now: number,
-): Promise<void> {
+async function bumpAuthorizationEpoch(ctx: MutationCtx, company: Doc<"companies">): Promise<void> {
   assertSmokeCompany(company);
   await ctx.db.patch(company._id, {
     authorizationEpoch: company.authorizationEpoch + 1,
-    updatedAt: now,
   });
 }
 
@@ -226,7 +221,7 @@ export const seed = internalMutation({
       }
     }
 
-    if (authorizationChanged) await bumpAuthorizationEpoch(ctx, company, now);
+    if (authorizationChanged) await bumpAuthorizationEpoch(ctx, company);
 
     return {
       companyId: SMOKE_COMPANY_DOMAIN_ID,
@@ -254,7 +249,7 @@ export const revokeRegistration = internalMutation({
         relayLinkState: "revoked",
         updatedAt: now,
       });
-      await bumpAuthorizationEpoch(ctx, company, now);
+      await bumpAuthorizationEpoch(ctx, company);
     }
     return { revoked: true };
   },
@@ -281,7 +276,7 @@ export const setThumbprint = internalMutation({
     if (registration.publicKeyThumbprint !== publicKeyThumbprint) {
       const now = Date.now();
       await ctx.db.patch(registration._id, { publicKeyThumbprint, updatedAt: now });
-      await bumpAuthorizationEpoch(ctx, company, now);
+      await bumpAuthorizationEpoch(ctx, company);
     }
     return { updated: true };
   },

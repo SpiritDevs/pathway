@@ -341,6 +341,45 @@ describe("appendCompanyChanges", () => {
     expect(row.retainUntil).toBe(row.createdAt + SYNC_FEED_RETENTION_MS);
   });
 
+  it("updates the company timestamp only for a company upsert", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+
+    await t.run(async (ctx: MutationCtx) => {
+      const membership = await ctx.db.get(seeded.memberMembershipId);
+      if (membership === null) throw new Error("membership vanished");
+      await appendCompanyChanges(ctx, {
+        companyId: seeded.companyDocId,
+        actor: OWNER_ACTOR,
+        changes: [
+          {
+            entityKind: "membership",
+            entityId: membership.id,
+            changeKind: "upsert",
+            versionDocId: membership._id,
+            payload: encodeMembership(membership),
+          },
+        ],
+        bumpEpoch: true,
+      });
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(seeded.companyDocId))?.updatedAt).toBe(seeded.now);
+    });
+
+    await t.run(async (ctx: MutationCtx) => {
+      await appendCompanyChanges(ctx, {
+        companyId: seeded.companyDocId,
+        actor: OWNER_ACTOR,
+        changes: [],
+        companyUpsert: true,
+      });
+    });
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(seeded.companyDocId))?.updatedAt).toBeGreaterThan(seeded.now);
+    });
+  });
+
   it("bumps the epoch and encodes the company payload from the patched row, in one transaction", async () => {
     const t = harness();
     const seeded = await seed(t);
@@ -485,6 +524,7 @@ describe("bumpAuthorizationEpoch", () => {
       const company = await ctx.db.get(seeded.companyDocId);
       expect(company?.authorizationEpoch).toBe(2);
       expect(company?.syncVersion).toBe(0);
+      expect(company?.updatedAt).toBe(seeded.now);
     });
   });
 });

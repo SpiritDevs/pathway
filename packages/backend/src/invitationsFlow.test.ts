@@ -18,6 +18,7 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
+import type { Id } from "../convex/_generated/dataModel.js";
 import {
   INVITATION_RESEND_MIN_INTERVAL_MS,
   setInvitationMailer,
@@ -25,6 +26,7 @@ import {
 } from "../convex/invitations.ts";
 import schema from "../convex/schema.ts";
 import { hashInvitationToken, INVITATION_TTL_MS } from "./invitations.ts";
+import type { PermissionKey } from "./permissions.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_CLOUD_SYNC = "enabled";
@@ -176,6 +178,7 @@ async function seed(t: ReturnType<typeof harness>) {
       readerMembershipId,
       readerUserId,
       roleDocId,
+      readerRoleDocId,
       teamDocId,
     };
   });
@@ -200,6 +203,16 @@ function asReader(t: ReturnType<typeof harness>) {
     email: "reader@example.test",
     emailVerified: true,
     name: "Reader",
+  });
+}
+
+async function setReaderPermissions(
+  t: ReturnType<typeof harness>,
+  roleId: Id<"roles">,
+  permissions: PermissionKey[],
+): Promise<void> {
+  await t.run(async (ctx) => {
+    await ctx.db.patch(roleId, { permissions });
   });
 }
 
@@ -683,6 +696,78 @@ describe("creation guards", () => {
       }),
     ).rejects.toThrow(/members\.invite/);
     expect(sent).toHaveLength(0);
+  });
+
+  it("refuses role grants from an inviter without roles.manage", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await setReaderPermissions(t, seeded.readerRoleDocId, ["members.invite"]);
+
+    await expect(
+      asReader(t).action(api.invitations.create, {
+        companyId: COMPANY_ID,
+        id: INVITATION_ID,
+        email: INVITEE_EMAIL,
+        teamIds: [],
+        roleIds: [ROLE_ID],
+      }),
+    ).rejects.toThrow(/roles\.manage/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("refuses team grants from an inviter without teams.manage", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await setReaderPermissions(t, seeded.readerRoleDocId, ["members.invite"]);
+
+    await expect(
+      asReader(t).action(api.invitations.create, {
+        companyId: COMPANY_ID,
+        id: INVITATION_ID,
+        email: INVITEE_EMAIL,
+        teamIds: [TEAM_ID],
+        roleIds: [],
+      }),
+    ).rejects.toThrow(/teams\.manage/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("allows grant lists when the inviter holds both manage permissions", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await setReaderPermissions(t, seeded.readerRoleDocId, [
+      "members.invite",
+      "roles.manage",
+      "teams.manage",
+    ]);
+
+    await asReader(t).action(api.invitations.create, {
+      companyId: COMPANY_ID,
+      id: INVITATION_ID,
+      email: INVITEE_EMAIL,
+      teamIds: [TEAM_ID],
+      roleIds: [ROLE_ID],
+    });
+
+    expect(await invitationRow(t)).toMatchObject({ teamIds: [TEAM_ID], roleIds: [ROLE_ID] });
+    expect(sent).toHaveLength(1);
+  });
+
+  it("allows a plain invitation with only members.invite", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await setReaderPermissions(t, seeded.readerRoleDocId, ["members.invite"]);
+
+    await asReader(t).action(api.invitations.create, {
+      companyId: COMPANY_ID,
+      id: INVITATION_ID,
+      email: INVITEE_EMAIL,
+      teamIds: [],
+      roleIds: [],
+    });
+
+    expect(await invitationRow(t)).toMatchObject({ teamIds: [], roleIds: [] });
+    expect(sent).toHaveLength(1);
   });
 
   it("refuses an empty address, a duplicate id, a second live invitation, and an existing member", async () => {

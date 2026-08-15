@@ -897,7 +897,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (collision !== null) return rejected("invalid-arguments", `The key ${key} is taken.`);
   // A key at or past the counter would collide with a future lease.
   if (keyNumber >= freshCompany.nextIssueNumber) {
-    await ctx.db.patch(company._id, { nextIssueNumber: keyNumber + 1, updatedAt: now });
+    await ctx.db.patch(company._id, { nextIssueNumber: keyNumber + 1 });
   }
 
   const docId = await ctx.db.insert("issues", {

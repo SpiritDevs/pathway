@@ -34,6 +34,8 @@ export interface MemberActor {
   readonly company: Doc<"companies">;
   readonly isOwner: boolean;
   readonly permissions: EffectivePermissions;
+  /** Domain ids of the roles referenced by this member's own assignments. */
+  readonly ownRoleDomainIds: ReadonlySet<string>;
 }
 
 export interface EnvironmentActor {
@@ -106,12 +108,15 @@ function toRoleDefinition(role: Doc<"roles">): RoleDefinition {
   return { roleId: role._id, permissions: role.permissions.filter(isPermissionKey) };
 }
 
-/** Loads the roles a membership is assigned and unions them into effective permissions. */
-async function membershipPermissions(
+/** Loads a membership's assigned roles once for effective permissions and self-visible role ids. */
+async function membershipAuthorization(
   ctx: QueryCtx,
   membership: Doc<"memberships">,
   isOwner: boolean,
-): Promise<EffectivePermissions> {
+): Promise<{
+  readonly permissions: EffectivePermissions;
+  readonly ownRoleDomainIds: ReadonlySet<string>;
+}> {
   const assignmentDocs = await ctx.db
     .query("roleAssignments")
     .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
@@ -120,12 +125,16 @@ async function membershipPermissions(
   const roles: RoleDefinition[] = [];
   const assignments: RoleAssignment[] = [];
   const seenRoles = new Set<string>();
+  const ownRoleDomainIds = new Set<string>();
 
   for (const assignment of assignmentDocs) {
     if (!seenRoles.has(assignment.roleId)) {
       seenRoles.add(assignment.roleId);
       const role = await ctx.db.get(assignment.roleId);
-      if (role !== null) roles.push(toRoleDefinition(role));
+      if (role !== null) {
+        roles.push(toRoleDefinition(role));
+        ownRoleDomainIds.add(role.id);
+      }
     }
     assignments.push({
       roleId: assignment.roleId,
@@ -136,7 +145,10 @@ async function membershipPermissions(
     });
   }
 
-  return resolveEffectivePermissions({ isOwner, roles, assignments });
+  return {
+    permissions: resolveEffectivePermissions({ isOwner, roles, assignments }),
+    ownRoleDomainIds,
+  };
 }
 
 /**
@@ -220,13 +232,15 @@ export async function requireCompanyActor(ctx: QueryCtx, companyId: string): Pro
     .unique();
   const isOwner = owner !== null;
 
+  const authorization = await membershipAuthorization(ctx, membership, isOwner);
   return {
     kind: "member",
     user,
     membership,
     company,
     isOwner,
-    permissions: await membershipPermissions(ctx, membership, isOwner),
+    permissions: authorization.permissions,
+    ownRoleDomainIds: authorization.ownRoleDomainIds,
   };
 }
 
