@@ -1058,6 +1058,8 @@ export function pruneIssuesSelection(
 // ── Keyboard ───────────────────────────────────────────────────────────
 
 export type IssuesListKeyAction =
+  /** Show the create-issue dialog. */
+  | { readonly _tag: "new" }
   /** Move the cursor and make it the whole selection. */
   | { readonly _tag: "select"; readonly issueId: IssueId }
   /** Open the detail sheet — the caller writes `?issue=`. */
@@ -1079,6 +1081,14 @@ export function resolveIssuesListKeyAction(input: {
   readonly hasSelection: boolean;
 }): IssuesListKeyAction | null {
   const { key, ids, activeId } = input;
+  if (
+    key.toLowerCase() === "n" &&
+    input.metaKey !== input.ctrlKey &&
+    !input.altKey &&
+    !input.shiftKey
+  ) {
+    return { _tag: "new" };
+  }
   if (input.metaKey || input.ctrlKey || input.altKey) return null;
 
   if (key === "Escape") return input.hasSelection ? { _tag: "clear" } : null;

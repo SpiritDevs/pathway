@@ -860,6 +860,36 @@ describe("resolveIssuesListKeyAction", () => {
     hasSelection: true,
   };
 
+  it("opens a new issue with either Command-N or Control-N", () => {
+    expect(
+      resolveIssuesListKeyAction({ ...base, key: "n", metaKey: true, activeId: null }),
+    ).toEqual({ _tag: "new" });
+    expect(
+      resolveIssuesListKeyAction({ ...base, key: "n", ctrlKey: true, activeId: null }),
+    ).toEqual({ _tag: "new" });
+  });
+
+  it("leaves modified variants of the new issue shortcut alone", () => {
+    expect(
+      resolveIssuesListKeyAction({
+        ...base,
+        key: "n",
+        metaKey: true,
+        shiftKey: true,
+        activeId: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveIssuesListKeyAction({
+        ...base,
+        key: "n",
+        metaKey: true,
+        ctrlKey: true,
+        activeId: null,
+      }),
+    ).toBeNull();
+  });
+
   it("moves the cursor with j/k and the arrows", () => {
     expect(resolveIssuesListKeyAction({ ...base, key: "j", activeId: ids[0] as IssueId })).toEqual({
       _tag: "select",

@@ -326,6 +326,11 @@ function IssuesListView({
     });
     if (action === null) return;
     event.preventDefault();
+    if (action._tag === "new") {
+      setNewIssueStatusId(null);
+      setNewIssueOpen(true);
+      return;
+    }
     if (action._tag === "clear") {
       setSelection(EMPTY_ISSUES_SELECTION);
       setBulkSelectionActive(false);
