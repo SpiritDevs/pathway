@@ -35,6 +35,9 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/pull-requests", "pull-requests"],
     ["/calendar", "calendar"],
     ["/email", "email"],
+    ["/contacts", "contacts"],
+    ["/time-tracker", "time-tracker"],
+    ["/files", "files"],
     ["/orchestrator", "orchestrator"],
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", "settings"],
@@ -64,6 +67,9 @@ describe("primary navigation view order", () => {
       "issues",
       "pull-requests",
       "calendar",
+      "contacts",
+      "time-tracker",
+      "files",
     ]);
   });
 
@@ -76,7 +82,16 @@ describe("primary navigation view order", () => {
         "issues",
         "future-view",
       ]),
-    ).toEqual(["issues", "threads", "pull-requests", "calendar", "email"]);
+    ).toEqual([
+      "issues",
+      "threads",
+      "pull-requests",
+      "calendar",
+      "email",
+      "contacts",
+      "time-tracker",
+      "files",
+    ]);
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("dashboard");
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("orchestrator");
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("settings");
@@ -91,9 +106,12 @@ describe("primary navigation view order", () => {
       "pull-requests",
       "calendar",
       "email",
+      "contacts",
+      "time-tracker",
+      "files",
     ]);
     expect(movePrimaryNavigationDestination(order, "threads", "up")).toBe(order);
-    expect(movePrimaryNavigationDestination(order, "email", "down")).toBe(order);
+    expect(movePrimaryNavigationDestination(order, "files", "down")).toBe(order);
   });
 });
 

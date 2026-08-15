@@ -195,7 +195,16 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   primaryNavigationViewOrder: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(
-      Effect.succeed(["threads", "issues", "pull-requests", "calendar", "email"]),
+      Effect.succeed([
+        "threads",
+        "issues",
+        "pull-requests",
+        "calendar",
+        "email",
+        "contacts",
+        "time-tracker",
+        "files",
+      ]),
     ),
   ),
   // Model favorites. Historically keyed by provider kind, now

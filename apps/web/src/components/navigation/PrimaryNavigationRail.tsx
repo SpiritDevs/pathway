@@ -18,6 +18,9 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import {
   BotIcon,
   CalendarDaysIcon,
+  Clock3Icon,
+  ContactRoundIcon,
+  FilesIcon,
   GitPullRequestIcon,
   LayoutDashboardIcon,
   ListTodoIcon,
@@ -60,6 +63,9 @@ export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
   "pull-requests",
   "calendar",
   "email",
+  "contacts",
+  "time-tracker",
+  "files",
 ] as const;
 
 export type MovablePrimaryNavigationDestination =
@@ -108,6 +114,9 @@ export type PrimaryNavigationDestination =
   | "pull-requests"
   | "calendar"
   | "email"
+  | "contacts"
+  | "time-tracker"
+  | "files"
   | "orchestrator"
   | "settings";
 
@@ -162,6 +171,15 @@ export function resolvePrimaryNavigationDestination(
   }
   if (pathname === "/email" || pathname.startsWith("/email/")) {
     return "email";
+  }
+  if (pathname === "/contacts" || pathname.startsWith("/contacts/")) {
+    return "contacts";
+  }
+  if (pathname === "/time-tracker" || pathname.startsWith("/time-tracker/")) {
+    return "time-tracker";
+  }
+  if (pathname === "/files" || pathname.startsWith("/files/")) {
+    return "files";
   }
   if (pathname === "/orchestrator" || pathname.startsWith("/orchestrator/")) {
     return "orchestrator";
@@ -518,6 +536,15 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       search: { inbox: undefined, message: undefined, tab: undefined, analytics: undefined },
     });
   }, [navigate]);
+  const navigateToContacts = useCallback(() => {
+    void navigate({ to: "/contacts" });
+  }, [navigate]);
+  const navigateToTimeTracker = useCallback(() => {
+    void navigate({ to: "/time-tracker" });
+  }, [navigate]);
+  const navigateToFiles = useCallback(() => {
+    void navigate({ to: "/files" });
+  }, [navigate]);
   const navigateToOrchestrator = useCallback(() => {
     void navigate({ to: "/orchestrator" });
   }, [navigate]);
@@ -563,6 +590,24 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         badgeCount: emailUnreadCount,
         onNavigate: navigateToEmail,
       },
+      contacts: {
+        destination: "contacts",
+        icon: ContactRoundIcon,
+        label: "Contacts",
+        onNavigate: navigateToContacts,
+      },
+      "time-tracker": {
+        destination: "time-tracker",
+        icon: Clock3Icon,
+        label: "Time Tracker",
+        onNavigate: navigateToTimeTracker,
+      },
+      files: {
+        destination: "files",
+        icon: FilesIcon,
+        label: "Files",
+        onNavigate: navigateToFiles,
+      },
       orchestrator: {
         destination: "orchestrator",
         icon: BotIcon,
@@ -579,13 +624,16 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     [
       emailUnreadCount,
       navigateToCalendar,
+      navigateToContacts,
       navigateToDashboard,
       navigateToEmail,
+      navigateToFiles,
       navigateToIssues,
       navigateToOrchestrator,
       navigateToPullRequests,
       navigateToSettings,
       navigateToThreads,
+      navigateToTimeTracker,
     ],
   ) satisfies Record<PrimaryNavigationDestination, MobileNavigationItem>;
 
@@ -674,7 +722,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         <nav
           aria-label="Workspace"
           className={cn(
-            "flex w-full flex-col gap-1 px-2 pb-2",
+            "flex min-h-0 w-full flex-1 flex-col gap-1 overflow-y-auto px-2 pb-2",
             expanded ? "items-stretch" : "items-center",
           )}
         >

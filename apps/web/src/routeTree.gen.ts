@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
+import { Route as TimeTrackerRouteImport } from './routes/time-tracker'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as PairRouteImport } from './routes/pair'
@@ -17,8 +18,10 @@ import { Route as OrchestratorRouteImport } from './routes/orchestrator'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as IssuesRouteImport } from './routes/issues'
+import { Route as FilesRouteImport } from './routes/files'
 import { Route as EmailRouteImport } from './routes/email'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as ContactsRouteImport } from './routes/contacts'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as CalendarRouteImport } from './routes/calendar'
 import { Route as ChatRouteImport } from './routes/_chat'
@@ -59,6 +62,11 @@ const UsageRoute = UsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TimeTrackerRoute = TimeTrackerRouteImport.update({
+  id: '/time-tracker',
+  path: '/time-tracker',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -94,6 +102,11 @@ const IssuesRoute = IssuesRouteImport.update({
   path: '/issues',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FilesRoute = FilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EmailRoute = EmailRouteImport.update({
   id: '/email',
   path: '/email',
@@ -102,6 +115,11 @@ const EmailRoute = EmailRouteImport.update({
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactsRoute = ContactsRouteImport.update({
+  id: '/contacts',
+  path: '/contacts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectRoute = ConnectRouteImport.update({
@@ -285,8 +303,10 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
+  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -294,6 +314,7 @@ export interface FileRoutesByFullPath {
   '/pair': typeof PairRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
@@ -330,8 +351,10 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
+  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -339,6 +362,7 @@ export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
@@ -377,8 +401,10 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
+  '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
+  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -386,6 +412,7 @@ export interface FileRoutesById {
   '/pair': typeof PairRoute
   '/register': typeof RegisterRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/time-tracker': typeof TimeTrackerRoute
   '/usage': typeof UsageRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/threads': typeof ChatThreadsRoute
@@ -424,8 +451,10 @@ export interface FileRouteTypes {
     | '/'
     | '/calendar'
     | '/connect'
+    | '/contacts'
     | '/dashboard'
     | '/email'
+    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -433,6 +462,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/register'
     | '/settings'
+    | '/time-tracker'
     | '/usage'
     | '/pull-requests'
     | '/threads'
@@ -469,8 +499,10 @@ export interface FileRouteTypes {
     | '/'
     | '/calendar'
     | '/connect'
+    | '/contacts'
     | '/dashboard'
     | '/email'
+    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -478,6 +510,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/register'
     | '/settings'
+    | '/time-tracker'
     | '/usage'
     | '/pull-requests'
     | '/threads'
@@ -515,8 +548,10 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/calendar'
     | '/connect'
+    | '/contacts'
     | '/dashboard'
     | '/email'
+    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -524,6 +559,7 @@ export interface FileRouteTypes {
     | '/pair'
     | '/register'
     | '/settings'
+    | '/time-tracker'
     | '/usage'
     | '/_chat/pull-requests'
     | '/_chat/threads'
@@ -562,8 +598,10 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   CalendarRoute: typeof CalendarRoute
   ConnectRoute: typeof ConnectRoute
+  ContactsRoute: typeof ContactsRoute
   DashboardRoute: typeof DashboardRoute
   EmailRoute: typeof EmailRoute
+  FilesRoute: typeof FilesRoute
   IssuesRoute: typeof IssuesRoute
   LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
@@ -571,6 +609,7 @@ export interface RootRouteChildren {
   PairRoute: typeof PairRoute
   RegisterRoute: typeof RegisterRoute
   SettingsRoute: typeof SettingsRouteWithChildren
+  TimeTrackerRoute: typeof TimeTrackerRoute
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
   IssuesMilestonesRoute: typeof IssuesMilestonesRoute
@@ -585,6 +624,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/usage'
       preLoaderRoute: typeof UsageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/time-tracker': {
+      id: '/time-tracker'
+      path: '/time-tracker'
+      fullPath: '/time-tracker'
+      preLoaderRoute: typeof TimeTrackerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -636,6 +682,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IssuesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/files': {
+      id: '/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof FilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/email': {
       id: '/email'
       path: '/email'
@@ -648,6 +701,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contacts': {
+      id: '/contacts'
+      path: '/contacts'
+      fullPath: '/contacts'
+      preLoaderRoute: typeof ContactsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect': {
@@ -966,8 +1026,10 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   CalendarRoute: CalendarRoute,
   ConnectRoute: ConnectRoute,
+  ContactsRoute: ContactsRoute,
   DashboardRoute: DashboardRoute,
   EmailRoute: EmailRoute,
+  FilesRoute: FilesRoute,
   IssuesRoute: IssuesRoute,
   LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,
@@ -975,6 +1037,7 @@ const rootRouteChildren: RootRouteChildren = {
   PairRoute: PairRoute,
   RegisterRoute: RegisterRoute,
   SettingsRoute: SettingsRouteWithChildren,
+  TimeTrackerRoute: TimeTrackerRoute,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
   IssuesMilestonesRoute: IssuesMilestonesRoute,

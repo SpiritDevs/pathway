@@ -14,10 +14,11 @@ their pinned threads keep the default newest-first order below the ones you have
 
 ## Reordering views
 
-On web and desktop, drag the Threads, Issues, Source Control, Calendar, or Email button up or down
-in the primary navigation rail. You can also open a button's context menu and choose **Move up** or
-**Move down**. The order is saved on that client and is also used by its compact mobile-width
-navigation. Dashboard stays at the top; Orchestrator and Settings stay at the bottom.
+On web and desktop, drag the Threads, Issues, Source Control, Calendar, Email, Contacts, Time Tracker,
+or Files button up or down in the primary navigation rail. You can also open a button's context menu
+and choose **Move up** or **Move down**. The order is saved on that client and is also used by its
+compact mobile-width navigation. Dashboard stays at the top; Orchestrator and Settings stay at the
+bottom.
 
 ## Environment artwork
 

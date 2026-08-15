@@ -21,6 +21,9 @@ describe("resolveSecondarySidebarKind", () => {
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", null],
     ["/dashboard", null],
+    ["/contacts", null],
+    ["/time-tracker", null],
+    ["/files", null],
   ] as const)("maps %s to %s", (pathname, sidebarKind) => {
     expect(resolveSecondarySidebarKind(pathname)).toBe(sidebarKind);
   });
