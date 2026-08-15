@@ -17,6 +17,7 @@ import {
   SyncChangeEnvelope,
   SyncCompanyPayload,
   SyncCompanySettingsPayload,
+  SyncEnvironmentCommandPayload,
   SyncListChangesResponse,
   SyncMembershipPayload,
   SyncOperation,
@@ -57,6 +58,7 @@ const decodePresentation = Schema.decodeUnknownSync(SyncPresentation);
 const decodeActor = Schema.decodeUnknownSync(IssueActor);
 const decodeCompany = Schema.decodeUnknownSync(SyncCompanyPayload);
 const decodeCompanySettings = Schema.decodeUnknownSync(SyncCompanySettingsPayload);
+const decodeEnvironmentCommand = Schema.decodeUnknownSync(SyncEnvironmentCommandPayload);
 const decodeMembership = Schema.decodeUnknownSync(SyncMembershipPayload);
 const decodeTeam = Schema.decodeUnknownSync(SyncTeamPayload);
 const decodeTeamMembership = Schema.decodeUnknownSync(SyncTeamMembershipPayload);
@@ -408,6 +410,30 @@ describe("company-domain change payloads", () => {
     ).toThrow();
   });
 
+  it("carries executable command arguments and durable terminal outcomes", () => {
+    const command = decodeEnvironmentCommand({
+      id: "command-1",
+      targetEnvironmentId: "environment-1",
+      cloudProjectId: null,
+      bindingId: null,
+      kind: "sendMessage",
+      args: { kind: "sendMessage", threadId: "thread-1", message: "Continue" },
+      issuedByMembershipId: OWNER,
+      onBehalfOfActor: { kind: "member", membershipId: OWNER },
+      state: "succeeded",
+      claimedByEnvironmentId: "environment-1",
+      claimGeneration: 1,
+      claimExpiresAt: null,
+      expiresAt: 10_000,
+      result: { kind: "sendMessage", threadId: "thread-1", turnId: "turn-1" },
+      error: null,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    expect(command.args).toMatchObject({ kind: "sendMessage", message: "Continue" });
+    expect(command.result).toMatchObject({ kind: "sendMessage", turnId: "turn-1" });
+  });
+
   it("names no field that would carry company scope or secret material", () => {
     const fields = [
       SyncCompanyPayload,
@@ -417,6 +443,7 @@ describe("company-domain change payloads", () => {
       SyncTeamMembershipPayload,
       SyncRolePayload,
       SyncRoleAssignmentPayload,
+      SyncEnvironmentCommandPayload,
     ].flatMap((payload) => Object.keys(payload.fields));
     for (const forbidden of ["companyId", "version", "deletedAt", "tokenHash", "token"]) {
       expect(fields).not.toContain(forbidden);

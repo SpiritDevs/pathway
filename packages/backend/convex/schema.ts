@@ -517,6 +517,8 @@ export default defineSchema({
     error: v.union(v.string(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    /** Feed version of the last lifecycle transition; pure lease renewals do not advance it. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])

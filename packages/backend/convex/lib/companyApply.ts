@@ -53,6 +53,7 @@ export type CompanyEntityKind = Extract<
   | "roleAssignment"
   | "environmentRegistration"
   | "environmentBinding"
+  | "environmentCommand"
 >;
 
 /** The company-domain tables whose rows carry a `version` column this writer stamps. */
@@ -65,7 +66,8 @@ export type CompanyVersionedTable =
   | "roles"
   | "roleAssignments"
   | "environmentRegistrations"
-  | "environmentBindings";
+  | "environmentBindings"
+  | "environmentCommands";
 
 /**
  * The `version` a company row reads as. Optional in storage so the columns could be added to live
@@ -328,6 +330,38 @@ export async function encodeEnvironmentBinding(
     localWorkspaceRoot: doc.localWorkspaceRoot,
     status: doc.status,
     lastSeenAt: doc.lastSeenAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+/**
+ * Durable command shape shared by direct command reads, feed changes, and bootstrap snapshots.
+ * Terminal rows remain upserts: their outcome is history a replica renders, not a deleted entity.
+ */
+export async function encodeEnvironmentCommand(
+  ctx: QueryCtx,
+  doc: Doc<"environmentCommands">,
+): Promise<unknown> {
+  return {
+    id: doc.id,
+    targetEnvironmentId: doc.targetEnvironmentId,
+    cloudProjectId:
+      doc.cloudProjectId === null
+        ? null
+        : await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
+    bindingId: doc.bindingId,
+    kind: doc.kind,
+    args: doc.args,
+    issuedByMembershipId: await requireMembershipDomainId(ctx, doc.issuedByMembershipId),
+    onBehalfOfActor: doc.onBehalfOfActor,
+    state: doc.state,
+    claimedByEnvironmentId: doc.claimedByEnvironmentId,
+    claimGeneration: doc.claimGeneration,
+    claimExpiresAt: doc.claimExpiresAt,
+    expiresAt: doc.expiresAt,
+    result: doc.result,
+    error: doc.error,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

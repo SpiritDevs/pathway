@@ -66,6 +66,8 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   // cursors from the previous deployment may already have walked every kind above.
   "environmentRegistration",
   "environmentBinding",
+  // Commands joined after the registry and must stay last for the same persisted-cursor reason.
+  "environmentCommand",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

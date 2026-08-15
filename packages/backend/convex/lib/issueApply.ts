@@ -74,6 +74,7 @@ import {
   encodeCompany,
   encodeCompanySettings,
   encodeEnvironmentBinding,
+  encodeEnvironmentCommand,
   encodeEnvironmentRegistration,
   encodeMembership,
   encodeRole,
@@ -3049,7 +3050,8 @@ type CompanyBootstrapTable =
   | "roles"
   | "roleAssignments"
   | "environmentRegistrations"
-  | "environmentBindings";
+  | "environmentBindings"
+  | "environmentCommands";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3307,6 +3309,13 @@ export async function readBootstrapRows(
       return liftCompanyRows(
         await pageOf(ctx, "environmentBindings", company._id, afterId, limit),
         (row) => encodeEnvironmentBinding(ctx, row),
+      );
+    case "environmentCommand":
+      // Terminal outcomes are history, not tombstones: a bootstrap must preserve the answer to a
+      // command even when its execution can no longer change.
+      return liftCompanyRows(
+        await pageOf(ctx, "environmentCommands", company._id, afterId, limit),
+        (row) => encodeEnvironmentCommand(ctx, row),
       );
   }
 }

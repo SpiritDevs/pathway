@@ -24,8 +24,17 @@ import {
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ChatAttachmentId } from "./chatAttachment.ts";
-import { CloudProjectId } from "./cloudProject.ts";
 import {
+  EnvironmentBindingId,
+  EnvironmentCommandArgs,
+  EnvironmentCommandId,
+  EnvironmentCommandKind,
+  EnvironmentCommandResult,
+  EnvironmentCommandState,
+  CloudProjectId,
+} from "./cloudProject.ts";
+import {
+  CloudActor,
   CloudTimestamp,
   CloudUserId,
   CompanyId,
@@ -455,6 +464,35 @@ export const SyncRoleAssignmentPayload = Schema.Struct({
   createdAt: CloudTimestamp,
 });
 export type SyncRoleAssignmentPayload = typeof SyncRoleAssignmentPayload.Type;
+
+/**
+ * One durable remote-control command as carried by bootstrap and the incremental feed.
+ *
+ * Commands remain upserts in terminal states because their outcome is user-visible history, not
+ * the absence of an entity. Arguments and the on-behalf-of actor are included because the target
+ * needs both to authorize and execute the command; the command contract keeps transcripts and file
+ * contents out of this channel.
+ */
+export const SyncEnvironmentCommandPayload = Schema.Struct({
+  id: EnvironmentCommandId,
+  targetEnvironmentId: EnvironmentId,
+  cloudProjectId: Schema.NullOr(CloudProjectId),
+  bindingId: Schema.NullOr(EnvironmentBindingId),
+  kind: EnvironmentCommandKind,
+  args: EnvironmentCommandArgs,
+  issuedByMembershipId: MembershipId,
+  onBehalfOfActor: CloudActor,
+  state: EnvironmentCommandState,
+  claimedByEnvironmentId: Schema.NullOr(EnvironmentId),
+  claimGeneration: NonNegativeInt,
+  claimExpiresAt: Schema.NullOr(CloudTimestamp),
+  expiresAt: CloudTimestamp,
+  result: Schema.NullOr(EnvironmentCommandResult),
+  error: Schema.NullOr(Schema.String),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncEnvironmentCommandPayload = typeof SyncEnvironmentCommandPayload.Type;
 
 // ---------------------------------------------------------------------------
 // Operations

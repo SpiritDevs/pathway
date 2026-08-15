@@ -290,11 +290,10 @@ export const setThumbprint = internalMutation({
  * nothing here. A row in any of these means the reserved company has been mixed with data of
  * unknown provenance, and `cleanup` must refuse to delete the company rather than delete blind.
  *
- * `environmentCommands` and `companySettings` are on this list rather than swept because no write
- * path reaches them for an environment actor: `ISSUE_DOMAIN_APPLY` has no operation kind for
- * either, and every `environmentCommands` mutation is still `notImplemented` (`issue` additionally
- * requires a member actor). They move to the sweep list when phase 8 gives the smoke actor a real
- * way to write them.
+ * `environmentCommands` and `companySettings` stay on this list rather than swept because the
+ * smoke identity cannot create either. Command issuance is member-only; claim and status reporting
+ * can only transition a row somebody else already created, which is foreign provenance under this
+ * reserved company and must keep cleanup fail-closed.
  *
  * Enumerated from `schema.ts`, split by which company-scoped index each table carries.
  */

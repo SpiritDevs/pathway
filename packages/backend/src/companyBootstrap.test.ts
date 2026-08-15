@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents, whose clock is `Date.now()`.
 /**
- * The company domain's read half, end to end: `sync.bootstrap` seeding the seven administration
+ * The company domain's read half, end to end: `sync.bootstrap` seeding administration and registry
  * kinds appended to `BOOTSTRAP_ENTITY_ORDER`, and `sync.listChanges` delivering the rows
  * `lib/companyApply` appends — both filtered by the same `src/sync/visibility` predicate.
  *
@@ -359,7 +359,7 @@ describe("sync.bootstrap over both domains", () => {
     await seed(t);
 
     // One row a page forces a suspension inside — or immediately after — each populated table, and
-    // the walk has to name each of the nineteen kinds in turn to get to the end. This is the test
+    // the walk has to name every kind in turn to get to the end. This is the test
     // that fails if a kind is appended to `BOOTSTRAP_ENTITY_ORDER` and `readBootstrapRows` reads it
     // from the wrong table: the walk would stall or skip rather than chain.
     const seedResult = await drainSeed(asMember(t, "user_owner"), 1);
