@@ -2,10 +2,9 @@
  * The composer's half of an agent mention: the picker that adds one, and the chip that configures
  * it.
  *
- * Neither control writes into the draft. Typing `[Claude](Claude)` is one way to name an agent and
- * the picker is the other, but the picker's choice rides *beside* the text rather than being pasted
- * into it — a composer that rewrote what somebody was mid-sentence on would fight them, and the
- * body is normalized once, at submit.
+ * A picked agent rides *beside* the text rather than being pasted into it. The button picker adds
+ * one directly; the inline picker consumes only the active `@query`. The body is normalized once,
+ * at submit, so neither path exposes persisted markdown in the draft.
  *
  * The chip's popover is the same composition Start work uses: a `ProviderModelPicker` for the
  * instance and model, and a `TraitsPicker` for whatever option descriptors that model exposes
@@ -95,6 +94,63 @@ export function IssueCommentMentionPicker({
         })}
       </MenuPopup>
     </Menu>
+  );
+}
+
+/** The keyboard-driven picker shown while the textarea caret is immediately after an `@query`. */
+export function IssueCommentInlineMentionPicker({
+  agents,
+  entries,
+  activeIndex,
+  onPick,
+}: {
+  agents: ReadonlyArray<IssueCommentMentionAgent>;
+  entries: ReadonlyArray<ProviderInstanceEntry>;
+  activeIndex: number;
+  onPick: (instanceId: ProviderInstanceId) => void;
+}) {
+  const entryById = new Map(entries.map((entry) => [entry.instanceId, entry]));
+
+  return (
+    <div
+      aria-label="Agents"
+      className="dropdown-glass absolute bottom-full left-0 z-[130] mb-1 max-h-56 w-60 overflow-y-auto rounded-lg p-1"
+      id="issue-comment-agent-picker"
+      role="listbox"
+    >
+      {agents.length === 0 ? (
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">No matching agents.</p>
+      ) : (
+        agents.map((agent, index) => {
+          const entry = entryById.get(agent.instanceId);
+          return (
+            <button
+              aria-selected={index === activeIndex}
+              className={cn(
+                "flex min-h-7 w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm outline-none",
+                index === activeIndex
+                  ? "bg-accent text-accent-foreground"
+                  : "text-foreground hover:bg-accent hover:text-accent-foreground",
+              )}
+              id={`issue-comment-agent-${index}`}
+              key={agent.instanceId}
+              onClick={() => onPick(agent.instanceId)}
+              onMouseDown={(event) => event.preventDefault()}
+              role="option"
+              type="button"
+            >
+              <ProviderInstanceIcon
+                accentColor={entry?.accentColor}
+                className="size-4"
+                displayName={agent.displayName}
+                driverKind={agent.provider}
+              />
+              <span className="min-w-0 truncate">{agent.displayName}</span>
+            </button>
+          );
+        })
+      )}
+    </div>
   );
 }
 

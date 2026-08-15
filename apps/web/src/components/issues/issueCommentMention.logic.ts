@@ -51,6 +51,55 @@ export interface IssueCommentMentionResolution {
   readonly typed: IssueCommentTypedMention | null;
 }
 
+/** The `@query` immediately behind the textarea caret while the inline picker is active. */
+export interface IssueCommentMentionQuery {
+  readonly index: number;
+  readonly length: number;
+  readonly value: string;
+}
+
+/**
+ * Finds an unfinished plain-text mention at the caret. The `@` must start a token rather than be
+ * part of an email address, and closing punctuation ends the query. Spaces remain valid because
+ * configured instance names may contain them (for example, "Claude Work").
+ */
+export function findIssueCommentMentionQuery(
+  text: string,
+  caret: number,
+): IssueCommentMentionQuery | null {
+  const boundedCaret = Math.max(0, Math.min(caret, text.length));
+  const lineStart = text.lastIndexOf("\n", boundedCaret - 1) + 1;
+  const at = text.lastIndexOf("@", boundedCaret - 1);
+  if (at < lineStart) return null;
+  const before = text[at - 1];
+  if (before !== undefined && !/[\s({]/.test(before)) return null;
+
+  const value = text.slice(at + 1, boundedCaret);
+  if (/[()[\]{}@:,;!?]/.test(value)) return null;
+  return { index: at, length: boundedCaret - at, value };
+}
+
+/** Case-insensitive substring filtering, preserving configured instance order. */
+export function filterIssueCommentMentionAgents(
+  agents: ReadonlyArray<IssueCommentMentionAgent>,
+  query: string,
+): ReadonlyArray<IssueCommentMentionAgent> {
+  const needle = query.trimStart().toLowerCase();
+  if (needle.length === 0) return agents;
+  return agents.filter((agent) => agent.displayName.toLowerCase().includes(needle));
+}
+
+/** Consumes the active `@query`; the existing out-of-band mention chip carries the selection. */
+export function removeIssueCommentMentionQuery(
+  text: string,
+  query: IssueCommentMentionQuery,
+): { readonly text: string; readonly caret: number } {
+  return {
+    text: `${text.slice(0, query.index)}${text.slice(query.index + query.length)}`,
+    caret: query.index,
+  };
+}
+
 /** Inline links only: a mention is a word in a sentence, never a paragraph of its own. */
 const MARKDOWN_LINK = /\[([^\]\n]*)\]\(([^)\n]*)\)/g;
 

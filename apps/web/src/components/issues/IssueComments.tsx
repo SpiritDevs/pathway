@@ -27,7 +27,7 @@ import type {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { useClientSettings } from "~/hooks/useSettings";
@@ -55,10 +55,17 @@ import {
 } from "./issueCommentAttachments";
 import {
   issueCommentMentionAgents,
+  IssueCommentInlineMentionPicker,
   IssueCommentMentionChip,
   IssueCommentMentionPicker,
 } from "./IssueCommentMentionControls";
-import { issueCommentMentionBody, resolveIssueCommentMention } from "./issueCommentMention.logic";
+import {
+  filterIssueCommentMentionAgents,
+  findIssueCommentMentionQuery,
+  issueCommentMentionBody,
+  removeIssueCommentMentionQuery,
+  resolveIssueCommentMention,
+} from "./issueCommentMention.logic";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
 import { resolveIssueStartWorkModelSelection } from "./issueStartWork.logic";
 import {
@@ -377,6 +384,12 @@ export function IssueComments({
   // discards a half-written comment rather than carrying it to the next issue. Staged images go
   // with it — they are already in the store, and an orphan there costs a file, not a row.
   const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [draftCaret, setDraftCaret] = useState(0);
+  const [inlineMentionActiveIndex, setInlineMentionActiveIndex] = useState(0);
+  const [dismissedInlineMentionQuery, setDismissedInlineMentionQuery] = useState<string | null>(
+    null,
+  );
   const [isDropTarget, setIsDropTarget] = useState(false);
   // The picker's choice, and the token a dismissed chip came from. Neither touches the draft: the
   // words stay as written, and the rewrite happens once, on the body, at submit.
@@ -397,6 +410,18 @@ export function IssueComments({
     pickedInstanceId,
     dismissedRaw,
   });
+  const inlineMentionQuery =
+    mention === null ? findIssueCommentMentionQuery(draft, draftCaret) : null;
+  const inlineMentionQueryKey =
+    inlineMentionQuery === null
+      ? null
+      : `${inlineMentionQuery.index}:${inlineMentionQuery.length}:${inlineMentionQuery.value}`;
+  const inlineMentionAgents =
+    inlineMentionQuery === null
+      ? []
+      : filterIssueCommentMentionAgents(mentionAgents, inlineMentionQuery.value);
+  const isInlineMentionPickerOpen =
+    inlineMentionQuery !== null && inlineMentionQueryKey !== dismissedInlineMentionQuery;
   const mentionInstanceId = mention?.agent.instanceId ?? null;
   const defaultSelectionFor = useCallback(
     (instanceId: ProviderInstanceId): ModelSelection | null => {
@@ -424,10 +449,29 @@ export function IssueComments({
         : defaultSelectionFor(mentionInstanceId),
     );
   }, [defaultSelectionFor, mentionInstanceId]);
+  useEffect(() => {
+    setInlineMentionActiveIndex(0);
+  }, [inlineMentionQueryKey]);
+
+  const pickInlineMention = (instanceId: ProviderInstanceId) => {
+    if (inlineMentionQuery === null) return;
+    const next = removeIssueCommentMentionQuery(draft, inlineMentionQuery);
+    setDraft(next.text);
+    setDraftCaret(next.caret);
+    setDismissedInlineMentionQuery(null);
+    setDismissedRaw(null);
+    setPickedInstanceId(instanceId);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.caret, next.caret);
+    });
+  };
 
   const clearComposer = () => {
     clearAttachments();
     setDraft("");
+    setDraftCaret(0);
+    setDismissedInlineMentionQuery(null);
     setPickedInstanceId(null);
     setDismissedRaw(null);
     setMentionSelection(null);
@@ -516,26 +560,83 @@ export function IssueComments({
             ))}
           </ul>
         )}
-        <Textarea
-          aria-label="New comment"
-          className="min-h-16"
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
-            event.preventDefault();
-            submit();
-          }}
-          onPaste={(event) => {
-            const files = [...event.clipboardData.files];
-            if (files.length === 0) return;
-            // The clipboard carries a screenshot as a file with no text alternative, so nothing
-            // is lost by taking the paste over — a copied file path still arrives as text.
-            event.preventDefault();
-            addFiles(files);
-          }}
-          placeholder="Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
-          value={draft}
-        />
+        <div className="relative">
+          <Textarea
+            aria-activedescendant={
+              isInlineMentionPickerOpen && inlineMentionAgents.length > 0
+                ? `issue-comment-agent-${inlineMentionActiveIndex}`
+                : undefined
+            }
+            aria-controls={isInlineMentionPickerOpen ? "issue-comment-agent-picker" : undefined}
+            aria-expanded={isInlineMentionPickerOpen}
+            aria-label="New comment"
+            aria-haspopup="listbox"
+            className="min-h-16"
+            onChange={(event) => {
+              setDraft(event.currentTarget.value);
+              setDraftCaret(event.currentTarget.selectionStart);
+            }}
+            onKeyDown={(event) => {
+              if (isInlineMentionPickerOpen && !(event.metaKey || event.ctrlKey)) {
+                if (event.key === "ArrowDown" && inlineMentionAgents.length > 0) {
+                  event.preventDefault();
+                  setInlineMentionActiveIndex(
+                    (current) => (current + 1) % inlineMentionAgents.length,
+                  );
+                  return;
+                }
+                if (event.key === "ArrowUp" && inlineMentionAgents.length > 0) {
+                  event.preventDefault();
+                  setInlineMentionActiveIndex(
+                    (current) =>
+                      (current - 1 + inlineMentionAgents.length) % inlineMentionAgents.length,
+                  );
+                  return;
+                }
+                if (event.key === "Enter" && inlineMentionAgents.length > 0) {
+                  event.preventDefault();
+                  pickInlineMention(
+                    inlineMentionAgents[
+                      Math.min(inlineMentionActiveIndex, inlineMentionAgents.length - 1)
+                    ]!.instanceId,
+                  );
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDismissedInlineMentionQuery(inlineMentionQueryKey);
+                  return;
+                }
+              }
+              if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+              event.preventDefault();
+              submit();
+            }}
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files];
+              if (files.length === 0) return;
+              // The clipboard carries a screenshot as a file with no text alternative, so nothing
+              // is lost by taking the paste over — a copied file path still arrives as text.
+              event.preventDefault();
+              addFiles(files);
+            }}
+            onSelect={(event) => setDraftCaret(event.currentTarget.selectionStart)}
+            placeholder="Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
+            ref={textareaRef}
+            value={draft}
+          />
+          {isInlineMentionPickerOpen ? (
+            <IssueCommentInlineMentionPicker
+              activeIndex={Math.min(
+                inlineMentionActiveIndex,
+                Math.max(0, inlineMentionAgents.length - 1),
+              )}
+              agents={inlineMentionAgents}
+              entries={instanceEntries}
+              onPick={pickInlineMention}
+            />
+          ) : null}
+        </div>
         {/* The mention row sits between the text and the actions, and is always here when there is
             anybody to mention: adding the agent first and writing afterwards is the common order. */}
         {mentionAgents.length === 0 ? null : (

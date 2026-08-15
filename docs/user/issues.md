@@ -279,13 +279,14 @@ You can ask an agent something directly from an issue's comment thread. Mention 
 
 - **Type it** as an ordinary markdown link naming a configured agent — `[Claude](Claude)` works,
   and so does `[@Claude](claude)`; case does not matter and a leading `@` is decoration.
-- **Pick it** with the **@** button beside the composer, which lists your configured agents and
-  adds nothing to your text.
+- **Pick it** by typing **@** in the composer. The agent list opens immediately and filters as you
+  type; use the arrow keys and Enter or click an agent. The **@** button below the composer opens
+  the same configured-agent list without typing.
 
 Either way a chip appears next to the composer showing the agent and its model. Click the chip to
 configure the run — provider instance, model, reasoning effort, and service tier, the same options
-a chat turn has — or dismiss it to send a plain comment. Your words are never rewritten while you
-type; the mention becomes a pill only when the comment posts.
+a chat turn has — or dismiss it to send a plain comment. Choosing from the inline picker consumes
+the unfinished `@query`; the persisted mention becomes a pill only when the comment posts.
 
 Posting the comment starts **exactly one run** for that comment. The agent reads the issue — title,
 description, and the comment thread including your ask — and works in the project's directory
