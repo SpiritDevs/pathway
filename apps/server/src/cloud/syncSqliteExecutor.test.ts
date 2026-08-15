@@ -159,8 +159,8 @@ layer("syncSqliteExecutor", (it) => {
         localSequenceHighWater: LocalSequence.make(5),
       });
 
-      // Real SQLite would fail `CREATE TABLE cloud_sync_outbox` on a second run — and
-      // `ADD COLUMN occurred_at` with "duplicate column name" — so the migration version guard is
+      // Real SQLite would fail `CREATE TABLE cloud_sync_outbox` on a second run — and the
+      // `ADD COLUMN` migrations with "duplicate column name" — so the migration version guard is
       // what makes this open succeed. This is the fake-free half of the SQLite store's own reopen
       // test: there, adding a column to a record is a no-op and cannot catch a re-run.
       const second = yield* makeSqliteSyncStore(executor);
@@ -173,7 +173,7 @@ layer("syncSqliteExecutor", (it) => {
         [],
       );
       // Every migration the store owns, applied exactly once across both opens.
-      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     }),
   );
 

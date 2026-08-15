@@ -22,7 +22,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 
 import { CloudSyncCapability } from "./capability.ts";
-import { SYNC_DOCUMENT_SCHEMA_VERSION } from "./document.ts";
+import { SYNC_BOOTSTRAP_GENERATION, SYNC_DOCUMENT_SCHEMA_VERSION } from "./document.ts";
 import {
   clampSyncBound,
   makeSyncEngine,
@@ -432,6 +432,166 @@ describe("SyncEngine", () => {
         expect(confirmedNote(state, NOTE_A)?.title).toBe("A-renamed");
         expect(confirmedNote(state, NOTE_B)?.title).toBe("B");
         expect(state.cursor).toBe((yield* harness.server.head).version);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("folds legacy version-0 rows during the first seed", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        bootstrap: (input) =>
+          harness.server.transport.bootstrap(input).pipe(
+            Effect.map((page) => ({
+              ...page,
+              entities: page.entities.map((entity) => ({
+                ...entity,
+                version: CompanyVersion.make(0),
+              })),
+            })),
+          ),
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "legacy", body: "" }),
+          operationId("op-legacy"),
+        );
+        const engine = yield* openEngine("client-a");
+        const receipt = yield* engine.sync;
+
+        expect(receipt.outcome).toBe("bootstrapped");
+        expect(confirmedNote(yield* SubscriptionRef.get(engine.state), NOTE_A)?.title).toBe(
+          "legacy",
+        );
+        expect((yield* harness.store.snapshot(COMPANY_ID)).entities[0]?.version).toBe(0);
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("folds legacy version-0 rows again after an authorization-epoch reseed", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        bootstrap: (input) =>
+          harness.server.transport.bootstrap(input).pipe(
+            Effect.map((page) => ({
+              ...page,
+              entities: page.entities.map((entity) => ({
+                ...entity,
+                version: CompanyVersion.make(0),
+              })),
+            })),
+          ),
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "legacy-a", body: "" }),
+          operationId("op-legacy-a"),
+        );
+        const engine = yield* openEngine("client-a");
+        yield* engine.sync;
+
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_B, title: "legacy-b", body: "" }),
+          operationId("op-legacy-b"),
+        );
+        yield* harness.server.setEpoch(AuthorizationEpoch.make(1));
+        const receipt = yield* engine.sync;
+
+        expect(receipt.outcome).toBe("reseeded");
+        const state = yield* SubscriptionRef.get(engine.state);
+        expect(confirmedNote(state, NOTE_A)?.title).toBe("legacy-a");
+        expect(confirmedNote(state, NOTE_B)?.title).toBe("legacy-b");
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("reseeds an old-generation checkpoint and sends its surviving outbox", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      yield* Effect.gen(function* () {
+        const old = yield* openEngine("client-a");
+        yield* old.enqueue({
+          operationId: operationId("op-offline"),
+          operation: createNote({ id: NOTE_B, title: "offline", body: "draft" }),
+        });
+        // Generation 1 was implicit, so an upgraded client reads a perfectly valid checkpoint
+        // with no marker. Its confirmed rows are incomplete, but its outbox is user work.
+        yield* harness.store.service.commit(COMPANY_ID, {
+          checkpoint: {
+            schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+            companyId: COMPANY_ID,
+            cursor: CompanyVersion.make(9),
+            authorizationEpoch: AuthorizationEpoch.make(0),
+            bootstrapped: true,
+          },
+          upsertEntities: [
+            {
+              entityKind: "issue",
+              entityId: NOTE_A,
+              version: CompanyVersion.make(9),
+              payload: { id: NOTE_A, title: "stale", body: "", tags: [], orderKey: "a0" },
+            },
+          ],
+        });
+
+        const upgraded = yield* openEngine("client-a");
+        const cold = yield* SubscriptionRef.get(upgraded.state);
+        expect(cold.bootstrapped).toBe(false);
+        expect(cold.confirmed.size).toBe(0);
+        expect(viewNote(cold, NOTE_B)?.title).toBe("offline");
+
+        const receipt = yield* upgraded.sync;
+        expect(receipt.outcome).toBe("bootstrapped");
+        expect((yield* harness.server.submissions).get(operationId("op-offline"))).toBe(1);
+        const stored = yield* harness.store.snapshot(COMPANY_ID);
+        expect(stored.outbox).toEqual([]);
+        expect(stored.checkpoint?.bootstrapGeneration).toBe(SYNC_BOOTSTRAP_GENERATION);
+        expect(stored.entities.map((entity) => entity.entityId)).toEqual([NOTE_B]);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("does not reseed a checkpoint at the current bootstrap generation", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      yield* Effect.gen(function* () {
+        yield* harness.server.applyExternal(
+          createNote({ id: NOTE_A, title: "current", body: "" }),
+          operationId("op-current"),
+        );
+        const first = yield* openEngine("client-a");
+        yield* first.sync;
+
+        const bootstraps = yield* Ref.make(0);
+        const transport = SyncTransport.of({
+          ...harness.server.transport,
+          bootstrap: (input) =>
+            Ref.update(bootstraps, (count) => count + 1).pipe(
+              Effect.andThen(harness.server.transport.bootstrap(input)),
+            ),
+        });
+        const restarted = yield* openEngine("client-a").pipe(
+          Effect.provideService(SyncTransport, transport),
+        );
+        const receipt = yield* restarted.sync;
+
+        expect(receipt.outcome).toBe("synced");
+        expect(yield* Ref.get(bootstraps)).toBe(0);
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
     }),
   );

@@ -20,6 +20,7 @@ import { CloudSyncCapability } from "./capability.ts";
 import {
   applySyncStoreBatch,
   EMPTY_STORED_SYNC_STATE,
+  SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type StoredOutboxEntry,
   type StoredSyncCheckpoint,
@@ -98,6 +99,7 @@ const quarantineRow = (id: string, sequence: number): StoredSyncQuarantine => ({
 
 const checkpointAt = (cursor: number): StoredSyncCheckpoint => ({
   schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+  bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
   companyId: COMPANY_A,
   cursor: CompanyVersion.make(cursor),
   authorizationEpoch: AuthorizationEpoch.make(0),
@@ -383,9 +385,12 @@ describe("IndexedDbSyncStore", () => {
       });
       yield* store.service.commit(COMPANY_B, { upsertEntities: [entity("note-b", 1)] });
 
+      expect(new Set(yield* store.service.listCompanyIds)).toEqual(new Set([COMPANY_A, COMPANY_B]));
+
       yield* store.service.clear(COMPANY_A);
       expect(yield* store.service.read(COMPANY_A)).toEqual(EMPTY_STORED_SYNC_STATE);
       expect((yield* store.service.read(COMPANY_B)).entities).toHaveLength(1);
+      expect(yield* store.service.listCompanyIds).toEqual([COMPANY_B]);
     }),
   );
 

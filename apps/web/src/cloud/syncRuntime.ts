@@ -178,28 +178,46 @@ export interface CloudSyncCompany {
 }
 
 /**
+ * A decoded membership listing. Only `decodedCleanly: true` is proof that absence means removal;
+ * a malformed row may be a company the current client simply failed to understand.
+ */
+export interface CloudSyncCompanyListing {
+  readonly companies: ReadonlyArray<CloudSyncCompany>;
+  readonly decodedCleanly: boolean;
+  readonly droppedRows: number;
+}
+
+/**
  * Turns a `companies.listMine` result into the companies to run engines for.
  *
  * Duplicates (the same company reached through two membership rows) collapse to the first, and a
  * row without a membership id is skipped: an operation carries an actor, and inventing one would
  * put a wrong name in the audit trail.
  */
-export function decodeCloudSyncCompanies(value: unknown): ReadonlyArray<CloudSyncCompany> {
-  if (!Array.isArray(value)) return [];
+export function decodeCloudSyncCompanies(value: unknown): CloudSyncCompanyListing {
+  if (!Array.isArray(value)) return { companies: [], decodedCleanly: false, droppedRows: 1 };
   const companies: Array<CloudSyncCompany> = [];
   const seen = new Set<string>();
+  let droppedRows = 0;
   for (const row of value) {
     const decoded = decodeCompanySummary(row);
-    if (Option.isNone(decoded)) continue;
+    if (Option.isNone(decoded)) {
+      droppedRows += 1;
+      continue;
+    }
     const { id, membershipId } = decoded.value;
-    if (id.trim().length === 0 || membershipId.trim().length === 0 || seen.has(id)) continue;
+    if (id.trim().length === 0 || membershipId.trim().length === 0) {
+      droppedRows += 1;
+      continue;
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
     companies.push({
       companyId: CompanyId.make(id),
       actor: { kind: "member", membershipId: MembershipId.make(membershipId) },
     });
   }
-  return companies;
+  return { companies, decodedCleanly: droppedRows === 0, droppedRows };
 }
 
 function sameCompanies(
@@ -216,6 +234,14 @@ function sameCompanies(
         actorKey(company.actor) === actorKey(other.actor)
       );
     })
+  );
+}
+
+function sameCompanyListings(left: CloudSyncCompanyListing, right: CloudSyncCompanyListing) {
+  return (
+    left.decodedCleanly === right.decodedCleanly &&
+    left.droppedRows === right.droppedRows &&
+    sameCompanies(left.companies, right.companies)
   );
 }
 
@@ -239,26 +265,30 @@ function actorKey(actor: SyncActor): string {
  */
 export function cloudSyncCompaniesStream(
   client: ConvexClientLike,
-): Stream.Stream<ReadonlyArray<CloudSyncCompany>, SyncTransportError> {
-  return Stream.callback<unknown, SyncTransportError>((queue) =>
-    Effect.gen(function* () {
-      const unsubscribe = client.onUpdate(
-        companiesListMineReference,
-        {},
-        (value) => {
-          Queue.offerUnsafe(queue, value);
-        },
-        (error) => {
-          Queue.failCauseUnsafe(queue, Cause.fail(classifyConvexSyncTransportError(error)));
-        },
-      );
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          unsubscribe();
-        }),
-      );
-    }),
-  ).pipe(Stream.map(decodeCloudSyncCompanies), Stream.changesWith(sameCompanies));
+): Stream.Stream<CloudSyncCompanyListing, SyncTransportError> {
+  return Stream.callback<unknown, SyncTransportError>(
+    (queue) =>
+      Effect.gen(function* () {
+        const unsubscribe = client.onUpdate(
+          companiesListMineReference,
+          {},
+          (value) => {
+            Queue.offerUnsafe(queue, value);
+          },
+          (error) => {
+            Queue.failCauseUnsafe(queue, Cause.fail(classifyConvexSyncTransportError(error)));
+          },
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            unsubscribe();
+          }),
+        );
+      }),
+    // Only the newest listing matters: reconcile is a full diff against it, so a burst of
+    // membership writes coalesces here instead of queuing one reconcile per stale intermediate.
+    { bufferSize: 1, strategy: "sliding" },
+  ).pipe(Stream.map(decodeCloudSyncCompanies), Stream.changesWith(sameCompanyListings));
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +340,7 @@ interface RunningEngine {
  */
 export interface CloudSyncConnection {
   readonly transport: SyncTransport["Service"];
-  readonly companies: Stream.Stream<ReadonlyArray<CloudSyncCompany>, SyncTransportError>;
+  readonly companies: Stream.Stream<CloudSyncCompanyListing, SyncTransportError>;
 }
 
 export interface CloudSyncEnginesOptions {
@@ -360,6 +390,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
   options: CloudSyncEnginesOptions,
 ) {
   const clock = yield* Clock.clockWith(Effect.succeed);
+  const store = yield* SyncStore;
   const restartDelay = options.restartDelay ?? ENGINE_RESTART_DELAY;
 
   /**
@@ -458,15 +489,52 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       );
     }, Effect.uninterruptible);
 
+    const purgeCompany = Effect.fn("web.cloudSync.purgeCompany")(function* (companyId: CompanyId) {
+      const state = yield* store.read(companyId);
+      const operationCount = new Set([
+        ...state.outbox.map((entry) => entry.envelope.operationId),
+        ...state.rejected.map((entry) => entry.envelope.operationId),
+        ...state.quarantined.map((entry) => entry.envelope.operationId),
+      ]).size;
+      yield* store.clear(companyId);
+      yield* Effect.logWarning(
+        "Cloud sync local state purged after authenticated company removal.",
+        { companyId, operationCount },
+      );
+    });
+
     const reconcile = Effect.fn("web.cloudSync.reconcile")(function* (
-      desired: ReadonlyArray<CloudSyncCompany>,
+      listing: CloudSyncCompanyListing,
     ) {
       const current = yield* Ref.get(running);
+      if (!listing.decodedCleanly) {
+        yield* Effect.logWarning(
+          "Cloud sync company listing contained rows this client could not decode; retaining absent local state.",
+          { droppedRows: listing.droppedRows },
+        );
+      }
+      // A partial listing may safely start or refresh the rows it did decode, but it cannot prove
+      // that anything absent was revoked. Keep the current set alongside the decoded rows.
+      const desired = listing.decodedCleanly
+        ? listing.companies
+        : [
+            ...new Map([
+              ...[...current.values()].map(
+                (entry) => [entry.company.companyId, entry.company] as const,
+              ),
+              ...listing.companies.map((company) => [company.companyId, company] as const),
+            ]).values(),
+          ];
       const { start, stop } = reconcileCloudSyncEngines(
         new Map([...current].map(([companyId, entry]) => [companyId, entry.company] as const)),
         desired,
       );
-      yield* Effect.forEach(stop, stopCompany, { discard: true });
+      const desiredIds = new Set(desired.map((company) => company.companyId));
+      const revoked = listing.decodedCleanly
+        ? (yield* store.listCompanyIds).filter((companyId) => !desiredIds.has(companyId))
+        : [];
+      yield* Effect.forEach(new Set([...stop, ...revoked]), stopCompany, { discard: true });
+      yield* Effect.forEach(revoked, purgeCompany, { discard: true });
       yield* Effect.forEach(start, startCompany, { discard: true });
     });
 
@@ -573,7 +641,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
       ),
     ),
     {
-      while: isRetryableTransportError,
+      while: (error) => error._tag === "SyncTransportError" && isRetryableTransportError(error),
       schedule: Schedule.spaced(options.retryDelay ?? COMPANIES_RETRY_DELAY),
     },
   );

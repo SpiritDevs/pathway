@@ -33,6 +33,7 @@ export const makeMemorySyncStore = Effect.fn("makeMemorySyncStore")(function* ()
 
   const service = SyncStore.of({
     read: (companyId) => snapshot(companyId),
+    listCompanyIds: Ref.get(companies).pipe(Effect.map((state) => [...state.keys()])),
     commit: (companyId: CompanyId, batch: SyncStoreBatch) =>
       Ref.update(companies, (state) => {
         const next = new Map(state);

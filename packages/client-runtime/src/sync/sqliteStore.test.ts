@@ -34,6 +34,7 @@ import * as Exit from "effect/Exit";
 
 import {
   EMPTY_STORED_SYNC_STATE,
+  SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type StoredSyncCheckpoint,
   type StoredSyncEntity,
@@ -255,7 +256,7 @@ const makeFakeSqliteExecutor = (): FakeSqliteDatabase => {
  * number of opens. Restated here rather than imported so a migration added without a thought about
  * reopening has to be acknowledged in a test.
  */
-const APPLIED_MIGRATIONS = [{ version: 1 }, { version: 2 }];
+const APPLIED_MIGRATIONS = [{ version: 1 }, { version: 2 }, { version: 3 }];
 
 const COMPANY_ID = CompanyId.make("company-sqlite");
 const OTHER_COMPANY_ID = CompanyId.make("company-other");
@@ -297,6 +298,7 @@ const checkpoint = (input: {
   readonly bootstrapped?: boolean;
 }): StoredSyncCheckpoint => ({
   schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+  bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
   companyId: COMPANY_ID,
   cursor: CompanyVersion.make(input.cursor),
   authorizationEpoch: AuthorizationEpoch.make(0),
@@ -814,6 +816,7 @@ describe("SqliteSyncStore", () => {
         });
       yield* seed(COMPANY_ID);
       yield* seed(OTHER_COMPANY_ID);
+      expect(new Set(yield* store.listCompanyIds)).toEqual(new Set([COMPANY_ID, OTHER_COMPANY_ID]));
 
       yield* store.clear(COMPANY_ID);
 
@@ -824,6 +827,7 @@ describe("SqliteSyncStore", () => {
       expect(other.outbox).toHaveLength(1);
       expect(other.quarantined).toHaveLength(1);
       expect(other.localSequenceHighWater).toBe(2);
+      expect(yield* store.listCompanyIds).toEqual([OTHER_COMPANY_ID]);
     }),
   );
 });

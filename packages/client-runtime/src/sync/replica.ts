@@ -30,6 +30,8 @@ export interface ConfirmedReplica<Entity> {
   readonly cursor: CompanyVersion;
   readonly authorizationEpoch: AuthorizationEpoch;
   readonly entities: ReadonlyMap<string, ConfirmedEntity<Entity>>;
+  /** Latest version seen per entity, including tombstones that have no live entity row. */
+  readonly entityVersions: ReadonlyMap<string, CompanyVersion>;
 }
 
 export function emptyConfirmedReplica<Entity>(input: {
@@ -40,6 +42,7 @@ export function emptyConfirmedReplica<Entity>(input: {
     cursor: input.cursor,
     authorizationEpoch: input.authorizationEpoch,
     entities: new Map(),
+    entityVersions: new Map(),
   };
 }
 
@@ -60,6 +63,7 @@ export function decodeConfirmedEntities<Entity, Operation>(input: {
   readonly authorizationEpoch: AuthorizationEpoch;
 }): { readonly replica: ConfirmedReplica<Entity>; readonly quarantined: number } {
   const entities = new Map<string, ConfirmedEntity<Entity>>();
+  const entityVersions = new Map<string, CompanyVersion>();
   let quarantined = 0;
   for (const row of input.rows) {
     const key = { entityKind: row.entityKind, entityId: row.entityId };
@@ -70,12 +74,14 @@ export function decodeConfirmedEntities<Entity, Operation>(input: {
       continue;
     }
     entities.set(syncEntityKey(key), { key, version: row.version, entity: decoded.value });
+    entityVersions.set(syncEntityKey(key), row.version);
   }
   return {
     replica: {
       cursor: input.cursor,
       authorizationEpoch: input.authorizationEpoch,
       entities,
+      entityVersions,
     },
     quarantined,
   };
@@ -84,8 +90,11 @@ export function decodeConfirmedEntities<Entity, Operation>(input: {
 /**
  * Folds one page of changes into the confirmed replica.
  *
- * A change at or below the current cursor is a redelivery and is ignored, which is what makes a
- * retried page idempotent. Within a page the highest version per entity wins.
+ * Drain changes at or below the current cursor are redeliveries and are ignored, which is what
+ * makes a retried feed page idempotent. Seed pages do not use that suppression: legacy bootstrap
+ * rows legitimately have version 0, the same value as an empty replica's cursor. Across and within
+ * seed pages, the highest version per entity wins; when the same version is genuinely delivered
+ * twice, the last-delivered payload wins.
  */
 export function applyConfirmedChanges<Entity, Operation>(input: {
   readonly replica: ConfirmedReplica<Entity>;
@@ -93,24 +102,28 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
   readonly changes: ReadonlyArray<SyncChangeEnvelope>;
   readonly cursor: CompanyVersion;
   readonly authorizationEpoch: AuthorizationEpoch;
+  readonly mode?: "drain" | "seed";
 }): ConfirmedChangeResult<Entity> {
   const entities = new Map(input.replica.entities);
+  const entityVersions = new Map(input.replica.entityVersions);
   const upserts = new Map<string, StoredSyncEntity>();
   const deletes = new Map<string, SyncEntityKey>();
   const merge = input.adapter.mergeConfirmed;
   let quarantined = 0;
 
   for (const change of input.changes) {
-    if (change.version <= input.replica.cursor) continue;
+    if (input.mode !== "seed" && change.version <= input.replica.cursor) continue;
     const key = { entityKind: change.entityKind, entityId: change.entityId };
     const mapKey = syncEntityKey(key);
     const current = entities.get(mapKey);
-    if (current !== undefined && current.version > change.version) continue;
+    const currentVersion = entityVersions.get(mapKey);
+    if (currentVersion !== undefined && currentVersion > change.version) continue;
 
     // A tombstone always wins locally. `mergeConfirmed` only guards live entities; a domain that
     // wants a delete to survive as a record models that as an entity field, not as a local ghost.
     if (change.changeKind === "tombstone") {
       entities.delete(mapKey);
+      entityVersions.set(mapKey, change.version);
       upserts.delete(mapKey);
       deletes.set(mapKey, key);
       continue;
@@ -127,6 +140,7 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
         ? decoded.value
         : merge({ current: current?.entity ?? null, incoming: decoded.value });
     entities.set(mapKey, { key, version: change.version, entity });
+    entityVersions.set(mapKey, change.version);
     deletes.delete(mapKey);
     upserts.set(mapKey, {
       entityKind: change.entityKind,
@@ -141,6 +155,7 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
       cursor: input.cursor,
       authorizationEpoch: input.authorizationEpoch,
       entities,
+      entityVersions,
     },
     upserts: [...upserts.values()],
     deletes: [...deletes.values()],

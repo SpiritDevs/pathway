@@ -43,7 +43,7 @@ import {
   SyncOperationId,
   type SyncOperationEnvelope,
 } from "@spiritdevs/contracts/cloudSync";
-import type { CompanyId } from "@spiritdevs/contracts/company";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -440,6 +440,31 @@ export const makeIndexedDbSyncStore = Effect.fn("makeIndexedDbSyncStore")(functi
     return { entities, outbox, rejected, quarantined, checkpoint, localSequenceHighWater };
   };
 
+  /** Cheap membership-reconciliation probe: counts rows without loading replica payloads. */
+  const hasStateRaw = async (companyId: CompanyId): Promise<boolean> => {
+    const database = await connect(companyId);
+    const transaction = database.transaction(ALL_STORES, "readonly");
+    const meta = transaction.objectStore(META_STORE);
+    const [entities, outbox, rejected, quarantined, checkpoint, localSequenceHighWater] =
+      await Promise.all([
+        awaitRequest<number>(transaction.objectStore(ENTITIES_STORE).count()),
+        awaitRequest<number>(transaction.objectStore(OUTBOX_STORE).count()),
+        awaitRequest<number>(transaction.objectStore(REJECTED_STORE).count()),
+        awaitRequest<number>(transaction.objectStore(QUARANTINE_STORE).count()),
+        awaitRequest<unknown>(meta.get(META_CHECKPOINT_KEY)),
+        awaitRequest<unknown>(meta.get(META_HIGH_WATER_KEY)),
+      ]);
+    await awaitTransaction(transaction);
+    return (
+      entities > 0 ||
+      outbox > 0 ||
+      rejected > 0 ||
+      quarantined > 0 ||
+      checkpoint !== undefined ||
+      localSequenceHighWater !== undefined
+    );
+  };
+
   const commitRaw = async (companyId: CompanyId, batch: SyncStoreBatch): Promise<void> => {
     const database = await connect(companyId);
     const transaction = database.transaction(ALL_STORES, "readwrite");
@@ -515,6 +540,29 @@ export const makeIndexedDbSyncStore = Effect.fn("makeIndexedDbSyncStore")(functi
     await deleteSyncDatabase(factory, name);
   };
 
+  const listCompanyIdsRaw = async (): Promise<ReadonlyArray<CompanyId>> => {
+    const prefix = `${SYNC_INDEXED_DB_PREFIX}/${options.scope}/`;
+    const names = new Set(connections.keys());
+    const discoverable = factory as IDBFactory & {
+      readonly databases?: () => Promise<ReadonlyArray<{ readonly name?: string }>>;
+    };
+    // Pathway's Chromium surfaces implement IDBFactory.databases(). Keeping the open-connection
+    // names as a fallback still gives non-Chromium adapters correct behavior for this process.
+    if (discoverable.databases !== undefined) {
+      for (const database of await discoverable.databases.call(factory)) {
+        if (database.name !== undefined) names.add(database.name);
+      }
+    }
+    const companyIds = [...names]
+      .filter((name) => name.startsWith(prefix) && name.length > prefix.length)
+      .map((name) => CompanyId.make(name.slice(prefix.length)));
+    const populated: Array<CompanyId> = [];
+    for (const companyId of companyIds) {
+      if (await hasStateRaw(companyId)) populated.push(companyId);
+    }
+    return populated;
+  };
+
   const service = SyncStore.of({
     read: (companyId) =>
       Effect.tryPromise({
@@ -530,6 +578,14 @@ export const makeIndexedDbSyncStore = Effect.fn("makeIndexedDbSyncStore")(functi
           return decoded.ok ? Effect.succeed(decoded.state) : Effect.fail(decoded.error);
         }),
       ),
+    listCompanyIds: Effect.tryPromise({
+      try: listCompanyIdsRaw,
+      catch: (error: unknown) =>
+        new SyncStoreError({
+          operation: "list",
+          message: `Listing the "${SYNC_INDEXED_DB_PREFIX}/${options.scope}" databases failed: ${describeError(error)}`,
+        }),
+    }),
     commit: (companyId, batch) =>
       Effect.tryPromise({
         try: () => commitRaw(companyId, batch),

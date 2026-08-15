@@ -29,8 +29,20 @@ import { syncEntityKey, type SyncEntityKey } from "./model.ts";
 /** Bumped when the persisted shape changes; a mismatch drops the replica and re-bootstraps. */
 export const SYNC_DOCUMENT_SCHEMA_VERSION = 1 as const;
 
+/**
+ * Bumped when a complete bootstrap contains more domain state than an older bootstrap did.
+ *
+ * This is deliberately separate from the document schema version. A generation mismatch throws
+ * away only the reproducible confirmed replica and forces one full seed; the outbox keeps decoding
+ * under the same document schema, so pending user writes survive the upgrade and are sent after
+ * the seed. Generation 1 was implicit. Generation 2 covers the expanded 19-kind company domain.
+ */
+export const SYNC_BOOTSTRAP_GENERATION = 2 as const;
+
 export const StoredSyncCheckpoint = Schema.Struct({
   schemaVersion: Schema.Literal(SYNC_DOCUMENT_SCHEMA_VERSION),
+  /** Absent on generation-1 checkpoints; the engine treats that as requiring one full reseed. */
+  bootstrapGeneration: Schema.optional(Schema.Number),
   companyId: CompanyId,
   cursor: CompanyVersion,
   authorizationEpoch: AuthorizationEpoch,

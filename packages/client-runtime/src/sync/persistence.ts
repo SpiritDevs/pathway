@@ -1,8 +1,10 @@
 /**
  * Storage port for the sync engine.
  *
- * The engine reads one company's replica once at start and writes atomic batches after that, so
- * an adapter needs exactly two operations plus a wipe. Web and Electron back this with the
+ * The engine reads one company's replica once at start and writes atomic batches after that. The
+ * host also enumerates durable company ids before reconciling an authenticated membership list,
+ * so revoked state can be found after a restart rather than only while its engine is running. Web
+ * and Electron back this with the
  * `pathway:cloud-sync` IndexedDB database, mobile with its SQLite layer, and the Pathway server
  * with its own SQLite tables; `memoryStore.ts` backs tests.
  *
@@ -16,7 +18,7 @@ import * as Schema from "effect/Schema";
 import type { SyncStoreBatch, StoredSyncState } from "./document.ts";
 
 export class SyncStoreError extends Schema.TaggedErrorClass<SyncStoreError>()("SyncStoreError", {
-  operation: Schema.Literals(["read", "commit", "clear"]),
+  operation: Schema.Literals(["read", "commit", "clear", "list"]),
   message: Schema.String,
 }) {}
 
@@ -24,6 +26,8 @@ export class SyncStore extends Context.Service<
   SyncStore,
   {
     readonly read: (companyId: CompanyId) => Effect.Effect<StoredSyncState, SyncStoreError>;
+    /** Companies with any durable sync state, including an outbox without a checkpoint. */
+    readonly listCompanyIds: Effect.Effect<ReadonlyArray<CompanyId>, SyncStoreError>;
     /** Applies the batch atomically; see `applySyncStoreBatch` for the required semantics. */
     readonly commit: (
       companyId: CompanyId,

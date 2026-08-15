@@ -42,6 +42,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { decodeSyncOperation, type SyncDomainAdapter } from "./adapter.ts";
 import { whenCloudSyncEnabled } from "./capability.ts";
 import {
+  SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type StoredOutboxEntry,
   type StoredSyncCheckpoint,
@@ -230,10 +231,14 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
 
   const stored = yield* store.read(companyId);
   const checkpoint = stored.checkpoint;
-  // A checkpoint written by another schema version is not readable; drop it and re-bootstrap
-  // rather than guessing what its rows meant.
+  // A checkpoint written by another schema version is not readable. A checkpoint from the old
+  // bootstrap generation is readable but incomplete: generation 1 predates seven company-domain
+  // kinds whose historical rows have no feed event. Both cases force one full seed. The outbox is
+  // decoded independently below and survives unchanged.
   const usableCheckpoint =
-    checkpoint !== null && checkpoint.schemaVersion === SYNC_DOCUMENT_SCHEMA_VERSION
+    checkpoint !== null &&
+    checkpoint.schemaVersion === SYNC_DOCUMENT_SCHEMA_VERSION &&
+    checkpoint.bootstrapGeneration === SYNC_BOOTSTRAP_GENERATION
       ? checkpoint
       : null;
   // An unfinished seed's rows are not a replica. Only the intermediate pages of a bootstrap and an
@@ -333,6 +338,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     readonly bootstrapped: boolean;
   }): StoredSyncCheckpoint => ({
     schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+    bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
     companyId,
     cursor: input.cursor,
     authorizationEpoch: input.authorizationEpoch,
@@ -383,6 +389,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
         replica,
         adapter,
         changes: page.entities,
+        mode: "seed",
         // Intermediate pages keep the zero cursor so later pages are not mistaken for redeliveries.
         cursor: page.isDone ? page.version : SYNC_INITIAL_VERSION,
         authorizationEpoch: page.authorizationEpoch,

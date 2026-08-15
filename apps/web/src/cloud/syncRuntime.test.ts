@@ -1,18 +1,31 @@
 import { describe, expect, it } from "@effect/vitest";
 import { setManagedRelaySession, type ManagedRelaySession } from "@spiritdevs/client-runtime/relay";
 import {
+  EMPTY_STORED_SYNC_STATE,
   makeInProcessWebLockManager,
   makeMemorySyncStore,
   makeWebLeaderElection,
+  SYNC_BOOTSTRAP_GENERATION,
+  SYNC_DOCUMENT_SCHEMA_VERSION,
   SyncStore,
   SyncTransport,
   SyncTransportError,
 } from "@spiritdevs/client-runtime/sync";
-import { SyncClientId } from "@spiritdevs/contracts/cloudSync";
-import { CompanyId } from "@spiritdevs/contracts/company";
+import {
+  AuthorizationEpoch,
+  CompanyVersion,
+  LocalSequence,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientId,
+  SyncEntityId,
+  SyncOperationId,
+  type SyncOperationEnvelope,
+} from "@spiritdevs/contracts/cloudSync";
+import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -31,6 +44,7 @@ import {
   useCloudSyncScope,
   type CloudSyncClientIdStorage,
   type CloudSyncCompany,
+  type CloudSyncCompanyListing,
   type CloudSyncConnection,
 } from "./syncRuntime";
 
@@ -38,7 +52,43 @@ const COMPANY_A = CompanyId.make("company-a");
 const COMPANY_B = CompanyId.make("company-b");
 
 const company = (companyId: CompanyId, membershipId: string): CloudSyncCompany =>
-  decodeCloudSyncCompanies([{ id: companyId, membershipId }])[0]!;
+  decodeCloudSyncCompanies([{ id: companyId, membershipId }]).companies[0]!;
+
+const cleanListing = (...companies: ReadonlyArray<CloudSyncCompany>): CloudSyncCompanyListing => ({
+  companies,
+  decodedCleanly: true,
+  droppedRows: 0,
+});
+
+const partialListing = (value: unknown): CloudSyncCompanyListing => decodeCloudSyncCompanies(value);
+
+const pendingEnvelope = (companyId: CompanyId): SyncOperationEnvelope => ({
+  protocolVersion: SYNC_PROTOCOL_VERSION,
+  operationId: SyncOperationId.make(`op-${companyId}`),
+  companyId,
+  clientId: SyncClientId.make("client-1"),
+  environmentId: null,
+  actor: { kind: "member", membershipId: MembershipId.make("membership-a") },
+  localSequence: LocalSequence.make(1),
+  baseVersion: CompanyVersion.make(0),
+  entityId: SyncEntityId.make(`issue-${companyId}`),
+  dependsOn: [],
+  kind: "issue.create",
+  args: { title: "offline draft" },
+});
+
+const captureLogs = () => {
+  const entries: Array<{ readonly level: string; readonly message: string }> = [];
+  const describe = (value: unknown): string => {
+    if (typeof value !== "object" || value === null) return String(value);
+    return Object.values(value).map(describe).join(" ");
+  };
+  const logger = Logger.make<unknown, void>((options) => {
+    const parts = Array.isArray(options.message) ? options.message : [options.message];
+    entries.push({ level: String(options.logLevel), message: parts.map(describe).join(" ") });
+  });
+  return { entries, layer: Logger.layer([logger], { mergeWithExisting: false }) };
+};
 
 const session = (accountId: string): ManagedRelaySession => ({
   accountId,
@@ -143,19 +193,23 @@ describe("readCloudSyncClientId", () => {
 
 describe("decodeCloudSyncCompanies", () => {
   it("maps each membership to a company and its member actor", () => {
-    const companies = decodeCloudSyncCompanies([
+    const decoded = decodeCloudSyncCompanies([
       { id: "company-a", membershipId: "membership-a", name: "A", isOwner: true },
       { id: "company-b", membershipId: "membership-b", name: "B", isOwner: false },
     ]);
 
-    expect(companies).toEqual([
-      { companyId: "company-a", actor: { kind: "member", membershipId: "membership-a" } },
-      { companyId: "company-b", actor: { kind: "member", membershipId: "membership-b" } },
-    ]);
+    expect(decoded).toEqual({
+      decodedCleanly: true,
+      droppedRows: 0,
+      companies: [
+        { companyId: "company-a", actor: { kind: "member", membershipId: "membership-a" } },
+        { companyId: "company-b", actor: { kind: "member", membershipId: "membership-b" } },
+      ],
+    });
   });
 
   it("drops rows it cannot attribute and collapses duplicates", () => {
-    const companies = decodeCloudSyncCompanies([
+    const decoded = decodeCloudSyncCompanies([
       { id: "company-a", membershipId: "membership-a" },
       { id: "company-a", membershipId: "membership-duplicate" },
       { id: "company-c" },
@@ -164,12 +218,22 @@ describe("decodeCloudSyncCompanies", () => {
       "not-a-row",
     ]);
 
-    expect(companies.map((entry) => entry.companyId)).toEqual(["company-a"]);
+    expect(decoded.companies.map((entry) => entry.companyId)).toEqual(["company-a"]);
+    expect(decoded.decodedCleanly).toBe(false);
+    expect(decoded.droppedRows).toBe(4);
   });
 
   it("answers with nothing for a non-array result", () => {
-    expect(decodeCloudSyncCompanies(null)).toEqual([]);
-    expect(decodeCloudSyncCompanies({ companies: [] })).toEqual([]);
+    expect(decodeCloudSyncCompanies(null)).toEqual({
+      companies: [],
+      decodedCleanly: false,
+      droppedRows: 1,
+    });
+    expect(decodeCloudSyncCompanies({ companies: [] })).toEqual({
+      companies: [],
+      decodedCleanly: false,
+      droppedRows: 1,
+    });
   });
 });
 
@@ -250,7 +314,7 @@ const makeFeedTransport = Effect.fn("makeFeedTransport")(function* () {
 /** The `connect` seam over a ready-made transport and listing queue. */
 const connectionTo = (
   transport: SyncTransport["Service"],
-  listings: Queue.Dequeue<ReadonlyArray<CloudSyncCompany>>,
+  listings: Queue.Dequeue<CloudSyncCompanyListing>,
 ): CloudSyncConnection => ({ transport, companies: Stream.fromQueue(listings) });
 
 describe("runCloudSyncEngines", () => {
@@ -262,7 +326,7 @@ describe("runCloudSyncEngines", () => {
         scope: "user_123",
         locks: makeInProcessWebLockManager(),
       });
-      const listings = yield* Queue.unbounded<ReadonlyArray<CloudSyncCompany>>();
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
 
       const supervisor = yield* Effect.forkChild(
         runCloudSyncEngines({
@@ -273,23 +337,124 @@ describe("runCloudSyncEngines", () => {
         { startImmediately: true },
       );
 
-      yield* Queue.offer(listings, [company(COMPANY_A, "membership-a")]);
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
       expect(yield* Queue.take(events)).toEqual({ kind: "subscribed", companyId: COMPANY_A });
 
       // Joining a second company starts a second engine without disturbing the first.
-      yield* Queue.offer(listings, [
-        company(COMPANY_A, "membership-a"),
-        company(COMPANY_B, "membership-b"),
-      ]);
+      yield* Queue.offer(
+        listings,
+        cleanListing(company(COMPANY_A, "membership-a"), company(COMPANY_B, "membership-b")),
+      );
       expect(yield* Queue.take(events)).toEqual({ kind: "subscribed", companyId: COMPANY_B });
 
       // Leaving one stops exactly its engine.
-      yield* Queue.offer(listings, [company(COMPANY_B, "membership-b")]);
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_B, "membership-b")));
       expect(yield* Queue.take(events)).toEqual({ kind: "unsubscribed", companyId: COMPANY_A });
 
       // Closing the runtime's scope stops what is left.
       yield* Fiber.interrupt(supervisor);
       expect(yield* Queue.take(events)).toEqual({ kind: "unsubscribed", companyId: COMPANY_B });
+    }),
+  );
+
+  it.effect("purges only an authenticated clean absence and logs the dropped outbox count", () =>
+    Effect.gen(function* () {
+      const { events, transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const logs = captureLogs();
+      const envelope = pendingEnvelope(COMPANY_A);
+      yield* store.service.commit(COMPANY_A, {
+        checkpoint: {
+          schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+          bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+          companyId: COMPANY_A,
+          cursor: CompanyVersion.make(1),
+          authorizationEpoch: AuthorizationEpoch.make(0),
+          bootstrapped: true,
+        },
+        upsertEntities: [
+          {
+            entityKind: "issue",
+            entityId: SyncEntityId.make("cached-a"),
+            version: CompanyVersion.make(1),
+            payload: { cached: true },
+          },
+        ],
+        upsertOutbox: [{ envelope, status: { _tag: "Pending" } }],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+      yield* store.service.commit(COMPANY_B, {
+        localSequenceHighWater: LocalSequence.make(2),
+      });
+
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+        }).pipe(Effect.provideService(SyncStore, store.service), Effect.provide(logs.layer)),
+        { startImmediately: true },
+      );
+
+      // A successful protected listMine answer is the positive signal. Company A is absent while
+      // B remains, so A is wiped even though this runtime never started its old engine.
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_B, "membership-b")));
+      expect(yield* Queue.take(events)).toEqual({ kind: "subscribed", companyId: COMPANY_B });
+
+      expect(yield* store.snapshot(COMPANY_A)).toEqual(EMPTY_STORED_SYNC_STATE);
+      expect((yield* store.snapshot(COMPANY_B)).localSequenceHighWater).toBe(2);
+      expect(
+        logs.entries.some(
+          (entry) =>
+            entry.level === "Warn" &&
+            entry.message.includes("purged after authenticated company removal") &&
+            entry.message.includes("1"),
+        ),
+      ).toBe(true);
+      yield* Fiber.interrupt(supervisor);
+    }),
+  );
+
+  it.effect("retains absent caches when the company listing dropped malformed rows", () =>
+    Effect.gen(function* () {
+      const { transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const logs = captureLogs();
+      yield* store.service.commit(COMPANY_A, {
+        upsertOutbox: [{ envelope: pendingEnvelope(COMPANY_A), status: { _tag: "Pending" } }],
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+        }).pipe(Effect.provideService(SyncStore, store.service), Effect.provide(logs.layer)),
+        { startImmediately: true },
+      );
+      yield* Queue.offer(listings, partialListing([{ id: "company-unknown" }]));
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      expect((yield* store.snapshot(COMPANY_A)).outbox).toHaveLength(1);
+      expect(
+        logs.entries.some(
+          (entry) =>
+            entry.level === "Warn" && entry.message.includes("retaining absent local state"),
+        ),
+      ).toBe(true);
+      yield* Fiber.interrupt(supervisor);
     }),
   );
 
@@ -300,7 +465,7 @@ describe("runCloudSyncEngines", () => {
       const locks = makeInProcessWebLockManager();
       const thisTab = yield* makeWebLeaderElection({ scope: "user_123", locks });
       const otherTab = yield* makeWebLeaderElection({ scope: "user_123", locks });
-      const listings = yield* Queue.unbounded<ReadonlyArray<CloudSyncCompany>>();
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
 
       yield* otherTab.acquire;
       const supervisor = yield* Effect.forkChild(
@@ -311,7 +476,7 @@ describe("runCloudSyncEngines", () => {
         }).pipe(Effect.provideService(SyncStore, store.service)),
         { startImmediately: true },
       );
-      yield* Queue.offer(listings, [company(COMPANY_A, "membership-a")]);
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
 
       // The listing is already there, so anything this tab was going to do it would have done by
       // now: it is waiting on the lock, not on work.
@@ -338,7 +503,7 @@ describe("runCloudSyncEngines", () => {
       const locks = makeInProcessWebLockManager();
       const thisTab = yield* makeWebLeaderElection({ scope: "user_123", locks });
       const otherTab = yield* makeWebLeaderElection({ scope: "user_123", locks });
-      const listings = yield* Queue.unbounded<ReadonlyArray<CloudSyncCompany>>();
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
       const opened = yield* Ref.make(0);
       const released = yield* Ref.make(0);
 
@@ -411,7 +576,7 @@ describe("runCloudSyncEngines restart policy", () => {
         scope: "user_123",
         locks: makeInProcessWebLockManager(),
       });
-      const listings = yield* Queue.unbounded<ReadonlyArray<CloudSyncCompany>>();
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
 
       const supervisor = yield* Effect.forkChild(
         runCloudSyncEngines({
@@ -423,7 +588,7 @@ describe("runCloudSyncEngines restart policy", () => {
         { startImmediately: true },
       );
 
-      yield* Queue.offer(listings, [company(COMPANY_A, "membership-a")]);
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
       // Well past several restart delays: whatever this policy is going to do, it has done.
       yield* TestClock.adjust(Duration.seconds(60));
       const count = yield* Ref.get(attempts);
@@ -448,6 +613,70 @@ describe("runCloudSyncEngines restart policy", () => {
           new SyncTransportError({ reason: "upgrade-required", message: "client too old" }),
         ),
       ).toBe(1);
+    }),
+  );
+
+  it.effect("does not purge when an authorized company engine stops as unauthorized", () =>
+    Effect.gen(function* () {
+      const { attempts, transport } = yield* makeFailingFeedTransport(
+        new SyncTransportError({ reason: "unauthorized", message: "membership changed" }),
+      );
+      const store = yield* makeMemorySyncStore();
+      yield* store.service.commit(COMPANY_A, {
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+          restartDelay,
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+        { startImmediately: true },
+      );
+
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      yield* TestClock.adjust(Duration.seconds(60));
+      expect(yield* Ref.get(attempts)).toBe(1);
+      expect((yield* store.snapshot(COMPANY_A)).localSequenceHighWater).toBe(1);
+      yield* Fiber.interrupt(supervisor);
+    }),
+  );
+
+  it.effect("does not purge when a null token makes listMine fail unauthenticated", () =>
+    Effect.gen(function* () {
+      const { transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      yield* store.service.commit(COMPANY_A, {
+        localSequenceHighWater: LocalSequence.make(1),
+      });
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const notAuthenticated = new SyncTransportError({
+        reason: "unauthorized",
+        message: "not-authenticated",
+      });
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed({
+            transport,
+            companies: Stream.fail(notAuthenticated),
+          }),
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+        { startImmediately: true },
+      );
+
+      yield* Fiber.await(supervisor);
+      expect((yield* store.snapshot(COMPANY_A)).localSequenceHighWater).toBe(1);
     }),
   );
 

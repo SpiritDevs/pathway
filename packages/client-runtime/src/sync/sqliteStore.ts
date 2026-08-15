@@ -172,6 +172,12 @@ const SQLITE_SYNC_STORE_MIGRATIONS: ReadonlyArray<SqliteSyncStoreMigration> = [
     // work to whenever they happened to upgrade.
     statements: [`ALTER TABLE cloud_sync_outbox ADD COLUMN occurred_at INTEGER`],
   },
+  {
+    version: 3,
+    // Generation 1 checkpoints predate seven company-domain kinds. Null is the durable marker for
+    // those old rows; the upgraded engine performs one full seed and writes generation 2.
+    statements: [`ALTER TABLE cloud_sync_checkpoints ADD COLUMN bootstrap_generation INTEGER`],
+  },
 ];
 
 const migrateSqliteSyncStore = Effect.fn("migrateSqliteSyncStore")(function* (
@@ -277,6 +283,7 @@ function decodeCheckpoint(row: SqliteSyncRow): StoredSyncCheckpoint | null {
     // Preserved verbatim; the engine compares it against its own SYNC_DOCUMENT_SCHEMA_VERSION
     // and drops the checkpoint on mismatch, so the store must not judge it here.
     schemaVersion: columnNumber(row["schema_version"]) as StoredSyncCheckpoint["schemaVersion"],
+    bootstrapGeneration: columnOptionalNumber(row["bootstrap_generation"]),
     companyId: CompanyId.make(columnString(row["company_id"])),
     cursor: CompanyVersion.make(columnNumber(row["cursor"])),
     authorizationEpoch: AuthorizationEpoch.make(columnNumber(row["authorization_epoch"])),
@@ -476,7 +483,7 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
   yield* migrateSqliteSyncStore(executor);
 
   const storeError =
-    (operation: "read" | "commit" | "clear") =>
+    (operation: "read" | "commit" | "clear" | "list") =>
     (error: SqliteSyncExecutorError): SyncStoreError =>
       new SyncStoreError({ operation, message: error.message });
 
@@ -486,7 +493,8 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
         Effect.gen(function* () {
           const byCompany = (statement: string) => executor.all(statement, [companyId]);
           const checkpoints = yield* byCompany(
-            `SELECT company_id, schema_version, cursor, authorization_epoch, bootstrapped
+            `SELECT company_id, schema_version, bootstrap_generation, cursor, authorization_epoch,
+                bootstrapped
               FROM cloud_sync_checkpoints WHERE company_id = ?`,
           );
           const entities = yield* byCompany(
@@ -519,6 +527,26 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
     const snapshot = decodeSnapshot(state);
     return snapshot.ok ? snapshot.state : yield* snapshot.error;
   });
+
+  const listCompanyIds = executor
+    .withTransaction(
+      Effect.gen(function* () {
+        const companyIds = new Set<CompanyId>();
+        for (const table of [
+          "cloud_sync_checkpoints",
+          "cloud_sync_entities",
+          "cloud_sync_outbox",
+          "cloud_sync_rejected",
+          "cloud_sync_quarantine",
+          "cloud_sync_local_sequences",
+        ]) {
+          const rows = yield* executor.all(`SELECT company_id FROM ${table}`, []);
+          for (const row of rows) companyIds.add(CompanyId.make(columnString(row["company_id"])));
+        }
+        return [...companyIds];
+      }),
+    )
+    .pipe(Effect.mapError(storeError("list")));
 
   const commit = Effect.fn("SqliteSyncStore.commit")(function* (
     companyId: CompanyId,
@@ -564,7 +592,7 @@ export const makeSqliteSyncStore = Effect.fn("makeSqliteSyncStore")(function* (
       .pipe(Effect.mapError(storeError("clear")));
   });
 
-  const service = SyncStore.of({ read, commit, clear });
+  const service = SyncStore.of({ read, listCompanyIds, commit, clear });
 
   return { service } satisfies SqliteSyncStore;
 });
@@ -586,11 +614,13 @@ function commitStatements(
     const checkpoint = batch.checkpoint;
     statements.push([
       `INSERT OR REPLACE INTO cloud_sync_checkpoints
-        (company_id, schema_version, cursor, authorization_epoch, bootstrapped)
-        VALUES (?, ?, ?, ?, ?)`,
+        (company_id, schema_version, bootstrap_generation, cursor, authorization_epoch,
+          bootstrapped)
+        VALUES (?, ?, ?, ?, ?, ?)`,
       [
         companyId,
         checkpoint.schemaVersion,
+        checkpoint.bootstrapGeneration ?? null,
         checkpoint.cursor,
         checkpoint.authorizationEpoch,
         checkpoint.bootstrapped ? 1 : 0,
