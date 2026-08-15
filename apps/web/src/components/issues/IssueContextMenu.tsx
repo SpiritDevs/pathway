@@ -185,7 +185,12 @@ export function IssueContextMenu({
       >
         <span className="sr-only">Issue actions</span>
       </MenuTrigger>
-      <MenuPopup align="start" anchor={anchor} className="min-w-60" side="inline-end">
+      <MenuPopup
+        align="start"
+        anchor={anchor}
+        className="w-[min(30rem,calc(100vw-1rem))]"
+        side="inline-end"
+      >
         <MenuGroup>
           <MenuGroupLabel>{issueContextMenuLabel(issues)}</MenuGroupLabel>
         </MenuGroup>
