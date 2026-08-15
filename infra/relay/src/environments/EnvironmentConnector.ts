@@ -16,6 +16,7 @@ import {
   RelayEnvironmentConnectNotAuthorizedReason,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
+  type RelayValidatedConnectGrantIdentity,
 } from "@spiritdevs/contracts/relay";
 import {
   normalizeRelayIssuer,
@@ -51,6 +52,8 @@ function environmentConnectNotAuthorizedReasonMessage(
   switch (reason) {
     case "client_proof_key_thumbprint_missing":
       return "the client proof key thumbprint is missing";
+    case "connect_grant_refused":
+      return "the presented connect grant was refused";
     case "environment_link_not_found":
       return "no active environment link was found";
     case "endpoint_provider_not_managed":
@@ -137,6 +140,7 @@ export class EnvironmentConnector extends Context.Service<
       readonly environmentId: string;
       readonly clientProofKeyThumbprint: string;
       readonly deviceId?: string;
+      readonly connectGrant?: RelayValidatedConnectGrantIdentity;
     }) => Effect.Effect<RelayEnvironmentConnectResponse, EnvironmentConnectorError>;
     readonly status: (input: {
       readonly userId: string;
@@ -603,6 +607,7 @@ const make = Effect.gen(function* () {
         clientProofKeyThumbprint: input.clientProofKeyThumbprint,
         cnf: { jkt: input.clientProofKeyThumbprint },
         ...(input.deviceId ? { deviceId: input.deviceId } : {}),
+        ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
         nonce,
         scope: ["environment:connect"],
       } satisfies RelayCloudMintCredentialProofPayload;

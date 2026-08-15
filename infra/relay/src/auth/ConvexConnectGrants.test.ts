@@ -1,228 +1,115 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { RELAY_CONVEX_CONNECT_GRANT_TYP, signRelayJwt } from "@spiritdevs/shared/relayJwt";
+import { getFunctionName, type FunctionReference } from "convex/server";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 
-import * as RelayConfiguration from "../Config.ts";
+import { RelayConvexClient, RelayConvexClientError } from "../db.ts";
 import * as ConvexConnectGrants from "./ConvexConnectGrants.ts";
 
-const relayKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-  privateKeyEncoding: { format: "pem", type: "pkcs8" },
-  publicKeyEncoding: { format: "pem", type: "spki" },
-});
-const convexKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-  privateKeyEncoding: { format: "pem", type: "pkcs8" },
-  publicKeyEncoding: { format: "pem", type: "spki" },
-});
-const attackerKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
-  privateKeyEncoding: { format: "pem", type: "pkcs8" },
-  publicKeyEncoding: { format: "pem", type: "spki" },
-});
-
-const CONVEX_ISSUER = "https://convex.example.test/";
-const RELAY_ISSUER = "https://relay.example.test/";
-
-const makeConfig = (cloudSync: RelayConfiguration.RelayCloudSyncConfiguration | undefined) =>
-  RelayConfiguration.RelayConfiguration.of({
-    relayIssuer: RELAY_ISSUER,
-    apns: {
-      environment: "sandbox",
-      teamId: "team-id",
-      keyId: "key-id",
-      privateKey: Redacted.make("private-key"),
-      bundleId: "com.spiritdevs.pathway.dev",
-    },
-    apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
-    clerkSecretKey: Redacted.make("clerk-secret"),
-    clerkPublishableKey: "pk_test_test",
-    clerkJwtAudience: "t3-code-relay",
-    cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
-    cloudMintPublicKey: relayKeyPair.publicKey,
-    managedEndpointBaseDomain: undefined,
-    managedEndpointNamespace: undefined,
-    cloudSync,
-  });
-
-const configuredLayer = ConvexConnectGrants.layer.pipe(
-  Layer.provide(
-    RelayConfiguration.layer(
-      makeConfig({
-        serviceTokensEnabled: true,
-        convexUrl: "https://convex.example.test",
-        signingKey: {
-          keyId: "pathway-convex-test",
-          privateKey: Redacted.make(relayKeyPair.privateKey),
-          publicKey: relayKeyPair.publicKey,
-        },
-        verificationKeys: [{ keyId: "pathway-convex-test", publicKey: relayKeyPair.publicKey }],
-        connectGrantIssuer: CONVEX_ISSUER,
-        connectGrantPublicKey: convexKeyPair.publicKey,
-      }),
-    ),
-  ),
-);
-
-const unconfiguredLayer = ConvexConnectGrants.layer.pipe(
-  Layer.provide(RelayConfiguration.layer(makeConfig(undefined))),
-);
-
-const signGrant = (input: {
-  readonly privateKey?: string;
-  readonly issuer?: string;
-  readonly audience?: string;
-  readonly environmentId?: string;
-  readonly userId?: string;
-  readonly permission?: string;
-  readonly jti?: string;
-  readonly issuedAtEpochSeconds?: number;
-  readonly expiresAtEpochSeconds?: number;
-}) =>
-  signRelayJwt({
-    privateKey: input.privateKey ?? convexKeyPair.privateKey,
-    typ: RELAY_CONVEX_CONNECT_GRANT_TYP,
-    payload: {
-      iss: input.issuer ?? "https://convex.example.test",
-      aud: input.audience ?? "https://relay.example.test",
-      sub: input.userId ?? "user_123",
-      jti: input.jti ?? "connect-grant-1",
-      iat: input.issuedAtEpochSeconds ?? 100,
-      exp: input.expiresAtEpochSeconds ?? 400,
-      environmentId: input.environmentId ?? "environment-1",
-      permission: input.permission ?? "environments.read",
-    },
-  });
-
-const verifyDefaults = {
+const accepted = {
+  status: "accepted" as const,
   environmentId: "environment-1",
-  userId: "user_123",
-  requiredPermission: "environments.read",
-} as const;
+  membershipId: "membership-1",
+  permission: "remoteAgents.control",
+  expiresAt: 1_000,
+};
+
+function clientLayer(
+  mutation: (args: unknown, reference: string) => Effect.Effect<unknown, RelayConvexClientError>,
+) {
+  return Layer.succeed(
+    RelayConvexClient,
+    RelayConvexClient.of({
+      query: () => Effect.die("unexpected query"),
+      mutation: (reference: unknown, args: unknown) =>
+        mutation(args, getFunctionName(reference as FunctionReference<"mutation">)),
+    } as unknown as RelayConvexClient["Service"]),
+  );
+}
+
+function testLayer(
+  mutation: (args: unknown, reference: string) => Effect.Effect<unknown, RelayConvexClientError>,
+) {
+  return ConvexConnectGrants.layer.pipe(Layer.provide(clientLayer(mutation)));
+}
 
 describe("ConvexConnectGrants", () => {
-  it.effect("reports itself disabled until an issuer and public key are configured", () =>
-    Effect.gen(function* () {
-      expect((yield* ConvexConnectGrants.ConvexConnectGrants).enabled).toBe(false);
-    }).pipe(Effect.provide(unconfiguredLayer)),
-  );
-
-  it.effect("rejects every grant while the Convex issuer is unconfigured", () =>
-    Effect.gen(function* () {
+  it.effect("hashes and validates an accepted opaque grant through Convex", () => {
+    let received: unknown;
+    let functionName = "";
+    return Effect.gen(function* () {
       const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({});
 
       expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 200 }),
-      ).toBeNull();
-    }).pipe(Effect.provide(unconfiguredLayer)),
-  );
-
-  it.effect("accepts a valid grant from the configured Convex issuer", () =>
-    Effect.gen(function* () {
-      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      expect(grants.enabled).toBe(true);
-      const grant = yield* signGrant({});
-
-      expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 200 }),
-      ).toMatchObject({
-        sub: "user_123",
-        jti: "connect-grant-1",
+        yield* grants.validateConnectGrant({
+          grant: "opaque-connect-grant",
+          environmentId: "environment-1",
+        }),
+      ).toEqual({
         environmentId: "environment-1",
-        permission: "environments.read",
+        membershipId: "membership-1",
+        permission: "remoteAgents.control",
       });
-    }).pipe(Effect.provide(configuredLayer)),
-  );
-
-  it.effect("rejects an expired grant", () =>
-    Effect.gen(function* () {
-      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({});
-
-      expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 600 }),
-      ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
-  );
-
-  it.effect("rejects a grant hoarded past the maximum token age", () =>
-    Effect.gen(function* () {
-      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({
-        issuedAtEpochSeconds: 100,
-        expiresAtEpochSeconds: 100_000,
+      expect(functionName).toBe("connectGrants:validate");
+      expect(received).toEqual({
+        tokenHash: NodeCrypto.createHash("sha256").update("opaque-connect-grant").digest("hex"),
       });
+    }).pipe(
+      Effect.provide(
+        testLayer((args, reference) =>
+          Effect.sync(() => {
+            received = args;
+            functionName = reference;
+            return accepted;
+          }),
+        ),
+      ),
+    );
+  });
 
-      expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 5_000 }),
-      ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
-  );
-
-  it.effect("rejects a grant claiming a different issuer", () =>
+  it.effect("fails closed when Convex refuses the grant", () =>
     Effect.gen(function* () {
       const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({ issuer: "https://convex.attacker.test" });
-
       expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 200 }),
+        yield* grants.validateConnectGrant({
+          grant: "refused-grant",
+          environmentId: "environment-1",
+        }),
       ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
+    }).pipe(
+      Effect.provide(
+        testLayer(() => Effect.succeed({ status: "refused", code: "connect-grant-refused" })),
+      ),
+    ),
   );
 
-  it.effect("rejects a grant signed by a key the configured issuer does not hold", () =>
+  it.effect("fails closed when the accepted grant targets another environment", () =>
     Effect.gen(function* () {
       const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({ privateKey: attackerKeyPair.privateKey });
-
       expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 200 }),
-      ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
-  );
-
-  it.effect("rejects a grant addressed to another relay", () =>
-    Effect.gen(function* () {
-      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({ audience: "https://relay.other.test" });
-
-      expect(
-        yield* grants.verifyConnectGrant({ ...verifyDefaults, grant, nowEpochSeconds: 200 }),
-      ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
-  );
-
-  it.effect("rejects a grant whose environment, user, or permission does not match", () =>
-    Effect.gen(function* () {
-      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
-      const grant = yield* signGrant({});
-
-      expect(
-        yield* grants.verifyConnectGrant({
-          ...verifyDefaults,
+        yield* grants.validateConnectGrant({
+          grant: "wrong-environment-grant",
           environmentId: "environment-2",
-          grant,
-          nowEpochSeconds: 200,
         }),
       ).toBeNull();
-      expect(
-        yield* grants.verifyConnectGrant({
-          ...verifyDefaults,
-          userId: "user_attacker",
-          grant,
-          nowEpochSeconds: 200,
-        }),
-      ).toBeNull();
-      expect(
-        yield* grants.verifyConnectGrant({
-          ...verifyDefaults,
-          requiredPermission: "environments.manage",
-          grant,
-          nowEpochSeconds: 200,
-        }),
-      ).toBeNull();
-    }).pipe(Effect.provide(configuredLayer)),
+    }).pipe(Effect.provide(testLayer(() => Effect.succeed(accepted)))),
   );
+
+  it.effect("fails closed when Convex is unreachable", () => {
+    const failure = new RelayConvexClientError({
+      operation: "mutation",
+      cause: new Error("offline"),
+    });
+    return Effect.gen(function* () {
+      const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
+      expect(
+        yield* grants.validateConnectGrant({
+          grant: "unreachable-grant",
+          environmentId: "environment-1",
+        }),
+      ).toBeNull();
+    }).pipe(Effect.provide(testLayer(() => Effect.fail(failure))));
+  });
 });

@@ -9,7 +9,11 @@ import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import type { CompanyPermission } from "./company.ts";
+import {
+  CompanyPermission,
+  MembershipId,
+  type CompanyPermission as CompanyPermissionType,
+} from "./company.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literal("ios");
@@ -374,6 +378,7 @@ export class RelayEnvironmentLinkProofInvalidError extends Schema.TaggedErrorCla
 
 export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "client_proof_key_thumbprint_missing",
+  "connect_grant_refused",
   "environment_link_not_found",
   "endpoint_provider_not_managed",
   "managed_endpoint_allocation_not_found",
@@ -632,6 +637,9 @@ export const RelayListEnvironmentsResponse = Schema.Struct({
 });
 export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
 
+export const RelayConvexConnectGrant = TrimmedNonEmptyString;
+export type RelayConvexConnectGrant = typeof RelayConvexConnectGrant.Type;
+
 export const RelayEnvironmentConnectRequest = Schema.Struct({
   deviceId: Schema.optional(
     TrimmedNonEmptyString.annotate({
@@ -646,6 +654,11 @@ export const RelayEnvironmentConnectRequest = Schema.Struct({
   clientProofKeyThumbprint: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description: "JWK thumbprint that the minted environment credential must be bound to.",
+    }),
+  ),
+  connectGrant: Schema.optional(
+    RelayConvexConnectGrant.annotate({
+      description: "Optional single-use Convex grant for this environment connection.",
     }),
   ),
 }).annotate({ description: "Requests a short-lived credential for connecting to an environment." });
@@ -802,7 +815,7 @@ export const RELAY_CONVEX_CONNECT_GRANT_PERMISSIONS = [
   "environments.read",
   "environments.manage",
   "remoteAgents.control",
-] as const satisfies ReadonlyArray<CompanyPermission>;
+] as const satisfies ReadonlyArray<CompanyPermissionType>;
 
 export const RelayConvexConnectGrantPermission = Schema.Literals(
   RELAY_CONVEX_CONNECT_GRANT_PERMISSIONS,
@@ -819,8 +832,12 @@ export const RelayConvexConnectGrantClaims = Schema.Struct({
 });
 export type RelayConvexConnectGrantClaims = typeof RelayConvexConnectGrantClaims.Type;
 
-export const RelayConvexConnectGrant = TrimmedNonEmptyString;
-export type RelayConvexConnectGrant = typeof RelayConvexConnectGrant.Type;
+export const RelayValidatedConnectGrantIdentity = Schema.Struct({
+  environmentId: EnvironmentId,
+  membershipId: MembershipId,
+  permission: CompanyPermission,
+});
+export type RelayValidatedConnectGrantIdentity = typeof RelayValidatedConnectGrantIdentity.Type;
 
 export const RelayBearerRequestHeaders = Schema.Struct({
   authorization: TrimmedNonEmptyString,
@@ -887,6 +904,7 @@ export const RelayCloudMintCredentialProofPayload = Schema.Struct({
     jkt: TrimmedNonEmptyString,
   }),
   deviceId: Schema.optional(TrimmedNonEmptyString),
+  connectGrant: Schema.optional(RelayValidatedConnectGrantIdentity),
   nonce: TrimmedNonEmptyString,
   scope: Schema.Array(Schema.Literal("environment:connect")),
 });

@@ -646,7 +646,7 @@ describe("EnvironmentConnector", () => {
     );
   });
 
-  it.effect("mints a one-time environment credential through the linked endpoint", () => {
+  it.effect("keeps the existing no-grant mint flow unchanged", () => {
     const seenUrls: Array<string> = [];
     const seenProofs: Array<RelayCloudMintCredentialProofPayload> = [];
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
@@ -687,6 +687,39 @@ describe("EnvironmentConnector", () => {
           httpBaseUrl: "https://env.example.test/",
           wsBaseUrl: "wss://env.example.test/ws",
         },
+      });
+    }).pipe(Effect.provide(connectorTestLayer(execute)));
+  });
+
+  it.effect("forwards accepted connect grant identity in the signed mint proof", () => {
+    let seenProof: RelayCloudMintCredentialProofPayload | undefined;
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        const mintRequest = decodeMintRequestBody(requestBodyText(request));
+        seenProof = decodeRequestProof(mintRequest.proof);
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(signMintResponse(mintRequest), { status: 200 }),
+        );
+      });
+
+    return Effect.gen(function* () {
+      const connector = yield* EnvironmentConnector.EnvironmentConnector;
+      yield* connector.connect({
+        userId: "user_123",
+        environmentId: "env-connector-test",
+        clientProofKeyThumbprint: "client-proof-key-thumbprint",
+        connectGrant: {
+          environmentId: "env-connector-test" as never,
+          membershipId: "membership-123" as never,
+          permission: "remoteAgents.control",
+        },
+      });
+
+      expect(seenProof?.connectGrant).toEqual({
+        environmentId: "env-connector-test",
+        membershipId: "membership-123",
+        permission: "remoteAgents.control",
       });
     }).pipe(Effect.provide(connectorTestLayer(execute)));
   });

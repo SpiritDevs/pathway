@@ -39,10 +39,12 @@ import {
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
+  validatePresentedConnectGrant,
   verifyRelayClientBearerToken,
   withoutCapturedParentSpan,
 } from "./Api.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
+import * as ConvexConnectGrants from "../auth/ConvexConnectGrants.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
@@ -124,6 +126,71 @@ describe("relay client authentication", () => {
         Effect.sync(() => {
           vi.mocked(verifyToken).mockReset();
           vi.mocked(createClerkClient).mockReset();
+        }),
+      ),
+    ),
+  );
+});
+
+describe("relay environment connect grants", () => {
+  it.effect("returns accepted grant identity to the connect path", () => {
+    const identity = {
+      environmentId: "environment-1" as never,
+      membershipId: "membership-1" as never,
+      permission: "remoteAgents.control" as const,
+    };
+    return Effect.gen(function* () {
+      expect(
+        yield* validatePresentedConnectGrant({
+          connectGrant: "accepted-grant",
+          environmentId: "environment-1",
+        }),
+      ).toEqual(identity);
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.succeed(identity),
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses a connect when a presented grant is not accepted", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        validatePresentedConnectGrant({
+          connectGrant: "refused-grant",
+          environmentId: "environment-1",
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentConnectNotAuthorized",
+        environmentId: "environment-1",
+        operation: "connect",
+        reason: "connect_grant_refused",
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("leaves the existing no-grant connect path untouched", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* validatePresentedConnectGrant({ environmentId: "environment-1" }),
+      ).toBeUndefined();
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.die("grant validation must not run"),
         }),
       ),
     ),
@@ -401,8 +468,6 @@ const enabledCloudSync = {
     publicKey: convexMintKeyPair.publicKey,
   },
   verificationKeys: [{ keyId: "relay-convex-test", publicKey: convexMintKeyPair.publicKey }],
-  connectGrantIssuer: undefined,
-  connectGrantPublicKey: undefined,
 } satisfies RelayConfiguration.RelayCloudSyncConfiguration;
 
 // The request URL the relay reconstructs from the incoming host header, which is

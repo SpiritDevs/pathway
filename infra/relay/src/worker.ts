@@ -38,6 +38,7 @@ import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
 import * as Devices from "./agentActivity/Devices.ts";
 import * as DpopProofs from "./auth/DpopProofs.ts";
+import * as ConvexConnectGrants from "./auth/ConvexConnectGrants.ts";
 import * as ConvexJwks from "./auth/ConvexJwks.ts";
 import * as RelayTokens from "./auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./environments/EnvironmentCredentials.ts";
@@ -187,8 +188,6 @@ export const ApiLive = Api.make(
             publicKey: yield* convexRelayPublicKey,
           },
         ],
-        connectGrantIssuer: undefined,
-        connectGrantPublicKey: undefined,
       },
     });
     const relayConfigurationLayer = Layer.succeed(
@@ -242,6 +241,7 @@ export const ApiLive = Api.make(
         ),
       ),
       Layer.provideMerge(DpopProofs.layer),
+      Layer.provideMerge(ConvexConnectGrants.layer),
       Layer.provideMerge(ApnsDeliveries.layer),
       Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
       Layer.provideMerge(

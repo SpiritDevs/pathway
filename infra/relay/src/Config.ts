@@ -54,10 +54,6 @@ export interface RelayCloudSyncConfiguration {
     readonly keyId: string;
     readonly publicKey: string;
   }>;
-  /** Convex custom-JWT issuer trusted for connect grants. */
-  readonly connectGrantIssuer: string | undefined;
-  /** Ed25519 SPKI public key the Convex issuer signs connect grants with. */
-  readonly connectGrantPublicKey: string | undefined;
 }
 
 export class RelayConfiguration extends Context.Service<

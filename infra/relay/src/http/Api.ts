@@ -59,6 +59,7 @@ import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
+import * as ConvexConnectGrants from "../auth/ConvexConnectGrants.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
@@ -850,13 +851,25 @@ export const tokenApi = HttpApiBuilder.group(
   }),
 );
 
-// TODO(cloud-sync, rollout step 7): connectEnvironment must also require a
-// Convex-issued connect grant once clients can obtain one. The verifier is
-// ready — `ConvexConnectGrants.verifyConnectGrant` with permission
-// `environments.read` — but the grant has to reach the relay first, which needs
-// an additive `connectGrant` field on RelayEnvironmentConnectRequest plus client
-// support. Until then the route keeps its device-local link authorization and
-// `ConvexConnectGrants.enabled` stays false on every deployment.
+export const validatePresentedConnectGrant = Effect.fn(
+  "relay.api.dpopClient.validatePresentedConnectGrant",
+)(function* (input: { readonly connectGrant?: string; readonly environmentId: string }) {
+  if (input.connectGrant === undefined) return undefined;
+  const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
+  const identity = yield* grants.validateConnectGrant({
+    grant: input.connectGrant,
+    environmentId: input.environmentId,
+  });
+  if (identity === null) {
+    return yield* new EnvironmentConnector.EnvironmentConnectNotAuthorized({
+      environmentId: input.environmentId,
+      operation: "connect",
+      reason: "connect_grant_refused",
+    });
+  }
+  return identity;
+});
+
 export const dpopClientApi = HttpApiBuilder.group(
   RelayApi,
   "dpopClient",
@@ -879,11 +892,16 @@ export const dpopClientApi = HttpApiBuilder.group(
             const clientProofKeyThumbprint = yield* requireDpopThumbprint(proofKeyThumbprint, {
               expectedAccessToken: token,
             }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+            const connectGrant = yield* validatePresentedConnectGrant({
+              environmentId: params.environmentId,
+              ...(payload.connectGrant ? { connectGrant: payload.connectGrant } : {}),
+            });
             return yield* connector.connect({
               userId,
               environmentId: params.environmentId,
               clientProofKeyThumbprint,
               ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
+              ...(connectGrant ? { connectGrant } : {}),
             });
           },
           mapRelayCommonApiErrors("invalid_dpop"),

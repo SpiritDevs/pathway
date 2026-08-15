@@ -46,8 +46,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
       publicKey: convexKeyPair.publicKey,
     },
     verificationKeys: [{ keyId: convexKeyId, publicKey: convexKeyPair.publicKey }],
-    connectGrantIssuer: undefined,
-    connectGrantPublicKey: undefined,
   },
 });
 

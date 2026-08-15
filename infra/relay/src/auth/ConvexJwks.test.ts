@@ -49,8 +49,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
       { keyId: "pathway-convex-current", publicKey: current.publicKey },
       { keyId: "pathway-convex-previous", publicKey: previous.publicKey },
     ],
-    connectGrantIssuer: undefined,
-    connectGrantPublicKey: undefined,
   },
 });
 

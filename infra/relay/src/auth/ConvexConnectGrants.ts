@@ -1,106 +1,61 @@
+import { api } from "@spiritdevs/backend/convexApi";
+import { hashConnectGrantToken } from "@spiritdevs/backend/connectGrants";
 import {
-  RelayConvexConnectGrantClaims,
-  type RelayConvexConnectGrantPermission,
+  RelayValidatedConnectGrantIdentity,
+  type RelayValidatedConnectGrantIdentity as RelayValidatedConnectGrantIdentityType,
 } from "@spiritdevs/contracts/relay";
-import {
-  normalizeRelayIssuer,
-  RELAY_CONVEX_CONNECT_GRANT_TYP,
-  RelayJwtError,
-  verifyRelayJwt,
-} from "@spiritdevs/shared/relayJwt";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import * as RelayConfiguration from "../Config.ts";
+import { RelayConvexClient } from "../db.ts";
 
-// Grants are minted per connect attempt, so anything older than this is a
-// replayed or hoarded grant regardless of the expiry Convex chose.
-const CONNECT_GRANT_MAX_TOKEN_AGE = "10 minutes";
-
-const decodeConnectGrantClaims = Schema.decodeUnknownEffect(RelayConvexConnectGrantClaims);
+const decodeValidatedIdentity = Schema.decodeUnknownEffect(RelayValidatedConnectGrantIdentity);
 
 /**
- * Validates Convex-issued connect grants. The relay stays a credential broker:
- * it only checks that a trusted Convex issuer vouched for this user, this
- * environment, and this permission. The target environment re-checks the actor's
- * company permissions against its own synced replica before minting anything.
+ * Atomically validates and consumes opaque Convex-issued connect grants through
+ * the relay's authenticated control-plane client.
  */
 export class ConvexConnectGrants extends Context.Service<
   ConvexConnectGrants,
   {
-    /** False until a deployment configures the Convex issuer and its public key. */
-    readonly enabled: boolean;
-    readonly verifyConnectGrant: (input: {
+    readonly validateConnectGrant: (input: {
       readonly grant: string;
       readonly environmentId: string;
-      readonly userId: string;
-      readonly requiredPermission: RelayConvexConnectGrantPermission;
-      readonly nowEpochSeconds: number;
-    }) => Effect.Effect<RelayConvexConnectGrantClaims | null>;
+    }) => Effect.Effect<RelayValidatedConnectGrantIdentityType | null>;
   }
 >()("pathway-relay/auth/ConvexConnectGrants") {}
 
 const make = Effect.gen(function* () {
-  const config = yield* RelayConfiguration.RelayConfiguration;
-  const audience = normalizeRelayIssuer(config.relayIssuer);
-  const convexIssuer = config.cloudSync?.connectGrantIssuer;
-  const convexPublicKey = config.cloudSync?.connectGrantPublicKey;
-  const enabled = convexIssuer !== undefined && convexPublicKey !== undefined;
+  const client = yield* RelayConvexClient;
 
-  const verifyConnectGrant: ConvexConnectGrants["Service"]["verifyConnectGrant"] = Effect.fn(
-    "relay.convex_connect_grants.verify",
+  const validateConnectGrant: ConvexConnectGrants["Service"]["validateConnectGrant"] = Effect.fn(
+    "relay.convex_connect_grants.validate",
   )(function* (input) {
-    yield* Effect.annotateCurrentSpan({
-      "relay.environment_id": input.environmentId,
-      "relay.convex.connect_grant_required_permission": input.requiredPermission,
-    });
-    if (convexIssuer === undefined || convexPublicKey === undefined) {
-      // Fail closed: an unconfigured relay cannot tell a forged grant from a
-      // real one, so it accepts none.
-      yield* Effect.annotateCurrentSpan(
-        "relay.convex.connect_grant_rejection",
-        "issuer_not_configured",
-      );
-      return null;
-    }
-    return yield* verifyRelayJwt({
-      publicKey: convexPublicKey,
-      token: input.grant,
-      typ: RELAY_CONVEX_CONNECT_GRANT_TYP,
-      issuer: normalizeRelayIssuer(convexIssuer),
-      audience,
-      nowEpochSeconds: input.nowEpochSeconds,
-      maxTokenAge: CONNECT_GRANT_MAX_TOKEN_AGE,
+    return yield* Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("relay.environment_id", input.environmentId);
+      const tokenHash = yield* Effect.tryPromise(() => hashConnectGrantToken(input.grant));
+      const result = yield* client.mutation(api.connectGrants.validate, { tokenHash });
+      if (result.status !== "accepted" || result.environmentId !== input.environmentId) {
+        yield* Effect.annotateCurrentSpan("relay.convex.connect_grant_rejected", true);
+        return null;
+      }
+      return yield* decodeValidatedIdentity({
+        environmentId: result.environmentId,
+        membershipId: result.membershipId,
+        permission: result.permission,
+      });
     }).pipe(
-      Effect.tapError((error) =>
-        Effect.annotateCurrentSpan(
-          "relay.convex.connect_grant_rejection",
-          RelayJwtError.diagnosticCode(error),
+      Effect.catch(() =>
+        Effect.annotateCurrentSpan("relay.convex.connect_grant_rejected", true).pipe(
+          Effect.as(null),
         ),
       ),
-      Effect.flatMap(decodeConnectGrantClaims),
-      Effect.map((claims): RelayConvexConnectGrantClaims | null =>
-        claims.environmentId === input.environmentId &&
-        claims.sub === input.userId &&
-        claims.permission === input.requiredPermission
-          ? claims
-          : null,
-      ),
-      Effect.tap((claims) =>
-        claims === null
-          ? Effect.annotateCurrentSpan("relay.convex.connect_grant_rejection", "claims_mismatch")
-          : Effect.void,
-      ),
-      Effect.orElseSucceed(() => null),
     );
   });
 
-  return ConvexConnectGrants.of({
-    enabled,
-    verifyConnectGrant,
-  });
+  return ConvexConnectGrants.of({ validateConnectGrant });
 });
 
 export const layer = Layer.effect(ConvexConnectGrants, make);
