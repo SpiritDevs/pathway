@@ -27,7 +27,9 @@ import {
   PaletteIcon,
   SearchIcon,
   Settings2Icon,
+  ShieldIcon,
   TagsIcon,
+  UsersIcon,
   WandSparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -63,6 +65,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/projects": FolderIcon,
+  "/settings/company-members": UsersIcon,
+  "/settings/company-teams": ShieldIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,

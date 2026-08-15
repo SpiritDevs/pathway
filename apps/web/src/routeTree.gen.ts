@@ -39,6 +39,8 @@ import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsEmailRouteImport } from './routes/settings.email'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
+import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
+import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
@@ -204,6 +206,16 @@ const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   path: '/connections',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsCompanyTeamsRoute = SettingsCompanyTeamsRouteImport.update({
+  id: '/company-teams',
+  path: '/company-teams',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyMembersRoute = SettingsCompanyMembersRouteImport.update({
+  id: '/company-members',
+  path: '/company-members',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -295,6 +307,8 @@ export interface FileRoutesByFullPath {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
@@ -339,6 +353,8 @@ export interface FileRoutesByTo {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
@@ -385,6 +401,8 @@ export interface FileRoutesById {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
@@ -431,6 +449,8 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
@@ -475,6 +495,8 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
@@ -520,6 +542,8 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
@@ -777,6 +801,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsConnectionsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/company-teams': {
+      id: '/settings/company-teams'
+      path: '/company-teams'
+      fullPath: '/settings/company-teams'
+      preLoaderRoute: typeof SettingsCompanyTeamsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-members': {
+      id: '/settings/company-members'
+      path: '/company-members'
+      fullPath: '/settings/company-members'
+      preLoaderRoute: typeof SettingsCompanyMembersRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
@@ -894,6 +932,8 @@ const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
+  SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsEmailRoute: typeof SettingsEmailRoute
@@ -916,6 +956,8 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
+  SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsEmailRoute: SettingsEmailRoute,

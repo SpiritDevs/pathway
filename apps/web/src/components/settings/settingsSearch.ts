@@ -3,6 +3,8 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/projects"
+  | "/settings/company-members"
+  | "/settings/company-teams"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -35,6 +37,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/projects": "Projects",
+  "/settings/company-members": "Members",
+  "/settings/company-teams": "Teams & Roles",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -69,6 +73,10 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/keybindings",
       "/settings/projects",
     ],
+  },
+  {
+    label: "Company",
+    paths: ["/settings/company-members", "/settings/company-teams"],
   },
   {
     label: "Agents",
@@ -109,6 +117,21 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "company-members",
+    title: "Company members",
+    to: "/settings/company-members",
+  },
+  {
+    id: "company-teams",
+    title: "Company teams",
+    to: "/settings/company-teams",
+  },
+  {
+    id: "company-roles",
+    title: "Company roles",
+    to: "/settings/company-teams",
+  },
   {
     id: "color-scheme",
     title: "Color scheme",

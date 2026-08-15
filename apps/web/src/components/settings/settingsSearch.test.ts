@@ -153,6 +153,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
   it("groups the tracker pages under Issues", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
       "Workspace",
+      "Company",
       "Agents",
       "Issues",
       "Email",
