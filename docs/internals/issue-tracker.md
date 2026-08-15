@@ -9,8 +9,9 @@ which direction each one points.
 
 ## A plain-table domain beside the projections
 
-The tracker's tables live in the same `state.sqlite` as the projection tables and are written
-directly, not derived from orchestration events. Migrations 041–046 and 056–061 own them:
+The legacy environment-local tracker's tables live in the same `state.sqlite` as the projection
+tables and are written directly, not derived from orchestration events. Migrations 041–046 and
+056–061 own them:
 
 | Migration | Adds                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------- |
@@ -35,13 +36,15 @@ Nothing here enters [`decider.ts`][decider]. That aggregate exists for the agent
 issue CRUD would bury it in commands and projector cases. The precedent for a plain-table domain
 that streams to clients is `authAccessStream`.
 
-Consequence worth knowing before you design against it: the tracker is **environment-scoped**.
-Connecting to another machine's server is another tracker, with its own key prefix, statuses, and
-Slack configuration. There is no cross-environment read.
+That environment scope now applies only while no ready company replica is routable. For a
+cloud-synced company, issue reads come from the local Convex-backed replica and eligible writes enter
+its durable outbox, so the same company issue state converges across environments. Slack watches,
+routes, tokens, cursors, dedupe rows, outbound-post tracking, and enrichment execution remain
+environment-local.
 
 ## Stream over WS
 
-Clients hold one subscription, `WsIssuesStreamRpc` ([rpc.ts][rpc]), carrying the
+The legacy client holds one subscription, `WsIssuesStreamRpc` ([rpc.ts][rpc]), carrying the
 `IssuesStreamEvent` union from [issues.ts][contracts] — 16 tagged variants (`IssueUpserted`,
 `IssueDeleted`, `StatusesChanged`, `LabelsChanged`, `MilestonesChanged`, `CyclesChanged`,
 `ViewsChanged`, `IssueTodosChanged`, `IssueRelationsChanged`, `IssueCommentUpserted`,
@@ -57,6 +60,12 @@ should break the build in every one of them.
 
 Because the opening replay carries `SlackStatusChanged`, there is no client caller for the
 `slackGetStatus` RPC. That is deliberate, not an oversight.
+
+The replica-aware web client does not use this stream for the synced issue domain. It reads the
+shared local replica and enqueues synced mutations directly. Once the server has a routable company
+replica, old web/Electron issue RPCs are refused with “This workspace has moved to cloud sync. Update
+the app to continue.” They do not fall back to the environment-local tables; current-client seams
+whose domains are still local remain explicit exceptions.
 
 ## Milestone burn-up, by backward replay
 
@@ -123,9 +132,12 @@ IssueActor = { kind: "user" }                                  // the one human 
            | { kind: "system", source: "import" | "cycles" | "slack" | "automation" }
 ```
 
-`user` carries no identity because this environment has exactly one person and nothing to tell them
-apart by. `system` is a write the tracker made on somebody's behalf: CSV import, the lazy
-carry-over when a cycle ends, Slack intake, and configured issue automation.
+That anonymous `user` shape is the legacy environment-local actor. Cloud operations exclude it: a
+human write carries an authenticated company membership id, an agent carries its provider, a server
+may carry its environment id, and system work retains its source. Convex maps asserted attribution
+back to the authenticated identity except for narrowly authorized environment-system writes such as
+`system:slack`. `system` in the legacy tracker remains a write made on somebody's behalf: CSV import,
+the lazy carry-over when a cycle ends, Slack intake, and configured issue automation.
 
 The actor is not decoration. It is load-bearing in two places: the activity feed renders it, and the
 Slack poller uses `author.kind === "system"` as one of the two echo suppressors (below).
@@ -267,6 +279,13 @@ Reading is `conversations.history` per watched channel from a stored cursor, eve
 `SLACK_POLL_INTERVAL_MS` (30s), woken early by `SlackIntakeSignal` when the watch set changes. Not
 Socket Mode: this server sleeps, and only a cursor catches up on what it slept through. Each
 channel's pass is caught on its own, so one broken channel is one broken channel.
+
+On a replica-routed company, Slack issue creation and thread comments enter the cloud outbox as
+`system:slack`, including the message provenance on the created issue. Triage accept is a synced
+issue update and triage reject is a synced tombstone/audit operation, so the resulting state is
+company-visible. The polling configuration and operational ledger named above stay local; Slack
+image attachments are skipped on this path because the server cannot produce normal UploadThing
+attachments for a synced company.
 
 Two subtleties that are easy to undo by accident:
 

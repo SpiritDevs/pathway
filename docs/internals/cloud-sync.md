@@ -84,7 +84,9 @@ deletion durable and prevent an old update from recreating an entity implicitly.
 ## Cursors and authorization epochs
 
 A cursor records the last contiguous company version included in confirmed local state. Changes and
-operation receipts remain available for 90 days.
+operation receipts are stamped with a 90-day `retainUntil` target. No feed-pruning function or cron
+is wired yet, so rows currently remain beyond that target; the only scheduled Convex job is pending
+attachment cleanup.
 
 Receipt expiry must never reopen the dedupe question: a durable outbox can hold an unacknowledged
 send across a bootstrap and outlive its receipt. So every decided operation id also writes a compact,
@@ -136,9 +138,10 @@ changes increment it. On an epoch change, the client stops trusting the old perm
 replica, purges records no longer visible, and performs the required permission-aware reseed. An
 epoch is not a substitute for checking every query and mutation at the backend.
 
-A cursor older than the retained feed is expired. The client discards its confirmed replica and
-performs a full paginated bootstrap. Pending operations remain in the outbox and are rebased over
-the new confirmed snapshot before submission.
+Once pruning is implemented, a cursor older than the surviving feed is expired. The client discards
+its confirmed replica and performs a full paginated bootstrap. Pending operations remain in the
+outbox and are rebased over the new confirmed snapshot before submission. Pruning must never remove
+the permanent operation-decision ledger.
 
 ### The bootstrap walk order
 
@@ -237,6 +240,12 @@ replica decoders support the current and immediately previous client protocol ve
 optional fields are preferred within that window; a semantic or required-field change increments
 the protocol version and supplies a migration or adapter.
 
+The separate `SYNC_BOOTSTRAP_GENERATION` is currently 4. It changes when a complete seed contains
+state that an older completed replica could have missed; generation 4 adds cloud projects. A mismatch
+forces one full reseed of confirmed state on the upgraded replica while preserving its durable
+outbox. Bumping it therefore creates a fleet-wide bootstrap event as upgraded clients and servers
+reconnect.
+
 An older incompatible client receives an explicit upgrade-required result before it can mutate
 state. It must not fall back to the pre-cloud `issues.stream` or issue mutation RPCs, because those
 paths cannot enforce the company authorization model. Local schema versions are decoded before use,
@@ -246,7 +255,7 @@ and an unknown or corrupt schema is quarantined rather than partially folded.
 
 | Failure                                  | Recovery                                                                                        |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Cursor predates the 90-day feed          | Discard confirmed state, bootstrap in pages, then rebase the durable outbox.                    |
+| Cursor predates the surviving feed       | Discard confirmed state, bootstrap in pages, then rebase the durable outbox.                    |
 | Duplicate operation submission           | Return the stored receipt for `operationId`; never apply it twice.                              |
 | Permission rejection                     | Remove only that operation's overlay, retain it in rejected changes, continue independent work. |
 | Domain or invariant rejection            | Keep the operation and reason visible for edit, retry, or discard.                              |
@@ -261,10 +270,11 @@ Explicit sign-out wipes the Clerk user's replicas, cached grants, pending blobs,
 encryption keys only when the outbox is empty. With pending work, the user must sync first or
 explicitly discard it. Leaving a company follows the same purge rule for data no longer authorized.
 
-Offline attachments keep local blob IDs in optimistic comments. On reconnect the client obtains an
-authorized upload URL, uploads directly, finalizes permission-checked metadata, rewrites the pending
-comment to the stable attachment ID, and only then submits it. Upload and finalize retries are
-idempotent; unattached uploads are garbage-collected.
+Replica-backed attachment intake is online-only today. The web composer prepares an UploadThing
+upload, uploads bytes, finalizes permission-checked metadata, and only then enqueues the comment with
+stable attachment IDs. Text comments can remain in the offline outbox, but the composer disables
+attachments while offline; it does not retain local blob IDs for a later upload. Pending prepares
+older than one hour are garbage-collected by the hourly attachment cron.
 
 The existing tracker layout and server seams are mapped in [issue-tracker.md](./issue-tracker.md).
 Cross-environment command records reuse this bounded protocol but do not carry thread content; see
