@@ -714,6 +714,11 @@ function makeForkMarkerTurnItem(input: {
     completedAt: createdAt,
     updatedAt: createdAt,
     type: "fork",
+    forkKind:
+      input.targetProjection.thread.forkKind ??
+      (input.targetProjection.thread.title.toLowerCase().endsWith(" side chat")
+        ? "side_chat"
+        : "manual"),
     source: { type: "run", threadId: input.sourceThreadId, runId: input.sourceRunId },
     targetThreadId: input.targetProjection.thread.id,
   };
@@ -868,6 +873,8 @@ export function threadShellFromProjection(
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
     lineage: projection.thread.lineage,
+    forkKind: projection.thread.forkKind,
+    locations: projection.thread.locations,
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     latestRunId: latestRun?.id ?? null,
@@ -1052,6 +1059,7 @@ function shellFromState(input: {
     branch: input.state.thread.branch,
     worktreePath: input.state.thread.worktreePath,
     lineage: input.state.thread.lineage,
+    forkKind: input.state.thread.forkKind,
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
     latestRunId: input.state.latestRunId,

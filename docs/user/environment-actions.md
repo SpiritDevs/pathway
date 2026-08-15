@@ -3,6 +3,25 @@
 Open the thread details menu in a thread header to see workspace actions and live resources for
 that thread's environment.
 
+## Choose and arrange action areas
+
+Open **Settings → Appearance**, then select **Action palette** to choose which areas appear and the
+order they use. Active areas are listed first; inactive areas are listed below them. Turn an active
+area off to move it to the end of **Inactive**, or turn an inactive area on to move it to the end of
+**Active**.
+
+Drag a card by its handle to reorder it within its list. For keyboard reordering, focus the handle
+and use the up and down arrow keys. The **Reset** action restores the default visibility and
+ordering. Changes apply to both the inline thread-details panel and its popover presentation.
+
+Select **Reset** to restore Pathway's default visibility and ordering. An enabled area can still be
+absent when it has nothing relevant to show: for example, **Development environments** appears only
+while Pathway has discovered a local server in the configured port range.
+
+These preferences apply to every project and connected environment opened in the web or desktop
+client. Pathway Mobile does not currently expose the multi-area thread action palette, so this
+setting has no mobile surface to change.
+
 When a thread is related to any issues, an **Issues** section sits directly above **Version
 Control** and lists each of them with its key, title, status, priority, and due date. Select an
 issue row to open its full detail sheet.
@@ -22,9 +41,20 @@ The **Thread** section includes **Hand off…** after the chat has a completed a
 another provider or model to continue the same chat. The next message carries the conversation
 context into that provider while keeping the handoff visible in the thread history.
 
+If a provider stops a turn because its usage allowance is exhausted, the provider error offers two
+recovery choices. **Try another model** switches to a different ready model and asks it to continue the
+interrupted work in the same thread. **Wait until…** snoozes the thread until the provider's reported
+reset time; it returns to the active list after that time. Pathway uses live provider quota data when
+available and falls back to the reset time included in the provider error.
+
 Completed agent responses also have a **Continue in a new chat** action. Choose the model for the
 new chat, then continue in the current checkout or a new worktree. A new worktree starts from the
 source checkout's committed `HEAD`; uncommitted files remain only in the source checkout.
+
+Branch pickers show local branches and remote-qualified refs separately, such as `main`,
+`origin/main`, or `upstream/main`. When a new worktree starts from the remote version of a branch,
+Pathway fetches that selected remote first. If the branch name is local, Pathway uses `origin` when
+available and otherwise uses the repository's first configured remote.
 
 On a new thread, **Usage** shows every enabled provider account that supports live quota reporting,
 so you can compare remaining allowance and reset times before choosing a provider. Changing the

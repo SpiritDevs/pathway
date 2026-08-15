@@ -81,6 +81,7 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed, type ThreadFeedProps } from "./ThreadFeed";
 import { ThreadRelationshipsBanner } from "./ThreadRelationshipsBanner";
+import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { ThreadQueueControl } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
@@ -125,6 +126,13 @@ export interface ThreadDetailScreenProps {
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly onContinueFromRun: ThreadFeedProps["onContinueFromRun"];
+  readonly usageLimitRecovery: {
+    readonly resetAt: string | null;
+    readonly pending: boolean;
+    readonly canWaitUntilReset: boolean;
+  } | null;
+  readonly onRecoverUsageLimit: () => void;
+  readonly onWaitUntilUsageReset: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateThreadInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -659,10 +667,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             contentBottomInset={estimatedOverlayHeight}
             contentMaxWidth={contentMaxWidth}
             topAccessory={
-              <ThreadRelationshipsBanner
-                environmentId={props.environmentId}
-                threadId={props.selectedThread.id}
-              />
+              <View>
+                <ThreadRelationshipsBanner
+                  environmentId={props.environmentId}
+                  threadId={props.selectedThread.id}
+                />
+                {props.usageLimitRecovery ? (
+                  <UsageLimitRecoveryCard
+                    {...props.usageLimitRecovery}
+                    onRecover={props.onRecoverUsageLimit}
+                    onWaitUntilReset={props.onWaitUntilUsageReset}
+                  />
+                ) : null}
+              </View>
             }
             layoutVariant={layoutVariant}
             usesAutomaticContentInsets={props.usesAutomaticContentInsets}

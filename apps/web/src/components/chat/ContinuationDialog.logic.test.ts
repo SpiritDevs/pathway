@@ -59,4 +59,23 @@ describe("resolveInitialContinuationSelection", () => {
       }),
     ).toBeNull();
   });
+
+  it("falls back to another model on the same instance for recovery", () => {
+    expect(
+      resolveInitialContinuationSelection({
+        kind: "recovery",
+        source,
+        instanceEntries: [entry("codex", "codex")],
+        modelOptionsByInstance: new Map([
+          [
+            ProviderInstanceId.make("codex"),
+            [
+              { slug: "gpt-5.6", name: "GPT 5.6" },
+              { slug: "gpt-5.4", name: "GPT 5.4" },
+            ],
+          ],
+        ]),
+      }),
+    ).toEqual({ instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" });
+  });
 });

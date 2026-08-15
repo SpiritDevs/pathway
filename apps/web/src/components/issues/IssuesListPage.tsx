@@ -7,8 +7,21 @@
  *
  * @module components/issues/IssuesListPage
  */
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueCycleId,
@@ -19,15 +32,18 @@ import type {
   IssuePriority,
   IssueStatusId,
   ProjectId,
+  ThreadId,
 } from "@spiritdevs/contracts";
 import { MembershipId } from "@spiritdevs/contracts/company";
 import { Link } from "@tanstack/react-router";
-import { ColumnsIcon, ListTodoIcon, PlusIcon, Rows3Icon } from "lucide-react";
+import { ColumnsIcon, ListTodoIcon, PanelRightIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { cn } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
+import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { cn, newThreadId } from "~/lib/utils";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { useProjects, useThreadShells } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import {
   issueChildRollups,
@@ -60,13 +76,16 @@ import {
 } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { Toggle } from "../ui/toggle";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
-import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
+import { DraggableIssueListRow, IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
+import { IssuesAssistantPanel, type IssuesAssistantTab } from "./IssuesAssistantPanel";
+import { upsertIssuesAssistantIssueTab } from "./issuesAssistantPanel.logic";
 import { IssuesFilterBar } from "./IssuesFilterBar";
 import { IssuesTriageView } from "./IssuesTriageView";
 import { IssuesViewOptions } from "./IssuesViewOptions";
@@ -81,6 +100,7 @@ import {
 import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
+import { buildIssuesTalkContexts, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
@@ -90,6 +110,7 @@ import {
 import {
   DEFAULT_ISSUES_TAB,
   EMPTY_ISSUES_SELECTION,
+  activateIssueRow,
   buildIssuesListRows,
   buildIssuesView,
   effectiveIssuesGrouping,
@@ -98,7 +119,6 @@ import {
   NO_ISSUES_LIST_FILTER,
   isIssuesListFilterActive,
   issueIdsInRows,
-  issueSelectModeForModifiers,
   issuesFilterSearchPatch,
   issuesSearchFilter,
   issuesSearchGrouping,
@@ -116,6 +136,15 @@ import {
   type IssuesSearchPatch,
   type IssuesSelection,
 } from "./issuesList.logic";
+import {
+  findIssuesListIssue,
+  isIssuesListSortable,
+  issuesListDropEdge,
+  issuesListRowDragId,
+  parseIssuesListDragId,
+  resolveIssuesListDrop,
+  type IssuesListDrop,
+} from "./issuesListDnd.logic";
 
 const TABS: ReadonlyArray<{ readonly value: IssuesTab; readonly label: string }> = [
   { value: "active", label: "Active" },
@@ -191,6 +220,7 @@ function IssuesListView({
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const threads = useThreadShells();
   const milestones = useIssueMilestones();
   const cycles = useIssueCycles();
   const grouping = useIssuesGrouped(tab);
@@ -201,18 +231,80 @@ function IssuesListView({
   const startEnrichment = useStartIssueEnrichment();
   const setIssueSortOrder = useSetIssueSortOrder();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const openNewThread = useNewThreadHandler();
 
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
+  const [bulkSelectionActive, setBulkSelectionActive] = useState(false);
   /** The right-click menu's target, or null while it is shut. One menu for every row and card. */
   const [contextMenu, setContextMenu] = useState<IssueContextMenuTarget | null>(null);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
+  const [assistantTabs, setAssistantTabs] = useState<ReadonlyArray<IssuesAssistantTab>>([]);
+  const [closedAssistantThreadIds, setClosedAssistantThreadIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  const [activeAssistantTabId, setActiveAssistantTabId] = useState<string | null>(null);
+  const [assistantPanelOpen, setAssistantPanelOpen] = useState(false);
+  const [issuesPreviewThreadId] = useState<ThreadId>(newThreadId);
+  const [assistantDraftPending, setAssistantDraftPending] = useState(false);
   /** Set by a column's `+`, which is the only path that names a status the filter did not. */
   const [newIssueStatusId, setNewIssueStatusId] = useState<IssueStatusId | null>(null);
+  const [activeListIssueId, setActiveListIssueId] = useState<IssueId | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const scrollToActiveRef = useRef(false);
+  const listDragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const issuesPreviewThreadRef = useMemo(
+    () =>
+      primaryEnvironmentId === null
+        ? null
+        : scopeThreadRef(primaryEnvironmentId, issuesPreviewThreadId),
+    [issuesPreviewThreadId, primaryEnvironmentId],
+  );
+  useEffect(() => {
+    const issueThreads = threads.filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        threadIsVisibleAt(thread, "issues") &&
+        !closedAssistantThreadIds.has(thread.id),
+    );
+    setAssistantTabs((current) => {
+      const eligibleThreadIds = new Set(issueThreads.map((thread) => thread.id));
+      let changed = current.some(
+        (tab) => tab.kind === "thread" && !eligibleThreadIds.has(tab.threadId),
+      );
+      const next = current.filter(
+        (tab) => tab.kind !== "thread" || eligibleThreadIds.has(tab.threadId),
+      );
+      for (const thread of issueThreads) {
+        const id = `thread:${thread.id}` as const;
+        const index = next.findIndex((tab) => tab.id === id);
+        const tab = {
+          id,
+          kind: "thread",
+          environmentId: thread.environmentId,
+          threadId: thread.id,
+          title: thread.title,
+        } as const satisfies IssuesAssistantTab;
+        if (index < 0) {
+          next.push(tab);
+          changed = true;
+        } else if (
+          next[index]?.kind === "draft" ||
+          (next[index]?.kind === "thread" &&
+            (next[index].title !== tab.title || next[index].environmentId !== tab.environmentId))
+        ) {
+          next[index] = tab;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [closedAssistantThreadIds, threads]);
   const filter = useMemo(() => issuesSearchFilter(search), [search]);
   const effectiveFilter = useMemo(
     () => resolveIssuesFilterUserAssignee(filter, memberDirectory.currentMembershipId),
@@ -254,6 +346,17 @@ function IssuesListView({
     () => (viewMode === "board" ? issuesBoardColumns(view) : EMPTY_ISSUES_BOARD_COLUMNS),
     [view, viewMode],
   );
+  const listSortable = viewMode === "list" && isIssuesListSortable(view);
+  const listExtraData = useMemo(
+    () => ({ selectionIds: selection.ids, sortable: listSortable }),
+    [listSortable, selection.ids],
+  );
+  const listDragItems = useMemo(
+    () => rows.flatMap((row) => (row.kind === "issue" ? [issuesListRowDragId(row.issue.id)] : [])),
+    [rows],
+  );
+  const activeListIssue =
+    activeListIssueId === null ? null : findIssuesListIssue(view, activeListIssueId);
   const ids = useMemo(() => issueIdsInRows(rows), [rows]);
   const filterActive = isIssuesListFilterActive(filter);
   const setFilter = (next: IssuesListFilter) => onSearch(issuesFilterSearchPatch(next));
@@ -263,6 +366,14 @@ function IssuesListView({
   // One subscription for the whole list. The set only changes identity when its membership does,
   // so a transcript arriving four times a second re-renders nothing.
   const investigatingIssueIds = useInvestigatingIssueIds();
+  const investigationProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) =>
+          project.environmentId === primaryEnvironmentId && project.workspaceRoot != null,
+      ),
+    [primaryEnvironmentId, projects],
+  );
 
   // A row can leave the list under a live stream or a filter change; a bulk write against rows
   // nobody can see is the one outcome the selection must never allow.
@@ -292,9 +403,7 @@ function IssuesListView({
     // which renders no rows at all.
     if (ids.length === 0 || detailIssue === null || detailIssue.deletedAt !== null) return;
     setSelection((current) =>
-      current.activeId === null
-        ? selectIssueRow(current, { ids, issueId: detailIssue.id, mode: "replace" })
-        : current,
+      current.activeId === null ? activateIssueRow(current, detailIssue.id) : current,
     );
   }, [detailIssue, ids]);
 
@@ -328,8 +437,14 @@ function IssuesListView({
     });
     if (action === null) return;
     event.preventDefault();
+    if (action._tag === "new") {
+      setNewIssueStatusId(null);
+      setNewIssueOpen(true);
+      return;
+    }
     if (action._tag === "clear") {
       setSelection(EMPTY_ISSUES_SELECTION);
+      setBulkSelectionActive(false);
       return;
     }
     if (action._tag === "open") {
@@ -338,9 +453,7 @@ function IssuesListView({
       return;
     }
     scrollToActiveRef.current = true;
-    setSelection((current) =>
-      selectIssueRow(current, { ids, issueId: action.issueId, mode: "replace" }),
-    );
+    setSelection((current) => activateIssueRow(current, action.issueId));
     // An open sheet follows the cursor rather than staying on the row it was opened from, which is
     // what makes `j`/`k` a triage pass rather than a way to lose your place.
     if (detailIssueKey !== null) {
@@ -365,10 +478,17 @@ function IssuesListView({
     listRef.current?.scrollToIndex({ index, viewOffset: 48 });
   }, [rows, selection.activeId]);
 
-  const handleRowClick = (issue: Issue, event: MouseEvent) => {
-    const mode = issueSelectModeForModifiers(event);
-    setSelection((current) => selectIssueRow(current, { ids, issueId: issue.id, mode }));
-    if (mode === "replace") openIssue(issue);
+  const handleRowClick = (issue: Issue, _event: MouseEvent) => {
+    setSelection((current) => activateIssueRow(current, issue.id));
+    openIssue(issue);
+  };
+
+  const handleRowSelected = (issue: Issue, selected: boolean) => {
+    setBulkSelectionActive(true);
+    setSelection((current) => {
+      if (current.ids.has(issue.id) === selected) return current;
+      return selectIssueRow(current, { ids, issueId: issue.id, mode: "toggle" });
+    });
   };
 
   // Nothing here is optimistic: a refused write leaves the row exactly as it was, which reads as a
@@ -478,11 +598,190 @@ function IssuesListView({
   const bulkDelete = () => {
     deleteIssues(selectedIssues);
     setSelection(EMPTY_ISSUES_SELECTION);
+    setBulkSelectionActive(false);
   };
 
-  // One write for both halves of a kanban drag: the contract carries `statusId` alongside the key
-  // so a card never renders in the new column with the old neighbours, or the other way round.
-  const moveBoardCard = (drop: IssuesBoardDrop) => {
+  const bulkInvestigateDisabledReason =
+    storeStatus === "disconnected"
+      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+      : investigationProjects.length === 0
+        ? "Connect a workspace to a project before investigating."
+        : selectedIssues.every(
+              (issue) => issue.deletedAt !== null || investigatingIssueIds.has(issue.id),
+            )
+          ? "Every selected issue is deleted or already being investigated."
+          : null;
+
+  const bulkInvestigate = (projectId: ProjectId) => {
+    void (async () => {
+      for (const issue of selectedIssues) {
+        if (issue.deletedAt !== null || investigatingIssueIds.has(issue.id)) continue;
+        if (issue.projectId !== projectId) {
+          const assignmentFailed = reportIssueWriteFailure(
+            `Failed to assign ${issue.key} to the project`,
+            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          );
+          if (assignmentFailed) continue;
+        }
+        reportIssueWriteFailure(
+          `Failed to investigate ${issue.key}`,
+          await startEnrichment({ issueId: issue.id }),
+        );
+      }
+    })();
+  };
+
+  const bulkAskDisabledReason =
+    storeStatus === "disconnected"
+      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+      : investigationProjects.length === 0
+        ? "Connect a workspace to a project before asking AI about these issues."
+        : assistantDraftPending
+          ? "The discussion is being prepared."
+          : null;
+
+  const bulkAsk = () => {
+    if (assistantDraftPending || primaryEnvironmentId === null) return;
+    const issues = [...selectedIssues];
+    if (issues.length === 0) return;
+    const hostProjectId = issueTalkHostProjectId(
+      issues,
+      investigationProjects.map((project) => project.id),
+    );
+    const project = investigationProjects.find((candidate) => candidate.id === hostProjectId);
+    if (project === undefined) return;
+    setAssistantDraftPending(true);
+    void (async () => {
+      try {
+        const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+          branch: null,
+          envMode: "local",
+          forceNew: true,
+          locations: ["issues"],
+          navigate: false,
+          startFromOrigin: false,
+          worktreePath: null,
+        });
+        if (opened === null) throw new Error("The issue discussion draft could not be created.");
+        useComposerDraftStore
+          .getState()
+          .setIssueContexts(
+            opened.draftId,
+            buildIssuesTalkContexts(issues, window.location.origin),
+          );
+        const title =
+          issues.length === 1
+            ? (issues[0]?.key ?? "Issue discussion")
+            : issues.length === 2
+              ? issues.map((issue) => issue.key).join(" + ")
+              : `${issues.length} issues`;
+        const assistantTab = {
+          id: `thread:${opened.threadId}`,
+          kind: "draft",
+          draftId: opened.draftId,
+          environmentId: project.environmentId,
+          threadId: opened.threadId,
+          title,
+        } as const satisfies IssuesAssistantTab;
+        setClosedAssistantThreadIds((current) => {
+          if (!current.has(opened.threadId)) return current;
+          const next = new Set(current);
+          next.delete(opened.threadId);
+          return next;
+        });
+        setAssistantTabs((current) => [...current, assistantTab]);
+        setActiveAssistantTabId(assistantTab.id);
+        setAssistantPanelOpen(true);
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to start the issue discussion",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setAssistantDraftPending(false);
+      }
+    })();
+  };
+
+  const addAssistantSideChat = async (): Promise<string | null> => {
+    if (assistantDraftPending) return null;
+    const project = investigationProjects[0];
+    if (project === undefined) return null;
+    setAssistantDraftPending(true);
+    try {
+      const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
+        branch: null,
+        envMode: "local",
+        forceNew: true,
+        locations: ["issues"],
+        navigate: false,
+        startFromOrigin: false,
+        worktreePath: null,
+      });
+      if (opened === null) throw new Error("The issue side chat draft could not be created.");
+      const tab = {
+        id: `thread:${opened.threadId}`,
+        kind: "draft",
+        draftId: opened.draftId,
+        environmentId: project.environmentId,
+        threadId: opened.threadId,
+        title: "Side chat",
+      } as const satisfies IssuesAssistantTab;
+      setClosedAssistantThreadIds((current) => {
+        if (!current.has(opened.threadId)) return current;
+        const next = new Set(current);
+        next.delete(opened.threadId);
+        return next;
+      });
+      setAssistantTabs((current) => [...current, tab]);
+      setActiveAssistantTabId(tab.id);
+      setAssistantPanelOpen(true);
+      return tab.id;
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to start the issue side chat",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+      return null;
+    } finally {
+      setAssistantDraftPending(false);
+    }
+  };
+
+  const closeAssistantTab = (tabId: string) => {
+    setAssistantTabs((current) => {
+      const index = current.findIndex((tab) => tab.id === tabId);
+      if (index < 0) return current;
+      const closing = current[index];
+      if (closing?.kind === "draft" || closing?.kind === "thread") {
+        setClosedAssistantThreadIds((closed) => new Set([...closed, closing.threadId]));
+      }
+      const next = current.filter((tab) => tab.id !== tabId);
+      setActiveAssistantTabId((active) =>
+        active !== tabId ? active : (next[Math.min(index, next.length - 1)]?.id ?? null),
+      );
+      return next;
+    });
+  };
+
+  const openAssistantIssue = (issueKey: string, contextTitle?: string) => {
+    const liveIssue = Array.from(store.issuesById.values()).find((issue) => issue.key === issueKey);
+    const title = contextTitle?.trim() || liveIssue?.title || issueKey;
+    const id = `issue:${issueKey}` as const;
+    setAssistantTabs((current) => upsertIssuesAssistantIssueTab(current, issueKey, title));
+    setActiveAssistantTabId(id);
+    setAssistantPanelOpen(true);
+  };
+
+  // One write for both halves of a manual-order drag: the contract carries `statusId` alongside
+  // the key so a row never renders in the new group with the old neighbours, or the other way round.
+  const moveIssueByDrop = (drop: IssuesBoardDrop | IssuesListDrop) => {
     write("Failed to move the issue", () =>
       setIssueSortOrder({
         issueId: drop.issueId,
@@ -490,6 +789,29 @@ function IssuesListView({
         ...(drop.statusId === null ? {} : { statusId: drop.statusId }),
       }),
     );
+  };
+
+  const handleListDragStart = (event: DragStartEvent) => {
+    const active = parseIssuesListDragId(String(event.active.id));
+    setActiveListIssueId(active !== null && active.kind === "row" ? active.issueId : null);
+  };
+
+  const handleListDragEnd = (event: DragEndEvent) => {
+    setActiveListIssueId(null);
+    const over = event.over;
+    if (over === null) return;
+    const translated = event.active.rect.current.translated ?? null;
+    const drop = resolveIssuesListDrop({
+      view,
+      activeId: String(event.active.id),
+      overId: String(over.id),
+      edge: issuesListDropEdge({
+        activeCenterY: translated === null ? null : translated.top + translated.height / 2,
+        overTop: over.rect.top,
+        overHeight: over.rect.height,
+      }),
+    });
+    if (drop !== null) moveIssueByDrop(drop);
   };
 
   // ── Right-click menu ─────────────────────────────────────────────────
@@ -539,6 +861,7 @@ function IssuesListView({
     // A right-click outside the selection moves the cursor onto the row under the pointer, so what
     // is highlighted and what the menu is about are the same rows. Inside it, the selection stands.
     if (targets.length === 1) {
+      setBulkSelectionActive(false);
       setSelection((current) =>
         selectIssueRow(current, { ids, issueId: issue.id, mode: "replace" }),
       );
@@ -603,9 +926,9 @@ function IssuesListView({
 
   const renderItem = ({ item }: { item: IssuesListRowModel }) =>
     item.kind === "header" ? (
-      <IssueGroupHeader onToggle={toggleGroup} row={item} />
+      <IssueGroupHeader onToggle={toggleGroup} row={item} sortable={listSortable} />
     ) : (
-      <IssueListRow
+      <DraggableIssueListRow
         active={selection.activeId === item.issue.id}
         childRollup={childRollups.get(item.issue.id) ?? null}
         investigating={investigatingIssueIds.has(item.issue.id)}
@@ -617,6 +940,7 @@ function IssuesListView({
         onOpen={openIssue}
         onPriority={setIssuePriority}
         onRowClick={handleRowClick}
+        onSelectedChange={handleRowSelected}
         onStatus={setIssueStatus}
         onToggleLabel={toggleIssueLabel}
         parentTitle={
@@ -630,6 +954,7 @@ function IssuesListView({
         selected={selection.ids.has(item.issue.id)}
         status={statusById.get(item.issue.statusId) ?? null}
         statuses={statuses}
+        sortable={listSortable}
         today={today}
       />
     );
@@ -716,6 +1041,15 @@ function IssuesListView({
                 <ColumnsIcon />
               </Button>
             </div>
+            <Toggle
+              aria-label="Toggle issues sidebar"
+              onPressedChange={setAssistantPanelOpen}
+              pressed={assistantPanelOpen}
+              size="sm"
+              variant="ghost"
+            >
+              <PanelRightIcon className="size-3.5" />
+            </Toggle>
             <Button onClick={() => openNewIssue(null)} size="xs" variant="outline">
               <PlusIcon />
               New issue
@@ -814,7 +1148,7 @@ function IssuesListView({
               investigatingIssueIds={investigatingIssueIds}
               labelsById={labelsById}
               onContextMenuIssue={handleCardContextMenu}
-              onMove={moveBoardCard}
+              onMove={moveIssueByDrop}
               onNewIssue={openNewIssue}
               onOpenIssue={openIssue}
               // The order the columns were actually built in, which is the only order a drag can
@@ -823,28 +1157,79 @@ function IssuesListView({
               today={today}
             />
           ) : (
-            <LegendList<IssuesListRowModel>
-              aria-label="Issues"
-              className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
-              data={rows}
-              estimatedItemSize={ESTIMATED_ROW_HEIGHT}
-              getItemType={getItemType}
-              keyExtractor={keyExtractor}
-              ref={listRef}
-              renderItem={renderItem}
-              role="listbox"
-            />
+            <DndContext
+              collisionDetection={closestCenter}
+              onDragCancel={() => setActiveListIssueId(null)}
+              onDragEnd={handleListDragEnd}
+              onDragStart={handleListDragStart}
+              sensors={listDragSensors}
+            >
+              <SortableContext items={listDragItems} strategy={verticalListSortingStrategy}>
+                <LegendList<IssuesListRowModel>
+                  aria-label="Issues"
+                  className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
+                  data={rows}
+                  estimatedItemSize={ESTIMATED_ROW_HEIGHT}
+                  extraData={listExtraData}
+                  getItemType={getItemType}
+                  keyExtractor={keyExtractor}
+                  ref={listRef}
+                  renderItem={renderItem}
+                  role="listbox"
+                />
+              </SortableContext>
+              <DragOverlay dropAnimation={null}>
+                {activeListIssue === null ? null : (
+                  <IssueListRow
+                    active={false}
+                    childRollup={childRollups.get(activeListIssue.id) ?? null}
+                    dragging
+                    investigating={investigatingIssueIds.has(activeListIssue.id)}
+                    issue={activeListIssue}
+                    labels={labels}
+                    labelsById={labelsById}
+                    onOpen={() => {}}
+                    onPriority={() => {}}
+                    onRowClick={() => {}}
+                    onStatus={() => {}}
+                    onToggleLabel={() => {}}
+                    parentTitle={
+                      activeListIssue.parentId === null
+                        ? null
+                        : (store.issuesById.get(activeListIssue.parentId)?.title ?? null)
+                    }
+                    projectTitle={
+                      activeListIssue.projectId === null
+                        ? null
+                        : (projectTitles.get(activeListIssue.projectId) ?? null)
+                    }
+                    selected={false}
+                    status={statusById.get(activeListIssue.statusId) ?? null}
+                    statuses={statuses}
+                    today={today}
+                  />
+                )}
+              </DragOverlay>
+            </DndContext>
           )}
 
-          {selectedIssues.length > 1 ? (
+          {bulkSelectionActive && selectedIssues.length > 0 ? (
             <IssuesBulkBar
+              askDisabledReason={bulkAskDisabledReason}
               issues={selectedIssues}
               labels={labels}
-              onClear={() => setSelection(EMPTY_ISSUES_SELECTION)}
+              onAsk={bulkAsk}
+              onClear={() => {
+                setSelection(EMPTY_ISSUES_SELECTION);
+                setBulkSelectionActive(false);
+              }}
               onDelete={bulkDelete}
+              onInvestigate={bulkInvestigate}
               onPriority={bulkPriority}
               onStatus={bulkStatus}
               onToggleLabel={bulkToggleLabel}
+              investigateDisabledReason={bulkInvestigateDisabledReason}
+              projects={investigationProjects}
               statuses={statuses}
             />
           ) : null}
@@ -891,6 +1276,67 @@ function IssuesListView({
         issueKey={detailIssueKey}
         onClose={closeDetail}
         onOpenIssueKey={(key) => onSearch({ issue: key })}
+      />
+
+      <IssuesAssistantPanel
+        activeTabId={activeAssistantTabId}
+        onAddSideChat={addAssistantSideChat}
+        tabs={assistantTabs}
+        open={assistantPanelOpen}
+        panelThreadRef={issuesPreviewThreadRef}
+        sideChatAvailable={investigationProjects.length > 0 && !assistantDraftPending}
+        onActivate={setActiveAssistantTabId}
+        onClose={closeAssistantTab}
+        onCloseAll={() => {
+          setClosedAssistantThreadIds(
+            (closed) =>
+              new Set([
+                ...closed,
+                ...assistantTabs.flatMap((tab) =>
+                  tab.kind === "draft" || tab.kind === "thread" ? [tab.threadId] : [],
+                ),
+              ]),
+          );
+          setAssistantTabs([]);
+          setActiveAssistantTabId(null);
+        }}
+        onCloseOthers={(tabId) => {
+          setClosedAssistantThreadIds(
+            (closed) =>
+              new Set([
+                ...closed,
+                ...assistantTabs.flatMap((tab) =>
+                  tab.id !== tabId && (tab.kind === "draft" || tab.kind === "thread")
+                    ? [tab.threadId]
+                    : [],
+                ),
+              ]),
+          );
+          setAssistantTabs((current) => current.filter((tab) => tab.id === tabId));
+          setActiveAssistantTabId(tabId);
+        }}
+        onCloseToRight={(tabId) => {
+          setAssistantTabs((current) => {
+            const index = current.findIndex((tab) => tab.id === tabId);
+            if (index >= 0) {
+              setClosedAssistantThreadIds(
+                (closed) =>
+                  new Set([
+                    ...closed,
+                    ...current
+                      .slice(index + 1)
+                      .flatMap((tab) =>
+                        tab.kind === "draft" || tab.kind === "thread" ? [tab.threadId] : [],
+                      ),
+                  ]),
+              );
+            }
+            return index < 0 ? current : current.slice(0, index + 1);
+          });
+          setActiveAssistantTabId(tabId);
+        }}
+        onOpenChange={setAssistantPanelOpen}
+        onOpenIssue={openAssistantIssue}
       />
     </SidebarInset>
   );

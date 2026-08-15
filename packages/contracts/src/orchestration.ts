@@ -29,6 +29,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProjectFaviconPath, ProjectScript } from "./project.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { ThreadLocation } from "./threadLocation.ts";
 import {
   ApplicationEventMetadata,
   ApplicationProjectCreatedEvent,
@@ -597,6 +598,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  locations: Schema.optional(Schema.Array(ThreadLocation)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,

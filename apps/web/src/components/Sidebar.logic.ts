@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { ContextMenuItem } from "@spiritdevs/contracts";
+import { threadIsVisibleAt, type ContextMenuItem } from "@spiritdevs/contracts";
 import type {
   SidebarProjectSortOrder,
   SidebarThreadSortOrder,
@@ -106,7 +106,7 @@ export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "line
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "title"> & {
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "locations" | "title"> & {
     environmentId: string;
     projectId: string;
   },
@@ -114,6 +114,7 @@ export function filterSidebarV2VisibleThreads<
   return threads.filter(
     (thread) =>
       thread.archivedAt === null &&
+      threadIsVisibleAt(thread, "agents") &&
       thread.lineage.relationshipToParent === null &&
       !isPullRequestReviewThreadTitle(thread.title) &&
       (scopedProjectKeys === null ||
@@ -320,17 +321,6 @@ export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null
 // still count as a normal single activation.
 export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
-}
-
-// Shift+click on the new thread button creates directly in the current
-// project, skipping the command palette's project picker. With a single
-// project there is nothing to pick, so a plain click already creates
-// immediately and the modifier changes nothing.
-export function shouldCreateNewThreadInCurrentProject(
-  shiftKey: boolean,
-  projectGroupCount: number,
-): boolean {
-  return shiftKey || projectGroupCount <= 1;
 }
 
 export function orderItemsByPreferredIds<TItem, TId>(input: {

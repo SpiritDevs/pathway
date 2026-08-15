@@ -23,6 +23,7 @@ import {
   isBrowserTakeoverBannerDismissedForSession,
   isBrowserTakeoverSettled,
   resolveBrowserTakeoverBanner,
+  resolveBrowserTakeoverTabToReveal,
   shouldShowBrowserTakeoverCallout,
 } from "./browserTakeoverBanner";
 
@@ -195,6 +196,47 @@ describe("isBrowserTakeoverSettled", () => {
   });
 });
 
+describe("resolveBrowserTakeoverTabToReveal", () => {
+  it("waits for an active takeover and its exact local tab", () => {
+    const availableTabIds = new Set(["tab-1"]);
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover({ status: "pausing" }),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds,
+      }),
+    ).toBeNull();
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds: new Set(),
+      }),
+    ).toBeNull();
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: HOST_CLIENT_ID,
+        availableTabIds,
+      }),
+    ).toBe("tab-1");
+  });
+
+  it("only reveals the tab on the desktop that hosts it", () => {
+    expect(
+      resolveBrowserTakeoverTabToReveal({
+        takeover: takeover(),
+        previewSupported: true,
+        automationHostClientId: "another-host",
+        availableTabIds: new Set(["tab-1"]),
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("resolveBrowserTakeoverBanner", () => {
   it("offers the callout with a busy label while a request is in flight", () => {
     const idle = resolveBrowserTakeoverBanner({
@@ -203,6 +245,9 @@ describe("resolveBrowserTakeoverBanner", () => {
     });
     expect(idle?.tone).toBe("callout");
     expect(idle?.title).toBe("Take over to assist agent");
+    expect(idle?.description).toBe(
+      "Pause the agent and drive its Preview browser yourself, then hand it back.",
+    );
     expect(idle?.actions.map((action) => action.kind)).toEqual(["take-over"]);
     expect(idle?.actions[0]?.busy).toBe(false);
     expect(idle?.dismissKey).not.toBeNull();

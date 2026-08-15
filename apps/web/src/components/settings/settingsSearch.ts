@@ -23,11 +23,17 @@ export type SettingsPath =
   | "/settings/archived"
   | "/settings/diagnostics";
 
+export type SettingsSearchPath = SettingsPath | "/settings/appearance/action-palette";
+
 export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
-  readonly to: SettingsPath;
+  readonly to: SettingsSearchPath;
   readonly targetId?: string;
+}
+
+export function settingsSectionPathForSearchPath(path: SettingsSearchPath): SettingsPath {
+  return path === "/settings/appearance/action-palette" ? "/settings/appearance" : path;
 }
 
 /**
@@ -181,6 +187,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     // The setting is stage-dependent, so its parent section is the stable destination.
     targetId: "appearance",
+  },
+  {
+    id: "action-palette",
+    title: "Action palette",
+    to: "/settings/appearance/action-palette",
   },
   {
     id: "interface-font",

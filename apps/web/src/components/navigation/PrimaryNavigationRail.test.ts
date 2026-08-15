@@ -2,10 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   formatNavigationBadgeCount,
+  movePrimaryNavigationDestination,
   PRIMARY_NAVIGATION_COMPACT_WIDTH,
   PRIMARY_NAVIGATION_EXPANDED_WIDTH,
+  PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS,
   resolvePrimaryNavigationDestination,
   resolvePrimaryNavigationRailWidth,
+  resolvePrimaryNavigationViewOrder,
   resolveRememberedThreadRoute,
 } from "./PrimaryNavigationRail";
 
@@ -27,11 +30,17 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/threads", "threads"],
     ["/threads/draft/new", "threads"],
     ["/threads/environment/thread", "threads"],
+    ["/projects", "projects"],
+    ["/projects/pathway", "projects"],
     ["/issues", "issues"],
     ["/issues/assigned", "issues"],
     ["/pull-requests", "pull-requests"],
     ["/calendar", "calendar"],
     ["/email", "email"],
+    ["/contacts", "contacts"],
+    ["/time-tracker", "time-tracker"],
+    ["/files", "files"],
+    ["/browser", "browser"],
     ["/orchestrator", "orchestrator"],
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", "settings"],
@@ -50,6 +59,68 @@ describe("resolvePrimaryNavigationRailWidth", () => {
 
   it("uses the expanded width when labels are visible", () => {
     expect(resolvePrimaryNavigationRailWidth(true)).toBe(PRIMARY_NAVIGATION_EXPANDED_WIDTH);
+  });
+});
+
+describe("primary navigation view order", () => {
+  it("keeps a valid preference and appends newly introduced views", () => {
+    expect(resolvePrimaryNavigationViewOrder(["email", "threads"])).toEqual([
+      "email",
+      "threads",
+      "projects",
+      "issues",
+      "pull-requests",
+      "calendar",
+      "contacts",
+      "time-tracker",
+      "files",
+      "browser",
+    ]);
+  });
+
+  it("discards fixed, unknown, and duplicate destinations", () => {
+    expect(
+      resolvePrimaryNavigationViewOrder([
+        "settings",
+        "issues",
+        "dashboard",
+        "issues",
+        "future-view",
+      ]),
+    ).toEqual([
+      "issues",
+      "threads",
+      "projects",
+      "pull-requests",
+      "calendar",
+      "email",
+      "contacts",
+      "time-tracker",
+      "files",
+      "browser",
+    ]);
+    expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("dashboard");
+    expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("orchestrator");
+    expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("settings");
+  });
+
+  it("moves a view one position without crossing either boundary", () => {
+    const order = resolvePrimaryNavigationViewOrder([]);
+
+    expect(movePrimaryNavigationDestination(order, "projects", "up")).toEqual([
+      "projects",
+      "threads",
+      "issues",
+      "pull-requests",
+      "calendar",
+      "email",
+      "contacts",
+      "time-tracker",
+      "files",
+      "browser",
+    ]);
+    expect(movePrimaryNavigationDestination(order, "threads", "up")).toBe(order);
+    expect(movePrimaryNavigationDestination(order, "browser", "down")).toBe(order);
   });
 });
 

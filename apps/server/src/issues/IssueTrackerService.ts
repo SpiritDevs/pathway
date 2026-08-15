@@ -3169,9 +3169,18 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.commentUpdate",
   )(function* (input, actor) {
     const current = yield* requireComment(input.commentId);
-    // Only the writer rewrites their own words. There is no editing on somebody else's behalf,
-    // and an agent must not be able to rewrite what a person said it was asked to do.
-    if (!isSameActor(actor, current.author)) {
+    const attachmentRemovalByUser =
+      actor.kind === "user" &&
+      input.patch.body === undefined &&
+      input.patch.attachmentIds !== undefined &&
+      input.patch.attachmentIds.length < current.attachmentIds.length &&
+      new Set(input.patch.attachmentIds).size === input.patch.attachmentIds.length &&
+      input.patch.attachmentIds.every((attachmentId) =>
+        current.attachmentIds.includes(attachmentId),
+      );
+    // Only the writer rewrites their own words. The environment's user may detach an image from
+    // anybody's comment, just as they may delete that whole comment, but cannot add or replace one.
+    if (!isSameActor(actor, current.author) && !attachmentRemovalByUser) {
       return yield* invalid("Only the author can edit a comment.", current.id);
     }
     const { patch } = input;

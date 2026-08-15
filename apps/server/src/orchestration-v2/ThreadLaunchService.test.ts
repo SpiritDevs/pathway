@@ -74,6 +74,8 @@ interface HarnessOptions {
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly primaryRemoteName?: string;
+  readonly remoteNameForRef?: string;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -106,6 +108,18 @@ function makeHarness(options: HarnessOptions = {}) {
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
+  const fetchRemote = vi.fn<GitWorkflow.GitWorkflowService["Service"]["fetchRemote"]>(
+    () => Effect.void,
+  );
+  const resolvePrimaryRemoteName = vi.fn<
+    GitWorkflow.GitWorkflowService["Service"]["resolvePrimaryRemoteName"]
+  >(() => Effect.succeed(options.primaryRemoteName ?? "origin"));
+  const resolveRemoteNameForRef = vi.fn<
+    GitWorkflow.GitWorkflowService["Service"]["resolveRemoteNameForRef"]
+  >(() => Effect.succeed(options.remoteNameForRef ?? options.primaryRemoteName ?? "origin"));
+  const resolveRemoteTrackingCommit = vi.fn<
+    GitWorkflow.GitWorkflowService["Service"]["resolveRemoteTrackingCommit"]
+  >(() => Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }));
   const externalServices = Layer.mergeAll(
     Layer.succeed(ProjectService.ProjectService, {
       create: () => Effect.die("unused"),
@@ -119,10 +133,11 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.mock(GitWorkflow.GitWorkflowService)({
       createWorktree,
       renameBranch,
-      fetchRemote: () => Effect.void,
+      fetchRemote,
+      resolvePrimaryRemoteName,
+      resolveRemoteNameForRef,
       removeWorktree: () => Effect.void,
-      resolveRemoteTrackingCommit: () =>
-        Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
+      resolveRemoteTrackingCommit,
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: runSetup,
@@ -162,6 +177,10 @@ function makeHarness(options: HarnessOptions = {}) {
     layer: Layer.mergeAll(launch, threadManagement, titleRegeneration, outbox, database),
     createWorktree,
     renameBranch,
+    fetchRemote,
+    resolvePrimaryRemoteName,
+    resolveRemoteNameForRef,
+    resolveRemoteTrackingCommit,
     generateBranchName,
     generateThreadTitle,
     runSetup,
@@ -211,6 +230,25 @@ function waitUntil<E, R>(predicate: () => Effect.Effect<boolean, E, R>): Effect.
     assert.fail("Condition was not reached before timeout.");
   });
 }
+
+it.effect("persists the views selected for a launched thread", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness();
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = launchInput({
+        command: "command:launch:issues-location",
+        thread: "thread:launch:issues-location",
+      });
+
+      const launched = yield* launches.launch({ ...input, locations: ["issues"] });
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+
+      assert.deepEqual(projection.thread.locations, ["issues"]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 it.effect("returns a visible preparing message while provisioning is still blocked", () =>
   Effect.gen(function* () {
@@ -275,6 +313,41 @@ it.effect("returns a visible preparing message while provisioning is still block
       );
       assert.isEmpty(prematureEffects);
       yield* Deferred.succeed(allowSetup, undefined);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("starts new worktrees from the repository primary remote", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ primaryRemoteName: "github" });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:primary-remote",
+          thread: "thread:launch:primary-remote",
+          message: "Start from the remote branch",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        }),
+      );
+      yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 1));
+
+      assert.deepEqual(harness.resolvePrimaryRemoteName.mock.calls[0]?.[0], "/repo");
+      assert.deepEqual(harness.resolveRemoteNameForRef.mock.calls[0]?.[0], {
+        cwd: "/repo",
+        refName: "main",
+        fallbackRemoteName: "github",
+      });
+      assert.deepEqual(harness.fetchRemote.mock.calls[0]?.[0], {
+        cwd: "/repo",
+        remoteName: "github",
+      });
+      assert.deepEqual(harness.resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
+        cwd: "/repo",
+        refName: "main",
+        fallbackRemoteName: "github",
+      });
+      assert.equal(harness.createWorktree.mock.calls[0]?.[0].refName, "remote-main-sha");
     }).pipe(Effect.provide(harness.layer));
   }),
 );

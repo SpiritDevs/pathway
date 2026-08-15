@@ -118,6 +118,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
       },
       transferId: ContextTransferId.make("context-transfer:fork-snoozed-source"),
       targetThreadId,
+      forkKind: "side_chat",
       title: "Awake fork",
       createdBy: "user",
       creationSource: "mobile",
@@ -134,6 +135,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     assert.equal(result.targetThread.branch, sourceThread.branch);
     assert.equal(result.targetThread.worktreePath, sourceThread.worktreePath);
     assert.isNull(result.targetThread.activeProviderThreadId);
+    assert.equal(result.targetThread.forkKind, "side_chat");
     assert.deepEqual(result.targetThread.lineage, {
       parentThreadId: sourceThreadId,
       relationshipToParent: "fork",

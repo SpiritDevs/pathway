@@ -1587,7 +1587,10 @@ export const IssueCommentPatch = Schema.Struct({
 });
 export type IssueCommentPatch = typeof IssueCommentPatch.Type;
 
-/** The server refuses an edit by anyone but the author, so there is no author field to send. */
+/**
+ * The author owns the text. The environment's user may also remove attachment ids from any
+ * comment, matching their existing ability to delete that comment without allowing a rewrite.
+ */
 export const IssueCommentUpdateInput = Schema.Struct({
   commentId: IssueCommentId,
   patch: IssueCommentPatch,

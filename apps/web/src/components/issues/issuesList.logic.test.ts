@@ -17,6 +17,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { EMPTY_ISSUES_STORE, type IssuesGrouping, type IssuesStore } from "~/state/issues";
 import {
   EMPTY_ISSUES_SELECTION,
+  activateIssueRow,
   ISSUE_ASSIGNEE_USER_VALUE,
   NO_ISSUES_LIST_FILTER,
   activeIssuesFilterFields,
@@ -886,6 +887,24 @@ describe("selectIssueRow", () => {
   });
 });
 
+describe("activateIssueRow", () => {
+  it("moves the active row without changing checkbox selection", () => {
+    const selectedId = IssueId.make("1");
+    const activeId = IssueId.make("2");
+    const selection: IssuesSelection = {
+      ids: new Set([selectedId]),
+      anchorId: selectedId,
+      activeId: selectedId,
+    };
+
+    const activated = activateIssueRow(selection, activeId);
+
+    expect([...activated.ids]).toEqual([selectedId]);
+    expect(activated.anchorId).toBe(selectedId);
+    expect(activated.activeId).toBe(activeId);
+  });
+});
+
 describe("pruneIssuesSelection", () => {
   it("drops rows the list stopped showing", () => {
     const selection: IssuesSelection = {
@@ -920,6 +939,36 @@ describe("resolveIssuesListKeyAction", () => {
     ids,
     hasSelection: true,
   };
+
+  it("opens a new issue with either Command-N or Control-N", () => {
+    expect(
+      resolveIssuesListKeyAction({ ...base, key: "n", metaKey: true, activeId: null }),
+    ).toEqual({ _tag: "new" });
+    expect(
+      resolveIssuesListKeyAction({ ...base, key: "n", ctrlKey: true, activeId: null }),
+    ).toEqual({ _tag: "new" });
+  });
+
+  it("leaves modified variants of the new issue shortcut alone", () => {
+    expect(
+      resolveIssuesListKeyAction({
+        ...base,
+        key: "n",
+        metaKey: true,
+        shiftKey: true,
+        activeId: null,
+      }),
+    ).toBeNull();
+    expect(
+      resolveIssuesListKeyAction({
+        ...base,
+        key: "n",
+        metaKey: true,
+        ctrlKey: true,
+        activeId: null,
+      }),
+    ).toBeNull();
+  });
 
   it("moves the cursor with j/k and the arrows", () => {
     expect(resolveIssuesListKeyAction({ ...base, key: "j", activeId: ids[0] as IssueId })).toEqual({

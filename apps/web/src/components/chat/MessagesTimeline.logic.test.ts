@@ -29,6 +29,24 @@ describe("editable user message text", () => {
       original.replace("Fix teh typo", "Fix the typo"),
     );
   });
+
+  it("keeps hidden issue context out of the editable prompt", () => {
+    const suffix = [
+      "<issue_context>",
+      '<issue id="i1" key="ISS-26" title="Navigation bug" url="pathway://issues/ISS-26" />',
+      "Read it with issues_get.",
+      "</issue_context>",
+    ].join("\n");
+    const original = `Compare the regressions\n\n${suffix}`;
+
+    expect(splitEditableUserMessageText(original)).toEqual({
+      editableText: "Compare the regressions",
+      preservedSuffix: `\n\n${suffix}`,
+    });
+    expect(replaceEditableUserMessageText(original, "Compare likely causes")).toBe(
+      `Compare likely causes\n\n${suffix}`,
+    );
+  });
 });
 
 describe("computeMessageDurationStart", () => {

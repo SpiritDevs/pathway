@@ -19,6 +19,7 @@ import {
   ISSUE_COMMENT_MAX_ATTACHMENTS,
   type ChatAttachmentId,
   type IssueComment,
+  type IssueCommentId,
 } from "@spiritdevs/contracts";
 
 import { issueCommentCreateBody } from "./issueDetail.logic";
@@ -146,6 +147,27 @@ export function issueAttachmentIds(
     }
   }
   return attachmentIds;
+}
+
+export interface IssueAttachmentReference {
+  readonly attachmentId: ChatAttachmentId;
+  readonly commentId: IssueCommentId;
+}
+
+/** Every visible image plus the comment that owns its removable reference. */
+export function issueAttachmentReferences(
+  comments: ReadonlyArray<IssueComment>,
+): ReadonlyArray<IssueAttachmentReference> {
+  const seen = new Set<ChatAttachmentId>();
+  const attachments: IssueAttachmentReference[] = [];
+  for (const comment of comments) {
+    for (const attachmentId of comment.attachmentIds) {
+      if (seen.has(attachmentId)) continue;
+      seen.add(attachmentId);
+      attachments.push({ attachmentId, commentId: comment.id });
+    }
+  }
+  return attachments;
 }
 
 /** Video evidence stays reviewable on the issue but cannot ride on an image-only provider turn. */

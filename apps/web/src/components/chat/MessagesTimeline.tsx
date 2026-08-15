@@ -11,6 +11,7 @@ import {
 } from "@spiritdevs/contracts";
 import { parseScopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@spiritdevs/client-runtime/state/thread-workflows";
+import { isUsageLimitFailure } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
 import { resolveChatListAnchoredEndSpace } from "@spiritdevs/shared/chatList";
 import { buildOrchestrationErrorFixPrompt } from "@spiritdevs/shared/orchestrationV2Timeline";
 import {
@@ -52,6 +53,7 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   CircleAlertIcon,
+  CircleDotIcon,
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
@@ -106,6 +108,7 @@ import {
   extractTrailingElementContexts,
   type ParsedElementContextEntry,
 } from "~/lib/elementContext";
+import { extractTrailingIssueContexts, type IssueContextSelection } from "~/lib/issueContext";
 import {
   extractTrailingPreviewAnnotation,
   type ParsedPreviewAnnotation,
@@ -115,8 +118,14 @@ import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@spiritdevs/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
 import { V2ItemInspector } from "./V2ItemInspector";
-import { isV2LifecycleItem, V2LifecycleRow, type HandoffTimelineRun } from "./V2LifecycleRow";
+import {
+  isV2LifecycleItem,
+  V2LifecycleRow,
+  type HandoffTimelineRun,
+  type SubagentTimelineModel,
+} from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { UsageLimitRecoveryActions } from "./UsageLimitRecoveryActions";
 
 import {
   buildInlineTerminalContextText,
@@ -151,6 +160,8 @@ interface TimelineRowSharedState {
   providerStatuses: ReadonlyArray<ServerProvider>;
   /** Projection runs, for recovering handoff models on legacy items. */
   runs: ReadonlyArray<HandoffTimelineRun>;
+  /** Projection subagents, for labelling subagent cards with their model. */
+  subagents: ReadonlyArray<SubagentTimelineModel>;
   activeThreadEnvironmentId: EnvironmentId;
   editableUserMessageId: MessageId | null;
   editingUserMessageId: MessageId | null;
@@ -165,9 +176,17 @@ interface TimelineRowSharedState {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview: (relativePath: string, line?: number) => void;
+  onOpenIssueContext: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
+  onRecoverUsageLimit: (input: {
+    readonly runId: RunId;
+    readonly sourceModelSelection: import("@spiritdevs/contracts").ModelSelection;
+  }) => void;
+  onWaitUntilUsageReset: (resetAt: string) => void;
+  usageLimitRecoveryPending: boolean;
+  canWaitUntilUsageReset: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -199,7 +218,9 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 } as const;
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const EMPTY_TIMELINE_SUBAGENTS: ReadonlyArray<SubagentTimelineModel> = [];
 const NOOP_OPEN_FILE_PREVIEW = (_relativePath: string, _line?: number) => undefined;
+const NOOP_OPEN_ISSUE_CONTEXT = (_context: IssueContextSelection) => undefined;
 const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 
 // ---------------------------------------------------------------------------
@@ -225,6 +246,7 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview?: (relativePath: string, line?: number) => void;
+  onOpenIssueContext?: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen?: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
@@ -232,6 +254,13 @@ interface MessagesTimelineProps {
     readonly title: string;
   } | null;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
+  onRecoverUsageLimit?: (input: {
+    readonly runId: RunId;
+    readonly sourceModelSelection: import("@spiritdevs/contracts").ModelSelection;
+  }) => void;
+  onWaitUntilUsageReset?: (resetAt: string) => void;
+  usageLimitRecoveryPending?: boolean;
+  canWaitUntilUsageReset?: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -248,6 +277,7 @@ interface MessagesTimelineProps {
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses?: ReadonlyArray<ServerProvider>;
   runs?: ReadonlyArray<HandoffTimelineRun>;
+  subagents?: ReadonlyArray<SubagentTimelineModel>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -270,6 +300,8 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_ASYNC_FALSE = (): Promise<boolean> => Promise.resolve(false);
+const NOOP_RECOVER_USAGE_LIMIT = () => undefined;
+const NOOP_WAIT_FOR_USAGE_RESET = () => undefined;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
@@ -287,10 +319,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
+  onOpenIssueContext = NOOP_OPEN_ISSUE_CONTEXT,
   onPanelSurfaceOpen = NOOP_PANEL_SURFACE_OPEN,
   onOpenThread,
   parentThreadLink = null,
   onContinueFromRun,
+  onRecoverUsageLimit = NOOP_RECOVER_USAGE_LIMIT,
+  onWaitUntilUsageReset = NOOP_WAIT_FOR_USAGE_RESET,
+  usageLimitRecoveryPending = false,
+  canWaitUntilUsageReset = false,
   onRollbackCheckpoint,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -304,6 +341,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   skills = EMPTY_TIMELINE_SKILLS,
   providerStatuses = EMPTY_TIMELINE_PROVIDERS,
   runs: runsProp = EMPTY_TIMELINE_RUNS,
+  subagents: subagentsProp = EMPTY_TIMELINE_SUBAGENTS,
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
@@ -502,6 +540,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
+  const subagents = useStableSubagentModels(subagentsProp);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
@@ -617,6 +656,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       providerStatuses,
       runs,
+      subagents,
       activeThreadEnvironmentId,
       editableUserMessageId,
       editingUserMessageId,
@@ -631,9 +671,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
+      onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
+      onRecoverUsageLimit,
+      onWaitUntilUsageReset,
+      usageLimitRecoveryPending,
+      canWaitUntilUsageReset,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -647,6 +692,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       providerStatuses,
       runs,
+      subagents,
       activeThreadEnvironmentId,
       editableUserMessageId,
       editingUserMessageId,
@@ -660,9 +706,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onImageExpand,
       onOpenTurnDiff,
       onOpenFilePreview,
+      onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
+      onRecoverUsageLimit,
+      onWaitUntilUsageReset,
+      usageLimitRecoveryPending,
+      canWaitUntilUsageReset,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -1118,7 +1169,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userImages = row.message.attachments ?? [];
-  const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
+  const issueContextState = extractTrailingIssueContexts(row.message.text);
+  const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
   const terminalContexts = displayedUserMessage.contexts;
   const previewAnnotations: ParsedPreviewAnnotation[] = [];
   let visibleText = displayedUserMessage.visibleText;
@@ -1202,6 +1254,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             image={previewImages[index] ?? null}
           />
         ))}
+        {issueContextState.contexts.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Issues in this message">
+            {issueContextState.contexts.map((context) => (
+              <UserMessageIssueContextChip key={context.id} context={context} />
+            ))}
+          </div>
+        ) : null}
         {elementContexts.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {elementContexts.map((context) => (
@@ -1679,6 +1738,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
     return (
@@ -1688,6 +1748,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         timestampFormat={ctx.timestampFormat}
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
+        subagents={ctx.subagents}
         onOpenThread={ctx.onOpenThread}
       />
     );
@@ -1759,6 +1820,29 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
               From {sourceThreadId}
             </p>
+          ) : null}
+          {visibility === "local" &&
+          item.status === "failed" &&
+          item.runId !== null &&
+          item.runId === activity.latestRunId &&
+          isUsageLimitFailure(item.failure) ? (
+            <div className="mt-3 border-t border-border/45 pt-3">
+              <p className="mb-2 text-xs font-medium text-foreground/90">
+                This work can continue with another model, or wait for this allowance to reset.
+              </p>
+              <UsageLimitRecoveryActions
+                environmentId={ctx.activeThreadEnvironmentId}
+                item={item}
+                providerStatuses={ctx.providerStatuses}
+                runs={ctx.runs}
+                timestampFormat={ctx.timestampFormat}
+                disabled={ctx.usageLimitRecoveryPending}
+                waiting={ctx.usageLimitRecoveryPending}
+                canWaitUntilReset={ctx.canWaitUntilUsageReset}
+                onRecover={ctx.onRecoverUsageLimit}
+                onWaitUntilReset={ctx.onWaitUntilUsageReset}
+              />
+            </div>
           ) : null}
           <div className={presentation.detail ? "mt-2" : undefined}>
             <V2ItemInspector
@@ -2155,6 +2239,34 @@ const UserMessageElementContextChip = memo(function UserMessageElementContextChi
       />
       <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap leading-tight">
         {tooltipText}
+      </TooltipPopup>
+    </Tooltip>
+  );
+});
+
+const UserMessageIssueContextChip = memo(function UserMessageIssueContextChip(props: {
+  context: IssueContextSelection;
+}) {
+  const ctx = use(TimelineRowCtx);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={`Open ${props.context.key}`}
+            className="inline-flex max-w-72 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-xs text-foreground/85 outline-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => ctx.onOpenIssueContext(props.context)}
+          >
+            <CircleDotIcon className="size-3 shrink-0" aria-hidden />
+            <span className="truncate">
+              {props.context.key} {props.context.title}
+            </span>
+          </button>
+        }
+      />
+      <TooltipPopup side="top" className="max-w-96 whitespace-normal leading-tight">
+        {props.context.key} — {props.context.title}
       </TooltipPopup>
     </Tooltip>
   );
@@ -2560,6 +2672,30 @@ function useStableHandoffRuns(
     prev.current = { signature, value };
     return value;
   }, [runs]);
+}
+
+/** Content-stable projection of the subagent models the subagent cards read.
+ *  The projection's subagent records churn on every progress/result chunk, but
+ *  a subagent's model is fixed at creation — so this reference only changes
+ *  when a subagent appears, keeping TimelineRowCtx stable mid-run. */
+function useStableSubagentModels(
+  subagents: ReadonlyArray<SubagentTimelineModel>,
+): ReadonlyArray<SubagentTimelineModel> {
+  const prev = useRef<{
+    signature: string;
+    value: ReadonlyArray<SubagentTimelineModel>;
+  }>({ signature: "", value: EMPTY_TIMELINE_SUBAGENTS });
+  return useMemo(() => {
+    const signature = subagents
+      .map((subagent) => `${subagent.id}\0${subagent.model ?? ""}`)
+      .join("\n");
+    if (signature === prev.current.signature) {
+      return prev.current.value;
+    }
+    const value = subagents.map((subagent) => ({ id: subagent.id, model: subagent.model }));
+    prev.current = { signature, value };
+    return value;
+  }, [subagents]);
 }
 
 /** Returns a structurally-shared copy of `rows`: for each row whose content

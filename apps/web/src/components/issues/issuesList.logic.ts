@@ -673,7 +673,7 @@ export const EMPTY_ISSUES_VIEW: IssuesView = {
 };
 
 /**
- * The manual key is written by a drag inside a status column, so it only orders a list grouped by
+ * The manual key is written by a drag inside a status group, so it only orders a list grouped by
  * status. Anywhere else it would render an order nobody can see the rule of, so priority stands in.
  */
 export function effectiveIssueSortMode(
@@ -686,11 +686,11 @@ export function effectiveIssueSortMode(
 /**
  * Why the order on screen is not the order that was asked for, or why the board's drag is off.
  *
- * The two cases are converses of each other. In the list, manual order needs a status grouping to
- * mean anything, so it stands aside. On the board the grouping is always status, so manual order
- * always applies — but the *drag that writes it* is only honest while manual is what orders the
- * column: under any other mode the slot the card was dropped into is not a slot in the stored
- * order, so the write would land somewhere nobody pointed at.
+ * The two cases are converses of each other. In the list, manual order and row dragging need a
+ * status grouping to mean anything, so they stand aside. On the board the grouping is always
+ * status, so manual order always applies — but the *drag that writes it* is only honest while
+ * manual is what orders the column: under any other mode the slot the card was dropped into is not
+ * a slot in the stored order, so the write would land somewhere nobody pointed at.
  */
 export function issueSortModeHint(
   sortMode: IssueViewSortMode,
@@ -1008,7 +1008,7 @@ export interface IssuesSelection {
   readonly ids: ReadonlySet<IssueId>;
   /** Where a shift-click measures from; the last row picked without shift. */
   readonly anchorId: IssueId | null;
-  /** The cursor `j`/`k` moves and Enter opens. Always a member of `ids` when `ids` is non-empty. */
+  /** The cursor `j`/`k` moves and Enter opens. Independent from checkbox selection. */
   readonly activeId: IssueId | null;
 }
 
@@ -1022,6 +1022,11 @@ export const EMPTY_ISSUES_SELECTION: IssuesSelection = {
 
 /** A click's meaning, already resolved from the modifier keys by the caller. */
 export type IssueSelectMode = "replace" | "toggle" | "range";
+
+/** Moves the list cursor without changing the rows selected for bulk actions. */
+export function activateIssueRow(selection: IssuesSelection, issueId: IssueId): IssuesSelection {
+  return selection.activeId === issueId ? selection : { ...selection, activeId: issueId };
+}
 
 export function issueSelectModeForModifiers(input: {
   readonly shiftKey: boolean;
@@ -1117,6 +1122,8 @@ export function pruneIssuesSelection(
 // ── Keyboard ───────────────────────────────────────────────────────────
 
 export type IssuesListKeyAction =
+  /** Show the create-issue dialog. */
+  | { readonly _tag: "new" }
   /** Move the cursor and make it the whole selection. */
   | { readonly _tag: "select"; readonly issueId: IssueId }
   /** Open the detail sheet — the caller writes `?issue=`. */
@@ -1138,6 +1145,14 @@ export function resolveIssuesListKeyAction(input: {
   readonly hasSelection: boolean;
 }): IssuesListKeyAction | null {
   const { key, ids, activeId } = input;
+  if (
+    key.toLowerCase() === "n" &&
+    input.metaKey !== input.ctrlKey &&
+    !input.altKey &&
+    !input.shiftKey
+  ) {
+    return { _tag: "new" };
+  }
   if (input.metaKey || input.ctrlKey || input.altKey) return null;
 
   if (key === "Escape") return input.hasSelection ? { _tag: "clear" } : null;

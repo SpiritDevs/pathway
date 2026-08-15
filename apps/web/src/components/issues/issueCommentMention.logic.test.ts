@@ -6,11 +6,14 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  filterIssueCommentMentionAgents,
   findIssueCommentAgentMentions,
+  findIssueCommentMentionQuery,
   issueCommentMentionBody,
   issueCommentMentionModelSummary,
   issueCommentMentionPillMarkdown,
   normalizeIssueCommentMentionName,
+  removeIssueCommentMentionQuery,
   resolveIssueCommentMention,
   type IssueCommentMentionAgent,
 } from "./issueCommentMention.logic";
@@ -28,6 +31,38 @@ const CODEX: IssueCommentMentionAgent = {
 };
 
 const AGENTS = [CLAUDE, CODEX];
+
+describe("inline mention query", () => {
+  it("opens at a token-leading @ and follows the caret", () => {
+    expect(findIssueCommentMentionQuery("please @cl", 10)).toEqual({
+      index: 7,
+      length: 3,
+      value: "cl",
+    });
+    expect(findIssueCommentMentionQuery("@", 1)).toEqual({ index: 0, length: 1, value: "" });
+  });
+
+  it("does not treat email addresses or closed punctuation as mention queries", () => {
+    expect(findIssueCommentMentionQuery("me@example.com", 14)).toBeNull();
+    expect(findIssueCommentMentionQuery("ask @Claude, please", 12)).toBeNull();
+  });
+
+  it("filters configured instances without case sensitivity", () => {
+    expect(filterIssueCommentMentionAgents(AGENTS, "AU")).toEqual([CLAUDE]);
+    expect(filterIssueCommentMentionAgents(AGENTS, "")).toEqual(AGENTS);
+    expect(filterIssueCommentMentionAgents(AGENTS, "gemini")).toEqual([]);
+  });
+
+  it("consumes only the query and returns the next caret position", () => {
+    expect(
+      removeIssueCommentMentionQuery("please @cl review", {
+        index: 7,
+        length: 3,
+        value: "cl",
+      }),
+    ).toEqual({ text: "please  review", caret: 7 });
+  });
+});
 
 describe("normalizeIssueCommentMentionName", () => {
   it("drops case, surrounding space, and the decorative @", () => {

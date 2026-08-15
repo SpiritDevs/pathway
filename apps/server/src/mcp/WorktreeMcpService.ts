@@ -225,14 +225,24 @@ const make = Effect.gen(function* () {
 
     let worktreeBaseRef = baseRef;
     if (startFromOrigin) {
+      const primaryRemoteName = yield* gitWorkflow
+        .resolvePrimaryRemoteName(projectCwd)
+        .pipe(asOperationFailed("Unable to resolve the primary remote"));
+      const remoteName = yield* gitWorkflow
+        .resolveRemoteNameForRef({
+          cwd: projectCwd,
+          refName: baseRef,
+          fallbackRemoteName: primaryRemoteName,
+        })
+        .pipe(asOperationFailed(`Unable to resolve the remote for '${baseRef}'`));
       yield* gitWorkflow
-        .fetchRemote({ cwd: projectCwd, remoteName: "origin" })
-        .pipe(asOperationFailed("Unable to fetch origin"));
+        .fetchRemote({ cwd: projectCwd, remoteName })
+        .pipe(asOperationFailed(`Unable to fetch '${remoteName}'`));
       const resolvedRemoteBase = yield* gitWorkflow
         .resolveRemoteTrackingCommit({
           cwd: projectCwd,
           refName: baseRef,
-          fallbackRemoteName: "origin",
+          fallbackRemoteName: remoteName,
         })
         .pipe(asOperationFailed(`Unable to resolve the remote-tracking commit of '${baseRef}'`));
       worktreeBaseRef = resolvedRemoteBase.commitSha;

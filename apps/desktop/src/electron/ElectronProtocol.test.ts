@@ -49,7 +49,7 @@ describe("ElectronProtocol", () => {
     unhandleMock.mockReset();
   });
 
-  it("removes Chromium's origin only from authenticated Clerk requests", () => {
+  it("removes Chromium's desktop origin from native Clerk requests", () => {
     const authenticatedHeaders = {
       Accept: "application/json",
       Authorization: "Bearer client-jwt",
@@ -71,7 +71,23 @@ describe("ElectronProtocol", () => {
         },
         "pathway://app",
       ),
-      { Accept: "application/json", Origin: "pathway://app" },
+      { Accept: "application/json" },
+    );
+    assert.deepEqual(
+      ElectronProtocol.prepareDesktopClerkRequestHeaders(
+        {
+          Accept: "*/*",
+          "Access-Control-Request-Headers": "authorization",
+          "Access-Control-Request-Method": "GET",
+          Origin: "pathway://app",
+        },
+        "pathway://app",
+      ),
+      {
+        Accept: "*/*",
+        "Access-Control-Request-Headers": "authorization",
+        "Access-Control-Request-Method": "GET",
+      },
     );
     assert.deepEqual(
       ElectronProtocol.prepareDesktopClerkRequestHeaders(authenticatedHeaders, "pathway-dev://app"),
@@ -90,12 +106,20 @@ describe("ElectronProtocol", () => {
         {
           "content-type": ["application/json"],
           "access-control-allow-origin": ["https://unexpected.example"],
+          "access-control-allow-headers": ["x-unexpected"],
+          "access-control-allow-methods": ["POST"],
         },
-        "pathway://app",
+        {
+          origin: "pathway://app",
+          requestedHeaders: "authorization",
+          requestedMethod: "GET",
+        },
       ),
       {
         "content-type": ["application/json"],
         "Access-Control-Allow-Origin": ["pathway://app"],
+        "Access-Control-Allow-Headers": ["authorization"],
+        "Access-Control-Allow-Methods": ["GET"],
       },
     );
   });

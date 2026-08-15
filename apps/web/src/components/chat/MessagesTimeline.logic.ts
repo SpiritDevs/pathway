@@ -27,7 +27,7 @@ export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
 const USER_MESSAGE_CONTEXT_START =
-  /\n*<(?:terminal_context|element_context|preview_annotation|review_comment)\b/;
+  /\n*<(?:terminal_context|element_context|issue_context|preview_annotation|review_comment)\b/;
 
 export function splitEditableUserMessageText(value: string): {
   readonly editableText: string;

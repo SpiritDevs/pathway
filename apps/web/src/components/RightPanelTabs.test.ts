@@ -33,4 +33,19 @@ describe("resolveRightPanelSurfaceTitle", () => {
       ),
     ).toBe("Side chat");
   });
+
+  it("labels issue surfaces with the issue key and title", () => {
+    expect(
+      resolveRightPanelSurfaceTitle(
+        {
+          id: "issue:ISS-27",
+          kind: "issue",
+          issueKey: "ISS-27",
+          title: "The issue modal needs more room",
+        },
+        {},
+        new Map<string, string>(),
+      ),
+    ).toBe("ISS-27 The issue modal needs more room");
+  });
 });

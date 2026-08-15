@@ -17,7 +17,7 @@ export type ContinuationWorkspaceTarget = "current" | "new-worktree";
 
 export function ContinuationDialog(props: {
   readonly open: boolean;
-  readonly kind: "continue" | "handoff";
+  readonly kind: "continue" | "handoff" | "recovery";
   readonly sourceModelSelection: ModelSelection;
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
@@ -56,18 +56,28 @@ export function ContinuationDialog(props: {
   const handoffUnavailable = props.kind === "handoff" && initialSelection === null;
   const handoffStillOnSource =
     props.kind === "handoff" && selection.instanceId === props.sourceModelSelection.instanceId;
+  const recoveryStillOnSource =
+    props.kind === "recovery" &&
+    selection.instanceId === props.sourceModelSelection.instanceId &&
+    selection.model === props.sourceModelSelection.model;
 
   return (
     <Dialog open={props.open} onOpenChange={(open) => !props.pending && props.onOpenChange(open)}>
       <DialogPopup className="w-[min(28rem,calc(100vw-2rem))]">
         <DialogHeader>
           <DialogTitle>
-            {props.kind === "handoff" ? "Hand off this chat" : "Continue in a new chat"}
+            {props.kind === "handoff"
+              ? "Hand off this chat"
+              : props.kind === "recovery"
+                ? "Recover with another model"
+                : "Continue in a new chat"}
           </DialogTitle>
           <DialogDescription>
             {props.kind === "handoff"
               ? "Choose another provider or account for the next response."
-              : "Start from this response and choose the model and checkout."}
+              : props.kind === "recovery"
+                ? "Choose a different model. Pathway will ask it to continue the interrupted work in this chat."
+                : "Start from this response and choose the model and checkout."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 px-6 pb-6">
@@ -84,17 +94,33 @@ export function ContinuationDialog(props: {
             triggerAriaLabel="Continuation model"
             onInstanceModelChange={(instanceId, model) => setSelection({ instanceId, model })}
           />
-          {handoffUnavailable ? (
-            <p className="text-sm text-muted-foreground">No other provider instance is ready.</p>
+          {handoffUnavailable || (props.kind === "recovery" && initialSelection === null) ? (
+            <p className="text-sm text-muted-foreground">
+              {props.kind === "recovery"
+                ? "No other model is ready."
+                : "No other provider instance is ready."}
+            </p>
           ) : null}
-          {props.kind === "handoff" ? (
+          {props.kind === "handoff" || props.kind === "recovery" ? (
             <Button
               className="w-full"
-              disabled={props.pending || handoffUnavailable || handoffStillOnSource}
+              disabled={
+                props.pending ||
+                handoffUnavailable ||
+                handoffStillOnSource ||
+                initialSelection === null ||
+                recoveryStillOnSource
+              }
               onClick={() => props.onSubmit(selection, "current")}
             >
               {props.pending ? <Spinner className="size-4" /> : null}
-              {props.pending ? "Handing off…" : "Hand off"}
+              {props.pending
+                ? props.kind === "recovery"
+                  ? "Recovering…"
+                  : "Handing off…"
+                : props.kind === "recovery"
+                  ? "Switch and continue"
+                  : "Hand off"}
             </Button>
           ) : (
             <div className="grid gap-2">

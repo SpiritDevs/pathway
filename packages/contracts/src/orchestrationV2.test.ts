@@ -32,6 +32,7 @@ import {
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
@@ -45,6 +46,7 @@ const LegacyShellStreamItem = Schema.Union([
 const decodeLegacyShellStreamItem = Schema.decodeUnknownSync(LegacyShellStreamItem);
 const decodeOrchestrationV2Command = Schema.decodeUnknownSync(OrchestrationV2Command);
 const decodeOrchestrationV2TurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
+const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2CheckpointScope = Schema.decodeUnknownSync(
   OrchestrationV2CheckpointScope,
 );
@@ -199,6 +201,40 @@ describe("orchestration V2 contracts", () => {
     expect(command.type).toBe("message.edit-and-restart");
     if (command.type !== "message.edit-and-restart") throw new Error("expected edit command");
     expect(command.replacementMessageId).toBe(MessageId.make("message-replacement"));
+  });
+
+  it("decodes durable source-control marker commands and items", () => {
+    const command = decodeOrchestrationV2Command({
+      type: "thread.source-control.record",
+      commandId: "command-source-control-1",
+      threadId: "thread-1",
+      committed: true,
+      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+    });
+    const item = decodeOrchestrationV2TurnItemJson({
+      id: "turn-item-source-control-1",
+      threadId: "thread-1",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: "2026-04-20T00:00:00.000Z",
+      completedAt: "2026-04-20T00:00:00.000Z",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+      type: "source_control",
+      committed: true,
+      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+    });
+
+    expect(command.type).toBe("thread.source-control.record");
+    expect(item.type).toBe("source_control");
+    if (item.type !== "source_control") throw new Error("expected source-control marker");
+    expect(item.pullRequest?.number).toBe(47);
   });
 
   it("decodes app-owned delegated task commands", () => {

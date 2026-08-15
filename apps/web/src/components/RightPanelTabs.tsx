@@ -6,11 +6,12 @@ import type {
 import { getTerminalLabel } from "@spiritdevs/shared/terminalLabels";
 import {
   Bot,
+  CircleDot,
   FileDiff,
   Files,
   GitPullRequest,
   Globe2,
-  MessageSquare,
+  MessagesSquare,
   Plus,
   TerminalSquare,
   X,
@@ -29,7 +30,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { isElectron } from "~/env";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import type { RightPanelKind, RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -77,6 +78,8 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   sideChatAvailable: boolean;
+  /** Limits the surface picker for view-specific panels such as Issues. */
+  allowedSurfaceKinds?: ReadonlySet<RightPanelKind>;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -155,9 +158,11 @@ function RightPanelEmptyState(props: {
   agentsAvailable: boolean;
   sideChatAvailable: boolean;
   liveAgentCount: number;
+  allowedSurfaceKinds?: ReadonlySet<RightPanelKind>;
 }) {
   const actions = [
     {
+      kind: "preview",
       label: "Browser",
       description: "Open a local app or URL.",
       icon: Globe2,
@@ -167,6 +172,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      kind: "terminal",
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
@@ -176,6 +182,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      kind: "files",
       label: "Files",
       description: "Browse and read workspace files.",
       icon: Files,
@@ -185,6 +192,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      kind: "diff",
       label: "Diff",
       description: "Review changes in this thread.",
       icon: FileDiff,
@@ -194,6 +202,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      kind: "pull-request",
       label: "Pull request",
       description: "Open the pull request for this thread's branch.",
       icon: GitPullRequest,
@@ -203,6 +212,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      kind: "agents",
       label: "Agents",
       description: "Watch subagents and workflows run.",
       icon: Bot,
@@ -212,15 +222,16 @@ function RightPanelEmptyState(props: {
       badgeCount: props.liveAgentCount,
     },
     {
+      kind: "thread",
       label: "Side chat",
       description: "Ask with this conversation's context.",
-      icon: MessageSquare,
+      icon: MessagesSquare,
       available: props.sideChatAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.sideChat,
       onClick: props.onAddSideChat,
       badgeCount: 0,
     },
-  ] as const;
+  ].filter((action) => props.allowedSurfaceKinds?.has(action.kind as RightPanelKind) ?? true);
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -310,6 +321,8 @@ export function resolveRightPanelSurfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "issue":
+      return `${surface.issueKey} ${surface.title}`.trim();
     case "thread":
       return threadTitlesById?.get(surface.resourceId)?.trim() || "Side chat";
     case "preview": {
@@ -389,8 +402,10 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "issue":
+      return <CircleDot className="size-3 shrink-0" />;
     case "thread":
-      return <MessageSquare className="size-3 shrink-0" />;
+      return <MessagesSquare className="size-3 shrink-0" />;
   }
 }
 
@@ -574,62 +589,76 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   <Plus className="size-3.5" />
                 </MenuTrigger>
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
-                  <SurfaceMenuItem
-                    available={props.browserAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.browser}
-                    onClick={props.onAddBrowser}
-                  >
-                    <Globe2 />
-                    Browser
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.terminalAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.terminal}
-                    onClick={props.onAddTerminal}
-                  >
-                    <TerminalSquare />
-                    Terminal
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.filesAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.files}
-                    onClick={props.onAddFiles}
-                  >
-                    <Files />
-                    Files
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.diffAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.diff}
-                    onClick={props.onAddDiff}
-                  >
-                    <FileDiff />
-                    Diff
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.pullRequestAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
-                    onClick={props.onAddPullRequest}
-                  >
-                    <GitPullRequest />
-                    Pull request
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.agentsAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.agents}
-                    onClick={props.onAddAgents}
-                  >
-                    <Bot />
-                    Agents
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
-                    available={props.sideChatAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.sideChat}
-                    onClick={props.onAddSideChat}
-                  >
-                    <MessageSquare />
-                    Side chat
-                  </SurfaceMenuItem>
+                  {(props.allowedSurfaceKinds?.has("preview") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.browserAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.browser}
+                      onClick={props.onAddBrowser}
+                    >
+                      <Globe2 />
+                      Browser
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("terminal") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.terminalAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.terminal}
+                      onClick={props.onAddTerminal}
+                    >
+                      <TerminalSquare />
+                      Terminal
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("files") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.filesAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.files}
+                      onClick={props.onAddFiles}
+                    >
+                      <Files />
+                      Files
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("diff") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.diffAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.diff}
+                      onClick={props.onAddDiff}
+                    >
+                      <FileDiff />
+                      Diff
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("pull-request") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.pullRequestAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
+                      onClick={props.onAddPullRequest}
+                    >
+                      <GitPullRequest />
+                      Pull request
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("agents") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.agentsAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.agents}
+                      onClick={props.onAddAgents}
+                    >
+                      <Bot />
+                      Agents
+                    </SurfaceMenuItem>
+                  ) : null}
+                  {(props.allowedSurfaceKinds?.has("thread") ?? true) ? (
+                    <SurfaceMenuItem
+                      available={props.sideChatAvailable}
+                      disabledReason={SURFACE_DISABLED_REASONS.sideChat}
+                      onClick={props.onAddSideChat}
+                    >
+                      <MessagesSquare />
+                      Side chat
+                    </SurfaceMenuItem>
+                  ) : null}
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -656,6 +685,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             agentsAvailable={props.agentsAvailable}
             sideChatAvailable={props.sideChatAvailable}
             liveAgentCount={props.liveAgentCount}
+            {...(props.allowedSurfaceKinds
+              ? { allowedSurfaceKinds: props.allowedSurfaceKinds }
+              : {})}
           />
         ) : (
           <RightPanelTabBarActionsContext.Provider value={tabBarActionsHost}>

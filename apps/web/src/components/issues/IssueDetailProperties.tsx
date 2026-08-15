@@ -28,11 +28,9 @@ import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models
 import {
   CalendarIcon,
   CalendarRangeIcon,
-  CheckIcon,
   FlagIcon,
   FolderIcon,
   GitBranchIcon,
-  PlusIcon,
   TagIcon,
   XIcon,
 } from "lucide-react";
@@ -43,10 +41,7 @@ import { usePrimaryEnvironmentId } from "~/state/environments";
 import { useSlackChannelNames } from "~/state/issues";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
-import { ColorSelector } from "../color-selector";
-import { DEFAULT_ISSUE_COLOR, ISSUE_COLOR_OPTIONS } from "../settings/issues/issuesSettings.logic";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import {
   Menu,
   MenuGroup,
@@ -56,7 +51,6 @@ import {
   MenuRadioItem,
   MenuTrigger,
 } from "../ui/menu";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
   IssueAssigneeGlyph,
   IssueLabelDot,
@@ -69,6 +63,7 @@ import {
   IssueParentPicker,
   IssueStatusGlyphFor,
 } from "./IssueSelectors";
+import { IssueLabelsPicker } from "./IssueLabelsPicker";
 import { IssuePriorityMenu, IssueProjectMenu, IssueStatusMenu } from "./IssuePropertyMenus";
 import { IssueSlackSourceChip } from "./IssueSlackSourceChip";
 import { slackSourceChip } from "./triage.logic";
@@ -77,8 +72,6 @@ import {
   issueAssigneeOptions,
   issueDueDateInputValue,
   isCompleteIssueDate,
-  issueLabelCreateName,
-  nextIssueLabelColor,
 } from "./issueDetail.logic";
 import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
@@ -155,160 +148,6 @@ function IssueAssigneeMenu({
         </MenuGroup>
       </MenuPopup>
     </Menu>
-  );
-}
-
-/**
- * A `Popover` rather than a `Menu`: creating a label inline needs a text field and a swatch row,
- * and a menu closes on the first keystroke that looks like typeahead.
- */
-function IssueLabelsEditor({
-  issue,
-  labels,
-  onToggle,
-  onCreate,
-}: {
-  issue: Issue;
-  labels: ReadonlyArray<IssueLabel>;
-  onToggle: (labelId: IssueLabelId) => void;
-  onCreate: (input: { readonly name: string; readonly color: string }) => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draftName, setDraftName] = useState("");
-  const [draftColor, setDraftColor] = useState(DEFAULT_ISSUE_COLOR);
-  const [creating, setCreating] = useState(false);
-
-  const worn = labels.filter((label) => issue.labelIds.includes(label.id));
-  const createName = issueLabelCreateName(draftName, labels);
-
-  const startCreating = () => {
-    setDraftColor(nextIssueLabelColor(ISSUE_COLOR_OPTIONS, labels, DEFAULT_ISSUE_COLOR));
-  };
-
-  const submit = () => {
-    if (createName === null || creating) return;
-    setCreating(true);
-    void (async () => {
-      const created = await onCreate({ name: createName, color: draftColor });
-      setCreating(false);
-      if (!created) return;
-      setDraftName("");
-      setDraftColor(nextIssueLabelColor(ISSUE_COLOR_OPTIONS, labels, DEFAULT_ISSUE_COLOR));
-    })();
-  };
-
-  return (
-    <Popover
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) startCreating();
-        else setDraftName("");
-      }}
-      open={open}
-    >
-      <PopoverTrigger
-        render={
-          <button className={cn(ROW_CONTROL_CLASS, "flex-wrap")} type="button">
-            {worn.length === 0 ? (
-              <>
-                <TagIcon className="size-3.5 text-muted-foreground" />
-                <span className={PLACEHOLDER_CLASS}>Add labels</span>
-              </>
-            ) : (
-              worn.map((label) => (
-                <span
-                  className="flex max-w-full items-center gap-1 rounded-full border border-border/60 px-1.5 py-px text-[11px] text-muted-foreground"
-                  key={label.id}
-                >
-                  <IssueLabelDot className="size-1.5" color={label.color} />
-                  <span className="truncate">{label.name}</span>
-                </span>
-              ))
-            )}
-          </button>
-        }
-      />
-      <PopoverPopup align="start" className="w-64 p-1.5">
-        <div className="max-h-56 overflow-y-auto">
-          {labels.length === 0 ? (
-            <p className="px-1.5 py-1 text-xs text-muted-foreground">
-              No labels yet. Type a name below to make the first one.
-            </p>
-          ) : (
-            labels.map((label) => {
-              const checked = issue.labelIds.includes(label.id);
-              return (
-                <button
-                  className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-start text-[13px] outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
-                  key={label.id}
-                  onClick={() => onToggle(label.id)}
-                  type="button"
-                >
-                  <IssueLabelDot color={label.color} />
-                  <span className="min-w-0 flex-1 truncate">{label.name}</span>
-                  {checked ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
-                </button>
-              );
-            })
-          )}
-        </div>
-
-        <div className="mt-1.5 border-t border-border/60 pt-1.5">
-          <div className="flex items-center gap-1.5">
-            <Popover>
-              <PopoverTrigger
-                render={
-                  <button
-                    aria-label="Colour for the new label"
-                    className="size-5 shrink-0 rounded-full border border-black/8 dark:border-white/12"
-                    style={{ backgroundColor: draftColor }}
-                    type="button"
-                  />
-                }
-              />
-              <PopoverPopup align="start" className="w-auto p-2">
-                <ColorSelector
-                  className="gap-1.5"
-                  colors={[...ISSUE_COLOR_OPTIONS]}
-                  defaultValue={draftColor}
-                  key={draftColor}
-                  onColorSelect={setDraftColor}
-                  size="lg"
-                />
-              </PopoverPopup>
-            </Popover>
-            <Input
-              aria-label="New label name"
-              className="min-w-0 flex-1"
-              disabled={creating}
-              onChange={(event) => setDraftName(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                submit();
-              }}
-              placeholder="Create a label…"
-              size="sm"
-              value={draftName}
-            />
-            <Button
-              aria-label="Create label"
-              disabled={createName === null || creating}
-              onClick={submit}
-              size="icon-xs"
-              variant="outline"
-            >
-              <PlusIcon />
-            </Button>
-          </div>
-          {draftName.trim().length > 0 && createName === null ? (
-            <p className="px-1 pt-1 text-[11px] text-muted-foreground">
-              That label already exists.
-            </p>
-          ) : null}
-        </div>
-      </PopoverPopup>
-    </Popover>
   );
 }
 
@@ -477,11 +316,33 @@ export function IssueDetailProperties({
       </PropertyRow>
 
       <PropertyRow label="Labels">
-        <IssueLabelsEditor
-          issue={issue}
+        <IssueLabelsPicker
           labels={labels}
           onCreate={onCreateLabel}
           onToggle={onToggleLabel}
+          selectedLabelIds={issue.labelIds}
+          trigger={
+            <button className={cn(ROW_CONTROL_CLASS, "flex-wrap")} type="button">
+              {labels.every((label) => !issue.labelIds.includes(label.id)) ? (
+                <>
+                  <TagIcon className="size-3.5 text-muted-foreground" />
+                  <span className={PLACEHOLDER_CLASS}>Add labels</span>
+                </>
+              ) : (
+                labels
+                  .filter((label) => issue.labelIds.includes(label.id))
+                  .map((label) => (
+                    <span
+                      className="flex max-w-full items-center gap-1 rounded-full border border-border/60 px-1.5 py-px text-[11px] text-muted-foreground"
+                      key={label.id}
+                    >
+                      <IssueLabelDot className="size-1.5" color={label.color} />
+                      <span className="truncate">{label.name}</span>
+                    </span>
+                  ))
+              )}
+            </button>
+          }
         />
       </PropertyRow>
 

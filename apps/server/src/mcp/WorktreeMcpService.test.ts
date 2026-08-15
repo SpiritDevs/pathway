@@ -110,6 +110,8 @@ interface HarnessOptions {
   readonly createWorktreeFails?: boolean;
   readonly fetchRemoteFails?: boolean;
   readonly resolveRemoteFails?: boolean;
+  readonly primaryRemoteName?: string;
+  readonly remoteNameForRef?: string;
   readonly removeWorktreeFails?: boolean;
   readonly deleteLocalBranchFails?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
@@ -210,6 +212,12 @@ const makeHarness = (options: HarnessOptions = {}) => {
   );
   const fetchRemote = vi.fn((_: unknown) =>
     options.fetchRemoteFails ? (Effect.fail("simulated fetch failure") as never) : Effect.void,
+  );
+  const resolvePrimaryRemoteName = vi.fn(() =>
+    Effect.succeed(options.primaryRemoteName ?? "origin"),
+  );
+  const resolveRemoteNameForRef = vi.fn(() =>
+    Effect.succeed(options.remoteNameForRef ?? options.primaryRemoteName ?? "origin"),
   );
   const resolveRemoteTrackingCommit = vi.fn((_: unknown) =>
     options.resolveRemoteFails
@@ -321,6 +329,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
           listLocalBranchNames,
           localStatus,
           fetchRemote,
+          resolvePrimaryRemoteName,
+          resolveRemoteNameForRef,
           resolveRemoteTrackingCommit,
           createWorktree,
           removeWorktree,
@@ -343,6 +353,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
     dispatch,
     sendToThread,
     fetchRemote,
+    resolvePrimaryRemoteName,
+    resolveRemoteNameForRef,
     resolveRemoteTrackingCommit,
     createWorktree,
     removeWorktree,
@@ -499,8 +511,8 @@ describe("t3_worktree_handoff", () => {
     });
   });
 
-  it.effect("starts from origin and honors explicit baseRef and path", () => {
-    const harness = makeHarness();
+  it.effect("starts from the primary remote and honors explicit baseRef and path", () => {
+    const harness = makeHarness({ primaryRemoteName: "github" });
     return Effect.gen(function* () {
       const result = yield* runHandoff(harness, {
         branch: "feature/from-origin",
@@ -512,12 +524,17 @@ describe("t3_worktree_handoff", () => {
 
       expect(harness.fetchRemote).toHaveBeenCalledWith({
         cwd: workspaceRoot,
-        remoteName: "origin",
+        remoteName: "github",
+      });
+      expect(harness.resolveRemoteNameForRef).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        refName: "dev",
+        fallbackRemoteName: "github",
       });
       expect(harness.resolveRemoteTrackingCommit).toHaveBeenCalledWith({
         cwd: workspaceRoot,
         refName: "dev",
-        fallbackRemoteName: "origin",
+        fallbackRemoteName: "github",
       });
       expect(harness.createWorktree).toHaveBeenCalledWith({
         cwd: workspaceRoot,
@@ -533,6 +550,30 @@ describe("t3_worktree_handoff", () => {
       expect(result.worktreePath).toBe("/custom/worktree/location");
       expect(result.startedFromOrigin).toBe(true);
       expect(result.setupScript).toEqual({ status: "skipped" });
+    });
+  });
+
+  it.effect("fetches the selected remote when the base ref is remote-qualified", () => {
+    const harness = makeHarness({
+      primaryRemoteName: "github",
+      remoteNameForRef: "t3code-github",
+    });
+    return Effect.gen(function* () {
+      yield* runHandoff(harness, {
+        branch: "feature/from-upstream",
+        baseRef: "t3code-github/main",
+        startFromOrigin: true,
+      });
+
+      expect(harness.fetchRemote).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        remoteName: "t3code-github",
+      });
+      expect(harness.resolveRemoteTrackingCommit).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        refName: "t3code-github/main",
+        fallbackRemoteName: "t3code-github",
+      });
     });
   });
 

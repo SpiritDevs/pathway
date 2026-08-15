@@ -145,7 +145,7 @@ export const EmailCaptureTimings = Schema.Struct({
 });
 export type EmailCaptureTimings = typeof EmailCaptureTimings.Type;
 
-export const DetectedEmailCode = Schema.String.check(Schema.isMinLength(4), Schema.isMaxLength(8));
+export const DetectedEmailCode = Schema.String.check(Schema.isMinLength(4), Schema.isMaxLength(32));
 export type DetectedEmailCode = typeof DetectedEmailCode.Type;
 
 export const EmailDeliverabilityCheckId = Schema.Literals([

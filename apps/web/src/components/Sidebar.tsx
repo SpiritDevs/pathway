@@ -24,12 +24,18 @@ import {
   threadWokeAt,
 } from "@spiritdevs/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
+import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import {
   scopeProjectRef,
   scopeThreadRef,
   scopedThreadKey,
 } from "@spiritdevs/client-runtime/environment";
-import type { Issue, ScopedThreadRef, ThreadId } from "@spiritdevs/contracts";
+import {
+  threadIsVisibleAt,
+  type Issue,
+  type ScopedThreadRef,
+  type ThreadId,
+} from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
   AlarmClockIcon,
@@ -44,6 +50,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -136,7 +143,6 @@ import {
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
   searchSidebarThreadsByTitle,
-  shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
@@ -384,7 +390,7 @@ function SidebarThreadTooltip({
       {sideChats.length > 0 ? (
         <div className="border-border/60 border-t">
           <div className="flex items-center gap-1.5 px-[var(--floating-content-inset)] py-2 text-[10px] font-medium text-muted-foreground">
-            <MessageSquareIcon aria-hidden className="size-3" />
+            <MessagesSquareIcon aria-hidden className="size-3" />
             <span>Side chats</span>
             <span className="ml-auto tabular-nums">{sideChats.length}</span>
           </div>
@@ -396,7 +402,7 @@ function SidebarThreadTooltip({
                 className="flex w-full cursor-pointer items-center gap-2 px-[var(--floating-content-inset)] py-2 text-left text-xs text-foreground/80 outline-none hover:bg-accent hover:text-foreground focus-visible:bg-accent"
                 onClick={() => onOpenSideChat(sideChat.id)}
               >
-                <MessageSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+                <MessagesSquareIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{sideChat.title}</span>
               </button>
             ))}
@@ -625,7 +631,11 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       const session = store.getDraftSession(draftId);
       const composer = store.getComposerDraft(draftId);
       row =
-        session && session.promotedTo == null && composer && composerDraftHasUserContent(composer)
+        session &&
+        session.promotedTo == null &&
+        threadIsVisibleAt(session, "agents") &&
+        composer &&
+        composerDraftHasUserContent(composer)
           ? { draftId, session, composer }
           : null;
     }
@@ -638,6 +648,9 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
     // unmapped, so the mapping only knows about the latest per project.
     for (const [draftKey, session] of Object.entries(draftThreadsByThreadKey)) {
       if (session.promotedTo != null) {
+        continue;
+      }
+      if (!threadIsVisibleAt(session, "agents")) {
         continue;
       }
       if (
@@ -1700,6 +1713,10 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const agentThreads = useMemo(
+    () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
+    [threads],
+  );
   const startWorkIssuesByThread = useStartWorkIssuesByThread();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -1863,8 +1880,9 @@ export default function Sidebar() {
     ],
   );
   const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+    () =>
+      sortLogicalProjectsForSidebar(unsortedProjectGroups, agentThreads, sidebarProjectSortOrder),
+    [agentThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
@@ -1881,7 +1899,14 @@ export default function Sidebar() {
     const grouped = new Map<string, EnvironmentThreadShell[]>();
     for (const thread of threads) {
       const parentThreadId = getSidebarForkParentThreadId(thread);
-      if (parentThreadId === null || thread.archivedAt !== null) continue;
+      if (
+        parentThreadId === null ||
+        thread.archivedAt !== null ||
+        thread.settledOverride === "settled" ||
+        resolveThreadForkKind(thread) !== "side_chat"
+      ) {
+        continue;
+      }
       const parentKey = scopedThreadKey(scopeThreadRef(thread.environmentId, parentThreadId));
       const existing = grouped.get(parentKey);
       if (existing) {
@@ -1997,6 +2022,9 @@ export default function Sidebar() {
       if (session.promotedTo != null) {
         continue;
       }
+      if (!threadIsVisibleAt(session, "agents")) {
+        continue;
+      }
       if (!composerDraftHasUserContent(store.draftsByThreadKey[draftKey])) {
         continue;
       }
@@ -2025,7 +2053,7 @@ export default function Sidebar() {
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/projects/$projectKey",
+        to: "/settings/projects/$projectKey",
         params: { projectKey: projectGroup.projectKey },
       });
     },
@@ -2054,7 +2082,7 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+    const visible = filterSidebarV2VisibleThreads(agentThreads, scopedProjectKeys);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -2126,7 +2154,7 @@ export default function Sidebar() {
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
-    threads,
+    agentThreads,
   ]);
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
@@ -3384,43 +3412,22 @@ export default function Sidebar() {
     autoAnimate(node, { duration: 150, easing: "ease-out" });
   }, []);
 
-  // New thread defaults to the project you're in (active thread's project,
-  // falling back to the top project) — same resolution the command palette
-  // uses. The command palette already offers a "New thread in..." submenu
-  // for multi-project setups.
-  const handleNewThreadClick = useCallback(
-    (event?: ReactMouseEvent) => {
-      // One project: nothing to pick, create immediately. Shift+click creates
-      // directly in the current project even with several projects, skipping
-      // the palette picker.
-      if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
-        if (isMobile) setOpenMobile(false);
-        void startNewThreadFromContext({
-          activeDraftThread: newThreadContext.activeDraftThread,
-          activeThread: newThreadContext.activeThread ?? undefined,
-          defaultProjectRef: newThreadContext.defaultProjectRef,
-          handleNewThread: newThreadContext.handleNewThread,
-        });
-        return;
-      }
-      if (isMobile) setOpenMobile(false);
-      openCommandPalette({ open: "new-thread-in" });
-    },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
-  );
+  // New threads open directly in the current thread's project, falling back
+  // to the current draft and then the first project in the user's ordering.
+  const handleNewThreadClick = useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    void startNewThreadFromContext({
+      activeDraftThread: newThreadContext.activeDraftThread,
+      activeThread: newThreadContext.activeThread ?? undefined,
+      defaultProjectRef: newThreadContext.defaultProjectRef,
+      handleNewThread: newThreadContext.handleNewThread,
+    });
+  }, [isMobile, newThreadContext, setOpenMobile]);
 
-  // The button mirrors chat.new: in multi-project setups both route through
-  // the command palette's "New thread in..." picker, and in single-project
-  // setups both create immediately. In multi-project setups the label is only
-  // the picker's shortcut: falling back to chat.newLocal would advertise the
-  // same shortcut for both the picker and direct create. In single-project
-  // setups both commands create directly, so chat.newLocal is a valid
-  // fallback. The second tooltip line (multi-project only) advertises
-  // shift+click and its keyboard twin chat.newLocal for direct create.
+  // chat.newLocal is retained as a fallback for custom keybinding setups.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
-    (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
-  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+    shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3498,25 +3505,9 @@ export default function Sidebar() {
                     />
                   </TooltipTrigger>
                   <TooltipPopup side="right">
-                    {projectGroups.length > 1 ? (
-                      <span className="flex flex-col gap-0.5">
-                        <span>
-                          {newThreadShortcutLabel
-                            ? `New thread (${newThreadShortcutLabel})`
-                            : "New thread"}
-                        </span>
-                        <span className="text-muted-foreground">
-                          New thread in current project: Shift+click
-                          {newThreadInProjectShortcutLabel
-                            ? ` (${newThreadInProjectShortcutLabel})`
-                            : ""}
-                        </span>
-                      </span>
-                    ) : newThreadShortcutLabel ? (
-                      `New thread (${newThreadShortcutLabel})`
-                    ) : (
-                      "New thread"
-                    )}
+                    {newThreadShortcutLabel
+                      ? `New thread (${newThreadShortcutLabel})`
+                      : "New thread"}
                   </TooltipPopup>
                 </Tooltip>
               </div>

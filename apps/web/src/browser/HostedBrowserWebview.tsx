@@ -2,11 +2,17 @@
 
 import type { PreviewViewportSetting, ScopedThreadRef } from "@spiritdevs/contracts";
 import { useShallow } from "zustand/react/shallow";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { AgentBrowserCursor } from "~/components/preview/AgentBrowserCursor";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { cn } from "~/lib/utils";
+import {
+  deriveProviderInstanceEntries,
+  shouldShowProviderInstanceBadge,
+} from "~/providerInstances";
+import { useServerConfigs, useThreadShell } from "~/state/entities";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
 import {
@@ -51,6 +57,15 @@ export function HostedBrowserWebview(props: {
 }) {
   const { threadRef, tabId, runtimeTabId, initialUrl, viewport, zoomFactor } = props;
   const config = usePreviewWebviewConfig(threadRef.environmentId);
+  const thread = useThreadShell(threadRef);
+  const serverConfigs = useServerConfigs();
+  const providers = serverConfigs.get(threadRef.environmentId)?.providers;
+  const providerEntries = useMemo(
+    () => deriveProviderInstanceEntries(providers ?? []),
+    [providers],
+  );
+  const activeProvider =
+    providerEntries.find((entry) => entry.instanceId === thread?.providerInstanceId) ?? null;
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -295,6 +310,21 @@ export function HostedBrowserWebview(props: {
             transformOrigin: "top left",
           }}
         />
+        {active ? (
+          <AgentBrowserCursor
+            tabId={runtimeTabId}
+            zoomFactor={normalizedZoomFactor}
+            scale={layout.viewportScale}
+            offsetX={layout.viewportX}
+            offsetY={layout.viewportY}
+            provider={activeProvider}
+            showProviderBadge={
+              activeProvider
+                ? shouldShowProviderInstanceBadge(activeProvider, providerEntries)
+                : false
+            }
+          />
+        ) : null}
         {active && effectiveViewport._tag !== "fill" && !fittedSourceViewport ? (
           <>
             <BrowserViewportResizeHandles

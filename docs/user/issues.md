@@ -17,8 +17,15 @@ and the whole list stays fast at thousands of rows.
 - Move the cursor with `j` / `k` or the arrow keys, and press `Enter` to open the highlighted issue.
 - Click a property on a row — status, priority, assignee, labels — to change it without opening
   anything.
-- Shift-click to select a range. A bar appears with bulk **Status**, **Priority**, **Labels**, and
-  **Delete** for everything selected. `Escape` clears the selection.
+- Shift-click to select a range. A bar appears with bulk **Status**, **Priority**, **Labels**,
+  **Investigate**, **Ask AI**, and **Delete** for everything selected. **Ask AI** opens a draft with
+  one compact badge per issue, leaving the prompt clear for your question while the agent receives
+  the selected issue context. Select a badge in the Issues assistant to review that issue in a
+  neighbouring tab and then return to the conversation. In a regular agent conversation, selecting
+  the same badge opens the issue detail sheet for a quick review. `Escape` clears the selection.
+- Use the panel button beside the view controls to open or close the Issues sidebar. Its **Side
+  chat** conversations belong to Issues and stay out of the agent thread list; **Browser** tabs are
+  also available in the desktop app.
 
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.
@@ -74,7 +81,8 @@ The sheet holds the description, the properties rail, todos, sub-issues, relatio
 investigation panel, and the activity feed. Every change to an issue is recorded in that feed with
 who made it and what it was before. On wider sheets, drag the divider beside the properties rail to
 resize it; Pathway remembers the width for the next issue you open. Click the issue key in the
-sheet header to copy it.
+sheet header to copy it. When you follow a sub-issue or relation inside the sheet, use the back and
+forward buttons beside the issue key to move through the issues you visited.
 
 A pull request discovered on a linked work thread also appears in the properties rail with its
 title and current open, closed, or merged state. The first discovery is recorded automatically in
@@ -83,6 +91,12 @@ the activity feed as an Automation event.
 Use **Add images** in the attachment shelf to choose images from a file or from the clipboard. You
 can also paste an image directly into the description; Pathway moves it into the attachment shelf
 instead of inserting it into the description.
+
+Clicking an image — in the shelf or in a comment — opens it full window inside Pathway rather than
+in a browser. The viewer holds every image on the issue, so the arrows, the thumbnail strip, and the
+left and right arrow keys walk the whole set. From there you can zoom (the buttons, `+`, `-`, and
+`0`, or double-click, and drag to pan), download or copy the image, open it in a browser, start a
+new thread about that one image, or comment on it without leaving the viewer. `Esc` closes it.
 
 Deleting an issue is recoverable — it disappears from the list but keeps its key and its history,
 and **Restore** brings it back.
@@ -272,13 +286,14 @@ You can ask an agent something directly from an issue's comment thread. Mention 
 
 - **Type it** as an ordinary markdown link naming a configured agent — `[Claude](Claude)` works,
   and so does `[@Claude](claude)`; case does not matter and a leading `@` is decoration.
-- **Pick it** with the **@** button beside the composer, which lists your configured agents and
-  adds nothing to your text.
+- **Pick it** by typing **@** in the composer. The agent list opens immediately and filters as you
+  type; use the arrow keys and Enter or click an agent. The **@** button below the composer opens
+  the same configured-agent list without typing.
 
 Either way a chip appears next to the composer showing the agent and its model. Click the chip to
 configure the run — provider instance, model, reasoning effort, and service tier, the same options
-a chat turn has — or dismiss it to send a plain comment. Your words are never rewritten while you
-type; the mention becomes a pill only when the comment posts.
+a chat turn has — or dismiss it to send a plain comment. Choosing from the inline picker consumes
+the unfinished `@query`; the persisted mention becomes a pill only when the comment posts.
 
 Posting the comment starts **exactly one run** for that comment. The agent reads the issue — title,
 description, and the comment thread including your ask — and works in the project's directory
@@ -301,7 +316,10 @@ Mentions are a web and desktop feature; there is no issues surface on mobile.
 
 Coding agents get an issues toolkit automatically, whichever provider you use. They can search and
 read issues, create and update them, comment, delete, and restore, and link the thread they are
-working in to an issue.
+working in to an issue. They can also list, create, rename, reschedule, move, and delete milestones.
+Milestone tools identify one by its project and name, since the same name may exist in two projects.
+When an agent creates an issue with a project and names a milestone that does not exist there yet,
+Pathway creates the milestone while filing the issue and assigns the new issue to it.
 
 Issue reads include every image attachment in the issue-level attachment list and on the comment
 that owns it, together with that comment's body, author, and timestamp. Pathway sends a bounded set
@@ -309,9 +327,10 @@ of those images directly with the issue read so the agent can inspect them visua
 more images than fit safely in that response, the agent can read any remaining image individually
 with its attachment id. Issue attachments are images only.
 
-Agent writes are not gated behind an approval, so treat them like your own: deletes are soft and
-reversible with **Restore**, and every write is attributed in the activity feed with the provider
-that made it.
+Agent writes are not gated behind an approval, so treat them like your own. Issue deletes are soft
+and reversible with **Restore**, and issue writes are attributed in the activity feed with the
+provider that made them. Milestone changes appear immediately, but milestones have no activity feed
+of their own.
 
 ### Issue keys in chat
 

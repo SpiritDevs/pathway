@@ -54,6 +54,7 @@ import {
   MenuSub,
   MenuSubPopup,
   MenuSubTrigger,
+  MenuTrigger,
 } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -171,7 +172,23 @@ export function IssueContextMenu({
       }}
       open
     >
-      <MenuPopup align="start" anchor={anchor} className="min-w-56" side="inline-end">
+      {/* Base UI still needs a registered trigger for a controlled, pointer-anchored menu. It
+          owns the root/submenu floating tree and keeps submenu hover from dismissing the root. */}
+      <MenuTrigger
+        className="pointer-events-none fixed size-0"
+        nativeButton={false}
+        render={<span />}
+        style={{ left: x, top: y }}
+        tabIndex={-1}
+      >
+        <span className="sr-only">Issue actions</span>
+      </MenuTrigger>
+      <MenuPopup
+        align="start"
+        anchor={anchor}
+        className="w-[min(30rem,calc(100vw-1rem))]"
+        side="inline-end"
+      >
         <MenuGroup>
           <MenuGroupLabel>{issueContextMenuLabel(issues)}</MenuGroupLabel>
         </MenuGroup>

@@ -329,6 +329,7 @@ const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"
   "error",
   "fork",
   "handoff",
+  "source_control",
   "run_interrupt_request",
   "run_interrupt_result",
   "subagent",

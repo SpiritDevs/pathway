@@ -8,12 +8,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
+  actionPaletteSections: [] as Array<{ id: string; visible: boolean }>,
   useT3ProjectFileScripts: vi.fn(),
   projectScriptsControl: vi.fn(),
   providerUsage: vi.fn(),
   providerUsageList: vi.fn(),
-  runtimeControls: vi.fn(),
+  developmentControls: vi.fn(),
+  terminalControls: vi.fn(),
   threadIssuePanel: vi.fn(),
+}));
+
+vi.mock("../../hooks/useSettings", () => ({
+  useClientSettings: (selector: (settings: unknown) => unknown) =>
+    selector({ actionPaletteSections: testState.actionPaletteSections }),
 }));
 
 vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
@@ -30,9 +37,13 @@ vi.mock("../ProjectScriptsControl", () => ({
   },
 }));
 vi.mock("../EnvironmentRuntimeControls", () => ({
-  EnvironmentRuntimeControls: (props: unknown) => {
-    testState.runtimeControls(props);
-    return <div>runtime-controls-sentinel</div>;
+  DevelopmentEnvironmentControls: (props: unknown) => {
+    testState.developmentControls(props);
+    return <div>development-controls-sentinel</div>;
+  },
+  TerminalRuntimeControls: (props: unknown) => {
+    testState.terminalControls(props);
+    return <div>terminal-controls-sentinel</div>;
   },
 }));
 vi.mock("../usage/ProviderUsage", () => ({
@@ -48,7 +59,7 @@ vi.mock("../usage/ProviderUsage", () => ({
   },
 }));
 vi.mock("./ThreadAutomationsPanel", () => ({
-  ThreadAutomationsPanel: () => null,
+  ThreadAutomationsPanel: () => <div>automations-panel-sentinel</div>,
 }));
 vi.mock("./ThreadIssuePanel", () => ({
   ThreadIssuePanel: (props: unknown) => {
@@ -57,18 +68,22 @@ vi.mock("./ThreadIssuePanel", () => ({
   },
 }));
 vi.mock("./ThreadRelationshipsControl", () => ({
-  ThreadRelationshipsPanel: () => null,
+  ThreadRelationshipsProvider: ({ children }: { children: unknown }) => children,
+  ThreadChatsPanel: () => <div>chats-panel-sentinel</div>,
+  ThreadLineagePanel: () => <div>lineage-panel-sentinel</div>,
 }));
 
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetailsPanel";
 
 describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
+    testState.actionPaletteSections = [];
     testState.useT3ProjectFileScripts.mockReset();
     testState.projectScriptsControl.mockReset();
     testState.providerUsage.mockReset();
     testState.providerUsageList.mockReset();
-    testState.runtimeControls.mockReset();
+    testState.developmentControls.mockReset();
+    testState.terminalControls.mockReset();
     testState.threadIssuePanel.mockReset();
   });
 
@@ -127,9 +142,13 @@ describe("ThreadDetailsPanel", () => {
         fileScripts,
       }),
     );
-    expect(testState.runtimeControls).toHaveBeenCalledWith({
+    expect(testState.developmentControls).toHaveBeenCalledWith({
       threadRef: { environmentId, threadId: props.threadId },
       enabled: true,
+      displayMode: "panel",
+    });
+    expect(testState.terminalControls).toHaveBeenCalledWith({
+      threadRef: { environmentId, threadId: props.threadId },
       displayMode: "panel",
     });
     expect(testState.threadIssuePanel).toHaveBeenCalledWith({
@@ -175,7 +194,7 @@ describe("ThreadDetailsPanel", () => {
     };
 
     const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
-    const runtimeIndex = html.indexOf("runtime-controls-sentinel");
+    const runtimeIndex = html.indexOf("terminal-controls-sentinel");
     const issuesIndex = html.indexOf("issues-panel-sentinel");
     const versionControlIndex = html.indexOf("Version Control");
 
@@ -293,4 +312,63 @@ describe("ThreadDetailsPanel", () => {
     });
     expect(testState.providerUsage).not.toHaveBeenCalled();
   });
+
+  it.each(["inline", "popover"] as const)(
+    "applies the same visibility and ordering in %s mode",
+    (mode) => {
+      const environmentId = "environment:configured-palette" as EnvironmentId;
+      testState.useT3ProjectFileScripts.mockReturnValue([]);
+      testState.actionPaletteSections = [
+        { id: "issues", visible: true },
+        { id: "workspace", visible: true },
+        { id: "actions", visible: true },
+        { id: "usage", visible: true },
+        { id: "development-environments", visible: false },
+        { id: "terminals", visible: true },
+        { id: "version-control", visible: true },
+        { id: "automations", visible: true },
+        { id: "chats", visible: true },
+        { id: "lineage", visible: true },
+      ];
+
+      const props: ThreadDetailsPanelProps = {
+        mode,
+        environmentId,
+        environmentConnection: null,
+        threadId: "thread:configured-palette" as ThreadId,
+        activeProjectName: undefined,
+        activeProjectScripts: undefined,
+        activeProvider: null,
+        resourcesEnabled: true,
+        preferredScriptId: null,
+        keybindings: [],
+        availableEditors: [],
+        showOpenInPicker: false,
+        gitCwd: "/tmp/configured-palette",
+        isGitRepo: true,
+        envLocked: false,
+        availableEnvironments: [],
+        onEnvironmentChange: vi.fn(),
+        onEnvModeChange: vi.fn(),
+        startFromOrigin: false,
+        onStartFromOriginChange: vi.fn(),
+        onComposerFocusRequest: vi.fn(),
+        onReconnectEnvironment: vi.fn(),
+        onOpenConnectionSettings: vi.fn(),
+        versionMismatch: null,
+        onDismissVersionMismatch: vi.fn(),
+        onRunProjectScript: vi.fn(),
+        onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+        onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+        onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+      };
+
+      const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+
+      expect(html.indexOf("issues-panel-sentinel")).toBeLessThan(html.indexOf("Workspace"));
+      expect(html).not.toContain("development-controls-sentinel");
+      expect(html).toContain("terminal-controls-sentinel");
+      expect(testState.developmentControls).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -249,6 +249,36 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("drops Issues workspace tabs from persisted thread panels", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issue:ISS-27",
+            surfaces: [
+              {
+                id: "issue:ISS-27",
+                kind: "issue",
+                issueKey: "ISS-27",
+                title: "Make the issue detail taller",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: false,
+          activeSurfaceId: null,
+          surfaces: [],
+        },
+      },
+      threadPanelVisibilityByThreadKey: {},
+    });
+  });
+
   it("persists inline preference without restoring an open popover", () => {
     expect(
       migratePersistedRightPanelState({
@@ -567,6 +597,23 @@ describe("rightPanelStore", () => {
       id: "browser:tab-b",
       kind: "preview",
       resourceId: "tab-b",
+    });
+  });
+
+  it("reveals an existing browser tab when the panel is closed or showing another surface", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().close(refA);
+
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "browser:tab-a",
+      surfaces: [
+        { id: "browser:tab-a", kind: "preview", resourceId: "tab-a" },
+        { id: "agents", kind: "agents" },
+      ],
     });
   });
 

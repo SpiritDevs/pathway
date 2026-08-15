@@ -175,6 +175,10 @@
       "types": "./src/state/threadWorkflows.ts",
       "default": "./src/state/threadWorkflows.ts"
     },
+    "./state/usage-limit-recovery": {
+      "types": "./src/state/usageLimitRecovery.ts",
+      "default": "./src/state/usageLimitRecovery.ts"
+    },
     "./state/thread-settled": {
       "types": "./src/state/threadSettled.ts",
       "default": "./src/state/threadSettled.ts"

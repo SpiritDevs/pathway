@@ -2,83 +2,90 @@
 
 import type { DesktopPreviewPointerEvent } from "@spiritdevs/contracts";
 import { MousePointer2 } from "lucide-react";
-import { useEffect, useState } from "react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";
-import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { ProviderInstanceIcon } from "~/components/chat/ProviderInstanceIcon";
+import type { ProviderInstanceEntry } from "~/providerInstances";
 
-import {
-  AGENT_CURSOR_GLIDE_MS,
-  agentBrowserCursorGlidePosition,
-  agentBrowserCursorOpacity,
-  agentBrowserCursorSurfaceOffset,
-  type AgentBrowserCursorContent,
-} from "./agentBrowserCursorLogic";
+import { AGENT_CURSOR_GLIDE_MS, agentBrowserCursorGlidePosition } from "./agentBrowserCursorLogic";
 
-const CURSOR_ACTIVE_MS = 700;
-
-export function AgentBrowserCursor(props: { readonly tabId: string; readonly zoomFactor: number }) {
-  const { tabId, zoomFactor } = props;
+/**
+ * Rendered inside the hosted webview's wrapper (a sibling of the `<webview>`
+ * element) so it always paints above the guest page, wherever the surface is
+ * presented. Coordinates are wrapper-local: `offsetX`/`offsetY` position the
+ * guest viewport and the pointer event glides within it.
+ */
+export function AgentBrowserCursor(props: {
+  readonly tabId: string;
+  readonly zoomFactor: number;
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly provider: ProviderInstanceEntry | null;
+  readonly showProviderBadge: boolean;
+}) {
+  const { tabId, zoomFactor, scale, offsetX, offsetY, provider, showProviderBadge } = props;
   const event = useBrowserPointerStore((state) => state.byTabId[tabId] ?? null);
-  const content = useBrowserSurfaceStore((state) => state.byTabId[tabId]?.content ?? null);
 
   if (!event) return null;
 
   return (
-    <AgentBrowserCursorEvent key={tabId} event={event} content={content} zoomFactor={zoomFactor} />
+    <AgentBrowserCursorEvent
+      key={tabId}
+      event={event}
+      zoomFactor={zoomFactor}
+      scale={scale}
+      offsetX={offsetX}
+      offsetY={offsetY}
+      provider={provider}
+      showProviderBadge={showProviderBadge}
+    />
   );
 }
 
 function AgentBrowserCursorEvent(props: {
   readonly event: DesktopPreviewPointerEvent;
-  readonly content: AgentBrowserCursorContent | null;
   readonly zoomFactor: number;
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly provider: ProviderInstanceEntry | null;
+  readonly showProviderBadge: boolean;
 }) {
-  const { event, content, zoomFactor } = props;
-  const [active, setActive] = useState(true);
-
-  useEffect(() => {
-    setActive(true);
-    const timeout = window.setTimeout(() => setActive(false), CURSOR_ACTIVE_MS);
-    return () => window.clearTimeout(timeout);
-  }, [event.sequence]);
-
-  const offset = agentBrowserCursorSurfaceOffset(content);
-  const glide = agentBrowserCursorGlidePosition(event, zoomFactor, content);
-  const pressed = active && event.phase === "click";
+  const { event, zoomFactor, scale, offsetX, offsetY, provider, showProviderBadge } = props;
+  const glide = agentBrowserCursorGlidePosition(event, zoomFactor, scale);
 
   return (
     <div
       className="pointer-events-none absolute left-0 top-0 z-40"
-      style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
+      style={{ transform: `translate3d(${offsetX}px, ${offsetY}px, 0)` }}
       aria-hidden="true"
       data-agent-browser-cursor
     >
       <div
         className="transition-[transform,opacity] ease-out motion-reduce:transition-none"
         style={{
-          opacity: agentBrowserCursorOpacity(active),
+          opacity: 0.8,
           transform: `translate3d(${glide.x}px, ${glide.y}px, 0)`,
           transitionDuration: `${AGENT_CURSOR_GLIDE_MS}ms`,
         }}
       >
-        {event.phase === "click" ? (
-          <span
-            key={event.sequence}
-            className="absolute -left-3 -top-3 size-6 animate-status-ping rounded-full border border-primary/60 bg-primary/25 motion-reduce:animate-none"
-          />
-        ) : null}
-        <span className="absolute -left-2 -top-2 size-8 rounded-full bg-primary/15 blur-sm" />
-        <div
-          className={`relative transition-transform duration-100 ease-out motion-reduce:transition-none ${pressed ? "scale-90" : "scale-100"}`}
-        >
+        <div className="relative">
           <MousePointer2
-            className="size-5 -translate-x-0.5 -translate-y-0.5 fill-primary stroke-background drop-shadow-md"
+            className="size-6 -translate-x-0.5 -translate-y-0.5 fill-primary stroke-background drop-shadow-md"
             strokeWidth={1.5}
           />
-          <span className="absolute left-4 top-4 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground shadow-sm">
-            AI
-          </span>
+          {provider ? (
+            <ProviderInstanceIcon
+              accentColor={provider.accentColor}
+              badgeClassName="h-3 min-w-3 text-[7px]"
+              className="absolute left-4 top-4 size-5 rounded-full bg-background p-0.5 shadow-sm"
+              displayName={provider.displayName}
+              driverKind={provider.driverKind}
+              iconClassName="size-4"
+              showBadge={showProviderBadge}
+            />
+          ) : null}
         </div>
       </div>
     </div>

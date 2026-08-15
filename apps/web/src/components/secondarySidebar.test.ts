@@ -8,6 +8,8 @@ describe("resolveSecondarySidebarKind", () => {
     ["/threads", "threads"],
     ["/threads/draft/new", "threads"],
     ["/threads/environment/thread", "threads"],
+    ["/projects", "projects"],
+    ["/projects/pathway", "projects"],
     ["/issues", "issues"],
     ["/issues/assigned", "issues"],
     ["/settings", "settings"],
@@ -21,6 +23,10 @@ describe("resolveSecondarySidebarKind", () => {
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", null],
     ["/dashboard", null],
+    ["/contacts", null],
+    ["/time-tracker", null],
+    ["/files", null],
+    ["/browser", null],
   ] as const)("maps %s to %s", (pathname, sidebarKind) => {
     expect(resolveSecondarySidebarKind(pathname)).toBe(sidebarKind);
   });
@@ -37,6 +43,7 @@ describe("shouldRenderSecondarySidebar", () => {
 
   it("shows contextual sidebars on desktop", () => {
     expect(shouldRenderSecondarySidebar(false, "threads")).toBe(true);
+    expect(shouldRenderSecondarySidebar(false, "projects")).toBe(true);
     expect(shouldRenderSecondarySidebar(false, "settings")).toBe(true);
     expect(shouldRenderSecondarySidebar(false, "email")).toBe(true);
     expect(shouldRenderSecondarySidebar(false, "calendar")).toBe(true);

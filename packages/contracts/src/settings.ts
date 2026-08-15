@@ -138,9 +138,23 @@ export const DEFAULT_ACTIVE_TURN_SEND_MODE: ActiveTurnSendMode = "steer";
 export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
+/**
+ * One client-owned action-palette section preference. Section ids stay open
+ * ended so a newer client can persist a section without breaking an older
+ * client that reads the same settings file.
+ */
+export const ActionPaletteSectionPreference = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  visible: Schema.Boolean,
+});
+export type ActionPaletteSectionPreference = typeof ActionPaletteSectionPreference.Type;
+
 export const ClientSettingsSchema = Schema.Struct({
   activeTurnSendMode: ActiveTurnSendMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ACTIVE_TURN_SEND_MODE)),
+  ),
+  actionPaletteSections: Schema.Array(ActionPaletteSectionPreference).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
   ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -178,6 +192,22 @@ export const ClientSettingsSchema = Schema.Struct({
   fontSmoothing: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   persistComposerContextStrip: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  primaryNavigationViewOrder: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed([
+        "threads",
+        "projects",
+        "issues",
+        "pull-requests",
+        "calendar",
+        "email",
+        "contacts",
+        "time-tracker",
+        "files",
+        "browser",
+      ]),
+    ),
   ),
   // Model favorites. Historically keyed by provider kind, now
   // widened to `ProviderInstanceId` so users can favorite a specific model
@@ -933,6 +963,7 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   activeTurnSendMode: Schema.optionalKey(ActiveTurnSendMode),
+  actionPaletteSections: Schema.optionalKey(Schema.Array(ActionPaletteSectionPreference)),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -949,6 +980,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
   fontSmoothing: Schema.optionalKey(Schema.Boolean),
   persistComposerContextStrip: Schema.optionalKey(Schema.Boolean),
+  primaryNavigationViewOrder: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   favorites: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({

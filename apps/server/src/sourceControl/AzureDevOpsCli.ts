@@ -70,10 +70,14 @@ export class AzureDevOpsPullRequestNotFoundError extends Schema.TaggedErrorClass
 
 export class AzureDevOpsCommandFailedError extends Schema.TaggedErrorClass<AzureDevOpsCommandFailedError>()(
   "AzureDevOpsCommandFailedError",
-  azureDevOpsCommandErrorFields,
+  {
+    ...azureDevOpsCommandErrorFields,
+    /** Sanitized `az` stderr excerpt captured by the VCS process boundary. */
+    stderrExcerpt: Schema.optional(Schema.String),
+  },
 ) {
   get detail(): string {
-    return "Azure DevOps CLI command failed.";
+    return this.stderrExcerpt ?? "Azure DevOps CLI command failed.";
   }
 
   override get message(): string {
@@ -107,6 +111,12 @@ export class AzureDevOpsCommandFailedError extends Schema.TaggedErrorClass<Azure
       }
       if (cause.failureKind === "not-found") {
         return new AzureDevOpsPullRequestNotFoundError(fields);
+      }
+      if (cause.stderrExcerpt !== undefined) {
+        return new AzureDevOpsCommandFailedError({
+          ...fields,
+          stderrExcerpt: cause.stderrExcerpt,
+        });
       }
     }
 

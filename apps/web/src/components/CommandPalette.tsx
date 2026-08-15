@@ -1569,7 +1569,7 @@ function OpenCommandPaletteDialog(props: {
       icon: <FolderIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await navigate({
-          to: "/projects/$projectKey",
+          to: "/settings/projects/$projectKey",
           params: { projectKey: contextualProjectGroup.projectKey },
         });
       },

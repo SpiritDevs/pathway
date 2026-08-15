@@ -4,6 +4,7 @@ import {
   immediateThreadRelationships,
   isParentThreadRelationship,
   orderWebThreadLineageRows,
+  resolveThreadForkKind,
   resolveMergeBackTargetThreadId,
   type ThreadRelationshipEdge,
 } from "@spiritdevs/client-runtime/state/thread-relationships";
@@ -16,17 +17,28 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
   BotIcon,
+  CheckIcon,
   CornerLeftUpIcon,
   GitForkIcon,
   GitMergeIcon,
   LoaderCircleIcon,
+  MessagesSquareIcon,
   MoreHorizontalIcon,
   PlusIcon,
   UnplugIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
+import { useRightPanelStore } from "../../rightPanelStore";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { useThreadProjection, useThreadShells } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
@@ -78,13 +90,16 @@ export function ThreadLineageRowList(props: {
         Bounded rather than free-growing so Lineage cannot push the rest of the
         thread details panel out of view. Plain overflow, not a ScrollArea
         component: this sits inside an already scrolling panel, where a
-        max-height-only virtual viewport measures badly. Every row is a focusable
-        button, so keyboard users reach and scroll the region through the rows
-        themselves and the container needs no extra tab stop of its own.
+        max-height-only virtual viewport measures badly. Let wheel and touch
+        scrolling chain to the surrounding details panel when this list reaches
+        an edge; containing overscroll here makes the panel feel stuck whenever
+        the pointer is over a lineage row. Every row is a focusable button, so
+        keyboard users reach and scroll the region through the rows themselves
+        and the container needs no extra tab stop of its own.
       */}
       <ul
         aria-label={props.ariaLabel ?? "Related threads"}
-        className="m-0 max-h-[13.5rem] list-none overflow-y-auto overscroll-contain p-0"
+        className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0"
       >
         {props.children}
       </ul>
@@ -125,7 +140,7 @@ function relationshipThreadTitle(input: {
   return input.title.replace(/^Subagent:\s*/i, "");
 }
 
-export function ThreadRelationshipsPanel(props: {
+function useThreadRelationshipsModel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
@@ -147,8 +162,10 @@ export function ThreadRelationshipsPanel(props: {
   }, [archivedShells, projection, props.environmentId, threadShells]);
   const navigate = useNavigate();
   const mergeBack = useAtomCommand(threadEnvironment.mergeBack);
+  const settleThread = useAtomCommand(threadEnvironment.settle);
   const stopSession = useAtomCommand(threadEnvironment.stopSession);
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
+  const [settlingThreadId, setSettlingThreadId] = useState<ThreadId | null>(null);
   const latestMergeBackRun = projection === null ? null : resolveLatestMergeBackRun(projection);
   const mergeTargetThreadId = resolveMergeBackTargetThreadId(projection);
   const relationshipRows = useMemo(
@@ -161,31 +178,73 @@ export function ThreadRelationshipsPanel(props: {
       }),
     [graph, mergeTargetThreadId, props.threadId],
   );
+  const chatRows = useMemo(
+    () =>
+      relationshipRows.filter(({ threadId, edge }) => {
+        const thread = graph.nodes.get(threadId)?.thread;
+        return (
+          edge.kind === "fork" &&
+          edge.sourceThreadId === props.threadId &&
+          thread?.settledOverride !== "settled"
+        );
+      }),
+    [graph.nodes, props.threadId, relationshipRows],
+  );
+  const lineageRows = useMemo(
+    () =>
+      relationshipRows.filter(
+        ({ edge }) => !(edge.kind === "fork" && edge.sourceThreadId === props.threadId),
+      ),
+    [props.threadId, relationshipRows],
+  );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
 
   const [visibleCount, setVisibleCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
+  const [visibleChatCount, setVisibleChatCount] = useState(THREAD_LINEAGE_INITIAL_COUNT);
   const lineageResetKey = scopedThreadKey(ref);
   const lastLineageResetKeyRef = useRef(lineageResetKey);
   if (lastLineageResetKeyRef.current !== lineageResetKey) {
     lastLineageResetKeyRef.current = lineageResetKey;
     setVisibleCount(THREAD_LINEAGE_INITIAL_COUNT);
+    setVisibleChatCount(THREAD_LINEAGE_INITIAL_COUNT);
   }
   const showMore = useCallback(
     () => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT),
     [],
   );
-  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(relationshipRows, visibleCount);
-
-  if (relationshipRows.length === 0) {
-    return null;
-  }
+  const showMoreChats = useCallback(
+    () => setVisibleChatCount((count) => count + THREAD_LINEAGE_PAGE_COUNT),
+    [],
+  );
+  const { visibleRows, hiddenCount } = resolveThreadLineageWindow(lineageRows, visibleCount);
+  const { visibleRows: visibleChatRows, hiddenCount: hiddenChatCount } = resolveThreadLineageWindow(
+    chatRows,
+    visibleChatCount,
+  );
 
   const openThread = (threadId: ThreadId) => {
     void navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(scopeThreadRef(props.environmentId, threadId)),
     });
+  };
+
+  const openChat = (threadId: ThreadId) => {
+    useRightPanelStore.getState().openThread(ref, threadId);
+  };
+
+  const settleChat = async (threadId: ThreadId, kind: "manual" | "side_chat") => {
+    if (settlingThreadId !== null) return;
+    setSettlingThreadId(threadId);
+    const result = await settleThread({
+      environmentId: props.environmentId,
+      input: { threadId },
+    });
+    setSettlingThreadId(null);
+    if (result._tag === "Success" && kind === "side_chat") {
+      useRightPanelStore.getState().closeSurface(ref, `thread:${threadId}`);
+    }
   };
 
   const merge = async () => {
@@ -218,7 +277,166 @@ export function ThreadRelationshipsPanel(props: {
       ? null
       : (graph.nodes.get(mergeTargetThreadId)?.thread?.title ?? null);
 
-  return (
+  return {
+    busyAction,
+    canDetach,
+    canMerge,
+    chatRows,
+    detach,
+    graph,
+    hiddenChatCount,
+    hiddenCount,
+    latestMergeBackRun,
+    lineageRows,
+    merge,
+    mergeTargetThreadId,
+    openChat,
+    openThread,
+    parentTitle,
+    settleChat,
+    settlingThreadId,
+    showMore,
+    showMoreChats,
+    threadId: props.threadId,
+    visibleChatRows,
+    visibleRows,
+  } as const;
+}
+
+type ThreadRelationshipsModel = ReturnType<typeof useThreadRelationshipsModel>;
+const ThreadRelationshipsContext = createContext<ThreadRelationshipsModel | null>(null);
+
+export function ThreadRelationshipsProvider(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly children: ReactNode;
+}) {
+  const model = useThreadRelationshipsModel(props);
+  return <ThreadRelationshipsContext value={model}>{props.children}</ThreadRelationshipsContext>;
+}
+
+function useThreadRelationshipsContext(): ThreadRelationshipsModel {
+  const model = useContext(ThreadRelationshipsContext);
+  if (model === null) {
+    throw new Error("Thread relationship sections must be inside ThreadRelationshipsProvider");
+  }
+  return model;
+}
+
+export function ThreadChatsPanel() {
+  const {
+    chatRows,
+    graph,
+    hiddenChatCount,
+    openChat,
+    settleChat,
+    settlingThreadId,
+    showMoreChats,
+    visibleChatRows,
+  } = useThreadRelationshipsContext();
+
+  return chatRows.length > 0 ? (
+    <section
+      aria-labelledby="thread-details-chats-heading"
+      className="border-t border-border/65 px-2 pb-2.5 pt-2"
+      data-thread-chats-panel
+    >
+      <div className="mb-1 flex min-h-8 items-center px-2">
+        <h3
+          id="thread-details-chats-heading"
+          className="text-[11px] font-medium text-muted-foreground"
+        >
+          Forks &amp; side chats
+        </h3>
+      </div>
+      <ThreadLineageRowList
+        ariaLabel="Forks and side chats"
+        hiddenCount={hiddenChatCount}
+        onShowMore={showMoreChats}
+      >
+        {visibleChatRows.map(({ threadId }) => {
+          const node = graph.nodes.get(threadId);
+          const thread = node?.thread;
+          if (!thread) return null;
+          const kind = resolveThreadForkKind(thread) ?? "manual";
+          const isSideChat = kind === "side_chat";
+          const ChatIcon = isSideChat ? MessagesSquareIcon : GitForkIcon;
+          const label = isSideChat ? "Side chat" : "Forked";
+          return (
+            <li key={threadId} className="group flex h-9 items-center rounded-lg">
+              <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={node.missing}
+                        onClick={() => openChat(threadId)}
+                        className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                      />
+                    }
+                  >
+                    <ChatIcon aria-label={label} className={THREAD_RELATIONSHIP_ICON_CLASS} />
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-4 text-foreground/85">
+                      {thread.title}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup side="left">{label}</TooltipPopup>
+                </Tooltip>
+                <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className={THREAD_DETAILS_PANEL_LINK_SPLIT_SECONDARY_CLASS}
+                        aria-label={`Settle ${isSideChat ? "side chat" : "fork"} ${thread.title}`}
+                        disabled={settlingThreadId !== null}
+                        onClick={() => void settleChat(threadId, kind)}
+                      />
+                    }
+                  >
+                    {settlingThreadId === threadId ? (
+                      <LoaderCircleIcon className="size-3 animate-spin" />
+                    ) : (
+                      <CheckIcon className="size-3" />
+                    )}
+                  </TooltipTrigger>
+                  <TooltipPopup side="left">
+                    Settle {isSideChat ? "side chat" : "fork"}
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
+            </li>
+          );
+        })}
+      </ThreadLineageRowList>
+    </section>
+  ) : null;
+}
+
+export function ThreadLineagePanel() {
+  const {
+    busyAction,
+    canDetach,
+    canMerge,
+    detach,
+    graph,
+    hiddenCount,
+    latestMergeBackRun,
+    lineageRows,
+    merge,
+    mergeTargetThreadId,
+    openThread,
+    parentTitle,
+    showMore,
+    threadId: currentThreadId,
+    visibleRows,
+  } = useThreadRelationshipsContext();
+
+  return lineageRows.length > 0 ? (
     <section
       aria-labelledby="thread-details-lineage-heading"
       className="border-t border-border/65 px-2 pb-2.5 pt-2"
@@ -263,9 +481,9 @@ export function ThreadRelationshipsPanel(props: {
           const node = graph.nodes.get(threadId);
           const isSubagent = edge.kind === "subagent";
           const isMergeTarget = threadId === mergeTargetThreadId;
-          const isParent = isParentThreadRelationship(edge, props.threadId);
+          const isParent = isParentThreadRelationship(edge, currentThreadId);
           const RelationshipIcon = isParent ? CornerLeftUpIcon : isSubagent ? BotIcon : GitForkIcon;
-          const relationship = relationshipLabel(edge, props.threadId);
+          const relationship = relationshipLabel(edge, currentThreadId);
           const threadTitle = relationshipThreadTitle({
             title: node?.thread?.title ?? threadId,
             isSubagent,
@@ -374,5 +592,18 @@ export function ThreadRelationshipsPanel(props: {
         })}
       </ThreadLineageRowList>
     </section>
+  ) : null;
+}
+
+/** Existing combined presentation retained for callers that do not need custom ordering. */
+export function ThreadRelationshipsPanel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  return (
+    <ThreadRelationshipsProvider {...props}>
+      <ThreadChatsPanel />
+      <ThreadLineagePanel />
+    </ThreadRelationshipsProvider>
   );
 }

@@ -7,6 +7,8 @@
  *
  * @module components/issues/IssueListRow
  */
+import { useDroppable } from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
 import type {
   Issue,
   IssueLabel,
@@ -20,6 +22,7 @@ import { memo, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import type { IssueChildRollup } from "~/state/issues";
+import { Checkbox } from "../ui/checkbox";
 import {
   IssueAssigneeGlyph,
   IssueInvestigatingChip,
@@ -28,7 +31,12 @@ import {
   IssueProgressRing,
   IssueStatusDot,
 } from "./IssueGlyphs";
-import { IssueLabelsMenu, IssuePriorityMenu, IssueStatusMenu } from "./IssuePropertyMenus";
+import {
+  IssueLabelsMenu,
+  IssuePriorityMenu,
+  IssuePropertyGuard,
+  IssueStatusMenu,
+} from "./IssuePropertyMenus";
 import { IssuePullRequestChip } from "./IssuePullRequestChip";
 import {
   formatIssueDueDate,
@@ -36,6 +44,7 @@ import {
   resolveIssueRowLabels,
   type IssuesListHeaderRow,
 } from "./issuesList.logic";
+import { issuesListGroupDropId, issuesListRowDragId } from "./issuesListDnd.logic";
 
 const PROPERTY_BUTTON_CLASS =
   "flex size-5 shrink-0 items-center justify-center rounded-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring";
@@ -43,16 +52,26 @@ const PROPERTY_BUTTON_CLASS =
 export function IssueGroupHeader({
   row,
   onToggle,
+  sortable = false,
 }: {
   row: IssuesListHeaderRow;
   onToggle: (groupId: string) => void;
+  sortable?: boolean;
 }) {
   const { group } = row;
+  const { setNodeRef, isOver } = useDroppable({
+    id: issuesListGroupDropId(group.status?.id ?? (group.id as IssueStatusId)),
+    disabled: !sortable || group.status === null,
+  });
   return (
     <button
       aria-expanded={!row.collapsed}
-      className="flex h-8 w-full items-center gap-2 border-b border-border/40 bg-muted/24 px-3 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-5"
+      className={cn(
+        "flex h-8 w-full items-center gap-2 border-b border-border/40 bg-muted/24 px-3 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-5",
+        isOver && "bg-primary/10 ring-1 ring-inset ring-primary/40",
+      )}
       onClick={() => onToggle(group.id)}
+      ref={setNodeRef}
       type="button"
     >
       <ChevronRightIcon
@@ -94,6 +113,8 @@ export interface IssueListRowProps {
   /** `YYYY-MM-DD`; passed in so every row agrees on what "today" is and stays pure. */
   readonly today: string;
   readonly onRowClick: (issue: Issue, event: MouseEvent) => void;
+  /** Present on selectable lists. The checkbox stays visible once selected. */
+  readonly onSelectedChange?: (issue: Issue, selected: boolean) => void;
   readonly onOpen: (issue: Issue) => void;
   /**
    * The right-click. It fires from anywhere in the row, inline property buttons included: the guard
@@ -105,6 +126,18 @@ export interface IssueListRowProps {
   readonly onStatus: (issue: Issue, statusId: IssueStatusId) => void;
   readonly onPriority: (issue: Issue, priority: IssuePriority) => void;
   readonly onToggleLabel: (issue: Issue, labelId: IssueLabelId, add: boolean) => void;
+  /** Draw the row as the pointer-following drag preview. */
+  readonly dragging?: boolean;
+}
+
+type SortableBindings = ReturnType<typeof useSortable>;
+
+interface IssueListRowImplProps extends IssueListRowProps {
+  readonly dragListeners?: SortableBindings["listeners"];
+  readonly dropTarget?: boolean;
+  readonly placeholder?: boolean;
+  readonly setNodeRef?: (node: HTMLElement | null) => void;
+  readonly sortable?: boolean;
 }
 
 function IssueListRowImpl({
@@ -122,22 +155,34 @@ function IssueListRowImpl({
   active,
   today,
   onRowClick,
+  onSelectedChange,
   onOpen,
   onContextMenu,
   onStatus,
   onPriority,
   onToggleLabel,
-}: IssueListRowProps) {
+  dragging = false,
+  dragListeners,
+  dropTarget = false,
+  placeholder = false,
+  setNodeRef,
+  sortable = false,
+}: IssueListRowImplProps) {
   const rowLabels = resolveIssueRowLabels(issue.labelIds, labelsById);
   const overdue = issue.dueDate !== null && isIssueDueDatePast(issue.dueDate, today);
 
   return (
     <div
+      {...dragListeners}
       aria-selected={selected}
       className={cn(
-        "group flex h-9 w-full items-center gap-2 border-b border-border/25 px-3 text-sm outline-none sm:px-5",
+        "group flex h-9 w-full cursor-pointer items-center gap-2 border-b border-border/25 px-3 text-sm outline-none sm:px-5",
         selected ? "bg-accent/60" : "hover:bg-accent/30",
         active && "ring-1 ring-inset ring-ring/60",
+        sortable && "touch-none cursor-grab active:cursor-grabbing",
+        placeholder && "opacity-30",
+        dropTarget && "bg-primary/10 ring-1 ring-inset ring-primary/40",
+        dragging && "pointer-events-none cursor-grabbing bg-background shadow-lg",
       )}
       data-issue-key={issue.key}
       onClick={(event) => onRowClick(issue, event)}
@@ -145,8 +190,23 @@ function IssueListRowImpl({
         onContextMenu === undefined ? undefined : (event) => onContextMenu(issue, event)
       }
       onDoubleClick={() => onOpen(issue)}
+      ref={setNodeRef}
       role="option"
     >
+      {onSelectedChange === undefined ? null : (
+        <IssuePropertyGuard>
+          <Checkbox
+            aria-label={`Select ${issue.key}`}
+            checked={selected}
+            className={cn(
+              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+              selected && "opacity-100",
+            )}
+            onCheckedChange={(checked) => onSelectedChange(issue, checked)}
+          />
+        </IssuePropertyGuard>
+      )}
+
       <IssuePriorityMenu
         onSelect={(priority) => onPriority(issue, priority)}
         trigger={
@@ -273,3 +333,25 @@ function IssueListRowImpl({
 }
 
 export const IssueListRow = memo(IssueListRowImpl);
+
+/** Register one virtualized row as both a drag source and a visible drop target. */
+export function DraggableIssueListRow({
+  sortable,
+  ...props
+}: IssueListRowProps & { readonly sortable: boolean }) {
+  const row = useSortable({
+    id: issuesListRowDragId(props.issue.id),
+    disabled: !sortable,
+  });
+
+  return (
+    <IssueListRowImpl
+      {...props}
+      dragListeners={row.listeners}
+      dropTarget={row.isOver && !row.isDragging}
+      placeholder={row.isDragging}
+      setNodeRef={row.setNodeRef}
+      sortable={sortable}
+    />
+  );
+}

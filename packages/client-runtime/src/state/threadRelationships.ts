@@ -25,6 +25,21 @@ export interface ThreadRelationshipGraph {
   readonly edges: ReadonlyArray<ThreadRelationshipEdge>;
 }
 
+export type ThreadForkKind = "manual" | "side_chat";
+
+/**
+ * Old side chats were persisted as ordinary forks with only their generated
+ * title distinguishing them. Keep those recognizable while newly-created
+ * side chats carry an explicit fork kind.
+ */
+export function resolveThreadForkKind(
+  thread: Pick<OrchestrationV2ThreadShell, "forkKind" | "lineage" | "title">,
+): ThreadForkKind | null {
+  if (thread.lineage.relationshipToParent !== "fork") return null;
+  if (thread.forkKind !== undefined) return thread.forkKind;
+  return thread.title.toLowerCase().endsWith(" side chat") ? "side_chat" : "manual";
+}
+
 export interface ThreadRelationshipWalkRow {
   readonly threadId: ThreadId;
   readonly fromThreadId: ThreadId;

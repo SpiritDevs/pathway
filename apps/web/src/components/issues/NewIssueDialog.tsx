@@ -31,18 +31,29 @@ import {
   FlagIcon,
   FolderIcon,
   GitBranchIcon,
+  Maximize2Icon,
+  Minimize2Icon,
   PaperclipIcon,
   SignalHighIcon,
   TagIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
 import {
   useCreateIssue,
   useCreateIssueComment,
+  useCreateIssueLabel,
   useIssueCycles,
   useIssueMilestonesForProject,
   useIssuesStore,
@@ -65,18 +76,14 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
-import {
-  IssueAssigneeGlyph,
-  IssueLabelDot,
-  IssuePriorityIcon,
-  IssueStatusDot,
-} from "./IssueGlyphs";
+import { IssueAssigneeGlyph, IssuePriorityIcon, IssueStatusDot } from "./IssueGlyphs";
 import {
   IssueCyclePicker,
   IssueMilestonePicker,
   IssueSearchList,
   IssueStatusGlyphFor,
 } from "./IssueSelectors";
+import { IssueLabelsPicker } from "./IssueLabelsPicker";
 import {
   buildIssueTreeIndex,
   issueAncestorDepth,
@@ -95,6 +102,7 @@ import {
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
+import { canResizeNewIssueDialog } from "./newIssueDialog.logic";
 
 const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
@@ -277,10 +285,12 @@ export function NewIssueDialog({
   const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
   const createIssue = useCreateIssue();
   const createComment = useCreateIssueComment();
+  const createLabel = useCreateIssueLabel();
   const uploadAttachment = useUploadIssueCommentAttachment();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
   const titleRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -298,6 +308,8 @@ export function NewIssueDialog({
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
   const [attachments, setAttachments] = useState<ReadonlyArray<NewIssueAttachmentDraft>>([]);
   const [isDropTarget, setIsDropTarget] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [canResize, setCanResize] = useState(true);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -308,7 +320,11 @@ export function NewIssueDialog({
   // left behind. "More" opens expanded when something arrived in it — a sub-issue create, a
   // milestone-filtered list — so the field that is already set is visible.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setIsMaximized(false);
+      setCanResize(true);
+      return;
+    }
     setTitle("");
     setDescription("");
     setStatusId(defaultStatusId);
@@ -337,6 +353,33 @@ export function NewIssueDialog({
     open,
   ]);
 
+  useLayoutEffect(() => {
+    if (!open || isMaximized) return;
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+
+    const nextCanResize = canResizeNewIssueDialog({
+      dialogHeight: dialog.getBoundingClientRect().height,
+      viewportHeight: window.innerHeight,
+    });
+    setCanResize((current) => (current === nextCanResize ? current : nextCanResize));
+  }, [attachments.length, isMaximized, open, showMore]);
+
+  useEffect(() => {
+    if (!open || isMaximized) return;
+    const measure = () => {
+      const dialog = dialogRef.current;
+      if (dialog === null) return;
+      const nextCanResize = canResizeNewIssueDialog({
+        dialogHeight: dialog.getBoundingClientRect().height,
+        viewportHeight: window.innerHeight,
+      });
+      setCanResize((current) => (current === nextCanResize ? current : nextCanResize));
+    };
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [isMaximized, open]);
+
   useEffect(
     () => () => {
       for (const attachment of attachmentsRef.current) {
@@ -360,6 +403,17 @@ export function NewIssueDialog({
     [statuses],
   );
   const canSubmit = title.trim().length > 0 && !submitting;
+
+  const handleCreateLabel = useCallback(
+    async (input: { readonly name: string; readonly color: string }) => {
+      const created = await createLabel(input);
+      if (reportIssueWriteFailure("Failed to create the label", created)) return false;
+      if (!AsyncResult.isSuccess(created)) return false;
+      setLabelIds((current) => [...current, created.value.label.id]);
+      return true;
+    },
+    [createLabel],
+  );
 
   const reportAttachmentRejection = useCallback((message: string) => {
     toastManager.add(
@@ -525,12 +579,35 @@ export function NewIssueDialog({
       <Dialog
         onOpenChange={(nextOpen) => {
           if (submitting) return;
-          if (!nextOpen) clearAttachments();
+          if (!nextOpen) {
+            clearAttachments();
+            setIsMaximized(false);
+            setCanResize(true);
+          }
           onOpenChange(nextOpen);
         }}
         open={open}
       >
-        <DialogPopup className="h-[min(16.25rem,calc(100vh-2rem))] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-sm:h-[calc(100vh-3rem)]">
+        <DialogPopup
+          className={cn(
+            "min-h-[min(16.25rem,90dvh)] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-h-[90dvh] max-sm:h-[90dvh]",
+            isMaximized && "h-[90dvh]",
+          )}
+          ref={dialogRef}
+        >
+          {canResize ? (
+            <Button
+              aria-label={isMaximized ? "Minimize new issue dialog" : "Maximize new issue dialog"}
+              className="absolute end-12 top-2"
+              onClick={() => setIsMaximized((current) => !current)}
+              size="icon"
+              title={isMaximized ? "Minimize" : "Maximize"}
+              type="button"
+              variant="ghost"
+            >
+              {isMaximized ? <Minimize2Icon /> : <Maximize2Icon />}
+            </Button>
+          ) : null}
           <DialogHeader className="flex-row items-center gap-1.5 px-4 py-2.5">
             <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
               {store.config?.keyPrefix ?? "ISS"}
@@ -753,7 +830,13 @@ export function NewIssueDialog({
                 )}
               </PickerPopover>
 
-              <PickerPopover
+              <IssueLabelsPicker
+                labels={labels}
+                onCreate={handleCreateLabel}
+                onToggle={(labelId) =>
+                  setLabelIds((current) => toggleIssueLabelIds(current, labelId))
+                }
+                selectedLabelIds={labelIds}
                 title="Labels"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
@@ -765,28 +848,7 @@ export function NewIssueDialog({
                         : `${selectedLabels[0]?.name} +${selectedLabels.length - 1}`}
                   </button>
                 }
-              >
-                {() =>
-                  labels.length === 0 ? (
-                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                      No labels yet — add them in Settings → Labels.
-                    </p>
-                  ) : (
-                    labels.map((label) => (
-                      <PickerOption
-                        key={label.id}
-                        onSelect={() =>
-                          setLabelIds((current) => toggleIssueLabelIds(current, label.id))
-                        }
-                        selected={labelIds.includes(label.id)}
-                      >
-                        <IssueLabelDot color={label.color} />
-                        <span className="truncate">{label.name}</span>
-                      </PickerOption>
-                    ))
-                  )
-                }
-              </PickerPopover>
+              />
 
               <button
                 aria-label={showMore ? "Hide more issue properties" : "Show more issue properties"}

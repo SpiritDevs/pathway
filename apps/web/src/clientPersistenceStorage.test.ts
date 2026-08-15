@@ -44,6 +44,10 @@ describe("clientPersistenceStorage", () => {
       await import("./clientPersistenceStorage");
     const settings = {
       ...DEFAULT_CLIENT_SETTINGS,
+      actionPaletteSections: [
+        { id: "usage", visible: false },
+        { id: "workspace", visible: true },
+      ],
       timestampFormat: "24-hour" as const,
     };
 

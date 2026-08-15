@@ -145,6 +145,7 @@ export const make = Effect.gen(function* () {
       connectionProbe: true,
       pullRequests: true,
       threadSettlement: true,
+      pushAutoSettlement: true,
       threadSnooze: true,
       threadPinning: true,
       threadPinReorder: true,

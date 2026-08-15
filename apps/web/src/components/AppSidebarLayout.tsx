@@ -9,7 +9,6 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
-import { isElectron } from "../env";
 import { getLocalStorageItem, useLocalStorage } from "../hooks/useLocalStorage";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -23,6 +22,7 @@ import { CalendarSidebar } from "./calendar/CalendarSidebar";
 import { EmailSidebar } from "./email/EmailSidebar";
 import { IssuesSidebar } from "./issues/IssuesSidebar";
 import { OrchestratorSidebar } from "./orchestrator/OrchestratorSidebar";
+import { ProjectsSidebar } from "./projects/ProjectsSidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
 import { SourceControlSidebar } from "./sourceControl/SourceControlSidebar";
@@ -250,6 +250,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                       <CalendarSidebar />
                     ) : secondarySidebarKind === "orchestrator" ? (
                       <OrchestratorSidebar />
+                    ) : secondarySidebarKind === "projects" ? (
+                      <ProjectsSidebar />
                     ) : secondarySidebarKind === "issues" ? (
                       <IssuesSidebar />
                     ) : secondarySidebarKind === "source-control" ? (

@@ -413,7 +413,7 @@ it.effect("serves every production Pathway toolkit through one endpoint", () =>
       const actual = listed.tools.map(({ name }) => name).sort();
       const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
 
-      expect(expected).toHaveLength(45);
+      expect(expected).toHaveLength(49);
       expect(new Set(expected).size).toBe(expected.length);
       expect(actual).toEqual(expected);
       expect(actual).toContain("issues_get");

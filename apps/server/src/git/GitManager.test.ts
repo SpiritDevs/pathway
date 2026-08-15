@@ -60,6 +60,8 @@ interface FakeGhScenario {
   failWith?: GitHubCli.GitHubCliError;
   /** Let this many gh calls succeed before failWith kicks in (default 0 = fail immediately). */
   failAfterCalls?: number;
+  /** Fail only `gh pr create` calls while every other gh call keeps working. */
+  createPrFailWith?: GitHubCli.GitHubCliError;
 }
 
 function fakeGhOutput(stdout: string): VcsProcess.VcsProcessOutput {
@@ -397,6 +399,9 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     }
 
     if (args[0] === "pr" && args[1] === "create") {
+      if (scenario.createPrFailWith) {
+        return Effect.fail(scenario.createPrFailWith);
+      }
       return Effect.succeed(
         fakeGhOutput(
           (scenario.createdPrUrl ?? "https://github.com/pingdotgg/codething-mvp/pull/101") + "\n",
@@ -2465,12 +2470,21 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("pathway-git-manager-");
         yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["push", "origin", "main"]);
         yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
         const forkDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
         yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
         yield* runGit(repoDir, ["checkout", "-b", "pathway/pr-142/statemachine"]);
         yield* runGit(repoDir, ["branch", "--set-upstream-to", "fork-seed/statemachine"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:pingdotgg/codething-mvp.git",
+          originDir,
+        );
         yield* configureVisibleRemoteUrlWithLocalRewrite(
           repoDir,
           "fork-seed",
@@ -2540,12 +2554,21 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("pathway-git-manager-");
         yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["push", "origin", "main"]);
         yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
         const forkDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
         yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
         yield* runGit(repoDir, ["checkout", "-b", "pathway/pr-142/statemachine"]);
         yield* runGit(repoDir, ["branch", "--set-upstream-to", "fork-seed/statemachine"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:pingdotgg/codething-mvp.git",
+          originDir,
+        );
         yield* configureVisibleRemoteUrlWithLocalRewrite(
           repoDir,
           "fork-seed",
@@ -2607,10 +2630,19 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("pathway-git-manager-");
         yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["push", "origin", "main"]);
         yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
         const forkDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
         yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:pingdotgg/codething-mvp.git",
+          originDir,
+        );
         yield* runGit(repoDir, [
           "config",
           "remote.fork-seed.url",
@@ -2716,6 +2748,293 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ),
       ).toBe(true);
     }),
+  );
+
+  it.effect(
+    "relaxed matching reuses an identity-less PR that the strict cross-repo match rejects",
+    () =>
+      Effect.sync(() => {
+        const headContext = {
+          headBranch: "statemachine",
+          headRepositoryNameWithOwner: "octocat/codething-mvp",
+          headRepositoryOwnerLogin: "octocat",
+          isCrossRepository: true,
+        };
+        const identityLessPr = {
+          number: 77,
+          title: "Existing PR",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/77",
+          baseRefName: "main",
+          headRefName: "statemachine",
+          state: "open" as const,
+          updatedAt: Option.none(),
+        };
+
+        expect(GitManager.matchesBranchHeadContext(identityLessPr, headContext)).toBe(false);
+        expect(
+          GitManager.matchesBranchHeadContext(identityLessPr, headContext, {
+            relaxCrossRepository: true,
+          }),
+        ).toBe(true);
+        // Relaxed matching still honours a conflicting head owner.
+        expect(
+          GitManager.matchesBranchHeadContext(
+            { ...identityLessPr, headRepositoryOwnerLogin: "someone-else" },
+            headContext,
+            { relaxCrossRepository: true },
+          ),
+        ).toBe(false);
+        // And still requires the head branch to line up.
+        expect(
+          GitManager.matchesBranchHeadContext(
+            { ...identityLessPr, headRefName: "other-branch" },
+            headContext,
+            { relaxCrossRepository: true },
+          ),
+        ).toBe(false);
+      }),
+  );
+
+  it.effect(
+    "create_pr reuses the existing open PR when the only remote is not named origin",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("pathway-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "github", remoteDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/no-origin"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
+        yield* runGit(repoDir, ["add", "changes.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+        yield* runGit(repoDir, ["push", "-u", "github", "feature/no-origin"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "github",
+          "https://github.com/coreybain/pathway.git",
+          remoteDir,
+        );
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListByHeadSelector: {
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              "feature/no-origin": JSON.stringify([
+                {
+                  number: 312,
+                  title: "Existing PR",
+                  url: "https://github.com/coreybain/pathway/pull/312",
+                  baseRefName: "main",
+                  headRefName: "feature/no-origin",
+                  state: "OPEN",
+                  isCrossRepository: false,
+                  headRepository: { nameWithOwner: "coreybain/pathway" },
+                  headRepositoryOwner: { login: "coreybain" },
+                },
+              ]),
+            },
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        });
+
+        expect(result.pr.status).toBe("opened_existing");
+        expect(result.pr.number).toBe(312);
+        const openLookupCalls = ghCalls.filter((call) => call.includes("--state open --limit 1"));
+        expect(openLookupCalls[0]).toContain(
+          "pr list --head feature/no-origin --state open --limit 1",
+        );
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "status surfaces the open PR when no remote is named origin and a second remote exists",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("pathway-git-manager-");
+        yield* initRepo(repoDir);
+        const primaryDir = yield* createBareRemote();
+        const upstreamDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "github", primaryDir]);
+        yield* runGit(repoDir, ["remote", "add", "t3code-github", upstreamDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/issue-attachments"]);
+        yield* runGit(repoDir, ["push", "-u", "github", "feature/issue-attachments"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "github",
+          "https://github.com/coreybain/pathway.git",
+          primaryDir,
+        );
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "t3code-github",
+          "https://github.com/pingdotgg/t3code.git",
+          upstreamDir,
+        );
+
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            prListByHeadSelector: {
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              "feature/issue-attachments": JSON.stringify([
+                {
+                  number: 27,
+                  title: "Improve issue attachment handling",
+                  url: "https://github.com/coreybain/pathway/pull/27",
+                  baseRefName: "main",
+                  headRefName: "feature/issue-attachments",
+                  state: "OPEN",
+                  updatedAt: "2026-08-01T10:00:00Z",
+                  isCrossRepository: false,
+                  headRepository: { nameWithOwner: "coreybain/pathway" },
+                  headRepositoryOwner: { login: "coreybain" },
+                },
+              ]),
+            },
+          },
+        });
+
+        const status = yield* manager.status({ cwd: repoDir });
+        expect(status.refName).toBe("feature/issue-attachments");
+        expect(status.pr?.number).toBe(27);
+        expect(status.pr?.state).toBe("open");
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "keeps a fork branch cross-repository when the base remote is not named origin",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("pathway-git-manager-");
+        yield* initRepo(repoDir);
+        const primaryDir = yield* createBareRemote();
+        const forkDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "github", primaryDir]);
+        yield* runGit(repoDir, ["remote", "add", "zfork", forkDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/fork-branch"]);
+        yield* runGit(repoDir, ["push", "-u", "zfork", "feature/fork-branch"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "github",
+          "https://github.com/coreybain/pathway.git",
+          primaryDir,
+        );
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "zfork",
+          "https://github.com/octocat/pathway.git",
+          forkDir,
+        );
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListByHeadSelector: {
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              "octocat:feature/fork-branch": JSON.stringify([
+                {
+                  number: 88,
+                  title: "Fork PR",
+                  url: "https://github.com/coreybain/pathway/pull/88",
+                  baseRefName: "main",
+                  headRefName: "feature/fork-branch",
+                  state: "OPEN",
+                  isCrossRepository: true,
+                  headRepository: { nameWithOwner: "octocat/pathway" },
+                  headRepositoryOwner: { login: "octocat" },
+                },
+              ]),
+            },
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        });
+
+        expect(result.pr.status).toBe("opened_existing");
+        expect(result.pr.number).toBe(88);
+        const openLookupCalls = ghCalls.filter((call) => call.includes("--state open --limit 1"));
+        expect(openLookupCalls[0]).toContain(
+          "pr list --head octocat:feature/fork-branch --state open --limit 1",
+        );
+        expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "recovers with the existing PR when pr create fails because one already exists",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("pathway-git-manager-");
+        yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["push", "origin", "main"]);
+        const forkDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
+        yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
+        NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
+        yield* runGit(repoDir, ["add", "changes.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+        yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "origin",
+          "git@github.com:pingdotgg/codething-mvp.git",
+          originDir,
+        );
+        yield* configureVisibleRemoteUrlWithLocalRewrite(
+          repoDir,
+          "fork-seed",
+          "git@github.com:octocat/codething-mvp.git",
+          forkDir,
+        );
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListByHeadSelector: {
+              // Identity-less metadata keeps the strict match blind to this PR,
+              // so the action falls through to `pr create`.
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              "octocat:statemachine": JSON.stringify([
+                {
+                  number: 77,
+                  title: "Existing fork PR",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/77",
+                  baseRefName: "main",
+                  headRefName: "statemachine",
+                  state: "OPEN",
+                },
+              ]),
+            },
+            createPrFailWith: new GitHubCli.GitHubCliCommandError({
+              command: "gh",
+              cwd: repoDir,
+              cause: new Error(
+                'a pull request for branch "statemachine" into branch "main" already exists',
+              ),
+            }),
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        });
+
+        expect(result.pr.status).toBe("opened_existing");
+        expect(result.pr.number).toBe(77);
+        expect(ghCalls.filter((call) => call.startsWith("pr create "))).toHaveLength(1);
+      }),
+    20_000,
   );
 
   it.effect("creates PR when one does not already exist", () =>
@@ -2927,6 +3246,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("pathway-git-manager-");
       yield* initRepo(repoDir);
+      const originDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["push", "origin", "main"]);
       const forkDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
       yield* runGit(repoDir, ["checkout", "-b", "statemachine"]);
@@ -2936,6 +3258,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "statemachine"]);
       yield* runGit(repoDir, ["checkout", "-b", "pathway/pr-91/statemachine"]);
       yield* runGit(repoDir, ["branch", "--set-upstream-to", "fork-seed/statemachine"]);
+      yield* configureVisibleRemoteUrlWithLocalRewrite(
+        repoDir,
+        "origin",
+        "git@github.com:pingdotgg/codething-mvp.git",
+        originDir,
+      );
       yield* configureVisibleRemoteUrlWithLocalRewrite(
         repoDir,
         "fork-seed",

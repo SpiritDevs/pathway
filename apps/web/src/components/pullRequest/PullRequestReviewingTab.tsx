@@ -217,7 +217,7 @@ export function PullRequestReviewingTab({
           </Button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <DiffWorkerPoolProvider>
           <Suspense
             fallback={

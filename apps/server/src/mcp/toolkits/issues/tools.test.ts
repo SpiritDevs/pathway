@@ -46,6 +46,9 @@ it("exports provider-compatible object schemas with described parameters", () =>
 it("states the side effect of every tool that writes", () => {
   const writers = [
     "issues_create",
+    "issues_milestone_create",
+    "issues_milestone_update",
+    "issues_milestone_delete",
     "issues_update",
     "issues_comment",
     "issues_comment_evidence",
@@ -63,10 +66,18 @@ it("states the side effect of every tool that writes", () => {
 });
 
 it("marks the read tools read-only and the delete destructive", () => {
-  for (const name of ["issues_list", "issues_get", "issues_get_attachment"] as const) {
+  for (const name of [
+    "issues_list",
+    "issues_get",
+    "issues_get_attachment",
+    "issues_milestones_list",
+  ] as const) {
     expect(Context.get(IssuesToolkit.tools[name].annotations, Tool.Readonly)).toBe(true);
   }
   expect(Context.get(IssuesToolkit.tools.issues_delete.annotations, Tool.Destructive)).toBe(true);
+  expect(
+    Context.get(IssuesToolkit.tools.issues_milestone_delete.annotations, Tool.Destructive),
+  ).toBe(true);
   expect(Context.get(IssuesToolkit.tools.issues_update.annotations, Tool.Destructive)).toBe(false);
   // A local SQLite table is not the open world. Evidence is the exception because it reads the
   // collaborative browser, whose current page may be remote.

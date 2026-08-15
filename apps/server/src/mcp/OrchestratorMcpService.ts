@@ -630,6 +630,12 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return item.summary ?? `${item.strategy} handoff to ${item.toProviderInstanceId}`;
     case "fork":
       return `Forked to thread ${item.targetThreadId}.`;
+    case "source_control":
+      return item.pullRequest === null
+        ? item.committed
+          ? "Pushed and committed."
+          : "Pushed."
+        : `Pushed, committed, PR created: #${item.pullRequest.number} (${item.pullRequest.url}).`;
     case "thread_created":
       return `Created thread ${item.targetThreadId} with ${item.targetProviderInstanceId} (${item.targetModel}).`;
     case "subagent":

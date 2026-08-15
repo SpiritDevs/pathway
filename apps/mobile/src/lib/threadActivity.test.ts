@@ -275,6 +275,26 @@ describe("buildThreadFeed", () => {
     ).toBe(false);
   });
 
+  it("presents source-control markers with linked PR detail", () => {
+    const feed = buildThreadFeed([
+      projected(
+        {
+          ...base("item-source-control", "2026-06-20T00:00:04.000Z", 3),
+          runId: null,
+          type: "source_control",
+          committed: true,
+          pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+        },
+        0,
+      ),
+    ]);
+    const activity = feed.find((entry) => entry.type === "activity-group")?.activities[0];
+
+    expect(activity?.summary).toBe("pushed, committed, PR created");
+    expect(activity?.detail).toBe("PR #47");
+    expect(activity?.prominent).toBe(true);
+  });
+
   it("folds settled V2 run work while keeping the terminal assistant message visible", () => {
     const feed = buildThreadFeed([
       projected(userMessage(), 0),

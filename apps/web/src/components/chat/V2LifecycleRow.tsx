@@ -1,20 +1,24 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import type {
   OrchestrationV2Run,
+  OrchestrationV2Subagent,
   OrchestrationV2TurnItem,
   ProviderInstanceId,
   ServerProvider,
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
+import { sourceControlMarkerLabel } from "@spiritdevs/shared/sourceControl";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
   BotIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
+  GitCommitHorizontalIcon,
   GitForkIcon,
   MessageSquareIcon,
+  MessagesSquareIcon,
   MinusIcon,
   type LucideIcon,
   XIcon,
@@ -31,6 +35,7 @@ const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "compaction",
   "handoff",
   "fork",
+  "source_control",
   "subagent",
   "thread_created",
 ]);
@@ -65,12 +70,20 @@ export type HandoffTimelineRun = Pick<
   "id" | "ordinal" | "providerInstanceId" | "modelSelection"
 >;
 
+/**
+ * The subset of a projection subagent that subagent cards read. The turn item
+ * carries the driver and instance but not the model, so the card joins on
+ * `subagentId` to label which model the child is running.
+ */
+export type SubagentTimelineModel = Pick<OrchestrationV2Subagent, "id" | "model">;
+
 export function V2LifecycleRow(props: {
   readonly item: OrchestrationV2TurnItem;
   readonly createdAt: string;
   readonly timestampFormat: TimestampFormat;
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
+  readonly subagents: ReadonlyArray<SubagentTimelineModel>;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   const { item } = props;
@@ -120,7 +133,7 @@ export function V2LifecycleRow(props: {
     // Items persisted before models were stamped only carry instance ids;
     // recover the models from the thread's runs (the handoff's own run is
     // the target, the newest earlier run per source instance is the origin).
-    // HandoffEndpoint falls back to the provider display name when neither
+    // ProviderModelEndpoint falls back to the provider display name when neither
     // source has a model.
     const handoffRun =
       item.runId === null ? undefined : props.runs.find((run) => run.id === item.runId);
@@ -154,7 +167,7 @@ export function V2LifecycleRow(props: {
                     ,
                   </span>
                 ) : null}
-                <HandoffEndpoint
+                <ProviderModelEndpoint
                   providers={props.providerStatuses}
                   instanceId={endpoint.instanceId}
                   model={endpoint.model}
@@ -164,7 +177,7 @@ export function V2LifecycleRow(props: {
             {fromEndpoints.length > 0 ? (
               <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0" />
             ) : null}
-            <HandoffEndpoint
+            <ProviderModelEndpoint
               providers={props.providerStatuses}
               instanceId={item.toProviderInstanceId}
               model={toModel}
@@ -176,12 +189,41 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "fork") {
     const relatedThreadId = item.source.type === "run" ? item.source.threadId : item.targetThreadId;
+    const isSideChat = item.forkKind === "side_chat";
     return (
       <TimelineSystemDivider
-        label={item.source.type === "run" ? "Forked from conversation" : "Conversation fork"}
-        icon={GitForkIcon}
+        label={
+          isSideChat
+            ? "Side chat created"
+            : item.source.type === "run"
+              ? "Forked from conversation"
+              : "Conversation fork"
+        }
+        icon={isSideChat ? MessagesSquareIcon : GitForkIcon}
         actionLabel={item.source.type === "run" ? "Open source conversation" : "Open fork"}
         onAction={() => props.onOpenThread(relatedThreadId)}
+      />
+    );
+  }
+  if (item.type === "source_control") {
+    return (
+      <TimelineSystemDivider
+        label={sourceControlMarkerLabel(item)}
+        icon={GitCommitHorizontalIcon}
+        detail={
+          item.pullRequest === null ? null : (
+            <a
+              href={item.pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+              aria-label={`Open PR #${item.pullRequest.number}`}
+            >
+              #{item.pullRequest.number}
+              <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+            </a>
+          )
+        }
       />
     );
   }
@@ -191,7 +233,14 @@ export function V2LifecycleRow(props: {
         itemType={item.type}
         icon={MessageSquareIcon}
         title={item.title ?? "Created thread"}
-        detail={`${item.targetProviderInstanceId} · ${item.targetModel}`}
+        detail=""
+        endpoint={
+          <ProviderModelEndpoint
+            providers={props.providerStatuses}
+            instanceId={item.targetProviderInstanceId}
+            model={item.targetModel}
+          />
+        }
         badge="created"
         threadId={item.targetThreadId}
         onOpenThread={props.onOpenThread}
@@ -204,12 +253,23 @@ export function V2LifecycleRow(props: {
     const detail = TERMINAL_SUBAGENT_STATUSES.has(item.status)
       ? (streamedResult ?? item.progress ?? item.prompt)
       : (item.progress ?? streamedResult ?? item.prompt);
+    // The item only records the instance; the model lives on the projection's
+    // subagent record, which the timeline threads through for this join.
+    const subagentModel =
+      props.subagents.find((subagent) => subagent.id === item.subagentId)?.model ?? undefined;
     return (
       <RelatedThreadCard
         itemType={item.type}
         icon={BotIcon}
         title={subagentDisplayTitle(item.title ?? "Subagent")}
         detail={detail}
+        endpoint={
+          <ProviderModelEndpoint
+            providers={props.providerStatuses}
+            instanceId={item.providerInstanceId}
+            model={subagentModel}
+          />
+        }
         badge={item.status}
         threadId={item.childThreadId}
         expandedDetail={finalResult}
@@ -225,6 +285,8 @@ function RelatedThreadCard(props: {
   readonly icon: LucideIcon;
   readonly title: string;
   readonly detail: string;
+  /** Provider icon + model label for the thread this card points at. */
+  readonly endpoint?: ReactNode;
   readonly expandedDetail?: string | null;
   readonly badge: string;
   readonly threadId: ThreadId | null;
@@ -237,7 +299,12 @@ function RelatedThreadCard(props: {
     <>
       <Icon className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
-      <span className="max-w-[50%] truncate text-xs text-muted-foreground">{props.detail}</span>
+      {props.detail === "" ? null : (
+        <span className="max-w-[40%] truncate text-xs text-muted-foreground">{props.detail}</span>
+      )}
+      {props.endpoint === undefined ? null : (
+        <span className="shrink-0 text-xs text-muted-foreground">{props.endpoint}</span>
+      )}
       <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
         {props.badge}
       </span>
@@ -326,12 +393,13 @@ function latestRunModelBefore(
 }
 
 /**
- * One side of a context handoff: the provider's brand icon plus the model's
- * display name. Falls back to the raw model slug when the instance no longer
- * lists it, and to the instance display name (or id) when no model was
- * recorded on the item.
+ * A provider endpoint: the provider's brand icon plus the model's display
+ * name. Used for both sides of a context handoff and for the provider/model a
+ * related thread (subagent or created thread) runs on. Falls back to the raw
+ * model slug when the instance no longer lists it, and to the instance display
+ * name (or id) when no model was recorded on the item.
  */
-function HandoffEndpoint(props: {
+function ProviderModelEndpoint(props: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly instanceId: ProviderInstanceId;
   readonly model?: string | undefined;

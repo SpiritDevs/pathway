@@ -246,6 +246,14 @@ const supportsOperation = (
   operation: PreviewAutomationOperation,
 ): boolean => connection.supportedOperations.has(operation);
 
+/**
+ * `status` is a capability probe used to discover whether Preview is attached;
+ * it does not mean the agent is driving the browser. Recording it as activity
+ * would offer a takeover for unrelated Pathway MCP work after a harmless probe.
+ */
+const recordsPreviewActivity = (operation: PreviewAutomationOperation): boolean =>
+  operation !== "status";
+
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
 function remoteDetailKind(detail: unknown): RemoteDetailKind {
@@ -681,7 +689,8 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         onSome: (value) => Effect.succeed(value as A),
       });
     });
-    yield* publishActivity(route.activity);
+    const shouldRecordActivity = recordsPreviewActivity(input.operation);
+    if (shouldRecordActivity) yield* publishActivity(route.activity);
     // `settled` outlives the response deferred on purpose: a takeover drain
     // waits for the whole invoke, including the tab bookkeeping below, so the
     // lease it hands the user names the tab this request ended on.
@@ -715,7 +724,7 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         // Only a correction: the record published when this request was routed
         // named the tab we expected, and the response moved it.
         const record =
-          resultTabId === route.activity.tabId
+          !shouldRecordActivity || resultTabId === route.activity.tabId
             ? undefined
             : activityRecord(input.scope, connection.clientId, resultTabId);
         return [record, { ...current, assignments }] as const;

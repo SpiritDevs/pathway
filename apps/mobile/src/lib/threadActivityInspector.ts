@@ -278,6 +278,12 @@ export function buildThreadActivityInspector(
     case "user_message":
     case "assistant_message":
       break;
+    case "source_control":
+      fields.push({ label: "Committed", value: item.committed ? "yes" : "no" });
+      if (item.pullRequest !== null) {
+        webLinks.push({ label: `PR #${item.pullRequest.number}`, url: item.pullRequest.url });
+      }
+      break;
   }
 
   const checkpoint =

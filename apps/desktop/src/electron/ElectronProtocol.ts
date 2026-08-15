@@ -13,18 +13,16 @@ export const DESKTOP_PRODUCTION_SCHEME = "pathway";
 export const DESKTOP_DEVELOPMENT_SCHEME = "pathway-dev";
 
 /**
- * Clerk's Electron SDK authenticates native requests with a bearer client JWT.
- * Chromium also adds Origin for requests initiated by our custom-scheme renderer,
- * but Clerk deliberately rejects requests carrying both security identities.
+ * Clerk's Electron SDK marks these as native requests, but Chromium still adds
+ * Origin for requests initiated by our custom-scheme renderer. Clerk rejects
+ * that non-HTTP origin, including on the authorization preflight, so let the
+ * native request through without it and restore CORS on the response locally.
  */
 export function prepareDesktopClerkRequestHeaders(
   requestHeaders: Record<string, string>,
   desktopOrigin: string,
 ): Record<string, string> {
   const names = Object.keys(requestHeaders);
-  const hasAuthorization = names.some((name) => name.toLowerCase() === "authorization");
-  if (!hasAuthorization) return requestHeaders;
-
   const originNames = names.filter((name) => name.toLowerCase() === "origin");
   if (originNames.length === 0) return requestHeaders;
   if (!originNames.some((name) => requestHeaders[name] === desktopOrigin)) return requestHeaders;
@@ -38,16 +36,38 @@ export function prepareDesktopClerkRequestHeaders(
 
 export function prepareDesktopClerkResponseHeaders(
   responseHeaders: Record<string, string[]>,
-  desktopOrigin: string,
+  cors: {
+    readonly origin: string;
+    readonly requestedHeaders?: string;
+    readonly requestedMethod?: string;
+  },
 ): Record<string, string[]> {
   const prepared = { ...responseHeaders };
   for (const name of Object.keys(prepared)) {
-    if (name.toLowerCase() === "access-control-allow-origin") {
+    if (
+      name.toLowerCase() === "access-control-allow-origin" ||
+      (cors.requestedHeaders !== undefined &&
+        name.toLowerCase() === "access-control-allow-headers") ||
+      (cors.requestedMethod !== undefined && name.toLowerCase() === "access-control-allow-methods")
+    ) {
       delete prepared[name];
     }
   }
-  prepared["Access-Control-Allow-Origin"] = [desktopOrigin];
+  prepared["Access-Control-Allow-Origin"] = [cors.origin];
+  if (cors.requestedHeaders !== undefined) {
+    prepared["Access-Control-Allow-Headers"] = [cors.requestedHeaders];
+  }
+  if (cors.requestedMethod !== undefined) {
+    prepared["Access-Control-Allow-Methods"] = [cors.requestedMethod];
+  }
   return prepared;
+}
+
+function readHeader(requestHeaders: Record<string, string>, expectedName: string) {
+  const entry = Object.entries(requestHeaders).find(
+    ([name]) => name.toLowerCase() === expectedName,
+  );
+  return entry?.[1];
 }
 
 export function getDesktopScheme(isDevelopment: boolean): string {
@@ -249,7 +269,14 @@ export const make = Effect.gen(function* () {
 
       const contentSecurityPolicy = makeDesktopContentSecurityPolicy(input);
       const desktopOrigin = `${input.scheme}://${DESKTOP_HOST}`;
-      const nativeClerkRequestOrigins = new Map<number, string>();
+      const nativeClerkRequestCors = new Map<
+        number,
+        {
+          readonly origin: string;
+          readonly requestedHeaders?: string;
+          readonly requestedMethod?: string;
+        }
+      >();
 
       yield* Effect.acquireRelease(
         Effect.try({
@@ -267,7 +294,19 @@ export const make = Effect.gen(function* () {
                     desktopOrigin,
                   );
                   if (preparedHeaders !== details.requestHeaders) {
-                    nativeClerkRequestOrigins.set(details.id, desktopOrigin);
+                    const requestedHeaders = readHeader(
+                      details.requestHeaders,
+                      "access-control-request-headers",
+                    );
+                    const requestedMethod = readHeader(
+                      details.requestHeaders,
+                      "access-control-request-method",
+                    );
+                    nativeClerkRequestCors.set(details.id, {
+                      origin: desktopOrigin,
+                      ...(requestedHeaders === undefined ? {} : { requestedHeaders }),
+                      ...(requestedMethod === undefined ? {} : { requestedMethod }),
+                    });
                   }
                   callback({
                     requestHeaders: preparedHeaders,
@@ -277,12 +316,12 @@ export const make = Effect.gen(function* () {
               Electron.session.defaultSession.webRequest.onHeadersReceived(
                 clerkUrls,
                 (details, callback) => {
-                  const allowedOrigin = nativeClerkRequestOrigins.get(details.id);
-                  if (allowedOrigin && details.responseHeaders) {
+                  const cors = nativeClerkRequestCors.get(details.id);
+                  if (cors && details.responseHeaders) {
                     callback({
                       responseHeaders: prepareDesktopClerkResponseHeaders(
                         details.responseHeaders,
-                        allowedOrigin,
+                        cors,
                       ),
                     });
                     return;
@@ -291,10 +330,10 @@ export const make = Effect.gen(function* () {
                 },
               );
               Electron.session.defaultSession.webRequest.onErrorOccurred(clerkUrls, (details) => {
-                nativeClerkRequestOrigins.delete(details.id);
+                nativeClerkRequestCors.delete(details.id);
               });
               Electron.session.defaultSession.webRequest.onCompleted(clerkUrls, (details) => {
-                nativeClerkRequestOrigins.delete(details.id);
+                nativeClerkRequestCors.delete(details.id);
               });
             }
           },

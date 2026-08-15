@@ -14,6 +14,7 @@ import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
   activeTurnSendMode: "steer",
+  actionPaletteSections: [],
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],
@@ -33,6 +34,18 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   planModeEnabled: false,
   persistComposerContextStrip: true,
+  primaryNavigationViewOrder: [
+    "threads",
+    "projects",
+    "issues",
+    "pull-requests",
+    "calendar",
+    "email",
+    "contacts",
+    "time-tracker",
+    "files",
+    "browser",
+  ],
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",

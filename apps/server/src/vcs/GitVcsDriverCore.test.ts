@@ -1487,6 +1487,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("remote operations", () => {
+    it.effect("uses the first configured remote when origin is absent", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const githubRemote = yield* makeTmpDir("git-github-remote-");
+        const upstreamRemote = yield* makeTmpDir("git-upstream-remote-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(githubRemote, ["init", "--bare"]);
+        yield* git(upstreamRemote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "github", githubRemote]);
+        yield* git(cwd, ["remote", "add", "t3code-github", upstreamRemote]);
+
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        assert.equal(yield* driver.resolvePrimaryRemoteName(cwd), "github");
+        assert.equal(
+          yield* driver.resolveRemoteNameForRef({
+            cwd,
+            refName: "main",
+            fallbackRemoteName: "github",
+          }),
+          "github",
+        );
+        assert.equal(
+          yield* driver.resolveRemoteNameForRef({
+            cwd,
+            refName: "t3code-github/main",
+            fallbackRemoteName: "github",
+          }),
+          "t3code-github",
+        );
+      }),
+    );
+
     it.effect("creates a worktree from the latest fetched remote commit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1510,6 +1542,22 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.notEqual(beforeFetch, remoteHead);
 
         const driver = yield* GitVcsDriver.GitVcsDriver;
+        assert.equal(
+          yield* driver.resolveRemoteNameForRef({
+            cwd,
+            refName: initialBranch,
+            fallbackRemoteName: "origin",
+          }),
+          "origin",
+        );
+        assert.equal(
+          yield* driver.resolveRemoteNameForRef({
+            cwd,
+            refName: `origin/${initialBranch}`,
+            fallbackRemoteName: "fallback",
+          }),
+          "origin",
+        );
         yield* driver.fetchRemote({ cwd, remoteName: "origin" });
 
         const resolvedBase = yield* driver.resolveRemoteTrackingCommit({

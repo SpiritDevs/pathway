@@ -519,6 +519,47 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("records a durable source-control timeline marker", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-source-control-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-source-control-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-source-control-project"),
+        title: "Source control marker",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feature/marker",
+        worktreePath: process.cwd(),
+      });
+      const command = {
+        type: "thread.source-control.record" as const,
+        commandId: CommandId.make("runtime-layer-source-control-record"),
+        threadId,
+        committed: true,
+        pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      };
+
+      const first = yield* orchestrator.dispatch(command);
+      const retry = yield* orchestrator.dispatch(command);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const marker = projection.visibleTurnItems.find(
+        (row) => row.item.type === "source_control",
+      )?.item;
+
+      assert.equal(retry.sequence, first.sequence);
+      assert.equal(marker?.type, "source_control");
+      if (marker?.type !== "source_control") return assert.fail("source-control marker missing");
+      assert.isTrue(marker.committed);
+      assert.deepEqual(marker.pullRequest, command.pullRequest);
+    }),
+  );
+
   it.effect("atomically plans rollback before starting an edited replacement message", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
@@ -1124,6 +1165,36 @@ it.layer(SharedApplicationDataPlaneTestLayer)("pending provider interruption", (
       );
       assert.deepEqual(interrupted.providerTurns, []);
       assert.isFalse(yield* effectWorker.runOnce);
+
+      const editCommandId = CommandId.make("runtime-layer-pending-interrupt-edit");
+      const replacementMessageId = MessageId.make("runtime-layer-pending-interrupt-replacement");
+      const editResult = yield* orchestrator.dispatch({
+        type: "message.edit-and-restart",
+        commandId: editCommandId,
+        createdBy: "user",
+        creationSource: "web",
+        threadId,
+        messageId: MessageId.make("runtime-layer-pending-interrupt-message"),
+        replacementMessageId,
+        text: "Reach the provider with this corrected message.",
+      });
+
+      const edited = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(edited.runs.find((candidate) => candidate.id === run.id)?.status, "rolled_back");
+      assert.equal(
+        edited.runs.find((candidate) => candidate.userMessageId === replacementMessageId)?.status,
+        "starting",
+      );
+      assert.deepEqual(
+        edited.visibleTurnItems
+          .filter((row) => row.item.type === "user_message")
+          .map((row) => (row.item.type === "user_message" ? row.item.messageId : null)),
+        [replacementMessageId],
+      );
+      assert.notInclude(
+        editResult.storedEvents.map((stored) => stored.event.type),
+        "checkpoint.rollback-requested",
+      );
     }),
   );
 });

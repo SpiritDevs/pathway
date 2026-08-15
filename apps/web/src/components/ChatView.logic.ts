@@ -16,6 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
+import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -37,6 +38,14 @@ export const FORK_THREAD_READINESS_ERROR =
   "The fork was created, but its thread data did not reach this client. Reconnect and try opening it from the sidebar.";
 
 export type ChatShortcutScope = "page" | "side-chat";
+
+export function visibleTurnItemsForThreadPresentation(
+  thread: Pick<Thread, "forkKind" | "lineage" | "title"> | null,
+  rows: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
+  if (thread === null || resolveThreadForkKind(thread) !== "side_chat") return rows;
+  return rows.filter((row) => row.visibility !== "inherited");
+}
 
 export function shortcutScopeOwnsEvent(
   scope: ChatShortcutScope,
@@ -144,6 +153,7 @@ export function buildLocalDraftThread(
     worktreePath: draftThread.worktreePath,
     activeProviderThreadId: null,
     lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+    locations: draftThread.locations,
     forkedFrom: null,
     createdBy: "user",
     creationSource: "web",
@@ -274,6 +284,25 @@ export function resolveEditableV2UserMessageId(
   const run = projection.runs.find((candidate) => candidate.id === latestUserItem.runId);
   if (run === undefined || run.status === "queued" || run.status === "cancelled") return null;
   if (!modelSelectionsEqual(projection.thread.modelSelection, run.modelSelection)) return null;
+  const hasChangesAfterMessage = projection.checkpoints.some(
+    (checkpoint) =>
+      checkpoint.status === "ready" &&
+      checkpoint.files.length > 0 &&
+      checkpoint.appRunOrdinal !== null &&
+      checkpoint.appRunOrdinal >= run.ordinal,
+  );
+  if (hasChangesAfterMessage) return null;
+  const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
+  const providerTurn = projection.providerTurns.find(
+    (candidate) =>
+      candidate.runAttemptId === run.activeAttemptId || candidate.id === attempt?.providerTurnId,
+  );
+  const hasAssistantMessage = projection.messages.some(
+    (message) => message.runId === run.id && message.role === "assistant",
+  );
+  if (run.status === "interrupted" && providerTurn === undefined && !hasAssistantMessage) {
+    return latestUserItem.messageId;
+  }
   const providerThread = projection.providerThreads.find(
     (candidate) => candidate.id === run.providerThreadId,
   );
@@ -281,17 +310,6 @@ export function resolveEditableV2UserMessageId(
     (candidate) => candidate.id === providerThread?.providerSessionId,
   );
   if (providerSession?.capabilities.checkpointing.providerCanRollbackConversation !== true) {
-    return null;
-  }
-  if (
-    projection.checkpoints.some(
-      (checkpoint) =>
-        checkpoint.status === "ready" &&
-        checkpoint.files.length > 0 &&
-        checkpoint.appRunOrdinal !== null &&
-        checkpoint.appRunOrdinal >= run.ordinal,
-    )
-  ) {
     return null;
   }
   const firstRunScope = projection.checkpointScopes.find(

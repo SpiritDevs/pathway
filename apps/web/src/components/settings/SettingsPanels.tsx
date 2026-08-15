@@ -7,6 +7,7 @@ import {
   type BackgroundActivityProfile,
   type DesktopUpdateChannel,
   ProviderDriverKind,
+  threadIsVisibleAt,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@spiritdevs/contracts";
@@ -141,6 +142,7 @@ import {
 } from "./SettingsPanels.logic";
 import {
   PolicyTooltip,
+  rememberSettingsReturnScrollPosition,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -1129,6 +1131,27 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep composer context visible in active threads"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Action palette"
+          description="Choose which action-palette areas are active and arrange their order."
+          control={
+            <Button
+              render={
+                <Link
+                  to="/settings/appearance/action-palette"
+                  resetScroll={false}
+                  onClick={() => rememberSettingsReturnScrollPosition("/settings/appearance")}
+                />
+              }
+              size="sm"
+              variant="outline"
+            >
+              Configure
+              <ChevronRightIcon aria-hidden className="size-4" />
+            </Button>
           }
         />
       </SettingsSection>
@@ -2535,7 +2558,9 @@ export function ArchivedThreadsPanel() {
       ),
     );
     const threads = archivedSnapshots.flatMap(({ environmentId, snapshot }) =>
-      snapshot.threads.map((thread) => presentThreadShell(environmentId, thread)),
+      snapshot.threads
+        .filter((thread) => threadIsVisibleAt(thread, "agents"))
+        .map((thread) => presentThreadShell(environmentId, thread)),
     );
 
     const archivedProjects = Array.from(projectsByEnvironmentAndId.values());

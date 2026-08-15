@@ -48,6 +48,7 @@ import {
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
+  threadIsVisibleAt,
   ThreadId,
 } from "@spiritdevs/contracts";
 import {
@@ -1189,7 +1190,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const openPrLink = useOpenPrLink();
   const allSidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
   const sidebarThreads = useMemo(
-    () => allSidebarThreads.filter((thread) => !isPullRequestReviewThreadTitle(thread.title)),
+    () =>
+      allSidebarThreads.filter(
+        (thread) =>
+          threadIsVisibleAt(thread, "agents") && !isPullRequestReviewThreadTitle(thread.title),
+      ),
     [allSidebarThreads],
   );
   const sidebarThreadByKey = useMemo(
@@ -3035,7 +3040,11 @@ export default function LegacySidebar() {
   const projects = useProjects();
   const allSidebarThreads = useThreadShells();
   const sidebarThreads = useMemo(
-    () => allSidebarThreads.filter((thread) => !isPullRequestReviewThreadTitle(thread.title)),
+    () =>
+      allSidebarThreads.filter(
+        (thread) =>
+          threadIsVisibleAt(thread, "agents") && !isPullRequestReviewThreadTitle(thread.title),
+      ),
     [allSidebarThreads],
   );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);

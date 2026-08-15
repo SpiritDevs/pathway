@@ -290,6 +290,45 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       }),
   );
 
+  it.effect("handles concurrent server requests independently", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const firstRequestAnswer = yield* Deferred.make<string>();
+      const notificationReceived = yield* Deferred.make<void>();
+      yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        onRequest: (request) =>
+          request.id === 1
+            ? Deferred.await(firstRequestAnswer)
+            : Effect.succeed(`answer-${request.id}`),
+        onNotification: () => Deferred.succeed(notificationReceived, undefined).pipe(Effect.asVoid),
+      });
+
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          [
+            encodeUnknownJsonString({ id: 1, method: "x/first" }),
+            encodeUnknownJsonString({ method: "x/progress" }),
+            encodeUnknownJsonString({ id: 2, method: "x/second" }),
+          ].join("\n") + "\n",
+        ),
+      );
+
+      yield* Deferred.await(notificationReceived);
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 2,
+        result: "answer-2",
+      });
+
+      yield* Deferred.succeed(firstRequestAnswer, "answer-1");
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 1,
+        result: "answer-1",
+      });
+    }),
+  );
+
   it.effect("surfaces JSON encoding failures as protocol parse errors", () =>
     Effect.gen(function* () {
       const { stdio } = yield* makeInMemoryStdio();

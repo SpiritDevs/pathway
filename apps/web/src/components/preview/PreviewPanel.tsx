@@ -15,6 +15,7 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  allowInlinePictureInPicture?: boolean;
   /** Content docked below the browser viewport while this Preview surface is visible. */
   footer?: ReactNode;
   onSendAnnotation?: (
@@ -29,6 +30,7 @@ export function PreviewPanel({
   tabId,
   configuredUrls,
   visible,
+  allowInlinePictureInPicture = true,
   footer,
   onSendAnnotation,
 }: Props) {
@@ -51,6 +53,7 @@ export function PreviewPanel({
         {...(tabId !== undefined ? { tabId } : {})}
         configuredUrls={configuredUrls}
         visible={visible}
+        allowInlinePictureInPicture={allowInlinePictureInPicture}
         {...(onSendAnnotation ? { onSendAnnotation } : {})}
       />
       {footer ? (

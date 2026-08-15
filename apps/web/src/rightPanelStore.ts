@@ -60,6 +60,13 @@ export type RightPanelSurface =
       number: number;
     }
   | { id: "agents"; kind: "agents" }
+  | {
+      /** Local-only issue detail tab used by the Issues workspace assistant panel. */
+      id: `issue:${string}`;
+      kind: "issue";
+      issueKey: string;
+      title: string;
+    }
   | { id: `thread:${string}`; kind: "thread"; resourceId: ThreadId };
 
 const RIGHT_PANEL_STORAGE_KEY = "pathway:right-panel-state:v2";
@@ -329,6 +336,9 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     // Dropped surface kind: plans now render inline in the
                     // transcript (v9).
                     if ((surface as { kind?: string }).kind === "plan") return [];
+                    // Issue tabs belong to the Issues workspace's local panel state, never to a
+                    // persisted thread panel.
+                    if (surface.kind === "issue") return [];
                     if (surface.kind === "thread") {
                       if (
                         typeof surface.resourceId !== "string" ||
@@ -859,7 +869,8 @@ export function selectActiveRightPanel(
 ): RightPanelKind | null {
   const state = selectThreadRightPanelState(byThreadKey, ref);
   if (!state.isOpen) return null;
-  return state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+  const kind = state.surfaces.find((surface) => surface.id === state.activeSurfaceId)?.kind ?? null;
+  return kind === "issue" ? null : kind;
 }
 
 export function selectActiveRightPanelSurface(

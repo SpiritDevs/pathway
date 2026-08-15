@@ -544,14 +544,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const branchState = useBranches(branchTarget);
   const branchesLoading = branchState.isPending;
   const allBranchRefs = branchState.data?.refs ?? EMPTY_BRANCH_REFS;
-  const availableBranches = useMemo(
-    () =>
-      pipe(
-        allBranchRefs,
-        Arr.filter((branch) => !branch.isRemote),
-      ),
-    [allBranchRefs],
-  );
+  const availableBranches = allBranchRefs;
 
   const filteredBranches = useMemo(() => {
     const query = branchQuery.trim().toLowerCase();
@@ -670,17 +663,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     ) {
       return;
     }
-    // The default may only exist as origin/<default> (isRemote), which
-    // availableBranches filters out — search the unfiltered refs for it.
     const preferredBranch =
-      allBranchRefs.find((branch) => branch.isDefault) ??
+      availableBranches.find((branch) => branch.isDefault) ??
       availableBranches.find((branch) => branch.current) ??
       null;
     if (preferredBranch) {
       selectBranch(preferredBranch);
     }
   }, [
-    allBranchRefs,
     availableBranches,
     defaultWorkspaceModeSettled,
     selectBranch,

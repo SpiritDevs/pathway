@@ -60,6 +60,7 @@ import {
   IssuesToolkit,
   type IssuesMcpDetail,
   type IssuesMcpAttachment,
+  type IssuesMcpMilestone,
   type IssuesMcpRow,
 } from "./tools.ts";
 
@@ -306,19 +307,31 @@ const resolveProject = (
 const resolveMilestone = (
   index: TrackerIndex,
   value: string,
+  projectId?: IssueMilestone["projectId"],
 ): Effect.Effect<IssueMilestone, IssueTrackerError> => {
   const wanted = normalizeName(value);
-  const milestone = index.milestones.find((candidate) => normalizeName(candidate.name) === wanted);
-  return milestone
-    ? Effect.succeed(milestone)
-    : Effect.fail(
-        notFound(
-          `No milestone called "${value.trim()}". Valid milestones: ${quoteOptions(
-            index.milestones.map((candidate) => candidate.name),
-          )}.`,
-          value.trim(),
-        ),
-      );
+  const inScope =
+    projectId === undefined
+      ? index.milestones
+      : index.milestones.filter((candidate) => candidate.projectId === projectId);
+  const matches = inScope.filter((candidate) => normalizeName(candidate.name) === wanted);
+  if (matches.length === 1) return Effect.succeed(matches[0]!);
+  if (matches.length > 1) {
+    return Effect.fail(
+      invalid(
+        `More than one project has a milestone called "${value.trim()}". Name the project too.`,
+        value.trim(),
+      ),
+    );
+  }
+  return Effect.fail(
+    notFound(
+      `No milestone called "${value.trim()}"${projectId === undefined ? "" : " in that project"}. Valid milestones: ${quoteOptions(
+        inScope.map((candidate) => candidate.name),
+      )}.`,
+      value.trim(),
+    ),
+  );
 };
 
 const resolveCycle = (
@@ -429,6 +442,14 @@ const formatMcpComment = (comment: IssueDetail["comments"][number]) => ({
   attachmentIds: comment.attachmentIds,
   createdAt: comment.createdAt,
   editedAt: comment.editedAt,
+});
+
+const formatMilestone = (index: TrackerIndex, milestone: IssueMilestone): IssuesMcpMilestone => ({
+  name: milestone.name,
+  project: index.projectById.get(milestone.projectId)?.title ?? "unknown",
+  description: milestone.description,
+  startDate: milestone.startDate,
+  targetDate: milestone.targetDate,
 });
 
 export const formatIssueRow = (index: TrackerIndex, issue: Issue): IssuesMcpRow => {
@@ -624,6 +645,74 @@ const handlers = {
       return { key: issue.key, attachment };
     }),
 
+  issues_milestones_list: (input) =>
+    Effect.gen(function* () {
+      const index = yield* readIndex();
+      const project =
+        input.project === undefined ? null : yield* resolveProject(index, input.project);
+      return {
+        milestones: index.milestones
+          .filter((milestone) => project === null || milestone.projectId === project.projectId)
+          .map((milestone) => formatMilestone(index, milestone)),
+      };
+    }),
+
+  issues_milestone_create: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const index = yield* readIndex();
+      const project = yield* resolveProject(index, input.project);
+      const created = yield* tracker.milestoneCreate({
+        projectId: project.projectId,
+        name: input.name,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
+        ...(input.targetDate === undefined ? {} : { targetDate: input.targetDate }),
+      });
+      return { milestone: formatMilestone(index, created.milestone) };
+    }),
+
+  issues_milestone_update: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const project = yield* resolveProject(index, input.project);
+      const milestone = yield* resolveMilestone(index, input.milestone, project.projectId);
+      const newProject =
+        input.newProject === undefined ? null : yield* resolveProject(index, input.newProject);
+      const updated = yield* tracker.milestoneUpdate(
+        {
+          milestoneId: milestone.id,
+          patch: {
+            ...(input.name === undefined ? {} : { name: input.name }),
+            ...(input.description === undefined ? {} : { description: input.description }),
+            ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
+            ...(input.targetDate === undefined ? {} : { targetDate: input.targetDate }),
+            ...(newProject === null ? {} : { projectId: newProject.projectId }),
+          },
+        },
+        actor,
+      );
+      const after = yield* readIndex();
+      return { milestone: formatMilestone(after, updated.milestone) };
+    }),
+
+  issues_milestone_delete: (input) =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const actor = yield* callerActor();
+      const index = yield* readIndex();
+      const project = yield* resolveProject(index, input.project);
+      const milestone = yield* resolveMilestone(index, input.milestone, project.projectId);
+      const deleted = formatMilestone(index, milestone);
+      const clearedIssues = index.snapshot.issues.filter(
+        (issue) => issue.milestoneId === milestone.id,
+      ).length;
+      yield* tracker.milestoneDelete({ milestoneId: milestone.id }, actor);
+      return { deleted, clearedIssues };
+    }),
+
   issues_create: (input) =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
@@ -631,10 +720,42 @@ const handlers = {
       const index = yield* readIndex();
 
       const status = input.status === undefined ? null : yield* resolveStatus(index, input.status);
-      const project =
+      let project =
         input.project === undefined ? null : yield* resolveProject(index, input.project);
-      const milestone =
-        input.milestone === undefined ? null : yield* resolveMilestone(index, input.milestone);
+      let milestone: IssueMilestone | null = null;
+      if (input.milestone !== undefined) {
+        if (project === null) {
+          const wanted = normalizeName(input.milestone);
+          if (!index.milestones.some((candidate) => normalizeName(candidate.name) === wanted)) {
+            return yield* invalid(
+              `No milestone called "${input.milestone.trim()}". Pass project to create it while filing the issue.`,
+              input.milestone.trim(),
+            );
+          }
+          milestone = yield* resolveMilestone(index, input.milestone);
+          project = index.projectById.get(milestone.projectId) ?? null;
+          if (project === null || project.deletedAt !== null) {
+            return yield* invalid(
+              `Milestone "${milestone.name}" does not belong to an active project.`,
+              milestone.name,
+            );
+          }
+        } else {
+          const wanted = normalizeName(input.milestone);
+          const projectId = project.projectId;
+          milestone =
+            index.milestones.find(
+              (candidate) =>
+                candidate.projectId === projectId && normalizeName(candidate.name) === wanted,
+            ) ?? null;
+          if (milestone === null) {
+            milestone = (yield* tracker.milestoneCreate({
+              projectId,
+              name: input.milestone,
+            })).milestone;
+          }
+        }
+      }
       const cycle = input.cycle === undefined ? null : yield* resolveCycle(index, input.cycle);
       const parent =
         input.parentKey === undefined ? null : yield* resolveIssue(index, input.parentKey);
@@ -699,8 +820,18 @@ const handlers = {
           input.project === null ? null : (yield* resolveProject(index, input.project)).projectId;
       }
       if (input.milestone !== undefined) {
-        patch.milestoneId =
-          input.milestone === null ? null : (yield* resolveMilestone(index, input.milestone)).id;
+        if (input.milestone === null) {
+          patch.milestoneId = null;
+        } else {
+          const projectId = patch.projectId === undefined ? issue.projectId : patch.projectId;
+          if (projectId === null) {
+            return yield* invalid(
+              "An issue must belong to a project before it can be assigned to a milestone.",
+              issue.key,
+            );
+          }
+          patch.milestoneId = (yield* resolveMilestone(index, input.milestone, projectId)).id;
+        }
       }
       if (input.cycle !== undefined) {
         patch.cycleId = input.cycle === null ? null : (yield* resolveCycle(index, input.cycle)).id;

@@ -45,6 +45,8 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   ArrowUpRightIcon,
   CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CopyIcon,
   SearchXIcon,
   Trash2Icon,
@@ -63,7 +65,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
 import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
@@ -134,11 +135,10 @@ import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { ScrollArea } from "../ui/scroll-area";
-import { Sheet, SheetClose, SheetPopup, SheetTitle } from "../ui/sheet";
+import { Sheet, SheetPopup, SheetTitle } from "../ui/sheet";
 import { Spinner } from "../ui/spinner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Textarea } from "../ui/textarea";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { IssueActivityFeed } from "./IssueActivityFeed";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { IssueActionPanel } from "./IssueActionPanel";
@@ -149,11 +149,15 @@ import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
 import { IssueDetailProperties } from "./IssueDetailProperties";
 import { IssueDetailTabs, type IssueDetailTab } from "./IssueDetailTabs";
 import { IssueEnrichmentPanel } from "./IssueEnrichmentPanel";
+import { IssueImageViewer } from "./IssueImageViewer";
 import { IssueRelationsSection } from "./IssueRelationsSection";
 import { IssueSubIssues } from "./IssueSubIssues";
 import { IssueTodoList } from "./IssueTodoList";
 import { IssueDeleteMenu } from "./IssuePropertyMenus";
-import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { IssueInvestigateProjectMenu } from "./IssueInvestigateProjectMenu";
+import { issueAttachmentIds } from "./issueCommentAttachments";
+import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -164,11 +168,14 @@ import {
   issueDueDatePatch,
   issueLabelTogglePatch,
   issueMilestonePatch,
+  issueSheetHistory,
   issueParentPatch,
   issuePriorityPatch,
   issueProjectPatch,
   issueStatusPatch,
   issueTitlePatch,
+  moveIssueSheetHistory,
+  pushIssueSheetHistory,
   resolveIssueDetailState,
 } from "./issueDetail.logic";
 import {
@@ -179,13 +186,13 @@ import {
   issueApplyPriorityPatch,
   issueApplyTitlePatch,
   issueInvestigateBlock,
-  type IssueInvestigateBlock,
 } from "./issueEnrichment.logic";
 import {
   buildIssueStartWorkPrompt,
   buildIssueTalkPrompt,
   issueDetailUrl,
   issueStartWorkAttachmentIds,
+  loadIssueStartWorkImages,
   issueStartWorkTodos,
   resolveIssueStartWorkModelSelection,
   resolveIssueStartWorkStatusId,
@@ -224,6 +231,7 @@ export function IssueDetailSheet({
   onClose,
   onOpenInIssues,
   onOpenIssueKey,
+  presentation = "sheet",
   startWorkRequestProvider = null,
   startWorkRequestProjectId = null,
   onStartWorkRequestHandled,
@@ -235,6 +243,8 @@ export function IssueDetailSheet({
   onOpenInIssues?: (key: string) => void;
   /** Reopens the sheet on an undone delete, which arrives after the sheet has already closed. */
   onOpenIssueKey: (key: string) => void;
+  /** Inline fills a right-panel tab; sheet keeps the normal non-modal overlay behavior. */
+  presentation?: "sheet" | "inline";
   /** A triage Start Task press waiting for the accepted assignment to reach this sheet. */
   startWorkRequestProvider?: ProviderDriverKind | null;
   startWorkRequestProjectId?: ProjectId | null;
@@ -262,6 +272,44 @@ export function IssueDetailSheet({
 
   const storeStatus = useIssuesStoreStatus();
   const issue = useIssue(issueKey);
+  const [history, setHistory] = useState(() => issueSheetHistory(issueKey));
+  const pendingHistoryNavigation = useRef<{
+    readonly from: string | null;
+    readonly to: string;
+  } | null>(null);
+
+  // Route/list navigation is a new sheet context. In-sheet navigation updates the stack before it
+  // changes the key. Keep that update while the route catches up; any other selection resets it.
+  useEffect(() => {
+    const pending = pendingHistoryNavigation.current;
+    if (pending !== null) {
+      if (issueKey === pending.from) return;
+      pendingHistoryNavigation.current = null;
+      if (issueKey === pending.to) return;
+    }
+    if (history.entries[history.index] !== issueKey) setHistory(issueSheetHistory(issueKey));
+  }, [history.entries, history.index, issueKey]);
+
+  const openFromSheet = useCallback(
+    (key: string) => {
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory((current) => pushIssueSheetHistory(current, key));
+      onOpenIssueKey(key);
+    },
+    [issueKey, onOpenIssueKey],
+  );
+  const moveThroughHistory = useCallback(
+    (offset: -1 | 1) => {
+      const next = moveIssueSheetHistory(history, offset);
+      const key = next.entries[next.index];
+      if (next === history || key === undefined) return;
+      pendingHistoryNavigation.current = { from: issueKey, to: key };
+      setHistory(next);
+      onOpenIssueKey(key);
+    },
+    [history, issueKey, onOpenIssueKey],
+  );
+  const historyMatchesIssue = history.entries[history.index] === issueKey;
 
   // The grace period restarts on every key, so walking the list with `j` never trips it.
   const [settled, setSettled] = useState(false);
@@ -279,6 +327,45 @@ export function IssueDetailSheet({
     "--right-panel-sheet-width": `${sheetSize.width}px`,
     "--right-panel-sheet-max-width": `${maxWidth}px`,
   } as CSSProperties;
+
+  const content =
+    issue === null ? (
+      <IssueDetailPlaceholder
+        issueKey={issueKey}
+        onClose={onClose}
+        showCloseButton={presentation === "sheet"}
+        state={state}
+      />
+    ) : (
+      <IssueDetailBody
+        issue={issue}
+        key={issue.id}
+        canGoBack={historyMatchesIssue && history.index > 0}
+        canGoForward={historyMatchesIssue && history.index < history.entries.length - 1}
+        onBack={() => moveThroughHistory(-1)}
+        onClose={onClose}
+        onOpenInIssues={onOpenInIssues}
+        onForward={() => moveThroughHistory(1)}
+        onOpenIssueKey={openFromSheet}
+        onStartWorkRequestHandled={onStartWorkRequestHandled}
+        propertiesMaxWidth={propertiesMaxWidth}
+        propertiesSize={propertiesSize}
+        showHeaderCloseButton={presentation === "sheet"}
+        startWorkRequestProvider={startWorkRequestProvider}
+        startWorkRequestProjectId={startWorkRequestProjectId}
+      />
+    );
+
+  if (presentation === "inline") {
+    return (
+      <div
+        className="@container/issue-detail flex min-h-0 flex-1 flex-col bg-background"
+        style={sheetStyle}
+      >
+        {content}
+      </div>
+    );
+  }
 
   return (
     <Sheet
@@ -303,22 +390,7 @@ export function IssueDetailSheet({
       >
         <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
         <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Issue"}</SheetTitle>
-        {issue === null ? (
-          <IssueDetailPlaceholder issueKey={issueKey} state={state} />
-        ) : (
-          <IssueDetailBody
-            issue={issue}
-            key={issue.id}
-            onClose={onClose}
-            onOpenInIssues={onOpenInIssues}
-            onOpenIssueKey={onOpenIssueKey}
-            onStartWorkRequestHandled={onStartWorkRequestHandled}
-            propertiesMaxWidth={propertiesMaxWidth}
-            propertiesSize={propertiesSize}
-            startWorkRequestProvider={startWorkRequestProvider}
-            startWorkRequestProjectId={startWorkRequestProjectId}
-          />
-        )}
+        {content}
       </SheetPopup>
     </Sheet>
   );
@@ -327,63 +399,78 @@ export function IssueDetailSheet({
 function SheetHeaderBar({
   title,
   children,
+  titleAccessory,
   onTitleClick,
   titleActionLabel,
   titleActionComplete = false,
+  onClose,
+  showCloseButton = true,
 }: {
   title: string;
   children?: ReactNode;
+  titleAccessory?: ReactNode;
   onTitleClick?: () => void;
   titleActionLabel?: string;
   titleActionComplete?: boolean;
+  onClose: () => void;
+  showCloseButton?: boolean;
 }) {
   return (
     <div className="pointer-events-auto flex h-11 shrink-0 items-center gap-1 border-b border-border/50 px-2 ps-3 [-webkit-app-region:no-drag]">
-      {onTitleClick === undefined ? (
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-          {title}
-        </span>
-      ) : (
-        <button
-          aria-label={titleActionLabel}
-          className="group/title flex min-w-0 flex-1 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={onTitleClick}
-          title={titleActionLabel}
-          type="button"
-        >
-          <span className="truncate">{title}</span>
-          {titleActionComplete ? (
-            <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
-          ) : (
-            <CopyIcon
-              aria-hidden="true"
-              className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
-            />
-          )}
-        </button>
-      )}
+      <div className="flex min-w-0 flex-1 items-center gap-0.5">
+        {onTitleClick === undefined ? (
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{title}</span>
+        ) : (
+          <button
+            aria-label={titleActionLabel}
+            className="group/title flex min-w-0 items-center gap-1.5 rounded-sm text-start font-mono text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onTitleClick}
+            title={titleActionLabel}
+            type="button"
+          >
+            <span className="truncate">{title}</span>
+            {titleActionComplete ? (
+              <CheckIcon aria-hidden="true" className="size-3 shrink-0 text-primary" />
+            ) : (
+              <CopyIcon
+                aria-hidden="true"
+                className="size-3 shrink-0 opacity-0 transition-opacity group-hover/title:opacity-70 group-focus-visible/title:opacity-70 pointer-coarse:opacity-70"
+              />
+            )}
+          </button>
+        )}
+        {titleAccessory}
+      </div>
       {children}
-      <SheetClose
-        aria-label="Close issue"
-        className="[-webkit-app-region:no-drag]"
-        render={<Button size="icon-xs" variant="ghost" />}
-      >
-        <XIcon />
-      </SheetClose>
+      {showCloseButton ? (
+        <Button
+          aria-label="Close issue"
+          className="[-webkit-app-region:no-drag]"
+          onClick={onClose}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <XIcon />
+        </Button>
+      ) : null}
     </div>
   );
 }
 
 function IssueDetailPlaceholder({
   issueKey,
+  onClose,
+  showCloseButton,
   state,
 }: {
   issueKey: string | null;
+  onClose: () => void;
+  showCloseButton: boolean;
   state: ReturnType<typeof resolveIssueDetailState>;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <SheetHeaderBar title={issueKey ?? ""} />
+      <SheetHeaderBar onClose={onClose} showCloseButton={showCloseButton} title={issueKey ?? ""} />
       {state === "loading" ? (
         <div className="flex flex-1 items-center justify-center">
           <Spinner className="size-4 text-muted-foreground" />
@@ -411,21 +498,31 @@ function IssueDetailPlaceholder({
 
 function IssueDetailBody({
   issue,
+  canGoBack,
+  canGoForward,
+  onBack,
   onClose,
   onOpenInIssues,
   onOpenIssueKey,
+  onForward,
   propertiesMaxWidth,
   propertiesSize,
+  showHeaderCloseButton,
   startWorkRequestProvider,
   startWorkRequestProjectId,
   onStartWorkRequestHandled,
 }: {
   issue: Issue;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onBack: () => void;
   onClose: () => void;
   onOpenInIssues: ((key: string) => void) | undefined;
   onOpenIssueKey: (key: string) => void;
+  onForward: () => void;
   propertiesMaxWidth: number;
   propertiesSize: ReturnType<typeof useResizableWidth>;
+  showHeaderCloseButton: boolean;
   startWorkRequestProvider: ProviderDriverKind | null;
   startWorkRequestProjectId: ProjectId | null;
   onStartWorkRequestHandled: (() => void) | undefined;
@@ -554,15 +651,15 @@ function IssueDetailBody({
     () => issueStartWorkAttachmentIds(detail?.comments ?? EMPTY_COMMENTS),
     [detail?.comments],
   );
-  const startWorkAttachmentResources = useMemo(
-    () =>
-      startWorkAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [startWorkAttachmentIds],
+  const { attachments: startWorkAttachments } = useIssueAttachmentUrls({
+    attachmentIds: startWorkAttachmentIds,
+    cloud: attachmentCloud,
+    environmentId: primaryEnvironmentId,
+    issueId: issue.id,
+  });
+  const startWorkAttachmentUrls = startWorkAttachments.map((attachment) =>
+    attachment === null ? null : attachment.url,
   );
-  const startWorkAttachmentUrls = useAssetUrls(primaryEnvironmentId, startWorkAttachmentResources);
   const startWorkAttachmentsReady = startWorkAttachmentUrls.every((url) => url !== null);
 
   const openIssue = useCallback((target: Issue) => onOpenIssueKey(target.key), [onOpenIssueKey]);
@@ -574,6 +671,8 @@ function IssueDetailBody({
   const [showRelations, setShowRelations] = useState(false);
   const [relationOpenRequest, setRelationOpenRequest] = useState(0);
   const [investigationRequested, setInvestigationRequested] = useState(false);
+  /** The image the in-app viewer is opened on; `null` keeps it closed. */
+  const [viewedAttachmentId, setViewedAttachmentId] = useState<ChatAttachmentId | null>(null);
 
   /**
    * Every tail write reports the same way, and none of them is optimistic: the stream echo is what
@@ -760,17 +859,47 @@ function IssueDetailBody({
     hasRunInFlight: investigating,
   });
 
-  const handleInvestigate = useCallback(() => {
-    setActiveTab("investigation");
-    setInvestigationRequested(true);
-    void (async () => {
-      const failed = reportFailure(
-        "Failed to start the investigation",
-        await startEnrichment({ issueId: issue.id }),
-      );
-      if (failed) setInvestigationRequested(false);
-    })();
-  }, [issue.id, startEnrichment]);
+  const investigationProjects = useMemo(
+    () =>
+      projects.filter(
+        (candidate) =>
+          candidate.environmentId === primaryEnvironmentId && candidate.workspaceRoot != null,
+      ),
+    [primaryEnvironmentId, projects],
+  );
+  const investigateMenuBlock =
+    investigationProjects.length === 0
+      ? "Connect a workspace to a project before investigating."
+      : investigateBlock === "no-project" || investigateBlock === "rootless-project"
+        ? null
+        : investigateBlock === null
+          ? null
+          : ISSUE_INVESTIGATE_BLOCK_REASONS[investigateBlock];
+
+  const handleInvestigate = useCallback(
+    (projectId: ProjectId) => {
+      setActiveTab("investigation");
+      setInvestigationRequested(true);
+      void (async () => {
+        if (issue.projectId !== projectId) {
+          const assignmentFailed = reportFailure(
+            "Failed to assign the issue to the project",
+            await updateIssue({ issueId: issue.id, patch: { projectId } }),
+          );
+          if (assignmentFailed) {
+            setInvestigationRequested(false);
+            return;
+          }
+        }
+        const failed = reportFailure(
+          "Failed to start the investigation",
+          await startEnrichment({ issueId: issue.id }),
+        );
+        if (failed) setInvestigationRequested(false);
+      })();
+    },
+    [issue.id, issue.projectId, startEnrichment, updateIssue],
+  );
 
   const handleAddTodo = useCallback(() => {
     setActiveTab("details");
@@ -872,6 +1001,8 @@ function IssueDetailBody({
       workspaceMode: IssueStartWorkWorkspaceMode,
       baseBranch: string | null,
       purpose: "start-work" | "talk" = "start-work",
+      /** Narrows the draft to one image — the viewer starts a thread about a single attachment. */
+      imageUrls: ReadonlyArray<string> | null = null,
     ) => {
       if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
         throw new Error("The issue thread could not be prepared.");
@@ -913,18 +1044,17 @@ function IssueDetailBody({
         purpose === "talk"
           ? buildIssueTalkPrompt(promptContext)
           : buildIssueStartWorkPrompt(promptContext);
-      const files: File[] = [];
-      for (const [index, url] of startWorkAttachmentUrls.entries()) {
-        if (url === null) throw new Error("The issue images are still loading. Try again.");
-        if (isIssueVideoAttachmentUrl(url)) continue;
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("An issue image could not be loaded.");
-        const blob = await response.blob();
-        if (!blob.type.startsWith("image/")) {
-          throw new Error("An issue attachment is not an image.");
-        }
-        files.push(new File([blob], `${issue.key}-attachment-${index + 1}`, { type: blob.type }));
+      const selectedUrls = imageUrls ?? startWorkAttachmentUrls;
+      if (selectedUrls.some((url) => url === null)) {
+        throw new Error("The issue images are still loading. Try again.");
       }
+      const loadedImages = await loadIssueStartWorkImages(
+        selectedUrls.filter((url): url is string => url !== null),
+      );
+      const files = loadedImages.map(
+        ({ blob, sourceIndex }) =>
+          new File([blob], `${issue.key}-attachment-${sourceIndex + 1}`, { type: blob.type }),
+      );
 
       const opened = await openNewThread(scopeProjectRef(project.environmentId, project.id), {
         branch: workspacePlan.branch,
@@ -1138,44 +1268,65 @@ function IssueDetailBody({
     [prepareIssueThreadDraft, startingWork],
   );
 
-  /** Opens a current-checkout draft so the user's first message can steer the discussion. */
-  const handleTalkAboutIssue = useCallback(() => {
-    if (startingWork) return;
-    setStartingWork(true);
-    void (async () => {
-      try {
-        const prepared = await prepareIssueThreadDraft("current_checkout", null, "talk");
-        if (prepared === null) return;
-        const draftStore = useComposerDraftStore.getState();
-        draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
-        draftStore.addImages(
-          prepared.opened.draftId,
-          prepared.files.map(
-            (file) =>
-              ({
-                type: "image",
-                id: randomUUID(),
-                name: file.name,
-                mimeType: file.type,
-                sizeBytes: file.size,
-                previewUrl: URL.createObjectURL(file),
-                file,
-              }) satisfies ComposerImageAttachment,
-          ),
-        );
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to create issue discussion",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      } finally {
-        setStartingWork(false);
-      }
-    })();
-  }, [prepareIssueThreadDraft, startingWork]);
+  /**
+   * Opens a current-checkout draft so the user's first message can steer the discussion.
+   * `imageUrls` narrows the attached images; `null` carries every image on the issue.
+   */
+  const openIssueDiscussionDraft = useCallback(
+    (imageUrls: ReadonlyArray<string> | null) => {
+      if (startingWork) return;
+      setStartingWork(true);
+      void (async () => {
+        try {
+          const prepared = await prepareIssueThreadDraft(
+            "current_checkout",
+            null,
+            "talk",
+            imageUrls,
+          );
+          if (prepared === null) return;
+          const draftStore = useComposerDraftStore.getState();
+          draftStore.setPrompt(prepared.opened.draftId, prepared.prompt);
+          draftStore.addImages(
+            prepared.opened.draftId,
+            prepared.files.map(
+              (file) =>
+                ({
+                  type: "image",
+                  id: randomUUID(),
+                  name: file.name,
+                  mimeType: file.type,
+                  sizeBytes: file.size,
+                  previewUrl: URL.createObjectURL(file),
+                  file,
+                }) satisfies ComposerImageAttachment,
+            ),
+          );
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to create issue discussion",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        } finally {
+          setStartingWork(false);
+        }
+      })();
+    },
+    [prepareIssueThreadDraft, startingWork],
+  );
+
+  const handleTalkAboutIssue = useCallback(
+    () => openIssueDiscussionDraft(null),
+    [openIssueDiscussionDraft],
+  );
+
+  const handleStartThreadWithImage = useCallback(
+    (src: string) => openIssueDiscussionDraft([src]),
+    [openIssueDiscussionDraft],
+  );
 
   useEffect(() => {
     if (
@@ -1232,20 +1383,68 @@ function IssueDetailBody({
   }, [store]);
   const todos = detail?.todos ?? EMPTY_TODOS;
   const comments = detail?.comments ?? EMPTY_COMMENTS;
+  const discussionComments = useMemo(
+    () => comments.filter((comment) => !isNewIssueAttachmentRecord(comment)),
+    [comments],
+  );
+  // The viewer spans every image on the issue, so the shelf and a comment's images open the
+  // same gallery and the arrows keep working across both.
+  const galleryAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
+  const talkAboutIssueBlockReason =
+    project?.workspaceRoot == null
+      ? "Assign this issue to a project with a connected workspace before starting a discussion."
+      : storeStatus === "disconnected"
+        ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+        : !startWorkAttachmentsReady
+          ? "Issue images are still loading."
+          : startingWork
+            ? "Another issue thread is being prepared."
+            : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SheetHeaderBar
+        onClose={onClose}
+        showCloseButton={showHeaderCloseButton}
         onTitleClick={() => copyIssueKey(issue.key, undefined)}
         title={issue.key}
         titleActionComplete={issueKeyCopied}
         titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
+        titleAccessory={
+          <div className="flex shrink-0 items-center">
+            <Button
+              aria-label="Go to previous issue"
+              disabled={!canGoBack}
+              onClick={onBack}
+              size="icon-xs"
+              title="Previous issue"
+              variant="ghost"
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <Button
+              aria-label="Go to next issue"
+              disabled={!canGoForward}
+              onClick={onForward}
+              size="icon-xs"
+              title="Next issue"
+              variant="ghost"
+            >
+              <ChevronRightIcon />
+            </Button>
+          </div>
+        }
       >
         {!runsPending && enrichmentRuns.length === 0 && !investigating ? (
-          <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
+          <IssueInvestigateProjectMenu
+            currentProjectId={issue.projectId}
+            disabledReason={investigateMenuBlock}
+            onSelect={handleInvestigate}
+            projects={investigationProjects}
+          >
             <WandSparklesIcon />
             Investigate
-          </IssueInvestigateButton>
+          </IssueInvestigateProjectMenu>
         ) : null}
         <IssueDeleteMenu
           count={1}
@@ -1301,11 +1500,26 @@ function IssueDetailBody({
                 drafts={attachmentDrafts}
                 issueId={issue.id}
                 onCreateComment={handleCreateComment}
+                onOpenImage={setViewedAttachmentId}
+                onRemoveAttachment={(commentId, attachmentId) => {
+                  const comment = comments.find((candidate) => candidate.id === commentId);
+                  if (comment === undefined) return;
+                  runWrite("Failed to remove the image", () =>
+                    updateComment({
+                      commentId,
+                      patch: {
+                        attachmentIds: comment.attachmentIds.filter(
+                          (candidate) => candidate !== attachmentId,
+                        ),
+                      },
+                    }),
+                  );
+                }}
               />
 
               <IssueDetailTabs
                 activityCount={events.length}
-                commentCount={comments.length}
+                commentCount={discussionComments.length}
                 investigating={investigating}
                 investigationCount={enrichmentRuns.length}
                 onChange={setActiveTab}
@@ -1390,13 +1604,14 @@ function IssueDetailBody({
                 <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
                     cloud={attachmentCloud}
-                    comments={comments}
+                    comments={discussionComments}
                     instanceEntries={providerInstanceEntries}
                     isPending={detailPending}
                     issueId={issue.id}
                     modelOptionsByInstance={startWorkModelOptionsByInstance}
                     onCancelAgentRun={handleCancelCommentAgentRun}
                     onCreate={handleCreateComment}
+                    onOpenImage={setViewedAttachmentId}
                     onRetryAgentRun={handleRetryCommentAgentRun}
                     onDelete={(commentId: IssueCommentId) =>
                       runWrite("Failed to delete the comment", () => deleteComment({ commentId }))
@@ -1426,14 +1641,19 @@ function IssueDetailBody({
                         Read-only analysis. Finished runs are also left in Comments.
                       </p>
                     </div>
-                    <IssueInvestigateButton block={investigateBlock} onClick={handleInvestigate}>
+                    <IssueInvestigateProjectMenu
+                      currentProjectId={issue.projectId}
+                      disabledReason={investigateMenuBlock}
+                      onSelect={handleInvestigate}
+                      projects={investigationProjects}
+                    >
                       {!investigating ? <WandSparklesIcon /> : <Spinner className="size-3.5" />}
                       {!investigating
                         ? enrichmentRuns.length === 0
                           ? "Investigate"
                           : "Investigate again"
                         : "Investigating"}
-                    </IssueInvestigateButton>
+                    </IssueInvestigateProjectMenu>
                   </div>
                   <IssueEnrichmentPanel
                     error={runsError}
@@ -1541,51 +1761,27 @@ function IssueDetailBody({
                 onAddSubIssue={handleAddSubIssue}
                 onAddTodo={handleAddTodo}
                 onTalkAboutIssue={handleTalkAboutIssue}
-                talkAboutIssueBlockReason={
-                  project?.workspaceRoot == null
-                    ? "Assign this issue to a project with a connected workspace before starting a discussion."
-                    : storeStatus === "disconnected"
-                      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
-                      : !startWorkAttachmentsReady
-                        ? "Issue images are still loading."
-                        : startingWork
-                          ? "Another issue thread is being prepared."
-                          : null
-                }
+                talkAboutIssueBlockReason={talkAboutIssueBlockReason}
               />
             </aside>
           </div>
         </ScrollArea>
       </div>
+      {viewedAttachmentId === null ||
+      (attachmentCloud === null && primaryEnvironmentId === null) ? null : (
+        <IssueImageViewer
+          attachmentIds={galleryAttachmentIds}
+          cloud={attachmentCloud}
+          environmentId={primaryEnvironmentId}
+          issueId={issue.id}
+          onClose={() => setViewedAttachmentId(null)}
+          onComment={(body, attachmentId) => handleCreateComment(body, [attachmentId])}
+          onStartThread={handleStartThreadWithImage}
+          selectedAttachmentId={viewedAttachmentId}
+          startThreadDisabled={talkAboutIssueBlockReason !== null}
+        />
+      )}
     </div>
-  );
-}
-
-function IssueInvestigateButton({
-  block,
-  children,
-  onClick,
-}: {
-  block: IssueInvestigateBlock | null;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  const disabled = block !== null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={<span className={cn("inline-flex", disabled && "cursor-not-allowed")} />}
-      >
-        <Button disabled={disabled} onClick={onClick} size="xs" variant="outline">
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipPopup>
-        {disabled
-          ? ISSUE_INVESTIGATE_BLOCK_REASONS[block]
-          : "Run a read-only investigation of this issue's repository."}
-      </TooltipPopup>
-    </Tooltip>
   );
 }
 

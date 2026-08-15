@@ -1,7 +1,7 @@
 import type { ChatAttachmentId, EnvironmentId, IssueId } from "@spiritdevs/contracts";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import { useAssetUrlsState } from "~/assets/assetUrls";
 import type {
   ReplicaIssueAttachment,
   ReplicaIssueAttachmentCloud,
@@ -14,13 +14,19 @@ export interface IssueAttachmentDisplay {
   readonly byteSize: number | null;
 }
 
+export interface IssueAttachmentUrlsState {
+  readonly attachments: ReadonlyArray<IssueAttachmentDisplay | null>;
+  /** Retry one failed signed URL once while this view remains mounted. */
+  readonly refresh: (index: number) => void;
+}
+
 /** Resolves legacy assets over environment RPC and replica assets through the authorized query. */
 export function useIssueAttachmentUrls(input: {
   readonly attachmentIds: ReadonlyArray<ChatAttachmentId>;
   readonly cloud: ReplicaIssueAttachmentCloud | null;
   readonly environmentId: EnvironmentId | null;
   readonly issueId: IssueId;
-}): ReadonlyArray<IssueAttachmentDisplay | null> {
+}): IssueAttachmentUrlsState {
   const legacyResources = useMemo(
     () =>
       input.cloud === null
@@ -31,7 +37,12 @@ export function useIssueAttachmentUrls(input: {
         : [],
     [input.attachmentIds, input.cloud],
   );
-  const legacyUrls = useAssetUrls(input.environmentId, legacyResources);
+  const legacy = useAssetUrlsState(
+    input.cloud === null ? input.environmentId : null,
+    legacyResources,
+  );
+  const retriedReplicaIdsRef = useRef(new Set<ChatAttachmentId>());
+  const [replicaRefreshVersion, setReplicaRefreshVersion] = useState(0);
   const [replicaRows, setReplicaRows] = useState<
     ReadonlyMap<ChatAttachmentId, ReplicaIssueAttachment>
   >(new Map());
@@ -70,21 +81,39 @@ export function useIssueAttachmentUrls(input: {
     return () => {
       current = false;
     };
-  }, [input.attachmentIds, input.cloud, input.issueId]);
+  }, [input.attachmentIds, input.cloud, input.issueId, replicaRefreshVersion]);
 
-  return input.cloud === null
-    ? legacyUrls.map((url) =>
-        url === null ? null : { url, fileName: null, mimeType: null, byteSize: null },
-      )
-    : input.attachmentIds.map((attachmentId) => {
-        const row = replicaRows.get(attachmentId);
-        return row === undefined
-          ? null
-          : {
-              url: row.url,
-              fileName: row.fileName,
-              mimeType: row.mimeType,
-              byteSize: row.byteSize,
-            };
-      });
+  const refresh = useCallback(
+    (index: number) => {
+      if (input.cloud === null) {
+        legacy.refresh(index);
+        return;
+      }
+      const attachmentId = input.attachmentIds[index];
+      if (attachmentId === undefined || retriedReplicaIdsRef.current.has(attachmentId)) return;
+      retriedReplicaIdsRef.current.add(attachmentId);
+      setReplicaRefreshVersion((current) => current + 1);
+    },
+    [input.attachmentIds, input.cloud, legacy],
+  );
+  const attachments = useMemo(
+    () =>
+      input.cloud === null
+        ? legacy.urls.map((url) =>
+            url === null ? null : { url, fileName: null, mimeType: null, byteSize: null },
+          )
+        : input.attachmentIds.map((attachmentId) => {
+            const row = replicaRows.get(attachmentId);
+            return row === undefined
+              ? null
+              : {
+                  url: row.url,
+                  fileName: row.fileName,
+                  mimeType: row.mimeType,
+                  byteSize: row.byteSize,
+                };
+          }),
+    [input.attachmentIds, input.cloud, legacy.urls, replicaRows],
+  );
+  return { attachments, refresh };
 }

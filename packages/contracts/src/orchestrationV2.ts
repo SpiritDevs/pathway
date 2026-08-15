@@ -45,6 +45,7 @@ import {
 } from "./providerPolicy.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
+import { ThreadLocation } from "./threadLocation.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -357,6 +358,7 @@ export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
 });
 export type OrchestrationV2ThreadPreviewActivity = typeof OrchestrationV2ThreadPreviewActivity.Type;
 
+/** Product views in which a thread is intentionally discoverable. */
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
@@ -370,6 +372,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   lineage: OrchestrationV2AppThreadLineage,
+  /** Distinguishes user-created side chats from ordinary conversation forks. */
+  forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
+  /** A multi-select marker for the product views that should list this thread. */
+  locations: Schema.optional(Schema.Array(ThreadLocation)),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -1085,6 +1091,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("fork"),
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     source: Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
       Schema.Struct({ type: Schema.Literal("node"), nodeId: NodeId }),
@@ -1096,6 +1103,17 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ]),
     targetThreadId: ThreadId,
     providerThreadId: Schema.optional(ProviderThreadId),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    type: Schema.Literal("source_control"),
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1351,6 +1369,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   lineage: OrchestrationV2AppThreadLineage,
+  forkKind: OrchestrationV2AppThread.fields.forkKind,
+  locations: OrchestrationV2AppThread.fields.locations,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   latestRunId: Schema.NullOr(RunId),
@@ -1770,6 +1790,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("fork"),
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     source: Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
       Schema.Struct({ type: Schema.Literal("node"), nodeId: NodeId }),
@@ -1781,6 +1802,17 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ]),
     targetThreadId: ThreadId,
     providerThreadId: Schema.optional(ProviderThreadId),
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    type: Schema.Literal("source_control"),
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2053,6 +2085,7 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
+    locations: Schema.optional(Schema.Array(ThreadLocation)),
     branch: Schema.NullOr(TrimmedNonEmptyString),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   }),
@@ -2075,6 +2108,18 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.source-control.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    committed: Schema.Boolean,
+    pullRequest: Schema.NullOr(
+      Schema.Struct({
+        number: PositiveInt,
+        url: Schema.String,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),
@@ -2345,6 +2390,7 @@ export const OrchestrationV2Command = Schema.Union([
     sourceThreadId: ThreadId,
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
+    forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     title: Schema.optional(TrimmedNonEmptyString),
     createdAt: Schema.optional(Schema.DateTimeUtc),
   }),
@@ -2485,6 +2531,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  locations: Schema.optional(Schema.Array(ThreadLocation)),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   initialMessage: Schema.optional(
     Schema.Struct({

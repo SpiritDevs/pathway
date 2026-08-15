@@ -118,6 +118,30 @@ export function shouldShowBrowserTakeoverCallout(input: BrowserTakeoverCalloutIn
   return !input.dismissed;
 }
 
+export interface BrowserTakeoverRevealInput {
+  readonly takeover: OrchestrationV2BrowserTakeover | null | undefined;
+  readonly previewSupported: boolean;
+  readonly automationHostClientId: string | null;
+  readonly availableTabIds: ReadonlySet<string>;
+}
+
+/** The exact locally available tab this hosting desktop should reveal once control is exclusive. */
+export function resolveBrowserTakeoverTabToReveal(
+  input: BrowserTakeoverRevealInput,
+): string | null {
+  const takeover = input.takeover ?? null;
+  if (!input.previewSupported || takeover?.status !== "active") return null;
+  if (
+    takeover.hostClientId === null ||
+    takeover.hostClientId !== input.automationHostClientId ||
+    takeover.tabId === null ||
+    !input.availableTabIds.has(takeover.tabId)
+  ) {
+    return null;
+  }
+  return takeover.tabId;
+}
+
 export type BrowserTakeoverActionKind = "take-over" | "proceed" | "release";
 
 export interface BrowserTakeoverBannerAction {
@@ -249,8 +273,7 @@ export function resolveBrowserTakeoverBanner(
     tone: "callout",
     variant: "info",
     title: "Take over to assist agent",
-    description:
-      "Pause the agent and drive its Preview browser yourself — sign in, dismiss a dialog, or set the page up — then hand it back.",
+    description: "Pause the agent and drive its Preview browser yourself, then hand it back.",
     actions: [
       {
         kind: "take-over",

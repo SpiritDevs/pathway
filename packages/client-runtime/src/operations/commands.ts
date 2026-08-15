@@ -18,6 +18,7 @@ import {
   type RunId,
   type RuntimeMode,
   type RuntimeRequestId,
+  type ThreadLocation,
   type ThreadId,
   type UploadChatAttachment,
 } from "@spiritdevs/contracts";
@@ -63,6 +64,7 @@ export interface CreateThreadInput extends CommandMetadata {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly locations?: ReadonlyArray<ThreadLocation>;
   readonly branch: string | null;
   readonly worktreePath: string | null;
 }
@@ -139,6 +141,7 @@ interface StartThreadBootstrap {
     readonly modelSelection: ModelSelection;
     readonly runtimeMode: RuntimeMode;
     readonly interactionMode: ProviderInteractionMode;
+    readonly locations?: ReadonlyArray<ThreadLocation>;
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly createdAt: string;
@@ -202,6 +205,7 @@ export interface ForkThreadFromRunInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly runId: RunId;
+  readonly forkKind?: "manual" | "side_chat";
   readonly title?: string;
 }
 
@@ -379,6 +383,7 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     modelSelection: input.modelSelection,
     runtimeMode: input.runtimeMode,
     interactionMode: input.interactionMode,
+    ...(input.locations === undefined ? {} : { locations: input.locations }),
     branch: input.branch,
     worktreePath: input.worktreePath,
   });
@@ -646,6 +651,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       modelSelection: input.modelSelection ?? thread.modelSelection,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
+      ...(bootstrap?.locations === undefined ? {} : { locations: bootstrap.locations }),
       workspaceStrategy,
       initialMessage: {
         messageId: input.message.messageId,
@@ -843,6 +849,7 @@ export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRu
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
     sourcePoint: { type: "run", runId: input.runId },
+    ...(input.forkKind === undefined ? {} : { forkKind: input.forkKind }),
     ...(input.title === undefined ? {} : { title: input.title }),
   });
 });

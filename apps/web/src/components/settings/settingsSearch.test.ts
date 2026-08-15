@@ -110,6 +110,10 @@ describe("searchSettings", () => {
       to: "/settings/appearance",
       targetId: "appearance",
     });
+    expect(searchSettings("action palette")[0]).toMatchObject({
+      id: "action-palette",
+      to: "/settings/appearance/action-palette",
+    });
   });
 
   it("routes usage analytics to its Settings section", () => {

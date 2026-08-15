@@ -1027,7 +1027,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-v2-item-type="thread_created"');
     expect(markup).toContain('aria-label="Open Claude research thread"');
     expect(markup).toContain("Claude research thread");
-    expect(markup).toContain("claude-default · claude-sonnet-4-6");
+    expect(markup).toContain("claude-sonnet-4-6");
+    expect(markup).not.toContain("claude-default · claude-sonnet-4-6");
     expect(markup).not.toContain("Work Log");
   });
 
@@ -1083,6 +1084,132 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Inspect the package");
     expect(markup).not.toContain('data-v2-subagent-result-disclosure="true"');
     expect(markup).not.toContain("Work Log");
+  });
+
+  it("labels subagent cards with the target provider icon and model", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const providerStatuses = [
+      {
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: {},
+        checkedAt: MESSAGE_CREATED_AT,
+        models: [
+          {
+            slug: "claude-fable-5",
+            name: "Claude Fable 5",
+            shortName: "Fable 5",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      },
+    ] as never;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        providerStatuses={providerStatuses}
+        subagents={[{ id: "node-subagent-1", model: "claude-fable-5" }] as never}
+        timelineEntries={[
+          {
+            id: "subagent-model",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "subagent-model",
+              item: {
+                id: "subagent-model",
+                threadId: "thread-1",
+                runId: "run-1",
+                nodeId: "node-subagent-1",
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Package audit",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "subagent",
+                subagentId: "node-subagent-1",
+                origin: "app_owned",
+                driver: "claudeAgent",
+                providerInstanceId: "claudeAgent",
+                childThreadId: "thread-subagent-1",
+                prompt: "Inspect the package",
+                progress: "Reading src/index.ts",
+                result: null,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Fable 5");
+    // The Claude brand mark, from the instance the subagent runs on.
+    expect(markup).toContain("fill-[#d97757]");
+  });
+
+  it("falls back to the instance name when a subagent has no recorded model", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "subagent-no-model",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "subagent-no-model",
+              item: {
+                id: "subagent-no-model",
+                threadId: "thread-1",
+                runId: "run-1",
+                nodeId: "node-subagent-1",
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Package audit",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "subagent",
+                subagentId: "node-subagent-1",
+                origin: "provider_native",
+                driver: "claudeAgent",
+                providerInstanceId: "claude_personal",
+                childThreadId: "thread-subagent-1",
+                prompt: "Inspect the package",
+                progress: "Reading src/index.ts",
+                result: null,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-v2-item-type="subagent"');
+    expect(markup).toContain("claude_personal");
   });
 
   it("discloses the full Codex subagent result without projecting child events", async () => {
@@ -1398,6 +1525,74 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Provider error");
     expect(markup).toContain("Invalid reasoning effort.");
     expect(markup).toContain("Copy message to AI");
+  });
+
+  it("offers model recovery and reset waiting for usage-limit failures", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        canWaitUntilUsageReset
+        latestRun={
+          {
+            runId: "run-usage-limit",
+            status: "failed",
+            startedAt: MESSAGE_CREATED_AT,
+            completedAt: MESSAGE_CREATED_AT,
+          } as never
+        }
+        runs={
+          [
+            {
+              id: "run-usage-limit",
+              ordinal: 1,
+              providerInstanceId: "codex",
+              modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+            },
+          ] as never
+        }
+        timelineEntries={[
+          {
+            id: "provider-usage-limit",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "provider-usage-limit",
+              item: {
+                id: "provider-usage-limit",
+                threadId: "thread-1",
+                runId: "run-usage-limit",
+                nodeId: null,
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 99,
+                status: "failed",
+                title: "Provider error",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "error",
+                failure: {
+                  class: "provider_error",
+                  message: "You've hit your session limit · resets 9:50pm (Australia/Sydney)",
+                  code: null,
+                  retryable: false,
+                },
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-usage-limit-recovery="true"');
+    expect(markup).toContain("Try another model");
+    expect(markup).toContain("Wait until");
   });
 
   it("keeps inherited V2 work provenance on the rendered row", async () => {

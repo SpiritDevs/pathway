@@ -10,6 +10,7 @@ import {
   ProjectId,
   type RunId,
   type RuntimeMode,
+  type ThreadLocation,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
@@ -68,6 +69,7 @@ export interface ThreadLaunchInput {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  readonly locations?: ReadonlyArray<ThreadLocation>;
   readonly workspaceStrategy: ThreadLaunchWorkspaceStrategy;
   readonly initialMessage?: ThreadLaunchInitialMessage;
   readonly createdBy: OrchestrationV2Actor;
@@ -252,14 +254,24 @@ export const make = Effect.gen(function* () {
       }
       let startRef = input.workspaceStrategy.baseRef;
       if (input.workspaceStrategy.startFromOrigin === true) {
+        const primaryRemoteName = yield* git
+          .resolvePrimaryRemoteName(projectWorkspaceRoot)
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        const remoteName = yield* git
+          .resolveRemoteNameForRef({
+            cwd: projectWorkspaceRoot,
+            refName: input.workspaceStrategy.baseRef,
+            fallbackRemoteName: primaryRemoteName,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         yield* git
-          .fetchRemote({ cwd: projectWorkspaceRoot, remoteName: "origin" })
+          .fetchRemote({ cwd: projectWorkspaceRoot, remoteName })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         startRef = yield* git
           .resolveRemoteTrackingCommit({
             cwd: projectWorkspaceRoot,
             refName: input.workspaceStrategy.baseRef,
-            fallbackRemoteName: "origin",
+            fallbackRemoteName: remoteName,
           })
           .pipe(
             Effect.map((resolved) => resolved.commitSha),
@@ -480,6 +492,7 @@ export const make = Effect.gen(function* () {
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
                 interactionMode: input.interactionMode,
+                ...(input.locations === undefined ? {} : { locations: input.locations }),
                 branch: initialBranch,
                 worktreePath: initialWorktreePath,
                 createdBy: input.createdBy,

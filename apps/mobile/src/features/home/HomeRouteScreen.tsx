@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { isPullRequestReviewThreadTitle } from "@spiritdevs/shared/pullRequestReview";
+import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
@@ -29,7 +30,11 @@ export function HomeRouteScreen() {
   const projects = useProjects();
   const allThreads = useThreadShells();
   const threads = useMemo(
-    () => allThreads.filter((thread) => !isPullRequestReviewThreadTitle(thread.title)),
+    () =>
+      allThreads.filter(
+        (thread) =>
+          threadIsVisibleAt(thread, "agents") && !isPullRequestReviewThreadTitle(thread.title),
+      ),
     [allThreads],
   );
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();

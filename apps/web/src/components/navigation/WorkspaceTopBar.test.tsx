@@ -1,24 +1,33 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-vi.mock("../clerk/T3ConnectSidebarSignIn", () => ({
-  T3ConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
-}));
-
-// The bar renders history controls, which read router context. This suite is a
-// static-markup layout smoke, not a navigation test, so the two hooks are stubbed
-// instead of standing up a RouterProvider; everything else in the module is kept.
-vi.mock("@tanstack/react-router", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({
     history: {
-      location: { state: { __TSR_index: 0 } },
+      go: vi.fn(),
+      location: {
+        hash: "",
+        href: "/threads",
+        pathname: "/threads",
+        search: "",
+        state: { __TSR_index: 0 },
+      },
       subscribe: () => () => {},
-      back: () => {},
-      forward: () => {},
     },
   }),
-  useCanGoBack: () => false,
+}));
+
+vi.mock("../ui/menu", () => ({
+  Menu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  MenuGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  MenuGroupLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  MenuItem: ({ children }: { children: ReactNode }) => <button>{children}</button>,
+  MenuPopup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("../clerk/T3ConnectSidebarSignIn", () => ({
+  T3ConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
 }));
 
 import { WorkspaceTopBar } from "./WorkspaceTopBar";
@@ -31,8 +40,13 @@ describe("WorkspaceTopBar", () => {
     expect(markup).toContain('data-testid="profile-button"');
     // History controls sit on the left, so the bar spreads its two children and
     // the profile button lands at the right edge.
-    expect(markup).toContain("justify-between");
     expect(markup).toContain('aria-label="History navigation"');
+    expect(markup).toContain('aria-label="Back"');
+    expect(markup).toContain('aria-label="Forward"');
+    expect(markup).not.toContain("Back history");
+    expect(markup).not.toContain("Forward history");
+    expect(markup.match(/disabled=""/g)).toHaveLength(2);
+    expect(markup).toContain("justify-between");
     expect(markup).toContain("pr-4");
     expect(markup).toContain("md:flex");
   });

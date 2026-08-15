@@ -57,6 +57,9 @@ import {
   type IssuesMcpDetail,
   type IssuesMcpIssueResult,
   type IssuesMcpListResult,
+  type IssuesMcpMilestoneDeleteResult,
+  type IssuesMcpMilestoneResult,
+  type IssuesMcpMilestonesListResult,
   type IssuesMcpThreadLinksResult,
 } from "./tools.ts";
 
@@ -526,6 +529,97 @@ describe("issues MCP toolkit", () => {
       });
       assert.strictEqual(cleared.issue.assignee, null);
       assert.strictEqual(cleared.issue.dueDate, null);
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("creates, lists, updates, and deletes project-scoped milestones", () =>
+    Effect.gen(function* () {
+      yield* seedProject(PROJECT, "Pathway");
+      yield* seedProject(OTHER_PROJECT, "Relay");
+
+      const created = yield* callTool<IssuesMcpMilestoneResult>("issues_milestone_create", {
+        project: "pathway",
+        name: "Salesforce master",
+        description: "Ship all Salesforce work.",
+        startDate: "2026-08-14",
+        targetDate: "2026-09-30",
+      });
+      assert.deepStrictEqual(created.milestone, {
+        name: "Salesforce master",
+        project: "Pathway",
+        description: "Ship all Salesforce work.",
+        startDate: "2026-08-14",
+        targetDate: "2026-09-30",
+      });
+
+      const listed = yield* callTool<IssuesMcpMilestonesListResult>("issues_milestones_list", {
+        project: "Pathway",
+      });
+      assert.deepStrictEqual(listed.milestones, [created.milestone]);
+
+      const updated = yield* callTool<IssuesMcpMilestoneResult>("issues_milestone_update", {
+        project: "Pathway",
+        milestone: "salesforce master",
+        name: "Salesforce launch",
+        description: null,
+        newProject: "Relay",
+      });
+      assert.strictEqual(updated.milestone.name, "Salesforce launch");
+      assert.strictEqual(updated.milestone.project, "Relay");
+      assert.strictEqual(updated.milestone.description, null);
+
+      const tracker = yield* IssueTrackerService;
+      const assigned = yield* tracker.create(
+        {
+          title: "Move account data",
+          projectId: OTHER_PROJECT,
+          milestoneId: (yield* tracker.getSnapshot()).milestones[0]!.id,
+        },
+        { kind: "user" },
+      );
+      const deleted = yield* callTool<IssuesMcpMilestoneDeleteResult>("issues_milestone_delete", {
+        project: "Relay",
+        milestone: "Salesforce launch",
+      });
+      assert.strictEqual(deleted.clearedIssues, 1);
+      assert.strictEqual(deleted.deleted.name, "Salesforce launch");
+      const after = yield* tracker.getSnapshot();
+      assert.lengthOf(after.milestones, 0);
+      assert.strictEqual(
+        after.issues.find((issue) => issue.id === assigned.issue.id)?.milestoneId,
+        null,
+      );
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("creates a missing milestone while creating an issue", () =>
+    Effect.gen(function* () {
+      yield* seedProject(PROJECT, "Pathway");
+
+      const missingProject = yield* callTool<IssuesMcpIssueResult>("issues_create", {
+        title: "Cannot place this yet",
+        milestone: "Salesforce master",
+      }).pipe(Effect.flip);
+      assert.strictEqual(missingProject.reason, "invalid");
+      assert.include(missingProject.message, "Pass project");
+
+      const created = yield* callTool<IssuesMcpIssueResult>("issues_create", {
+        title: "Build Salesforce sync",
+        project: "Pathway",
+        milestone: "Salesforce master",
+      });
+      assert.strictEqual(created.issue.project, "Pathway");
+
+      const detail = yield* callTool<IssuesMcpDetail>("issues_get", { key: created.issue.key });
+      assert.strictEqual(detail.milestone, "Salesforce master");
+      const milestones = yield* callTool<IssuesMcpMilestonesListResult>(
+        "issues_milestones_list",
+        {},
+      );
+      assert.deepStrictEqual(
+        milestones.milestones.map((milestone) => [milestone.project, milestone.name]),
+        [["Pathway", "Salesforce master"]],
+      );
     }).pipe(Effect.provide(TestLayer)),
   );
 

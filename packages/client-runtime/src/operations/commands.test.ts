@@ -614,6 +614,7 @@ describe("V2 environment commands", () => {
           sourceThreadId: v2ThreadId,
           targetThreadId: ThreadId.make("thread-fork"),
           runId: RunId.make("run-1"),
+          forkKind: "side_chat",
         }).pipe(provide);
         yield* mergeThreadBack({
           commandId: CommandId.make("merge"),
@@ -646,7 +647,11 @@ describe("V2 environment commands", () => {
         }).pipe(provide);
 
         expect(commands).toMatchObject([
-          { type: "thread.fork", sourcePoint: { type: "run", runId: "run-1" } },
+          {
+            type: "thread.fork",
+            forkKind: "side_chat",
+            sourcePoint: { type: "run", runId: "run-1" },
+          },
           { type: "thread.merge_back", sourcePoint: { type: "run", runId: "run-2" } },
           { type: "queued-run.reorder", runId: "run-3", beforeRunId: "run-4" },
           {

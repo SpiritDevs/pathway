@@ -121,6 +121,8 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import { runPushAutoSettlementCountdown } from "./vcs/PushAutoSettlement.ts";
+import { sourceControlMarkerFromGitResult } from "./vcs/SourceControlMarker.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
@@ -1255,6 +1257,7 @@ const makeWsRpcLayer = (
                   modelSelection: input.modelSelection,
                   runtimeMode: input.runtimeMode,
                   interactionMode: input.interactionMode,
+                  ...(input.locations === undefined ? {} : { locations: input.locations }),
                   workspaceStrategy: input.workspaceStrategy,
                   ...(input.initialMessage === undefined
                     ? {}
@@ -1875,11 +1878,55 @@ const makeWsRpcLayer = (
                 .pipe(
                   Effect.matchCauseEffect({
                     onFailure: (cause) => Queue.failCause(queue, cause),
-                    onSuccess: () =>
-                      (input.threadId === undefined
-                        ? refreshGitStatus(input.cwd)
-                        : refreshGitStatusForThread(input.threadId, input.cwd)
-                      ).pipe(Effect.andThen(Queue.end(queue).pipe(Effect.asVoid))),
+                    onSuccess: (result) => {
+                      const marker = sourceControlMarkerFromGitResult(result);
+                      const recordMarker =
+                        input.threadId !== undefined && marker !== null
+                          ? threadManagement
+                              .dispatch({
+                                type: "thread.source-control.record",
+                                commandId: CommandId.make(`${input.actionId}:source-control`),
+                                threadId: input.threadId,
+                                committed: marker.committed,
+                                pullRequest: marker.pullRequest,
+                              })
+                              .pipe(Effect.ignoreCause({ log: true }), Effect.asVoid)
+                          : Effect.void;
+                      const scheduleSettlement =
+                        input.threadId !== undefined && result.push.status === "pushed"
+                          ? runPushAutoSettlementCountdown(
+                              {
+                                readThread: (threadId) =>
+                                  threadManagement.getThreadShell(threadId).pipe(Effect.orDie),
+                                settleThread: ({ threadId, commandId }) =>
+                                  threadManagement
+                                    .dispatch({
+                                      type: "thread.settle",
+                                      commandId,
+                                      threadId,
+                                    })
+                                    .pipe(Effect.orDie),
+                              },
+                              {
+                                threadId: input.threadId,
+                                commandId: CommandId.make(`${input.actionId}:auto-settle`),
+                              },
+                            ).pipe(
+                              Effect.ignoreCause({ log: true }),
+                              Effect.forkDetach,
+                              Effect.asVoid,
+                            )
+                          : Effect.void;
+                      return recordMarker.pipe(
+                        Effect.andThen(scheduleSettlement),
+                        Effect.andThen(
+                          input.threadId === undefined
+                            ? refreshGitStatus(input.cwd)
+                            : refreshGitStatusForThread(input.threadId, input.cwd),
+                        ),
+                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
+                      );
+                    },
                   }),
                 ),
             ),

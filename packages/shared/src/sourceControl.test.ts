@@ -4,7 +4,30 @@ import {
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyForKind,
   resolveChangeRequestPresentation,
+  sourceControlMarkerLabel,
 } from "./sourceControl.ts";
+
+const sourceControlItem = {
+  type: "source_control" as const,
+  committed: false,
+  pullRequest: null,
+} as Parameters<typeof sourceControlMarkerLabel>[0];
+
+describe("source control timeline markers", () => {
+  it("describes the completed source-control steps", () => {
+    expect(sourceControlMarkerLabel(sourceControlItem)).toBe("pushed");
+    expect(sourceControlMarkerLabel({ ...sourceControlItem, committed: true })).toBe(
+      "pushed and committed",
+    );
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        committed: true,
+        pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      }),
+    ).toBe("pushed, committed, PR created");
+  });
+});
 
 describe("source control presentation", () => {
   it("uses merge request terminology for GitLab", () => {

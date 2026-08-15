@@ -1,10 +1,17 @@
-import type { ChatAttachmentId, EnvironmentId, IssueComment, IssueId } from "@spiritdevs/contracts";
+import type {
+  ChatAttachmentId,
+  EnvironmentId,
+  IssueComment,
+  IssueCommentId,
+  IssueId,
+} from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ClipboardPasteIcon,
   FileImageIcon,
   ImagePlusIcon,
   ImagesIcon,
+  XIcon,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
@@ -17,59 +24,84 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { issueClipboardImageFiles } from "./issueAttachmentClipboard";
 import {
   issueAttachmentComment,
-  issueAttachmentIds,
+  issueAttachmentReferences,
   issueCommentAttachmentIds,
   isIssueVideoAttachmentUrl,
+  type IssueAttachmentReference,
 } from "./issueCommentAttachments";
 import { PendingIssueImageAttachment } from "./useIssueImageAttachmentDrafts";
 import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachmentDrafts";
 import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 function AttachmentGallery({
-  attachmentIds,
+  attachments,
   cloud,
   environmentId,
   issueId,
+  onOpenImage,
+  onRemoveAttachment,
 }: {
-  attachmentIds: ReadonlyArray<ChatAttachmentId>;
+  attachments: ReadonlyArray<IssueAttachmentReference>;
   cloud: ReplicaIssueAttachmentCloud | null;
   environmentId: EnvironmentId | null;
   issueId: IssueId;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
+  onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
 }) {
-  const resolved = useIssueAttachmentUrls({ attachmentIds, cloud, environmentId, issueId });
+  const attachmentIds = useMemo(
+    () => attachments.map(({ attachmentId }) => attachmentId),
+    [attachments],
+  );
+  const { attachments: resolved, refresh } = useIssueAttachmentUrls({
+    attachmentIds,
+    cloud,
+    environmentId,
+    issueId,
+  });
 
   return (
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
-      {attachmentIds.map((attachmentId, index) => {
+      {attachments.map(({ attachmentId, commentId }, index) => {
         const attachment = resolved[index] ?? null;
         if (attachment === null) return null;
         return (
-          <li className="shrink-0" key={attachmentId}>
+          <li className="group relative shrink-0" key={attachmentId}>
             {attachment.mimeType?.startsWith("video/") === true ||
             isIssueVideoAttachmentUrl(attachment.url) ? (
               <video
                 aria-label={`Issue recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
                 controls
+                onError={() => refresh(index)}
                 playsInline
                 preload="metadata"
                 src={attachment.url}
               />
             ) : (
-              <a
+              <button
                 aria-label={`Open attachment ${index + 1}`}
-                className="block rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={attachment.url}
-                rel="noreferrer"
-                target="_blank"
+                className="block cursor-zoom-in rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => onOpenImage(attachmentId)}
+                type="button"
               >
                 <img
                   alt={`Issue attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
+                  onError={() => refresh(index)}
                   src={attachment.url}
                 />
-              </a>
+              </button>
             )}
+            <Button
+              aria-label={`Remove issue attachment ${index + 1}`}
+              className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 motion-reduce:transition-none"
+              onClick={() => onRemoveAttachment(commentId, attachmentId)}
+              size="icon-xs"
+              title="Remove image"
+              variant="ghost"
+            >
+              <XIcon />
+            </Button>
           </li>
         );
       })}
@@ -81,12 +113,16 @@ export function IssueAttachments({
   cloud,
   comments,
   onCreateComment,
+  onOpenImage,
+  onRemoveAttachment,
   drafts,
   issueId,
 }: {
   cloud: ReplicaIssueAttachmentCloud | null;
   comments: ReadonlyArray<IssueComment>;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
+  onOpenImage: (attachmentId: ChatAttachmentId) => void;
+  onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
   drafts: IssueImageAttachmentDraftController;
   issueId: IssueId;
 }) {
@@ -94,7 +130,7 @@ export function IssueAttachments({
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const { attachments, addFiles, removeAttachment, clearAttachments } = drafts;
-  const storedAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
+  const storedAttachments = useMemo(() => issueAttachmentReferences(comments), [comments]);
   const pendingIds = issueCommentAttachmentIds(attachments);
   const uploading = attachments.some((attachment) => attachment.status === "uploading");
 
@@ -162,9 +198,9 @@ export function IssueAttachments({
       <div className="flex min-h-7 items-center gap-1.5 text-xs text-muted-foreground">
         <ImagesIcon className="size-3.5" />
         <span>Attachments</span>
-        {storedAttachmentIds.length === 0 ? null : (
+        {storedAttachments.length === 0 ? null : (
           <span className="text-[10px] tabular-nums text-muted-foreground/70">
-            {storedAttachmentIds.length}
+            {storedAttachments.length}
           </span>
         )}
         <Menu>
@@ -206,12 +242,14 @@ export function IssueAttachments({
         />
       </div>
 
-      {storedAttachmentIds.length === 0 || (cloud === null && environmentId === null) ? null : (
+      {storedAttachments.length === 0 || (cloud === null && environmentId === null) ? null : (
         <AttachmentGallery
-          attachmentIds={storedAttachmentIds}
+          attachments={storedAttachments}
           cloud={cloud}
           environmentId={environmentId}
           issueId={issueId}
+          onOpenImage={onOpenImage}
+          onRemoveAttachment={onRemoveAttachment}
         />
       )}
 

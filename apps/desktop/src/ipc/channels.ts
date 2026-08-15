@@ -79,3 +79,4 @@ export const PREVIEW_RECORDING_READ_CHANNEL = "desktop:preview-recording-read";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+export const PREVIEW_OPEN_IN_NEW_TAB_CHANNEL = "desktop:preview-open-in-new-tab";

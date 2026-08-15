@@ -96,6 +96,7 @@ export function useBranches(input: {
           input: {
             cwd: input.cwd,
             ...(query.length > 0 ? { query } : {}),
+            includeMatchingRemoteRefs: true,
             limit: VCS_REF_LIST_LIMIT,
           },
         })

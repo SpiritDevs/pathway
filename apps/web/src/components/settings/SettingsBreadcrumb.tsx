@@ -20,6 +20,10 @@ function settingsBreadcrumbLabel(pathname: string): string | null {
 
 export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
   const sectionLabel = settingsBreadcrumbLabel(pathname);
+  const subpageLabel =
+    pathname.replace(/\/+$/, "") === "/settings/appearance/action-palette"
+      ? "Action Palette"
+      : null;
 
   return (
     <WorkspaceBreadcrumb ariaLabel="Settings breadcrumb">
@@ -29,8 +33,14 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
           <WorkspaceBreadcrumbSeparator />
         </>
       ) : null}
+      {subpageLabel ? (
+        <>
+          <WorkspaceBreadcrumbItem>{sectionLabel}</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbSeparator />
+        </>
+      ) : null}
       <WorkspaceBreadcrumbItem current className="truncate">
-        {sectionLabel ?? "Settings"}
+        {subpageLabel ?? sectionLabel ?? "Settings"}
       </WorkspaceBreadcrumbItem>
     </WorkspaceBreadcrumb>
   );

@@ -46,6 +46,9 @@ export const installPreviewEventForwarding = Effect.fn(
   yield* manager.subscribePointerEvents((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, event),
   );
+  yield* manager.subscribeOpenInNewTab((event) =>
+    electronWindow.sendAll(IpcChannels.PREVIEW_OPEN_IN_NEW_TAB_CHANNEL, event),
+  );
 });
 
 export const createTab = DesktopIpc.makeIpcMethod({

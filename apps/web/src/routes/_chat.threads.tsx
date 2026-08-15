@@ -1,4 +1,5 @@
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,10 @@ function ChatIndexRouteView() {
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
+  const agentThreads = useMemo(
+    () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
+    [threads],
+  );
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
@@ -47,9 +52,9 @@ function IndexDraftLanding() {
   const mostRecentProject = useMemo(
     () =>
       bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        ? (sortScopedProjectsForSidebar(projects, agentThreads, "updated_at")[0] ?? null)
         : null,
-    [bootstrapped, projects, threads],
+    [agentThreads, bootstrapped, projects],
   );
 
   useEffect(() => {
