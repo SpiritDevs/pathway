@@ -268,6 +268,32 @@ the same id resolve to one thread and one set of launch side effects. The Convex
 that value as `environmentCommands.issue.id`; identical resends are no-ops and conflicting reuse is
 rejected by canonical argument comparison.
 
+Each cloud-enabled, linked Pathway server also runs the target-side durable claimant. Discovery is
+the environment-scoped `environmentCommands.claim` mutation itself, not the member-oriented list
+query: the claimant asks for at most two commands with a 90-second claim, and Convex returns this
+environment's oldest issued work first. Before any local side effect the claimant calls
+`renewClaim({ companyId, commandId, claimGeneration, claimTtlMs })`; it renews every 30 seconds while
+the work runs, abandons execution if that generation fence is refused, and finishes with
+`reportStatus({ companyId, commandId, claimGeneration, state, result, error })`. Pending commands
+canceled before the atomic claim are never returned. The current backend does not permit canceling
+a claimed command, so there is no separate target-side cancellation transition to report; a future
+backend transition surfaced as a lost/invalid claim already stops renewal and local execution.
+
+The claimant invokes the local orchestration services directly. For `startThread`, the exact
+`EnvironmentCommandId` becomes `ThreadLaunchService.launch.commandId`; message dispatch and
+interrupt use it as their local command id too, with the message receipt derived as
+`${EnvironmentCommandId}:message`. The same identity now spans member issuance, direct RPC,
+durable claim, local receipt, restart redelivery, and terminal reporting. A reply lost after a
+committed direct launch and a later Convex claim therefore converge on the existing thread, and a
+server restart after local execution replays against the same receipt instead of launching twice.
+Start commands resolve the target environment's active local binding from the authenticated sync
+bootstrap because the current issue mutation leaves `bindingId` null; no local path is guessed.
+
+The worker is fail-closed with the cloud-sync daemon: missing configuration, link material, or a
+completed local bootstrap means it does not claim work. It runs no more than two commands at once,
+waits with jitter between polls, polls quickly after successful work, and backs off further while
+idle or after transport failures.
+
 At present, `environmentCommands.issue` also accepts only a member actor. `apps/server` therefore
 reports `member-cloud-authorization` as missing after direct delivery fails instead of presenting
 its environment service token to a mutation that must reject it. Enabling production deferred

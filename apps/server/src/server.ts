@@ -115,6 +115,7 @@ import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -820,6 +821,7 @@ export const makeServerLayer = Layer.unwrap(
       // the runtime chain because this is where the `SqlClient` behind every repository, the
       // secret store, the environment, and the HTTP client are all in scope at once.
       cloudSyncDaemonLayer(),
+      environmentCommandClaimantLayer(),
     );
 
     return serverApplicationLayer.pipe(
