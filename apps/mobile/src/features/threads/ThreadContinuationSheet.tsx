@@ -11,7 +11,7 @@ export type MobileContinuationWorkspaceTarget = "current" | "new-worktree";
 
 export function ThreadContinuationSheet(props: {
   readonly visible: boolean;
-  readonly kind: "continue" | "handoff";
+  readonly kind: "continue" | "handoff" | "recovery";
   readonly sourceModelSelection: ModelSelection;
   readonly serverConfig: T3ServerConfig | null;
   readonly canCreateWorktree: boolean;
@@ -31,14 +31,20 @@ export function ThreadContinuationSheet(props: {
       ? all.filter(
           (option) => option.selection.instanceId !== props.sourceModelSelection.instanceId,
         )
-      : all;
+      : props.kind === "recovery"
+        ? all.filter(
+            (option) =>
+              option.selection.instanceId !== props.sourceModelSelection.instanceId ||
+              option.selection.model !== props.sourceModelSelection.model,
+          )
+        : all;
   }, [props.kind, props.serverConfig, props.sourceModelSelection]);
   const groups = useMemo(() => groupByProvider(options), [options]);
   const [selection, setSelection] = useState(props.sourceModelSelection);
   useEffect(() => {
     if (!props.visible) return;
     setSelection(
-      props.kind === "handoff"
+      props.kind === "handoff" || props.kind === "recovery"
         ? (options[0]?.selection ?? props.sourceModelSelection)
         : props.sourceModelSelection,
     );
@@ -67,12 +73,18 @@ export function ThreadContinuationSheet(props: {
           <View className="mb-4 items-center">
             <View className="mb-4 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-700" />
             <Text className="text-xl font-t3-bold text-foreground">
-              {props.kind === "handoff" ? "Hand off this chat" : "Continue in a new chat"}
+              {props.kind === "handoff"
+                ? "Hand off this chat"
+                : props.kind === "recovery"
+                  ? "Recover with another model"
+                  : "Continue in a new chat"}
             </Text>
             <Text className="mt-1 text-center text-sm text-foreground-muted">
               {props.kind === "handoff"
                 ? "Choose another provider or account for the next response."
-                : "Choose the model and checkout that continues this response."}
+                : props.kind === "recovery"
+                  ? "Choose a different model to continue the interrupted work in this chat."
+                  : "Choose the model and checkout that continues this response."}
             </Text>
           </View>
           <ScrollView className="mb-4" showsVerticalScrollIndicator={false}>
@@ -113,20 +125,31 @@ export function ThreadContinuationSheet(props: {
               </View>
             ))}
           </ScrollView>
-          {props.kind === "handoff" && options.length === 0 ? (
+          {(props.kind === "handoff" || props.kind === "recovery") && options.length === 0 ? (
             <Text className="pb-3 text-center text-sm text-foreground-muted">
-              No other provider instance is ready.
+              No other model is ready.
             </Text>
           ) : null}
           <View className="gap-2">
             <ContinuationChoice
-              title={props.kind === "handoff" ? "Hand off" : "Use this worktree"}
+              title={
+                props.kind === "handoff"
+                  ? "Hand off"
+                  : props.kind === "recovery"
+                    ? "Switch and continue"
+                    : "Use this worktree"
+              }
               description={
                 props.kind === "handoff"
                   ? "Use this provider for the next response"
-                  : "Continue in the current checkout"
+                  : props.kind === "recovery"
+                    ? "Resume the interrupted work in this chat"
+                    : "Continue in the current checkout"
               }
-              disabled={props.pending || (props.kind === "handoff" && options.length === 0)}
+              disabled={
+                props.pending ||
+                ((props.kind === "handoff" || props.kind === "recovery") && options.length === 0)
+              }
               pending={props.pending}
               iconColor={iconColor}
               onPress={() => props.onSubmit(selection, "current")}

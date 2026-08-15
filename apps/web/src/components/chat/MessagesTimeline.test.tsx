@@ -1527,6 +1527,74 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Copy message to AI");
   });
 
+  it("offers model recovery and reset waiting for usage-limit failures", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        canWaitUntilUsageReset
+        latestRun={
+          {
+            runId: "run-usage-limit",
+            status: "failed",
+            startedAt: MESSAGE_CREATED_AT,
+            completedAt: MESSAGE_CREATED_AT,
+          } as never
+        }
+        runs={
+          [
+            {
+              id: "run-usage-limit",
+              ordinal: 1,
+              providerInstanceId: "codex",
+              modelSelection: { instanceId: "codex", model: "gpt-5.6" },
+            },
+          ] as never
+        }
+        timelineEntries={[
+          {
+            id: "provider-usage-limit",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "provider-usage-limit",
+              item: {
+                id: "provider-usage-limit",
+                threadId: "thread-1",
+                runId: "run-usage-limit",
+                nodeId: null,
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 99,
+                status: "failed",
+                title: "Provider error",
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "error",
+                failure: {
+                  class: "provider_error",
+                  message: "You've hit your session limit · resets 9:50pm (Australia/Sydney)",
+                  code: null,
+                  retryable: false,
+                },
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-usage-limit-recovery="true"');
+    expect(markup).toContain("Try another model");
+    expect(markup).toContain("Wait until");
+  });
+
   it("keeps inherited V2 work provenance on the rendered row", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const item = {

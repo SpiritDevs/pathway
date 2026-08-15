@@ -41,6 +41,12 @@ The **Thread** section includes **Hand off…** after the chat has a completed a
 another provider or model to continue the same chat. The next message carries the conversation
 context into that provider while keeping the handoff visible in the thread history.
 
+If a provider stops a turn because its usage allowance is exhausted, the provider error offers two
+recovery choices. **Try another model** switches to a different ready model and asks it to continue the
+interrupted work in the same thread. **Wait until…** snoozes the thread until the provider's reported
+reset time; it returns to the active list after that time. Pathway uses live provider quota data when
+available and falls back to the reset time included in the provider error.
+
 Completed agent responses also have a **Continue in a new chat** action. Choose the model for the
 new chat, then continue in the current checkout or a new worktree. A new worktree starts from the
 source checkout's committed `HEAD`; uncommitted files remain only in the source checkout.

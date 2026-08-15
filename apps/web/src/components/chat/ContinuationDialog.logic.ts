@@ -4,7 +4,7 @@ import { isProviderInstancePickerReady } from "../../providerInstances";
 import type { ModelEsque } from "./providerIconUtils";
 
 export function resolveInitialContinuationSelection(input: {
-  readonly kind: "continue" | "handoff";
+  readonly kind: "continue" | "handoff" | "recovery";
   readonly source: ModelSelection;
   readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
@@ -26,6 +26,12 @@ export function resolveInitialContinuationSelection(input: {
   for (const entry of alternatives) {
     const model = input.modelOptionsByInstance.get(entry.instanceId)?.[0];
     if (model) return { instanceId: entry.instanceId, model: model.slug };
+  }
+  if (input.kind === "recovery" && sourceEntry && isProviderInstancePickerReady(sourceEntry)) {
+    const alternateModel = input.modelOptionsByInstance
+      .get(sourceEntry.instanceId)
+      ?.find((model) => model.slug !== input.source.model);
+    if (alternateModel) return { instanceId: sourceEntry.instanceId, model: alternateModel.slug };
   }
   return null;
 }
