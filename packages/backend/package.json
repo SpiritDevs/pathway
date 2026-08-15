@@ -7,6 +7,10 @@
       "types": "./src/companies.ts",
       "import": "./src/companies.ts"
     },
+    "./connectGrants": {
+      "types": "./src/connectGrants.ts",
+      "import": "./src/connectGrants.ts"
+    },
     "./convexApi": {
       "types": "./src/convexApi.ts",
       "import": "./src/convexApi.ts"

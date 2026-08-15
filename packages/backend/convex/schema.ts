@@ -423,6 +423,32 @@ export default defineSchema({
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_environment", ["environmentId"]),
 
+  /**
+   * Transient, single-use authorization for one relay connection. These rows deliberately stay
+   * outside the company sync feed: replicas need the durable registration and membership state,
+   * never bearer-token material or an append-only history of connect attempts.
+   */
+  connectGrants: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    environmentId: v.string(),
+    /** Live revocation link: validation requires this exact registration to remain active. */
+    targetRegistrationId: v.id("environmentRegistrations"),
+    /** Live revocation link: validation resolves this exact membership's current permissions. */
+    grantedMembershipId: v.id("memberships"),
+    /** Storage stays open to future permission switches; issuance accepts only known switches. */
+    permission: v.string(),
+    /** SHA-256 of the opaque token returned once by `connectGrants.issue`. */
+    tokenHash: v.string(),
+    issuedAt: v.number(),
+    expiresAt: v.number(),
+    consumedAt: v.union(v.number(), v.null()),
+    consumer: v.union(v.string(), v.null()),
+  })
+    .index("by_token_hash", ["tokenHash"])
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"]),
+
   /** Environment-local binding of a cloud project to a real folder. Never portable between hosts. */
   environmentBindings: defineTable({
     id: domainId,

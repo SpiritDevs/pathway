@@ -109,7 +109,7 @@ function toRoleDefinition(role: Doc<"roles">): RoleDefinition {
 }
 
 /** Loads a membership's assigned roles once for effective permissions and self-visible role ids. */
-async function membershipAuthorization(
+export async function membershipAuthorization(
   ctx: QueryCtx,
   membership: Doc<"memberships">,
   isOwner: boolean,
