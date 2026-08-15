@@ -97,6 +97,7 @@ import {
   resolveTimelineMinimapTopPercent,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
+  shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -1635,6 +1636,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenFilePreview={ctx.onOpenFilePreview}
           onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           isStreaming={Boolean(row.message.streaming)}
+          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
           skills={ctx.skills}
         />
         <AssistantChangedFilesSection
