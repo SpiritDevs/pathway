@@ -16,6 +16,7 @@ import {
   handoffPrompt,
   handoffReviewComments,
   orderPullRequestComments,
+  pullRequestActionMenuHasGroup,
   pullRequestFindingKey,
   readableFailure,
   resolvePullRequestChromeCollapse,
@@ -48,6 +49,14 @@ const TIMELINE_SOURCE: Pick<
   mergedAt: null,
   closedAt: null,
 };
+
+describe("pull request action menu", () => {
+  it("keeps the group divider when a draft or merge-method action is shown", () => {
+    expect(pullRequestActionMenuHasGroup(true, false)).toBe(true);
+    expect(pullRequestActionMenuHasGroup(false, true)).toBe(true);
+    expect(pullRequestActionMenuHasGroup(false, false)).toBe(false);
+  });
+});
 
 describe("pull request state description", () => {
   it("keeps draft and conflicts orthogonal to the terminal states", () => {
