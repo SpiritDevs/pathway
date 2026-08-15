@@ -32,7 +32,7 @@ import {
   type IssueActor,
   type IssueCommentAgentRunId,
   type IssueCommentAgentRunPhase,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -66,7 +66,10 @@ const storage = (message: string) => new IssueTrackerError({ reason: "storage", 
 /** How a comment is attributed in the prompt. The tracker has no names, only kinds. */
 function describeActor(actor: IssueActor): string {
   switch (actor.kind) {
+    // A member is a person too, and carries a membership id rather than a name, so there is nothing
+    // to say about them that "the human" does not already say.
     case "user":
+    case "member":
       return "The human";
     case "agent":
       return `Agent (${actor.provider})`;

@@ -32,7 +32,7 @@ import {
   type IssuesStreamEvent,
   type SlackChannelWatch,
   type SlackIntakeStatus,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -47,6 +47,7 @@ import {
   applyIssuesStreamStateEvents,
   countTriageIssues,
   findIssue,
+  groupIssueThreadLinksByIssue,
   groupIssuesForTab,
   issueChildRollup,
   issueCyclesByStatus,
@@ -1112,6 +1113,24 @@ describe("startWorkIssuesByThread", () => {
 });
 
 describe("mergeIssueLinksForThread", () => {
+  it("groups replica links into the same per-issue shape as stream patches", () => {
+    const links = [
+      link("1", "thread-a", "2026-08-12T00:00:00.000Z"),
+      { ...link("1", "thread-b", "2026-08-12T00:01:00.000Z"), origin: "manual" as const },
+      { ...link("2", "thread-c", "2026-08-12T00:02:00.000Z"), origin: "mention" as const },
+    ];
+
+    expect(
+      [...groupIssueThreadLinksByIssue(links)].map(([issueId, grouped]) => [
+        issueId,
+        grouped.map((link) => link.threadId),
+      ]),
+    ).toEqual([
+      ["1", ["thread-a", "thread-b"]],
+      ["2", ["thread-c"]],
+    ]);
+  });
+
   it("applies issue-side link and unlink patches to the persisted thread read", () => {
     const threadId = ThreadId.make("t1");
     const persisted = [link("1", "t1"), link("2", "t1", "2026-08-12T00:00:01.000Z")];

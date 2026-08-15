@@ -7,7 +7,7 @@
  *
  * @module IssueViewRepository
  */
-import { IsoDateTime, IssueView, IssueViewId } from "@t3tools/contracts";
+import { IsoDateTime, IssueView, IssueViewId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -75,4 +75,4 @@ export interface IssueViewRepositoryShape {
 export class IssueViewRepository extends Context.Service<
   IssueViewRepository,
   IssueViewRepositoryShape
->()("t3/persistence/Services/IssueViews/IssueViewRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueViews/IssueViewRepository") {}

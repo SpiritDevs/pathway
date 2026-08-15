@@ -6,7 +6,7 @@ import {
   ProviderTurnId,
   RunAttemptId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -70,7 +70,9 @@ export interface ProviderTurnControlServiceV2Shape {
 export class ProviderTurnControlServiceV2 extends Context.Service<
   ProviderTurnControlServiceV2,
   ProviderTurnControlServiceV2Shape
->()("t3/orchestration-v2/ProviderTurnControlService/ProviderTurnControlServiceV2") {}
+>()(
+  "@spiritdevs/pathway/orchestration-v2/ProviderTurnControlService/ProviderTurnControlServiceV2",
+) {}
 
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,

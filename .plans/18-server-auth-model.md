@@ -571,7 +571,7 @@ PathwayServer -> PathwayServer : validate cookie session
 PathwayServer --> Frontend : websocket accepted
 ```
 
-### `npx t3` user
+### `npx @spiritdevs/pathway` user
 
 This is the standalone local server flow.
 
@@ -579,7 +579,7 @@ There is no trusted desktop shell here, so pairing should be explicit.
 
 ```text
 Participants:
-  UserShell     = npx t3 launcher
+  UserShell     = npx @spiritdevs/pathway launcher
   PathwayServer      = standalone local server
   Browser       = browser tab
 

@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo } from "react";
 import {
   deriveThreadCheckpointSummaries,
   type ThreadCheckpointSummary,
-} from "@t3tools/client-runtime/state/thread-checkpoints";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/thread-checkpoints";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 
 import { useCheckpointDiff } from "../../state/queries";
 import { useEnvironmentQuery } from "../../state/query";

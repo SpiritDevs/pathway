@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -10,8 +10,8 @@ import {
   PullRequestRef,
   PullRequestState,
   type ThreadId,
-} from "@t3tools/contracts";
-import { pullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
+} from "@spiritdevs/contracts";
+import { pullRequestReviewThreadTitle } from "@spiritdevs/shared/pullRequestReview";
 import {
   ArrowDownUpIcon,
   ArrowLeftIcon,

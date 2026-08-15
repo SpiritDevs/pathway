@@ -1,4 +1,4 @@
-import { MessageId, RunId, type OrchestrationV2RunStatus } from "@t3tools/contracts";
+import { MessageId, RunId, type OrchestrationV2RunStatus } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 

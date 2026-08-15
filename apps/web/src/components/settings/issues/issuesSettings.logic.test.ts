@@ -8,7 +8,7 @@ import {
   type IssueMilestone,
   type IssueStatus,
   type IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EMPTY_ISSUES_STORE, type IssuesStore } from "../../../state/issues";

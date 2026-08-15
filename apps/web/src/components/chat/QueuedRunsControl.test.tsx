@@ -6,13 +6,13 @@ const state = vi.hoisted(() => ({
   workflow: null as unknown,
 }));
 
-vi.mock("@t3tools/client-runtime/environment", () => ({
+vi.mock("@spiritdevs/client-runtime/environment", () => ({
   scopeThreadRef: () => ({}) as never,
 }));
 
 // Only the projection-derived state is faked; the ordering helpers under test
 // stay real so the rendered queue and the reorder contract agree.
-vi.mock("@t3tools/client-runtime/state/thread-workflows", async (importActual) => ({
+vi.mock("@spiritdevs/client-runtime/state/thread-workflows", async (importActual) => ({
   ...(await importActual<Record<string, unknown>>()),
   deriveThreadQueueWorkflowState: () => state.workflow,
 }));

@@ -3,7 +3,7 @@ import {
   COMPANY_SIZE_OPTIONS,
   type CompanyRole,
   type CompanySize,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 import { AuthCard, AuthChip, AuthChipGroup, AuthField } from "../components/AuthControls";
 

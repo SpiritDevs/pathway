@@ -1,4 +1,4 @@
-import { truncate } from "@t3tools/shared/String";
+import { truncate } from "@spiritdevs/shared/String";
 
 export interface ThreadTitleSeedInput {
   readonly text: string;

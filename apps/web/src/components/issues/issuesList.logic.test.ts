@@ -10,7 +10,8 @@ import {
   type IssueLabel,
   type IssueStatus,
   type IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EMPTY_ISSUES_STORE, type IssuesGrouping, type IssuesStore } from "~/state/issues";
@@ -34,9 +35,11 @@ import {
   indexIssueLabels,
   isIssueDueDatePast,
   isIssuesListFilterActive,
+  issueAssigneeValue,
   issueIdsInRows,
   issueLabelSelectionState,
   issueRangeIds,
+  resolveIssuesFilterUserAssignee,
   issueSelectModeForModifiers,
   issueSortModeHint,
   issuesFilterHasValue,
@@ -216,9 +219,9 @@ describe("parseIssuesSearch", () => {
   it("canonicalises a hand-edited list param", () => {
     expect(parseIssuesSearch({ label: " a , ,b, a " }).label).toBe("a,b");
     expect(parseIssuesSearch({ priority: "urgent,nonsense,low" }).priority).toBe("urgent,low");
-    expect(parseIssuesSearch({ assignee: "user,agent:,nobody,agent:codex" }).assignee).toBe(
-      "user,agent:codex",
-    );
+    expect(
+      parseIssuesSearch({ assignee: "user,agent:,member:,nobody,member:m1,agent:codex" }).assignee,
+    ).toBe("user,member:m1,agent:codex");
     expect(parseIssuesSearch({ due: "someday" }).due).toBeUndefined();
   });
 
@@ -436,6 +439,37 @@ describe("matchesIssuesFilter", () => {
     expect(matchesIssuesFilter(issue("3"), filter, TODAY)).toBe(false);
   });
 
+  it("tells two company members apart in an assignee chip", () => {
+    const filter = withIssuesFilterValues(NO_ISSUES_LIST_FILTER, "assignee", [
+      "member:membership-a",
+    ]);
+    const mine = issue("1", {
+      assignee: { kind: "member", membershipId: MembershipId.make("membership-a") },
+    });
+    const theirs = issue("2", {
+      assignee: { kind: "member", membershipId: MembershipId.make("membership-b") },
+    });
+    expect(issueAssigneeValue(mine.assignee)).toBe("member:membership-a");
+    expect(matchesIssuesFilter(mine, filter, TODAY)).toBe(true);
+    // Without the membership in the token every teammate would answer to every teammate's chip.
+    expect(matchesIssuesFilter(theirs, filter, TODAY)).toBe(false);
+  });
+
+  it("maps the legacy user filter to the signed-in member in replica mode", () => {
+    const legacy = withIssuesFilterValues(NO_ISSUES_LIST_FILTER, "assignee", ["user"]);
+    const resolved = resolveIssuesFilterUserAssignee(legacy, "membership-a");
+    expect(resolved.assignees).toEqual(["member:membership-a"]);
+    expect(
+      matchesIssuesFilter(
+        issue("mine", {
+          assignee: { kind: "member", membershipId: MembershipId.make("membership-a") },
+        }),
+        resolved,
+        TODAY,
+      ),
+    ).toBe(true);
+  });
+
   it("buckets due dates around today", () => {
     const rows = {
       late: issue("late", { dueDate: "2026-08-11" }),
@@ -560,6 +594,52 @@ describe("buildIssuesView", () => {
     expect(view.groups.map((group) => group.label)).toEqual(["You", "Codex", "Unassigned"]);
     expect(view.groups.map((group) => group.id)).toEqual([
       "assignee:user",
+      "assignee:agent:codex",
+      "assignee:none",
+    ]);
+  });
+
+  it("gives every company member their own assignee group, ahead of the agents", () => {
+    const codex = ProviderDriverKind.make("codex");
+    const view = buildIssuesView({
+      grouping: grouping([
+        [
+          TODO,
+          [
+            issue("1"),
+            issue("2", { assignee: { kind: "agent", provider: codex } }),
+            issue("3", { assignee: { kind: "user" } }),
+            issue("4", {
+              assignee: { kind: "member", membershipId: MembershipId.make("membership-b") },
+            }),
+            issue("5", {
+              assignee: { kind: "member", membershipId: MembershipId.make("membership-a") },
+            }),
+          ],
+        ],
+      ]),
+      filter: NO_ISSUES_LIST_FILTER,
+      today: TODAY,
+      groupBy: "assignee",
+      sortMode: "manual",
+      assigneeLabels: new Map([
+        ["agent:codex", "Codex"],
+        ["member:membership-a", "Ada"],
+      ]),
+    });
+
+    // An unnamed teammate never leaks their opaque membership id into the UI.
+    expect(view.groups.map((group) => group.label)).toEqual([
+      "You",
+      "Ada",
+      "Unknown member",
+      "Codex",
+      "Unassigned",
+    ]);
+    expect(view.groups.map((group) => group.id)).toEqual([
+      "assignee:user",
+      "assignee:member:membership-a",
+      "assignee:member:membership-b",
       "assignee:agent:codex",
       "assignee:none",
     ]);

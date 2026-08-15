@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createPullRequestEnvironmentAtoms } from "@t3tools/client-runtime/state/pull-requests";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { createPullRequestEnvironmentAtoms } from "@spiritdevs/client-runtime/state/pull-requests";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { connectionAtomRuntime } from "../connection/runtime";

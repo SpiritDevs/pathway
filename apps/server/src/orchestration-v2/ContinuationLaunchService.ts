@@ -9,7 +9,7 @@ import {
   type RunId,
   type RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -68,7 +68,7 @@ export class ContinuationLaunchService extends Context.Service<
       input: ContinuationLaunchInput,
     ) => Effect.Effect<OrchestrationV2ContinuationLaunchResult, ContinuationLaunchError>;
   }
->()("t3/orchestration-v2/ContinuationLaunchService") {}
+>()("@spiritdevs/pathway/orchestration-v2/ContinuationLaunchService") {}
 
 function isThreadNotFound(error: unknown): boolean {
   return (

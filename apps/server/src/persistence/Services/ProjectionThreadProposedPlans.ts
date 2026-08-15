@@ -1,5 +1,5 @@
-import { IsoDateTime, ThreadId, TrimmedNonEmptyString, TurnId } from "@t3tools/contracts";
-import { OrchestrationProposedPlanId } from "@t3tools/contracts/legacy-orchestration";
+import { IsoDateTime, ThreadId, TrimmedNonEmptyString, TurnId } from "@spiritdevs/contracts";
+import { OrchestrationProposedPlanId } from "@spiritdevs/contracts/legacy-orchestration";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -46,5 +46,5 @@ export class ProjectionThreadProposedPlanRepository extends Context.Service<
   ProjectionThreadProposedPlanRepository,
   ProjectionThreadProposedPlanRepositoryShape
 >()(
-  "t3/persistence/Services/ProjectionThreadProposedPlans/ProjectionThreadProposedPlanRepository",
+  "@spiritdevs/pathway/persistence/Services/ProjectionThreadProposedPlans/ProjectionThreadProposedPlanRepository",
 ) {}

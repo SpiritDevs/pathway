@@ -3,12 +3,12 @@ import type {
   RelayAgentAwarenessPreferences,
   RelayDeliveryKind,
   RelayDeliveryResult,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import {
   RelayAgentActivityAggregateState as RelayAgentActivityAggregateStateSchema,
   RelayAgentAwarenessPreferences as RelayAgentAwarenessPreferencesSchema,
   RelayDeliveryKind as RelayDeliveryKindSchema,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -39,6 +39,7 @@ import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as DeliveryAttempts from "./DeliveryAttempts.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
+import type { ApnsCredentials } from "../Config.ts";
 import * as ApnsDeliveryQueue from "./ApnsDeliveryQueue.ts";
 import { withSpanAttributes } from "../observability.ts";
 
@@ -584,9 +585,9 @@ interface LiveActivityDeliveryTarget {
 // DeviceTokenNotForTopic/BadDeviceToken, so per-device values override the
 // relay-wide defaults when present.
 function credentialsForTarget(
-  credentials: RelayConfiguration.RelayConfiguration["Service"]["apns"],
+  credentials: ApnsCredentials,
   target: LiveActivityDeliveryTarget,
-): RelayConfiguration.RelayConfiguration["Service"]["apns"] {
+): ApnsCredentials {
   return {
     ...credentials,
     ...(target.bundle_id ? { bundleId: target.bundle_id } : {}),
@@ -697,6 +698,7 @@ export const make = Effect.gen(function* () {
   const liveActivities = yield* LiveActivities.LiveActivities;
   const deliveryQueue = yield* ApnsDeliveryQueue.ApnsDeliveryQueue;
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const apnsCredentials = config.apns;
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
 
@@ -829,6 +831,16 @@ export const make = Effect.gen(function* () {
       "relay.delivery.kind": input.kind,
       ...(input.sourceJobId ? { "relay.delivery.job_id": input.sourceJobId } : {}),
     });
+    if (apnsCredentials === undefined) {
+      return {
+        deviceId: input.target.device_id,
+        kind: input.kind,
+        ok: false,
+        apnsStatus: null,
+        apnsReason: "APNs delivery is disabled.",
+        apnsId: null,
+      };
+    }
     const now = yield* DateTime.now;
     const aggregate =
       input.aggregate === null ? null : sanitizeAgentActivityAggregateState(input.aggregate);
@@ -907,7 +919,7 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* apns
       .sendLiveActivityRequest({
-        credentials: credentialsForTarget(config.apns, input.target),
+        credentials: credentialsForTarget(apnsCredentials, input.target),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })
@@ -973,6 +985,16 @@ export const make = Effect.gen(function* () {
       "relay.delivery.kind": "push_notification",
       ...(input.sourceJobId ? { "relay.delivery.job_id": input.sourceJobId } : {}),
     });
+    if (apnsCredentials === undefined) {
+      return {
+        deviceId: input.target.device_id,
+        kind: "push_notification" as const,
+        ok: false,
+        apnsStatus: null,
+        apnsReason: "APNs delivery is disabled.",
+        apnsId: null,
+      };
+    }
     const now = yield* DateTime.now;
     const epochSeconds = Math.floor(now.epochMilliseconds / 1_000);
     const notification = sanitizeApnsNotificationPayload(input.notification);
@@ -1045,7 +1067,7 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* apns
       .sendPushNotificationRequest({
-        credentials: credentialsForTarget(config.apns, input.target),
+        credentials: credentialsForTarget(apnsCredentials, input.target),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })
@@ -1187,6 +1209,7 @@ export const make = Effect.gen(function* () {
     sendPushNotification,
     processSignedJob,
     sendPushNotificationForTarget: Effect.fnUntraced(function* (input) {
+      if (apnsCredentials === undefined) return null;
       const now = yield* DateTime.now;
       const notification = notificationForAggregate({
         target: input.target,
@@ -1206,6 +1229,7 @@ export const make = Effect.gen(function* () {
         : Effect.succeed(null);
     }),
     sendForTarget: Effect.fnUntraced(function* (input) {
+      if (apnsCredentials === undefined) return null;
       const delivery = chooseDelivery({
         target: input.target,
         aggregate: input.aggregate,

@@ -13,6 +13,7 @@
  * @module components/issues/SaveIssueViewControl
  */
 import { AsyncResult } from "effect/unstable/reactivity";
+import type { MembershipId } from "@spiritdevs/contracts/company";
 import { BookmarkCheckIcon, BookmarkPlusIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
@@ -33,9 +34,11 @@ import {
 
 export function SaveIssueViewControl({
   search,
+  currentMembershipId = null,
   className,
 }: {
   search: IssuesSearch;
+  currentMembershipId?: MembershipId | null;
   className?: string;
 }) {
   const views = useIssueViews();
@@ -46,8 +49,11 @@ export function SaveIssueViewControl({
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  const config = useMemo(() => issuesSearchViewConfig(search), [search]);
-  const saved = findIssueViewForConfig(views, config);
+  const config = useMemo(
+    () => issuesSearchViewConfig(search, currentMembershipId),
+    [currentMembershipId, search],
+  );
+  const saved = findIssueViewForConfig(views, config, currentMembershipId);
   const summary = summarizeIssueViewConfig(config);
 
   // Opening prefills with the view these params already are, so the common path — apply a view,

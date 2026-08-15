@@ -12,7 +12,7 @@
  *
  * @module components/chat/IssueAgentMentionPill
  */
-import { parseIssueAgentMentionHref, type ProviderDriverKind } from "@t3tools/contracts";
+import { parseIssueAgentMentionHref, type ProviderDriverKind } from "@spiritdevs/contracts";
 import { BotIcon } from "lucide-react";
 import type { ReactNode } from "react";
 

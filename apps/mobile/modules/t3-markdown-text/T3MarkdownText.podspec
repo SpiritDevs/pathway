@@ -8,9 +8,9 @@ Pod::Spec.new do |s|
   s.version = package["version"]
   s.summary = "Native selectable markdown renderer for Pathway mobile."
   s.description = "Fabric-backed attributed text and markdown rendering primitives owned by Pathway."
-  s.homepage = "https://t3tools.com"
+  s.homepage = "https://spiritdevs.com"
   s.license = { :type => "MIT", :file => "LICENSE" }
-  s.author = { "T3 Tools" => "hello@t3tools.com" }
+  s.author = { "Spirit Devs" => "hello@spiritdevs.com" }
   s.platforms = { :ios => min_ios_version_supported }
   s.source = { :path => "." }
   s.source_files = "ios/**/*.{h,m,mm,cpp}"

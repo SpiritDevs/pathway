@@ -5,7 +5,7 @@ import type {
   OrchestrationV2BrowserTakeoverStatus,
   OrchestrationV2ThreadPreviewActivity,
   RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";

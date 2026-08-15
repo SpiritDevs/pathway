@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  CLOUD_SYNC_ENABLED_VALUE,
   CloudPublicConfigMissingError,
   hasClerkPublicConfig,
   hasCloudPublicConfig,
+  hasCloudSyncPublicConfig,
+  normalizeConvexDeploymentUrl,
+  parseCloudSyncFlag,
+  parsePublicFlag,
+  resolveCloudSyncConvexUrl,
   resolveRelayClerkTokenOptions,
 } from "./publicConfig.ts";
 
@@ -21,7 +27,7 @@ describe("hasCloudPublicConfig", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
     expect(hasCloudPublicConfig()).toBe(false);
 
-    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "t3-relay");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "pathway-relay");
     expect(hasCloudPublicConfig()).toBe(false);
 
     vi.stubEnv("VITE_PATHWAY_RELAY_URL", "https://relay.example.test");
@@ -30,7 +36,7 @@ describe("hasCloudPublicConfig", () => {
 
   it("rejects an insecure relay URL", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
-    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "t3-relay");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "pathway-relay");
     vi.stubEnv("VITE_PATHWAY_RELAY_URL", "http://relay.example.test");
 
     expect(hasCloudPublicConfig()).toBe(false);
@@ -42,6 +48,108 @@ describe("hasCloudPublicConfig", () => {
     expect(() => resolveRelayClerkTokenOptions()).toThrowError(
       new CloudPublicConfigMissingError({ key: "PATHWAY_CLERK_JWT_TEMPLATE" }),
     );
+  });
+});
+
+describe("parsePublicFlag", () => {
+  it("reads only an explicit yes as on", () => {
+    for (const on of ["1", "true", "TRUE", " on ", "yes"]) expect(parsePublicFlag(on)).toBe(true);
+    for (const off of [undefined, "", "0", "false", "off", "no", "maybe"]) {
+      expect(parsePublicFlag(off)).toBe(false);
+    }
+  });
+});
+
+describe("parseCloudSyncFlag", () => {
+  it("takes the literal the deployment gate demands, as well as the ordinary affirmatives", () => {
+    // Convex's requireCloudSyncEnabled and the server daemon both compare against exactly this
+    // string, and one operator knob feeds all three; a web parser that refused it would leave the
+    // browser dark on the only value the documentation names.
+    expect(CLOUD_SYNC_ENABLED_VALUE).toBe("enabled");
+    for (const on of [CLOUD_SYNC_ENABLED_VALUE, " ENABLED ", "1", "true", "on", "yes"]) {
+      expect(parseCloudSyncFlag(on)).toBe(true);
+    }
+    for (const off of [undefined, "", "0", "false", "off", "no", "maybe", "disabled"]) {
+      expect(parseCloudSyncFlag(off)).toBe(false);
+    }
+  });
+});
+
+describe("normalizeConvexDeploymentUrl", () => {
+  it("keeps an https deployment origin and drops its path", () => {
+    expect(normalizeConvexDeploymentUrl("https://example.convex.cloud/")).toBe(
+      "https://example.convex.cloud",
+    );
+    expect(normalizeConvexDeploymentUrl("  https://example.convex.cloud/api  ")).toBe(
+      "https://example.convex.cloud",
+    );
+  });
+
+  it("allows plaintext only for a local deployment", () => {
+    expect(normalizeConvexDeploymentUrl("http://127.0.0.1:3210")).toBe("http://127.0.0.1:3210");
+    expect(normalizeConvexDeploymentUrl("http://example.convex.cloud")).toBeNull();
+  });
+
+  it("refuses anything that is not a plain deployment URL", () => {
+    expect(normalizeConvexDeploymentUrl("")).toBeNull();
+    expect(normalizeConvexDeploymentUrl("example.convex.cloud")).toBeNull();
+    expect(normalizeConvexDeploymentUrl("ws://example.convex.cloud")).toBeNull();
+    // Credentials in the URL would be sent on every request; a deployment URL never needs them.
+    expect(normalizeConvexDeploymentUrl("https://user:pass@example.convex.cloud")).toBeNull();
+  });
+});
+
+describe("hasCloudSyncPublicConfig", () => {
+  const stubCloud = () => {
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "pathway-relay");
+    vi.stubEnv("VITE_PATHWAY_RELAY_URL", "https://relay.example.test");
+  };
+
+  it("stays off until the flag, the Convex URL, and the rest of the cloud config are all present", () => {
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", "");
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "");
+    expect(hasCloudSyncPublicConfig()).toBe(false);
+    expect(resolveCloudSyncConvexUrl()).toBeNull();
+
+    stubCloud();
+    expect(hasCloudSyncPublicConfig()).toBe(false);
+
+    // The flag alone is not enough: without a deployment there is nothing to sync against.
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", "1");
+    expect(hasCloudSyncPublicConfig()).toBe(false);
+
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    expect(hasCloudSyncPublicConfig()).toBe(true);
+    expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
+  });
+
+  it("turns on for the same value that turns the deployment on", () => {
+    stubCloud();
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", CLOUD_SYNC_ENABLED_VALUE);
+
+    expect(hasCloudSyncPublicConfig()).toBe(true);
+    expect(resolveCloudSyncConvexUrl()).toBe("https://example.convex.cloud");
+  });
+
+  it("stays off when the flag is absent even with a deployment configured", () => {
+    stubCloud();
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", "");
+
+    expect(hasCloudSyncPublicConfig()).toBe(false);
+    expect(resolveCloudSyncConvexUrl()).toBeNull();
+  });
+
+  it("stays off without the relay config the session depends on", () => {
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "");
+    vi.stubEnv("VITE_PATHWAY_RELAY_URL", "");
+    vi.stubEnv("VITE_PATHWAY_CLOUD_SYNC", "1");
+    vi.stubEnv("VITE_PATHWAY_CONVEX_URL", "https://example.convex.cloud");
+
+    expect(hasCloudSyncPublicConfig()).toBe(false);
   });
 });
 

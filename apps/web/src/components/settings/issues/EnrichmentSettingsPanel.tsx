@@ -10,9 +10,9 @@
  * @module components/settings/issues/EnrichmentSettingsPanel
  */
 import { useAtomValue } from "@effect/atom-react";
-import { ProviderDriverKind } from "@t3tools/contracts";
-import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import { createModelSelection } from "@t3tools/shared/model";
+import { ProviderDriverKind } from "@spiritdevs/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@spiritdevs/contracts/settings";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import * as Equal from "effect/Equal";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../../hooks/useSettings";

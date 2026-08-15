@@ -30,6 +30,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsSyncRouteImport } from './routes/settings.sync'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
@@ -37,14 +38,18 @@ import { Route as SettingsProjectsRouteImport } from './routes/settings.projects
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
 import { Route as SettingsIssuesMilestonesRouteImport } from './routes/settings.issues-milestones'
+import { Route as SettingsIssuesMigrationRouteImport } from './routes/settings.issues-migration'
 import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
 import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issues-intake'
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
 import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
+import { Route as SettingsEnvironmentsRouteImport } from './routes/settings.environments'
 import { Route as SettingsEmailRouteImport } from './routes/settings.email'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
+import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
+import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
@@ -164,6 +169,11 @@ const SettingsUsageRoute = SettingsUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsSyncRoute = SettingsSyncRouteImport.update({
+  id: '/sync',
+  path: '/sync',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
   id: '/source-control',
   path: '/source-control',
@@ -200,6 +210,11 @@ const SettingsIssuesMilestonesRoute =
     path: '/issues-milestones',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsIssuesMigrationRoute = SettingsIssuesMigrationRouteImport.update({
+  id: '/issues-migration',
+  path: '/issues-migration',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
   id: '/issues-labels',
   path: '/issues-labels',
@@ -226,6 +241,11 @@ const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   path: '/general',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsEnvironmentsRoute = SettingsEnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsEmailRoute = SettingsEmailRouteImport.update({
   id: '/email',
   path: '/email',
@@ -239,6 +259,16 @@ const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
 const SettingsConnectionsRoute = SettingsConnectionsRouteImport.update({
   id: '/connections',
   path: '/connections',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyTeamsRoute = SettingsCompanyTeamsRouteImport.update({
+  id: '/company-teams',
+  path: '/company-teams',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsCompanyMembersRoute = SettingsCompanyMembersRouteImport.update({
+  id: '/company-members',
+  path: '/company-members',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
@@ -343,14 +373,18 @@ export interface FileRoutesByFullPath {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -358,6 +392,7 @@ export interface FileRoutesByFullPath {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -393,14 +428,18 @@ export interface FileRoutesByTo {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -408,6 +447,7 @@ export interface FileRoutesByTo {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -446,14 +486,18 @@ export interface FileRoutesById {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/company-members': typeof SettingsCompanyMembersRoute
+  '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -461,6 +505,7 @@ export interface FileRoutesById {
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/sync': typeof SettingsSyncRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -499,14 +544,18 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -514,6 +563,7 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
+    | '/settings/sync'
     | '/settings/usage'
     | '/projects/'
     | '/$environmentId/$threadId'
@@ -549,14 +599,18 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -564,6 +618,7 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
+    | '/settings/sync'
     | '/settings/usage'
     | '/projects'
     | '/$environmentId/$threadId'
@@ -601,14 +656,18 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/company-members'
+    | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -616,6 +675,7 @@ export interface FileRouteTypes {
     | '/settings/providers'
     | '/settings/scheduled-tasks'
     | '/settings/source-control'
+    | '/settings/sync'
     | '/settings/usage'
     | '/projects/'
     | '/_chat/$environmentId/$threadId'
@@ -801,6 +861,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsUsageRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/sync': {
+      id: '/settings/sync'
+      path: '/sync'
+      fullPath: '/settings/sync'
+      preLoaderRoute: typeof SettingsSyncRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/source-control': {
       id: '/settings/source-control'
       path: '/source-control'
@@ -850,6 +917,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsIssuesMilestonesRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/issues-migration': {
+      id: '/settings/issues-migration'
+      path: '/issues-migration'
+      fullPath: '/settings/issues-migration'
+      preLoaderRoute: typeof SettingsIssuesMigrationRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/issues-labels': {
       id: '/settings/issues-labels'
       path: '/issues-labels'
@@ -885,6 +959,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsGeneralRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/environments': {
+      id: '/settings/environments'
+      path: '/environments'
+      fullPath: '/settings/environments'
+      preLoaderRoute: typeof SettingsEnvironmentsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/email': {
       id: '/settings/email'
       path: '/email'
@@ -904,6 +985,20 @@ declare module '@tanstack/react-router' {
       path: '/connections'
       fullPath: '/settings/connections'
       preLoaderRoute: typeof SettingsConnectionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-teams': {
+      id: '/settings/company-teams'
+      path: '/company-teams'
+      fullPath: '/settings/company-teams'
+      preLoaderRoute: typeof SettingsCompanyTeamsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/company-members': {
+      id: '/settings/company-members'
+      path: '/company-members'
+      fullPath: '/settings/company-members'
+      preLoaderRoute: typeof SettingsCompanyMembersRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/archived': {
@@ -1044,14 +1139,18 @@ const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
+  SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsEmailRoute: typeof SettingsEmailRoute
+  SettingsEnvironmentsRoute: typeof SettingsEnvironmentsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
   SettingsIssuesIntakeRoute: typeof SettingsIssuesIntakeRoute
   SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
+  SettingsIssuesMigrationRoute: typeof SettingsIssuesMigrationRoute
   SettingsIssuesMilestonesRoute: typeof SettingsIssuesMilestonesRoute
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
@@ -1059,6 +1158,7 @@ interface SettingsRouteChildren {
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
+  SettingsSyncRoute: typeof SettingsSyncRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
   SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
@@ -1067,14 +1167,18 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
+  SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsEmailRoute: SettingsEmailRoute,
+  SettingsEnvironmentsRoute: SettingsEnvironmentsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,
   SettingsIssuesIntakeRoute: SettingsIssuesIntakeRoute,
   SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
+  SettingsIssuesMigrationRoute: SettingsIssuesMigrationRoute,
   SettingsIssuesMilestonesRoute: SettingsIssuesMilestonesRoute,
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
@@ -1082,6 +1186,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
+  SettingsSyncRoute: SettingsSyncRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
   SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,

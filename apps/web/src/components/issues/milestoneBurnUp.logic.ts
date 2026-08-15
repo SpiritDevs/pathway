@@ -12,7 +12,7 @@
  *
  * @module components/issues/milestoneBurnUp.logic
  */
-import type { IssueMilestoneHistoryPoint } from "@t3tools/contracts";
+import type { IssueMilestoneHistoryPoint } from "@spiritdevs/contracts";
 
 import { addIssueDays } from "./issuesList.logic";
 

@@ -2,8 +2,8 @@ import * as NodeCrypto from "node:crypto";
 import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
-} from "@t3tools/contracts/relay";
-import { RELAY_LINK_PROOF_TYP } from "@t3tools/shared/relayJwt";
+} from "@spiritdevs/contracts/relay";
+import { RELAY_LINK_PROOF_TYP } from "@spiritdevs/shared/relayJwt";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -35,7 +35,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
     teamId: "team-id",
     keyId: "key-id",
     privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.pathway.dev",
+    bundleId: "com.spiritdevs.pathway.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
@@ -107,7 +107,7 @@ const makeRequest = Effect.gen(function* () {
 });
 
 function testLayer(input?: {
-  readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
+  readonly replaceLinkAndCreate?: EnvironmentCredentials.EnvironmentCredentials["Service"]["replaceLinkAndCreate"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
@@ -119,10 +119,10 @@ function testLayer(input?: {
         Layer.succeed(DpopProofs.DpopProofReplay, {
           verifyAndConsume: () => Effect.die("unexpected DPoP proof verification"),
           consume: input?.consume ?? (() => Effect.succeed(true)),
-          pruneExpired: Effect.void,
+          pruneExpired: Effect.succeed(0),
         }),
         Layer.succeed(EnvironmentLinks.EnvironmentLinks, {
-          upsert: input?.upsert ?? (() => Effect.void),
+          upsert: () => Effect.void,
           listUsersForEnvironment: () => Effect.succeed([]),
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listPublicKeysForEnvironment: () => Effect.succeed([]),
@@ -132,6 +132,8 @@ function testLayer(input?: {
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
+          replaceLinkAndCreate:
+            input?.replaceLinkAndCreate ?? (() => Effect.succeed("t3env_credential_secret")),
           authenticate: () => Effect.succeedNone,
           revokeForEnvironmentPublicKey: () => Effect.succeed(false),
         }),
@@ -167,9 +169,10 @@ describe("EnvironmentLinker", () => {
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: (input) =>
+          replaceLinkAndCreate: (input) =>
             Effect.sync(() => {
               persistedEnvironmentId = input.proof.environmentId;
+              return "t3env_credential_secret";
             }),
         }),
       ),
@@ -236,9 +239,10 @@ describe("EnvironmentLinker", () => {
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: (input) =>
+          replaceLinkAndCreate: (input) =>
             Effect.sync(() => {
               persistedEndpoint = input.endpoint.httpBaseUrl;
+              return "t3env_credential_secret";
             }),
           deprovision: (input) =>
             Effect.sync(() => {
@@ -276,9 +280,10 @@ describe("EnvironmentLinker", () => {
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: () =>
+          replaceLinkAndCreate: () =>
             Effect.sync(() => {
               persisted = true;
+              return "t3env_credential_secret";
             }),
         }),
       ),

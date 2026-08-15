@@ -23,7 +23,7 @@ import {
   ModelSelection,
   ProjectId,
   TrimmedNonEmptyString,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -229,5 +229,5 @@ export interface IssueRepositoryShape {
  * IssueRepository - Service tag for issue persistence.
  */
 export class IssueRepository extends Context.Service<IssueRepository, IssueRepositoryShape>()(
-  "t3/persistence/Services/Issues/IssueRepository",
+  "@spiritdevs/pathway/persistence/Services/Issues/IssueRepository",
 ) {}

@@ -38,6 +38,9 @@ describe("WorkspaceTopBar", () => {
 
     expect(markup).toContain('data-workspace-top-bar=""');
     expect(markup).toContain('data-testid="profile-button"');
+    // History controls sit on the left, so the bar spreads its two children and
+    // the profile button lands at the right edge.
+    expect(markup).toContain('aria-label="History navigation"');
     expect(markup).toContain('aria-label="Back"');
     expect(markup).toContain('aria-label="Forward"');
     expect(markup).not.toContain("Back history");

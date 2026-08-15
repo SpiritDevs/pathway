@@ -6,7 +6,7 @@
  *
  * @module components/issues/IssuesAssistantPanel
  */
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { PanelRightIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 

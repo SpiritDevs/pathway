@@ -1,12 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentThread } from "@t3tools/client-runtime/state/shell";
+import type { EnvironmentThread } from "@spiritdevs/client-runtime/state/shell";
 import type {
   EnvironmentId,
   OrchestrationV2BrowserTakeoverFailure,
   OrchestrationV2BrowserTakeoverStatus,
   OrchestrationV2ThreadProjection,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { environmentThreadDetails, useEnvironmentThread } from "./threads";

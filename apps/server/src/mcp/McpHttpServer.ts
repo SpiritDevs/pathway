@@ -16,12 +16,13 @@ import {
   type ServerEvent,
 } from "@modelcontextprotocol/server";
 import Mime from "@effect/platform-node/Mime";
+import { rpcSessionLayer } from "@spiritdevs/client-runtime/rpc";
 import {
   EmailMcpTaskState,
   EmailMcpWaitForInput,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EmailProjectSettings,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -39,6 +40,8 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 
 import packageJson from "../../package.json" with { type: "json" };
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import * as PeerEnvironments from "../cloud/peerEnvironments.ts";
+import * as RemoteDispatch from "../cloud/remoteDispatch.ts";
 import * as ServerConfig from "../config.ts";
 import * as EmailStoreLive from "../email/EmailStore.ts";
 import * as EmailWaitStoreLive from "../email/EmailWaitStore.ts";
@@ -965,6 +968,28 @@ const EmailMcpServiceLive = EmailMcpService.layer.pipe(
   Layer.provideMerge(EmailMcpProjectScopeLive),
 );
 
+const WebSocketConstructorLive = Layer.unwrap(
+  Effect.promise(() =>
+    typeof Bun === "undefined"
+      ? import("@effect/platform-node/NodeSocket").then(
+          (module) => module.layerWebSocketConstructor,
+        )
+      : import("@effect/platform-bun/BunSocket").then((module) => module.layerWebSocketConstructor),
+  ),
+);
+
+const RemoteDispatchLive = RemoteDispatch.layer.pipe(
+  Layer.provide(
+    PeerEnvironments.layer.pipe(
+      Layer.provide(rpcSessionLayer.pipe(Layer.provide(WebSocketConstructorLive))),
+    ),
+  ),
+);
+
+const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
+  Layer.provide(RemoteDispatchLive),
+);
+
 const ToolkitHandlersLive = Layer.mergeAll(
   PreviewStandardToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
@@ -975,7 +1000,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
 );
 
 const McpToolkitServicesLive = Layer.mergeAll(
-  OrchestratorMcpService.layer,
+  OrchestratorMcpServiceLive,
   WorktreeMcpService.layer,
   EmailMcpServiceLive,
 );
@@ -1076,7 +1101,7 @@ export const makeEmailTestHandler = (projects: ReadonlyArray<EmailProjectSetting
   }).pipe(Effect.provide(EmailToolkitHandlersLive));
 
 class McpV2HttpHandler extends Context.Service<McpV2HttpHandler, PathwayMcpHandler>()(
-  "t3/mcp/McpHttpServer/McpV2HttpHandler",
+  "@spiritdevs/pathway/mcp/McpHttpServer/McpV2HttpHandler",
 ) {}
 
 const McpV2HttpHandlerLive = Layer.effect(

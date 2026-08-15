@@ -1,5 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 
 export interface BrowserThreadOption {
   readonly key: string;

@@ -11,7 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 
 import { stackedThreadToast, toastManager } from "../ui/toast";
 

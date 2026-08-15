@@ -1,4 +1,4 @@
-import type { PullRequestListEntry } from "@t3tools/contracts";
+import type { PullRequestListEntry } from "@spiritdevs/contracts";
 import { BotIcon } from "lucide-react";
 
 import { memo } from "react";

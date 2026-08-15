@@ -7,7 +7,7 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { makeSubagentChildThread } from "./SubagentProjection.ts";

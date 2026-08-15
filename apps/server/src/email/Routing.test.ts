@@ -1,4 +1,4 @@
-import { EmailMailSlug, ProjectId, type EmailProjectSettings } from "@t3tools/contracts";
+import { EmailMailSlug, ProjectId, type EmailProjectSettings } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { routeEmail } from "./Routing.ts";

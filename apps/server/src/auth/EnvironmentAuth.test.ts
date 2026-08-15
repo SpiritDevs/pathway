@@ -1,8 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthAdministrativeScopes } from "@t3tools/contracts";
+import { AuthAdministrativeScopes, EnvironmentId } from "@spiritdevs/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -106,6 +107,37 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "relay:read",
       ]);
       expect(verified.subject).toBe("one-time-token");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("carries peer-environment attribution separately from the acting user", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const initiatingEnvironmentId = EnvironmentId.make("environment-initiating");
+
+      const pairing = yield* serverAuth.createPairingLink({
+        subject: "cloud-user-acting",
+        initiatingEnvironmentId,
+      });
+      const exchanged = yield* serverAuth.createBrowserSession(pairing.credential, requestMetadata);
+      const verified = yield* serverAuth.authenticateHttpRequest(
+        makeCookieRequest(sessions.cookieName, exchanged.sessionToken),
+      );
+      const ticket = yield* serverAuth.issueWebSocketTicket(verified);
+      const websocketSession = yield* serverAuth.authenticateWebSocketUpgrade(
+        HttpServerRequest.fromWeb(
+          new Request(`https://target.example.test/ws?wsTicket=${ticket.ticket}`),
+        ),
+      );
+      const listed = yield* sessions.listActive();
+
+      expect(verified.subject).toBe("cloud-user-acting");
+      expect(verified.initiatingEnvironmentId).toBe(initiatingEnvironmentId);
+      expect(websocketSession.subject).toBe("cloud-user-acting");
+      expect(websocketSession.initiatingEnvironmentId).toBe(initiatingEnvironmentId);
+      expect(listed[0]?.subject).toBe("cloud-user-acting");
+      expect(listed[0]?.initiatingEnvironmentId).toBe(initiatingEnvironmentId);
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 

@@ -4,7 +4,7 @@ import type {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2StoredEvent,
   OrchestrationV2ThreadShell,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 

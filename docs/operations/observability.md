@@ -79,7 +79,7 @@ You do not need any extra env vars. Just run the app normally and inspect `serve
 Examples:
 
 ```bash
-npx t3
+npx @spiritdevs/pathway
 ```
 
 ```bash
@@ -130,7 +130,7 @@ export PATHWAY_TRACE_TIMING_ENABLED=true
 CLI:
 
 ```bash
-npx t3
+npx @spiritdevs/pathway
 ```
 
 Monorepo web/server dev:

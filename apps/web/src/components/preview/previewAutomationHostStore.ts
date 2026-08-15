@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import { create } from "zustand";
 
 /**
@@ -17,10 +17,7 @@ export interface PreviewAutomationHostIdentity {
 
 interface PreviewAutomationHostStoreState {
   readonly byEnvironmentId: Record<string, PreviewAutomationHostIdentity>;
-  readonly publish: (
-    environmentId: EnvironmentId,
-    identity: PreviewAutomationHostIdentity,
-  ) => void;
+  readonly publish: (environmentId: EnvironmentId, identity: PreviewAutomationHostIdentity) => void;
   readonly clear: (environmentId: EnvironmentId) => void;
 }
 

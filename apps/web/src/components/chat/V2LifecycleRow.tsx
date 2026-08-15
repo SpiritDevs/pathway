@@ -6,9 +6,9 @@ import type {
   ProviderInstanceId,
   ServerProvider,
   ThreadId,
-} from "@t3tools/contracts";
-import type { TimestampFormat } from "@t3tools/contracts/settings";
-import { sourceControlMarkerLabel } from "@t3tools/shared/sourceControl";
+} from "@spiritdevs/contracts";
+import type { TimestampFormat } from "@spiritdevs/contracts/settings";
+import { sourceControlMarkerLabel } from "@spiritdevs/shared/sourceControl";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,

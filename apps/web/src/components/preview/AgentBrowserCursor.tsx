@@ -1,6 +1,6 @@
 "use client";
 
-import type { DesktopPreviewPointerEvent } from "@t3tools/contracts";
+import type { DesktopPreviewPointerEvent } from "@spiritdevs/contracts";
 import { MousePointer2 } from "lucide-react";
 
 import { useBrowserPointerStore } from "~/browser/browserPointerStore";

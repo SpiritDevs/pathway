@@ -1,6 +1,6 @@
 # Pathway
 
-Pathway is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.pathway)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Pathway is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.spiritdevs.pathway)), [web app](https://app.spiritdevs.com) and [Electron-based desktop app](https://t3.codes).
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, Pathway can control them.
 
@@ -26,12 +26,12 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 The easiest way to test Pathway is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
 
 ```bash
-npx t3@latest
+npx @spiritdevs/pathway@latest
 ```
 
 This will launch Pathway's backend on your machine as well as the local web app to control your agents.
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+Tip: Use `npx @spiritdevs/pathway@latest --help` for the full CLI reference.
 
 ### Desktop app
 

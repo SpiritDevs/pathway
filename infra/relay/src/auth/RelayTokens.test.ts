@@ -1,7 +1,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
-import { signRelayJwt } from "@t3tools/shared/relayJwt";
+import { decodeRelayJwt, signRelayEs256Jwt, signRelayJwt } from "@spiritdevs/shared/relayJwt";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -13,6 +13,12 @@ const keyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
   publicKeyEncoding: { format: "pem", type: "spki" },
 });
+const convexKeyPair = NodeCrypto.generateKeyPairSync("ec", {
+  namedCurve: "P-256",
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+const convexKeyId = "pathway-convex-test";
 
 const config = RelayConfiguration.RelayConfiguration.of({
   relayIssuer: "https://relay.example.test/",
@@ -21,7 +27,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
     teamId: "team-id",
     keyId: "key-id",
     privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.pathway.dev",
+    bundleId: "com.spiritdevs.pathway.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
@@ -31,6 +37,16 @@ const config = RelayConfiguration.RelayConfiguration.of({
   cloudMintPublicKey: keyPair.publicKey,
   managedEndpointBaseDomain: undefined,
   managedEndpointNamespace: undefined,
+  cloudSync: {
+    serviceTokensEnabled: true,
+    convexUrl: "https://convex.example.test",
+    signingKey: {
+      keyId: convexKeyId,
+      privateKey: Redacted.make(convexKeyPair.privateKey),
+      publicKey: convexKeyPair.publicKey,
+    },
+    verificationKeys: [{ keyId: convexKeyId, publicKey: convexKeyPair.publicKey }],
+  },
 });
 
 const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
@@ -82,7 +98,8 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
-        userId: "user_123",
+        subjectId: "user_123",
+        subjectKind: "user",
         proofKeyThumbprint: "proof-key-thumbprint",
         jti: "access-token-1",
         issuedAtEpochSeconds: 100,
@@ -109,7 +126,8 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
-        userId: "user_123",
+        subjectId: "user_123",
+        subjectKind: "user",
         proofKeyThumbprint: "web-proof-key-thumbprint",
         jti: "web-access-token-1",
         issuedAtEpochSeconds: 100,
@@ -125,6 +143,56 @@ describe("RelayTokens", () => {
         scope: ["environment:connect", "environment:status"],
         cnf: { jkt: "web-proof-key-thumbprint" },
       });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues environment-subject tokens with only environment connect authority", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueDpopAccessToken({
+        subjectId: "environment-1",
+        subjectKind: "environment",
+        proofKeyThumbprint: "environment-proof-key-thumbprint",
+        jti: "environment-access-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 200,
+        clientId: "t3-env",
+        scopes: ["environment:connect"],
+      });
+
+      expect(
+        yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 150 }),
+      ).toMatchObject({
+        sub: "environment-1",
+        subject_kind: "environment",
+        client_id: "t3-env",
+        scope: ["environment:connect"],
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-env",
+          scope: "environment:connect environment:status",
+        }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("keeps the web and mobile scope allowlists unchanged", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-web",
+          scope: "environment:connect environment:status",
+        }),
+      ).toEqual(["environment:connect", "environment:status"]);
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-mobile",
+          scope: "environment:connect environment:status mobile:registration",
+        }),
+      ).toEqual(["environment:connect", "environment:status", "mobile:registration"]);
     }).pipe(Effect.provide(layer)),
   );
 
@@ -183,6 +251,114 @@ describe("RelayTokens", () => {
       });
 
       expect(yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 150 })).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues Convex-audience service tokens bound to an environment and proof key", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueConvexServiceToken({
+        environmentId: "environment-1",
+        proofKeyThumbprint: "environment-proof-key-thumbprint",
+        jti: "convex-service-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 700,
+      });
+
+      expect(decodeRelayJwt(token)).toMatchObject({
+        iss: "https://relay.example.test",
+        aud: "pathway-convex",
+        sub: "environment-1",
+        jti: "convex-service-token-1",
+        iat: 100,
+        exp: 700,
+        environmentId: "environment-1",
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toMatchObject({
+        aud: "pathway-convex",
+        environmentId: "environment-1",
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 800 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects self-audienced relay tokens presented as Convex service tokens", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* signRelayJwt({
+        privateKey: keyPair.privateKey,
+        typ: "t3-relay-convex-service+jwt",
+        payload: {
+          iss: "https://relay.example.test",
+          aud: "https://relay.example.test",
+          sub: "environment-1",
+          jti: "convex-service-token-wrong-audience",
+          iat: 100,
+          exp: 700,
+          environmentId: "environment-1",
+          cnf: { jkt: "environment-proof-key-thumbprint" },
+        },
+      });
+
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects Convex service tokens whose subject is not the environment", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* signRelayEs256Jwt({
+        privateKey: convexKeyPair.privateKey,
+        keyId: convexKeyId,
+        typ: "t3-relay-convex-service+jwt",
+        payload: {
+          iss: "https://relay.example.test",
+          aud: "pathway-convex",
+          sub: "environment-2",
+          jti: "convex-service-token-subject-mismatch",
+          iat: 100,
+          exp: 700,
+          environmentId: "environment-1",
+          cnf: { jkt: "environment-proof-key-thumbprint" },
+        },
+      });
+
+      expect(
+        yield* relayTokens.verifyConvexServiceToken({ token, nowEpochSeconds: 300 }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues a distinct short-lived control-plane identity for relay persistence", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueConvexControlPlaneToken({
+        jti: "relay-control-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 220,
+      });
+
+      expect(decodeRelayJwt(token)).toMatchObject({
+        iss: "https://relay.example.test",
+        aud: "pathway-convex",
+        sub: "pathway-relay",
+        tokenKind: "relay-control-plane",
+        jti: "relay-control-token-1",
+      });
+      expect(
+        yield* relayTokens.verifyConvexControlPlaneToken({ token, nowEpochSeconds: 150 }),
+      ).toMatchObject({ sub: "pathway-relay", tokenKind: "relay-control-plane" });
+      expect(
+        yield* relayTokens.verifyConvexControlPlaneToken({ token, nowEpochSeconds: 400 }),
+      ).toBeNull();
     }).pipe(Effect.provide(layer)),
   );
 });

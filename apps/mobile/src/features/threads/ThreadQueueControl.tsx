@@ -15,8 +15,8 @@ import {
   isQueuedRunOrderStale,
   orderQueuedRuns,
   resolveQueuedRunReorder,
-} from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/thread-workflows";
+import type { EnvironmentId, RunId, ThreadId } from "@spiritdevs/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,

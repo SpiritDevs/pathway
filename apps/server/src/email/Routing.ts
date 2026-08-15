@@ -4,7 +4,7 @@ import {
   type EmailProjectAttribution,
   type EmailProjectSettings,
   type ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type { EmailProject } from "./EmailProjectCatalog.ts";
 

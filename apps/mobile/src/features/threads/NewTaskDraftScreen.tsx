@@ -11,12 +11,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+} from "@spiritdevs/client-runtime/state/runtime";
+import { deriveThreadTitleSeed } from "@spiritdevs/client-runtime/operations";
 
 import { AppText } from "../../components/AppText";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";

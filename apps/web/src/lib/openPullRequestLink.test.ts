@@ -65,10 +65,10 @@ describe("parseChangeRequestUrl", () => {
 
   it("reads a GitLab merge request, nested groups and all", () => {
     expect(
-      parseChangeRequestUrl("https://gitlab.com/t3tools/platform/pathway/-/merge_requests/42"),
+      parseChangeRequestUrl("https://gitlab.com/spiritdevs/platform/pathway/-/merge_requests/42"),
     ).toEqual({
       host: "gitlab.com",
-      repository: "t3tools/platform/pathway",
+      repository: "spiritdevs/platform/pathway",
       number: 42,
     });
   });
@@ -159,17 +159,17 @@ describe("findProjectForChangeRequest", () => {
     // two-segment owner/name form would look for `coreybain/pathway` and find nothing.
     const projects = [
       project({
-        canonicalKey: "gitlab.com/t3tools/platform/pathway",
+        canonicalKey: "gitlab.com/spiritdevs/platform/pathway",
         provider: "gitlab",
-        displayName: "t3tools/platform/pathway",
-        owner: "t3tools",
+        displayName: "spiritdevs/platform/pathway",
+        owner: "spiritdevs",
         name: "pathway",
       }),
     ];
     expect(
       findProjectForChangeRequest(projects, {
         host: "gitlab.com",
-        repository: "t3tools/platform/pathway",
+        repository: "spiritdevs/platform/pathway",
         number: 42,
       }),
     ).toBe(projects[0]);

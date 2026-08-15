@@ -8,7 +8,7 @@
  *
  * @module components/email/EmailCaptureFields
  */
-import type { EmailMailSlug } from "@t3tools/contracts";
+import type { EmailMailSlug } from "@spiritdevs/contracts";
 import { CopyIcon } from "lucide-react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";

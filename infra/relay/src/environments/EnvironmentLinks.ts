@@ -3,16 +3,15 @@ import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { and, eq, isNull, or } from "drizzle-orm";
 
-import * as RelayDb from "../db.ts";
-import { relayEnvironmentLinks } from "../persistence/schema.ts";
+import { api } from "@spiritdevs/backend/convexApi";
+import { RelayConvexClient } from "../db.ts";
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
@@ -140,29 +139,8 @@ export class EnvironmentLinks extends Context.Service<
   }
 >()("pathway-relay/environments/EnvironmentLinks") {}
 
-function agentAwarenessDeliveryUserCondition(environmentId: string) {
-  return and(
-    eq(relayEnvironmentLinks.environmentId, environmentId),
-    isNull(relayEnvironmentLinks.revokedAt),
-    or(
-      eq(relayEnvironmentLinks.notificationsEnabled, true),
-      eq(relayEnvironmentLinks.liveActivitiesEnabled, true),
-    ),
-  );
-}
-
-function agentAwarenessDeliveryUserKeyCondition(input: {
-  readonly environmentId: string;
-  readonly environmentPublicKey: string;
-}) {
-  return and(
-    agentAwarenessDeliveryUserCondition(input.environmentId),
-    eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
-  );
-}
-
 const make = Effect.gen(function* () {
-  const db = yield* RelayDb.RelayDb;
+  const client = yield* RelayConvexClient;
 
   return EnvironmentLinks.of({
     upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
@@ -170,12 +148,10 @@ const make = Effect.gen(function* () {
         "relay.environment_id": input.proof.environmentId,
       });
       const now = DateTime.formatIso(yield* DateTime.now);
-      const { request, proof } = input;
+      const { request, proof, endpoint } = input;
       const environmentId = proof.environmentId;
-      const { endpoint } = input;
-      yield* db
-        .insert(relayEnvironmentLinks)
-        .values({
+      yield* client
+        .mutation(api.relayPersistence.upsertEnvironmentLink, {
           userId: input.userId,
           environmentId,
           environmentLabel: proof.descriptor.label,
@@ -187,25 +163,7 @@ const make = Effect.gen(function* () {
           liveActivitiesEnabled: request.liveActivitiesEnabled,
           managedTunnelsEnabled: request.managedTunnelsEnabled,
           createdByDeviceId: request.deviceId ?? null,
-          revokedAt: null,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [relayEnvironmentLinks.userId, relayEnvironmentLinks.environmentId],
-          set: {
-            environmentPublicKey: proof.environmentPublicKey,
-            environmentLabel: proof.descriptor.label,
-            endpointHttpBaseUrl: endpoint.httpBaseUrl,
-            endpointWsBaseUrl: endpoint.wsBaseUrl,
-            endpointProviderKind: endpoint.providerKind,
-            notificationsEnabled: request.notificationsEnabled,
-            liveActivitiesEnabled: request.liveActivitiesEnabled,
-            managedTunnelsEnabled: request.managedTunnelsEnabled,
-            createdByDeviceId: request.deviceId ?? null,
-            revokedAt: null,
-            updatedAt: now,
-          },
+          now,
         })
         .pipe(
           Effect.mapError(
@@ -223,21 +181,16 @@ const make = Effect.gen(function* () {
     listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
       function* (input) {
         yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-        return yield* db
-          .select({ userId: relayEnvironmentLinks.userId })
-          .from(relayEnvironmentLinks)
-          .where(agentAwarenessDeliveryUserCondition(input.environmentId))
-          .pipe(
-            Effect.map((rows) => rows.map((row) => row.userId)),
-            Effect.mapError(
-              (cause) =>
-                new EnvironmentLinkUserListPersistenceError({
-                  operation: "list-users",
-                  environmentId: input.environmentId,
-                  cause,
-                }),
-            ),
-          );
+        return yield* client.query(api.relayPersistence.listUsersForEnvironment, input).pipe(
+          Effect.mapError(
+            (cause) =>
+              new EnvironmentLinkUserListPersistenceError({
+                operation: "list-users",
+                environmentId: input.environmentId,
+                cause,
+              }),
+          ),
+        );
       },
     ),
 
@@ -245,155 +198,61 @@ const make = Effect.gen(function* () {
       "relay.environment_links.list_delivery_users_for_environment",
     )(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-      return yield* db
-        .select({
-          userId: relayEnvironmentLinks.userId,
-          notificationsEnabled: relayEnvironmentLinks.notificationsEnabled,
-          liveActivitiesEnabled: relayEnvironmentLinks.liveActivitiesEnabled,
-        })
-        .from(relayEnvironmentLinks)
-        .where(agentAwarenessDeliveryUserKeyCondition(input))
-        .pipe(
-          Effect.map((rows) =>
-            rows.map((row) => ({
-              userId: row.userId,
-              notificationsEnabled: row.notificationsEnabled,
-              liveActivitiesEnabled: row.liveActivitiesEnabled,
-            })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkUserListPersistenceError({
-                operation: "list-delivery-users",
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
+      return yield* client.query(api.relayPersistence.listDeliveryUsersForEnvironment, input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkUserListPersistenceError({
+              operation: "list-delivery-users",
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
     }),
 
     listPublicKeysForEnvironment: Effect.fn(
       "relay.environment_links.list_public_keys_for_environment",
     )(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-      return yield* db
-        .select({ environmentPublicKey: relayEnvironmentLinks.environmentPublicKey })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .pipe(
-          Effect.map((rows) => [
-            ...new Set(rows.map((row) => row.environmentPublicKey).filter((key) => key.length > 0)),
-          ]),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentPublicKeyListPersistenceError({
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
+      return yield* client.query(api.relayPersistence.listPublicKeysForEnvironment, input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentPublicKeyListPersistenceError({
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
     }),
 
     listForUser: Effect.fn("relay.environment_links.list_for_user")(function* (input) {
-      return yield* db
-        .select({
-          environmentId: relayEnvironmentLinks.environmentId,
-          environmentLabel: relayEnvironmentLinks.environmentLabel,
-          endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
-          endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
-          endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
-          createdAt: relayEnvironmentLinks.createdAt,
-        })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .pipe(
-          Effect.map((rows) =>
-            rows.map((row) => ({
-              environmentId: row.environmentId as RelayClientEnvironmentRecord["environmentId"],
-              label:
-                row.environmentLabel.trim().length > 0 ? row.environmentLabel : row.environmentId,
-              endpoint: {
-                httpBaseUrl: row.endpointHttpBaseUrl,
-                wsBaseUrl: row.endpointWsBaseUrl,
-                providerKind:
-                  row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
-              },
-              linkedAt: row.createdAt,
-            })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkListPersistenceError({
-                userId: input.userId,
-                cause,
-              }),
-          ),
-        );
+      return yield* client.query(api.relayPersistence.listEnvironmentLinksForUser, input).pipe(
+        Effect.map((rows) => rows as unknown as ReadonlyArray<RelayClientEnvironmentRecord>),
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkListPersistenceError({
+              userId: input.userId,
+              cause,
+            }),
+        ),
+      );
     }),
 
     getForUser: Effect.fn("relay.environment_links.get_for_user")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,
       });
-      return yield* db
-        .select({
-          environmentId: relayEnvironmentLinks.environmentId,
-          environmentLabel: relayEnvironmentLinks.environmentLabel,
-          environmentPublicKey: relayEnvironmentLinks.environmentPublicKey,
-          endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
-          endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
-          endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
-          createdAt: relayEnvironmentLinks.createdAt,
-        })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .limit(1)
-        .pipe(
-          Effect.map((rows) => {
-            const row = rows[0];
-            return row
-              ? {
-                  environmentId: row.environmentId as RelayClientEnvironmentRecord["environmentId"],
-                  label:
-                    row.environmentLabel.trim().length > 0
-                      ? row.environmentLabel
-                      : row.environmentId,
-                  endpoint: {
-                    httpBaseUrl: row.endpointHttpBaseUrl,
-                    wsBaseUrl: row.endpointWsBaseUrl,
-                    providerKind:
-                      row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
-                  },
-                  environmentPublicKey: row.environmentPublicKey,
-                  linkedAt: row.createdAt,
-                }
-              : null;
-          }),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkLookupPersistenceError({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
+      return yield* client.query(api.relayPersistence.getEnvironmentLinkForUser, input).pipe(
+        Effect.map((row) => row as unknown as RelayLinkedEnvironmentRecord | null),
+        Effect.mapError(
+          (cause) =>
+            new EnvironmentLinkLookupPersistenceError({
+              userId: input.userId,
+              environmentId: input.environmentId,
+              cause,
+            }),
+        ),
+      );
     }),
 
     revokeForUser: Effect.fn("relay.environment_links.revoke_for_user")(function* (input) {
@@ -401,20 +260,8 @@ const make = Effect.gen(function* () {
         "relay.environment_id": input.environmentId,
       });
       const revokedAt = DateTime.formatIso(yield* DateTime.now);
-      const rows = yield* db
-        .update(relayEnvironmentLinks)
-        .set({
-          revokedAt,
-          updatedAt: revokedAt,
-        })
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .returning({ environmentId: relayEnvironmentLinks.environmentId })
+      return yield* client
+        .mutation(api.relayPersistence.revokeEnvironmentLink, { ...input, now: revokedAt })
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -425,7 +272,6 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      return rows.length > 0;
     }),
   });
 });

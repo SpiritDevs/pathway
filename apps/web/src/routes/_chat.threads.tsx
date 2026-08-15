@@ -1,5 +1,5 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { threadIsVisibleAt } from "@t3tools/contracts";
+import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

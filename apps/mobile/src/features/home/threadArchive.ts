@@ -1,4 +1,4 @@
-import type { ThreadRuntimeSummary } from "@t3tools/client-runtime/state/models";
+import type { ThreadRuntimeSummary } from "@spiritdevs/client-runtime/state/models";
 
 /**
  * Archiving may discard queued work, but it must not detach a provider while

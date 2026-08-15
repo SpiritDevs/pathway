@@ -1,4 +1,4 @@
-import type { GitRunStackedActionResult } from "@t3tools/contracts";
+import type { GitRunStackedActionResult } from "@spiritdevs/contracts";
 
 export interface SourceControlMarkerResult {
   readonly committed: boolean;

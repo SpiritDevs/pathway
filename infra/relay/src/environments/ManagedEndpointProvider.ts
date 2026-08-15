@@ -13,7 +13,7 @@ import type {
   RelayManagedEndpoint,
   RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 
 import * as RelayConfiguration from "../Config.ts";
 import {
@@ -367,7 +367,6 @@ export const make = Effect.gen(function* () {
   const tunnels = yield* ManagedEndpointTunnelClient;
   const dns = yield* ManagedEndpointDnsClient;
   const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
-  const tunnelLimits = yield* ManagedTunnelLimits.ManagedTunnelLimits;
 
   const updateExistingDnsRecords = Effect.fnUntraced(function* (
     records: ReadonlyArray<{ readonly id: string }>,
@@ -642,26 +641,6 @@ export const make = Effect.gen(function* () {
         environmentHash,
       );
       const requestedTunnelName = managedEndpointTunnelName(cf.namespace, environmentHash);
-      yield* tunnelLimits
-        .ensureCapacity({
-          userId: input.userId,
-          environmentId: input.environmentId,
-        })
-        .pipe(
-          Effect.catchTags({
-            ManagedTunnelLimitPersistenceError: (cause) =>
-              Effect.fail(
-                new ManagedEndpointProvisioningFailed({
-                  userId: input.userId,
-                  environmentId: input.environmentId,
-                  stage: "check-tunnel-limit",
-                  hostname: requestedHostname,
-                  tunnelName: requestedTunnelName,
-                  cause,
-                }),
-              ),
-          }),
-        );
       const allocation = yield* allocations
         .reserve({
           userId: input.userId,
@@ -670,8 +649,8 @@ export const make = Effect.gen(function* () {
           tunnelName: requestedTunnelName,
         })
         .pipe(
-          Effect.mapError(
-            (cause) =>
+          Effect.catchTag("ManagedEndpointAllocationPersistenceError", (cause) =>
+            Effect.fail(
               new ManagedEndpointProvisioningFailed({
                 userId: input.userId,
                 environmentId: input.environmentId,
@@ -680,6 +659,7 @@ export const make = Effect.gen(function* () {
                 tunnelName: requestedTunnelName,
                 cause,
               }),
+            ),
           ),
         );
       const { hostname, tunnelName } = allocation;

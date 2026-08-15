@@ -1,5 +1,5 @@
-import type { OrchestrationV2ThreadProjection } from "@t3tools/contracts";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import type { OrchestrationV2ThreadProjection } from "@spiritdevs/contracts";
+import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
 
 import {

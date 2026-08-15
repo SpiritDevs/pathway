@@ -1,7 +1,7 @@
 import type {
   OrchestrationV2ProviderFailure,
   ServerProviderUsageSnapshot,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 const USAGE_LIMIT_CODE_PATTERN =

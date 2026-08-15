@@ -1,4 +1,4 @@
-import { SlackChannelWatch, SlackIntakeTrigger, SlackReactionRoute } from "@t3tools/contracts";
+import { SlackChannelWatch, SlackIntakeTrigger, SlackReactionRoute } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

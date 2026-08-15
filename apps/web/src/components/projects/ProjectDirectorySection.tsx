@@ -4,7 +4,7 @@
  *
  * @module components/projects/ProjectDirectorySection
  */
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 
 import { Checkbox } from "../ui/checkbox";
 import { ProjectDirectoryField } from "./ProjectDirectoryField";

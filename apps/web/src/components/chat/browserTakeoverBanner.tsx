@@ -7,7 +7,7 @@ import {
   type OrchestrationV2RunStatus,
   type OrchestrationV2ThreadPreviewActivity,
   type RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CircleAlertIcon, HandIcon, InfoIcon, MousePointerClickIcon } from "lucide-react";
 import type { PointerEventHandler, ReactNode } from "react";
 

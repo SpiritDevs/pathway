@@ -4,10 +4,13 @@ import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NetService from "@t3tools/shared/Net";
-import { resolveGitWorktreePath, resolveWorktreePathwayHome } from "@t3tools/shared/devHome";
-import { HostProcessEnvironment, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import * as NetService from "@spiritdevs/shared/Net";
+import { resolveGitWorktreePath, resolveWorktreePathwayHome } from "@spiritdevs/shared/devHome";
+import {
+  HostProcessEnvironment,
+  HostProcessWorkingDirectory,
+} from "@spiritdevs/shared/hostProcess";
+import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Hash from "effect/Hash";
@@ -74,15 +77,15 @@ export const DEFAULT_PATHWAY_HOME = Effect.map(Effect.service(Path.Path), (path)
 const MODE_ARGS = {
   dev: [
     "run",
-    "--filter=@t3tools/contracts",
-    "--filter=@t3tools/web",
-    "--filter=t3",
+    "--filter=@spiritdevs/contracts",
+    "--filter=@spiritdevs/web",
+    "--filter=@spiritdevs/pathway",
     "--parallel",
     "dev",
   ],
-  "dev:server": ["run", "--filter=t3", "dev"],
-  "dev:web": ["run", "--filter=@t3tools/web", "dev"],
-  "dev:desktop": ["run", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "dev"],
+  "dev:server": ["run", "--filter=@spiritdevs/pathway", "dev"],
+  "dev:web": ["run", "--filter=@spiritdevs/web", "dev"],
+  "dev:desktop": ["run", "--filter=@spiritdevs/desktop", "--filter=@spiritdevs/web", "dev"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 type DevMode = keyof typeof MODE_ARGS;
@@ -675,7 +678,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
 
     const hostEnvironment = yield* HostProcessEnvironment;
     // A dev server started inside a worktree defaults to that worktree's own
-    // (gitignored) `.pathway` — see @t3tools/shared/devHome for why this must
+    // (gitignored) `.pathway` — see @spiritdevs/shared/devHome for why this must
     // outrank an ambient PATHWAY_HOME. `--home-dir` still wins.
     const worktreeHome = yield* resolveWorktreePathwayHome(yield* HostProcessWorkingDirectory);
     // Trim before choosing: `--home-dir ""` is not a selection, and treating it

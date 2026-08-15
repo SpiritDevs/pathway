@@ -21,7 +21,7 @@ import {
   type ThreadLocation,
   type ThreadId,
   type UploadChatAttachment,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 

@@ -31,7 +31,7 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
@@ -542,5 +542,5 @@ export interface ProviderAdapterV2Shape {
 }
 
 export class ProviderAdapterV2 extends Context.Service<ProviderAdapterV2, ProviderAdapterV2Shape>()(
-  "t3/orchestration-v2/ProviderAdapter/ProviderAdapterV2",
+  "@spiritdevs/pathway/orchestration-v2/ProviderAdapter/ProviderAdapterV2",
 ) {}

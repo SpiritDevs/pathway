@@ -1,4 +1,4 @@
-import type { KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
+import type { KnownTerminalSession } from "@spiritdevs/client-runtime/state/terminal";
 
 export function selectActiveTerminalSessions(
   sessions: ReadonlyArray<KnownTerminalSession>,

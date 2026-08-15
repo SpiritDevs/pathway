@@ -16,9 +16,12 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { WebSearchOutput } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
-import { parseCliArgs } from "@t3tools/shared/cliArgs";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { applyClaudePromptEffortPrefix, getProviderOptionDescriptors } from "@t3tools/shared/model";
+import { parseCliArgs } from "@spiritdevs/shared/cliArgs";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
+import {
+  applyClaudePromptEffortPrefix,
+  getProviderOptionDescriptors,
+} from "@spiritdevs/shared/model";
 import {
   type ChatAttachment,
   ClaudeSettings,
@@ -44,7 +47,7 @@ import {
   type ProviderRequestKind,
   type ProviderThreadId,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -308,7 +311,7 @@ export interface ClaudeAgentSdkQueryRunnerShape {
 export class ClaudeAgentSdkQueryRunner extends Context.Service<
   ClaudeAgentSdkQueryRunner,
   ClaudeAgentSdkQueryRunnerShape
->()("t3/orchestration-v2/Adapters/ClaudeAdapterV2/ClaudeAgentSdkQueryRunner") {}
+>()("@spiritdevs/pathway/orchestration-v2/Adapters/ClaudeAdapterV2/ClaudeAgentSdkQueryRunner") {}
 
 export interface ClaudeAgentSdkSessionForkInput {
   readonly sessionId: string;
@@ -745,6 +748,7 @@ export const CLAUDE_READ_ONLY_PATHWAY_MCP_ALLOWED_TOOLS: ReadonlyArray<string> =
   "issues_list",
   "issues_get",
   "issues_get_attachment",
+  "issues_milestones_list",
   "orchestrator_capabilities",
   "list_scheduled_tasks",
   "t3_thread_list",

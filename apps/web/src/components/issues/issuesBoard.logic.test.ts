@@ -6,7 +6,7 @@ import {
   type Issue,
   type IssueStatus,
   type IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { IssuesGrouping } from "~/state/issues";

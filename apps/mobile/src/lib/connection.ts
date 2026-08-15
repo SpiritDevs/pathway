@@ -1,6 +1,6 @@
-import { EnvironmentId } from "@t3tools/contracts";
-import { stripPairingTokenFromUrl } from "@t3tools/shared/remote";
-import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { EnvironmentId } from "@spiritdevs/contracts";
+import { stripPairingTokenFromUrl } from "@spiritdevs/shared/remote";
+import { type EnvironmentConnectionPhase } from "@spiritdevs/client-runtime/connection";
 
 export { authClientMetadata } from "./authClientMetadata";
 

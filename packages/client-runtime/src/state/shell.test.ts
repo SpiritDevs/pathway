@@ -1,5 +1,5 @@
-import type { ServerConfig } from "@t3tools/contracts";
-import { EnvironmentId } from "@t3tools/contracts";
+import type { ServerConfig } from "@spiritdevs/contracts";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
@@ -15,6 +15,7 @@ const OTHER_ENVIRONMENT_ID = EnvironmentId.make("environment-2");
 
 function environmentEntry(environmentId: EnvironmentId, label: string) {
   return {
+    source: "local" as const,
     target: new PrimaryConnectionTarget({
       environmentId,
       label,

@@ -20,7 +20,7 @@ import {
   type ChatAttachmentId,
   type IssueComment,
   type IssueCommentId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import { issueCommentCreateBody } from "./issueDetail.logic";
 

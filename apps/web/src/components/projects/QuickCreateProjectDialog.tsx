@@ -9,7 +9,7 @@
  *
  * @module components/projects/QuickCreateProjectDialog
  */
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 

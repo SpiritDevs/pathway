@@ -15,8 +15,8 @@
  * @module state/issues
  */
 import { useAtomValue } from "@effect/atom-react";
-import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
-import { subscribe } from "@t3tools/client-runtime/rpc";
+import { EnvironmentSupervisor } from "@spiritdevs/client-runtime/connection";
+import { subscribe } from "@spiritdevs/client-runtime/rpc";
 import {
   type AtomCommand,
   type AtomCommandResult,
@@ -25,29 +25,36 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
   followStreamInEnvironment,
-} from "@t3tools/client-runtime/state/runtime";
-import { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
+} from "@spiritdevs/client-runtime/state/runtime";
+import { pinOrderKeyBetween } from "@spiritdevs/client-runtime/state/thread-sort";
+import { defaultIssueSortOrder } from "@spiritdevs/client-runtime/sync";
+import { ISSUE_KEY_DRAFT_PLACEHOLDER } from "@spiritdevs/contracts/cloudSync";
 import {
   ISSUES_WS_METHODS,
+  IssueCommentId,
+  IssueCycleId,
+  IssueId,
+  IssueLabelId,
+  IssueMilestoneId,
+  IssueRelationId,
+  IssueStatusId,
+  IssueTodoId,
+  IssueViewId,
   issueCycleStatusOn,
   type EnvironmentId,
   type Issue,
   type IssueComment,
-  type IssueCommentId,
   type IssueCycle,
   type IssueDate,
   type IssueDetail,
   type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
   type IssueEvent,
-  type IssueId,
   type IssueLabel,
   type IssueMilestone,
   type IssueMilestoneHistoryPoint,
-  type IssueMilestoneId,
   type IssueRelationDirection,
   type IssueRelationEdge,
-  type IssueRelationId,
   type IssueRelationKind,
   type IssueStatus,
   type IssueStatusCategory,
@@ -61,8 +68,9 @@ import {
   type SlackChannelWatch,
   type SlackIntakeStatus,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Data from "effect/Data";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -71,7 +79,58 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
+import { activeCompanyReplicaRoutingAtom } from "../cloud/activeCompany";
+import {
+  syncedIssueDetailAtomFamily,
+  syncedIssueDomainAtom,
+  type SyncedIssueDetail,
+} from "../cloud/issueDomainReadModel";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { randomUUID } from "../lib/utils";
+import {
+  issueBulkUpdateOperations,
+  issueCommentCreateOperation,
+  issueCommentDeleteOperation,
+  issueCommentUpdateOperation,
+  issueCreateOperation,
+  issueCycleCreateOperation,
+  issueCycleDeleteOperation,
+  issueCycleUpdateOperation,
+  issueDeleteOperation,
+  issueLabelCreateOperation,
+  issueLabelDeleteOperation,
+  issueLabelUpdateOperation,
+  issueMilestoneCreateOperation,
+  issueMilestoneDeleteOperation,
+  issueMilestonesReorderOperations,
+  issueMilestoneUpdateOperation,
+  issueRelationCreateOperation,
+  issueRelationDeleteOperation,
+  issueRestoreOperation,
+  issueSetSortOrderOperation,
+  issueTriageRejectOperation,
+  issueStatusCreateOperation,
+  issueStatusDeleteOperation,
+  issueStatusesReorderOperation,
+  issueStatusUpdateOperation,
+  issueTodoCreateOperation,
+  issueTodoCreateSortOrder,
+  issueTodoDeleteOperation,
+  issueTodosReorderOperations,
+  issueTodoUpdateOperation,
+  issueUpdateOperation,
+  issueViewCreateOperation,
+  issueViewDeleteOperation,
+  issueViewsReorderOperations,
+  issueViewUpdateOperation,
+} from "@spiritdevs/client-runtime/sync";
+import { receiptMappedResult, routeIssueMutationCommand } from "./issueMutationRouting";
+import {
+  issueDetailProjectionFromReplica,
+  issueThreadLinksFromReplica,
+  issuesStoreFromReplica,
+  selectReplicaRoutedIssueRead,
+} from "./issuesFromReplica";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
@@ -623,7 +682,7 @@ const issuesConnectionGenerationAtom = Atom.family((environmentId: EnvironmentId
 const issuesChanges = createEnvironmentSubscriptionAtomFamily(connectionAtomRuntime, {
   label: "environment-data:issues:changes",
   subscribe: (_generation: number) =>
-    subscribe(ISSUES_WS_METHODS.stream, {}).pipe(
+    subscribe(ISSUES_WS_METHODS.stream, { clientProtocolVersion: 1 }).pipe(
       Stream.chunks,
       Stream.mapAccum(
         () => EMPTY_ISSUES_STREAM_STATE,
@@ -666,9 +725,24 @@ const issuesStreamViewAtom = Atom.make((get): IssuesStreamView => {
   return { state, status: AsyncResult.isSuccess(changes) ? "ready" : "loading" };
 }).pipe(Atom.withLabel("web-issues-stream-view"));
 
+/** Replica presence is the sync engine's usable-data signal; freshness is owned by the engine. */
+export function selectIssuesStoreState(
+  legacyState: IssuesStoreState,
+  replicaStore: IssuesStore | null,
+): IssuesStoreState {
+  return replicaStore === null ? legacyState : { store: replicaStore, status: "ready" };
+}
+
 export const issuesStoreStateAtom = Atom.make((get): IssuesStoreState => {
   const view = get(issuesStreamViewAtom);
-  return { store: view.state.store, status: view.status };
+  const legacyState: IssuesStoreState = { store: view.state.store, status: view.status };
+  if (get(activeCompanyReplicaRoutingAtom) === null) {
+    return selectIssuesStoreState(legacyState, null);
+  }
+  return selectIssuesStoreState(
+    legacyState,
+    issuesStoreFromReplica(get(syncedIssueDomainAtom), legacyState.store),
+  );
 }).pipe(Atom.withLabel("web-issues-store-state"));
 
 export const issuesStoreAtom = Atom.make(
@@ -725,6 +799,27 @@ const issueAgentStateAtom = Atom.make(
   (get): IssueAgentState => get(issuesStreamViewAtom).state.agents,
 ).pipe(Atom.withLabel("web-issue-agent-state"));
 
+export function groupIssueThreadLinksByIssue(
+  links: ReadonlyArray<IssueThreadLink>,
+): ReadonlyMap<IssueId, ReadonlyArray<IssueThreadLink>> {
+  const byIssue = new Map<IssueId, Array<IssueThreadLink>>();
+  for (const link of links) {
+    const current = byIssue.get(link.issueId);
+    if (current === undefined) byIssue.set(link.issueId, [link]);
+    else current.push(link);
+  }
+  return byIssue;
+}
+
+/** Replica mode must not depend on the legacy stream for issue-owned thread links. */
+const effectiveIssueThreadLinksByIssueAtom = Atom.make((get) =>
+  get(activeCompanyReplicaRoutingAtom) === null
+    ? get(issueAgentStateAtom).linksByIssue
+    : groupIssueThreadLinksByIssue(
+        issueThreadLinksFromReplica(get(syncedIssueDomainAtom).issueThreadLinks),
+      ),
+).pipe(Atom.withLabel("web-effective-issue-thread-links-by-issue"));
+
 /**
  * The issue that created each work thread. Manual links remain a detail-sheet concern: the
  * sidebar code is provenance, matching the thread-details issue panel.
@@ -754,7 +849,10 @@ export function startWorkIssuesByThread(
 
 const startWorkIssuesByThreadAtom = Atom.make(
   (get): ReadonlyMap<ThreadId, Issue> =>
-    startWorkIssuesByThread(get(issuesStoreAtom).issuesById, get(issueAgentStateAtom).linksByIssue),
+    startWorkIssuesByThread(
+      get(issuesStoreAtom).issuesById,
+      get(effectiveIssueThreadLinksByIssueAtom),
+    ),
 ).pipe(Atom.withLabel("web-start-work-issues-by-thread"));
 
 /**
@@ -1437,6 +1535,24 @@ const issueLinksForThreadQuery = createEnvironmentRpcQueryAtomFamily(connectionA
 
 const EMPTY_ISSUE_EVENTS: ReadonlyArray<IssueEvent> = Object.freeze([]);
 const EMPTY_ISSUE_COMMENTS: ReadonlyArray<IssueComment> = Object.freeze([]);
+const EMPTY_SYNCED_ISSUE_DETAIL_ATOM = Atom.make<SyncedIssueDetail | null>(null).pipe(
+  Atom.withLabel("web-issues:empty-synced-detail"),
+);
+const NOOP_REPLICA_REFRESH = () => undefined;
+
+/**
+ * Replica detail already includes the sync engine's optimistic outbox overlay. The legacy stream
+ * overlay must only participate in the RPC branch or a local comment/todo/relation would appear
+ * twice while its operation is pending.
+ */
+function useReplicaIssueDetailProjection(issueId: IssueId | null) {
+  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const synced = useAtomValue(
+    issueId === null ? EMPTY_SYNCED_ISSUE_DETAIL_ATOM : syncedIssueDetailAtomFamily(issueId),
+  );
+  const projection = useMemo(() => issueDetailProjectionFromReplica(synced), [synced]);
+  return { replicaCompanyId, projection };
+}
 
 /** What a sheet needs to render a read that can fail, lag, or be asked for again. */
 export interface IssueEventsView {
@@ -1447,18 +1563,29 @@ export interface IssueEventsView {
 }
 
 export function useIssueEvents(issueId: IssueId | null): IssueEventsView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueEventsQuery({ environmentId, input: { issueId } }),
   );
-  return {
+  const legacy = {
     events: query.data?.events ?? EMPTY_ISSUE_EVENTS,
     isPending: query.isPending,
     error: query.error,
     refresh: query.refresh,
   };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      events: replica.projection.events,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    legacy,
+  );
 }
 
 export interface IssueDetailView {
@@ -1470,20 +1597,32 @@ export interface IssueDetailView {
 }
 
 export function useIssueDetail(issueId: IssueId | null): IssueDetailView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueDetailQuery({ environmentId, input: { issueId } }),
   );
   const overlay = useAtomValue(
-    issueId === null ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM : issueDetailOverlayAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM
+      : issueDetailOverlayAtomFamily(issueId),
   );
   const detail = useMemo(
     () => (query.data === null ? null : mergeIssueDetail(query.data, overlay)),
     [query.data, overlay],
   );
-  return { detail, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      detail: replica.projection.detail,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    { detail, isPending: query.isPending, error: query.error, refresh: query.refresh },
+  );
 }
 
 export interface IssueCommentsView {
@@ -1498,14 +1637,17 @@ export interface IssueCommentsView {
  * detail sheet reads {@link useIssueDetail} instead — one round trip, same live patching.
  */
 export function useIssueComments(issueId: IssueId | null): IssueCommentsView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueCommentsQuery({ environmentId, input: { issueId } }),
   );
   const overlay = useAtomValue(
-    issueId === null ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM : issueDetailOverlayAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM
+      : issueDetailOverlayAtomFamily(issueId),
   );
   const comments = useMemo(
     () =>
@@ -1515,7 +1657,16 @@ export function useIssueComments(issueId: IssueId | null): IssueCommentsView {
             .comments,
     [query.data, overlay],
   );
-  return { comments, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      comments: replica.projection.comments,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    { comments, isPending: query.isPending, error: query.error, refresh: query.refresh },
+  );
 }
 
 // ── Agent reads ────────────────────────────────────────────────────────
@@ -1563,21 +1714,34 @@ export interface IssueThreadLinksView {
 
 /** The threads working an issue. The stream carries the whole list, so a patch replaces outright. */
 export function useIssueThreadLinks(issueId: IssueId | null): IssueThreadLinksView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueThreadLinksQuery({ environmentId, input: { issueId } }),
   );
   const patch = useAtomValue(
-    issueId === null ? EMPTY_THREAD_LINK_PATCH_ATOM : issueThreadLinkPatchAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_THREAD_LINK_PATCH_ATOM
+      : issueThreadLinkPatchAtomFamily(issueId),
   );
-  return {
+  const legacy = {
     links: patch ?? query.data?.links ?? EMPTY_THREAD_LINKS,
     isPending: query.isPending,
     error: query.error,
     refresh: query.refresh,
   };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      links: replica.projection.threadLinks,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    legacy,
+  );
 }
 
 /**
@@ -1613,25 +1777,27 @@ export function useIssueLinksForThread(
   threadId: ThreadId | null,
   enabled = true,
 ): IssueLinksForThreadView {
+  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || threadId === null || !enabled
+    replicaCompanyId !== null || environmentId === null || threadId === null || !enabled
       ? null
       : issueLinksForThreadQuery({ environmentId, input: { threadId } }),
   );
-  const patchesByIssue = useAtomValue(issueAgentStateAtom).linksByIssue;
+  const linksByIssue = useAtomValue(effectiveIssueThreadLinksByIssueAtom);
   const links = useMemo(
     () =>
       threadId === null
         ? EMPTY_THREAD_LINKS
-        : mergeIssueLinksForThread(
-            query.data?.links ?? EMPTY_THREAD_LINKS,
-            patchesByIssue,
-            threadId,
-          ),
-    [patchesByIssue, query.data, threadId],
+        : mergeIssueLinksForThread(query.data?.links ?? EMPTY_THREAD_LINKS, linksByIssue, threadId),
+    [linksByIssue, query.data, threadId],
   );
-  return { links, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return {
+    links,
+    isPending: replicaCompanyId === null ? query.isPending : false,
+    error: replicaCompanyId === null ? query.error : null,
+    refresh: replicaCompanyId === null ? query.refresh : NOOP_REPLICA_REFRESH,
+  };
 }
 
 /** For the list and the board: one subscription, membership-stable, no per-row reads. */
@@ -1801,7 +1967,7 @@ const loggedWriteCommandOptions = {
   onSuccess: refreshIssueEvents,
 } as const;
 
-export const issueCommands = {
+const legacyIssueCommands = {
   create: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "environment-data:issues:create",
     tag: ISSUES_WS_METHODS.create,
@@ -2077,6 +2243,407 @@ export const issueCommands = {
   }),
 } as const;
 
+const syncWriteOptions = {
+  scheduler: issueCommandScheduler,
+  concurrency: serialPerEnvironment,
+} as const;
+
+const syncedTriageAcceptCommand = routeIssueMutationCommand(legacyIssueCommands.triageAccept, {
+  ...syncWriteOptions,
+  plan: (input, registry) => {
+    const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
+    if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+    const issue: Issue = {
+      ...current,
+      statusId: input.statusId,
+      triage: false,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
+      ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+      updatedAt: new Date().toISOString(),
+    };
+    return {
+      operations: [
+        issueUpdateOperation({
+          issueId: input.issueId,
+          patch: {
+            statusId: input.statusId,
+            triage: false,
+            ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+            ...(input.priority === undefined ? {} : { priority: input.priority }),
+            ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+          },
+        }),
+      ],
+      result: () => ({ issue, enrichmentRun: null, enrichmentRefusal: null }),
+    };
+  },
+});
+
+const commandFailureMessage = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.squash(cause);
+  return typeof failure === "object" && failure !== null && "message" in failure
+    ? String((failure as { readonly message: unknown }).message)
+    : String(failure);
+};
+
+/**
+ * Replica triage is an ordinary issue update. The optional investigation remains an
+ * environment-local executor and starts only after the durable outbox enqueue has completed.
+ */
+const triageAcceptCommand: typeof syncedTriageAcceptCommand = {
+  label: syncedTriageAcceptCommand.label,
+  run: async (registry, target) => {
+    const replicaRouted = registry.get(activeCompanyReplicaRoutingAtom) !== null;
+    const accepted = await syncedTriageAcceptCommand.run(registry, target);
+    if (!replicaRouted || !target.input.runEnrichment || !AsyncResult.isSuccess(accepted)) {
+      return accepted;
+    }
+    const enrichment = await legacyIssueCommands.startEnrichment.run(registry, {
+      environmentId: target.environmentId,
+      input: { issueId: target.input.issueId },
+    });
+    return AsyncResult.isSuccess(enrichment)
+      ? AsyncResult.success({
+          ...accepted.value,
+          enrichmentRun: enrichment.value.run,
+          enrichmentRefusal: null,
+        })
+      : AsyncResult.success({
+          ...accepted.value,
+          enrichmentRun: null,
+          enrichmentRefusal: commandFailureMessage(enrichment.cause),
+        });
+  },
+};
+
+export const issueCommands = {
+  create: routeIssueMutationCommand(legacyIssueCommands.create, {
+    ...syncWriteOptions,
+    plan: (input) => {
+      const id = IssueId.make(randomUUID());
+      const timestamp = new Date().toISOString();
+      const issue: Issue = {
+        id,
+        key: ISSUE_KEY_DRAFT_PLACEHOLDER as Issue["key"],
+        title: input.title,
+        description: input.description ?? "",
+        statusId: input.statusId ?? ("" as Issue["statusId"]),
+        priority: input.priority ?? "none",
+        assignee: input.assignee ?? null,
+        workModelSelection: null,
+        automationAssignment: null,
+        pullRequest: null,
+        projectId: input.projectId ?? null,
+        milestoneId: input.milestoneId ?? null,
+        cycleId: input.cycleId ?? null,
+        parentId: input.parentId ?? null,
+        sortOrder: defaultIssueSortOrder(0),
+        labelIds: [...(input.labelIds ?? [])],
+        dueDate: input.dueDate ?? null,
+        triage: input.triage ?? false,
+        slackSource: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+      };
+      return {
+        operations: [issueCreateOperation(input, id)],
+        result: () => ({ issue }),
+      };
+    },
+  }),
+  update: routeIssueMutationCommand(legacyIssueCommands.update, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "automationAssignment" in input.patch,
+    plan: (input) => ({
+      operations: [issueUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  delete: routeIssueMutationCommand(legacyIssueCommands.delete, {
+    ...syncWriteOptions,
+    plan: (input) => ({ operations: [issueDeleteOperation(input)], result: receiptMappedResult }),
+  }),
+  restore: routeIssueMutationCommand(legacyIssueCommands.restore, {
+    ...syncWriteOptions,
+    plan: (input) => ({ operations: [issueRestoreOperation(input)], result: receiptMappedResult }),
+  }),
+  bulkUpdate: routeIssueMutationCommand(legacyIssueCommands.bulkUpdate, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "automationAssignment" in input.patch,
+    plan: (input) => ({
+      operations: issueBulkUpdateOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  setSortOrder: routeIssueMutationCommand(legacyIssueCommands.setSortOrder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueSetSortOrderOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  createStatus: routeIssueMutationCommand(legacyIssueCommands.createStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusCreateOperation(input, IssueStatusId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  updateStatus: routeIssueMutationCommand(legacyIssueCommands.updateStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  deleteStatus: routeIssueMutationCommand(legacyIssueCommands.deleteStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  reorderStatuses: routeIssueMutationCommand(legacyIssueCommands.reorderStatuses, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusesReorderOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  createLabel: routeIssueMutationCommand(legacyIssueCommands.createLabel, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const id = IssueLabelId.make(randomUUID());
+      const label: IssueLabel = {
+        id,
+        name: input.name,
+        color: input.color,
+        createdAt: new Date().toISOString(),
+      };
+      const labels = [...registry.get(issuesStoreAtom).labels, label].sort(
+        (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+      );
+      return {
+        operations: [issueLabelCreateOperation(input, id)],
+        result: () => ({ label, labels }),
+      };
+    },
+  }),
+  updateLabel: routeIssueMutationCommand(legacyIssueCommands.updateLabel, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueLabelUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  deleteLabel: routeIssueMutationCommand(legacyIssueCommands.deleteLabel, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueLabelDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  setKeyPrefix: legacyIssueCommands.setKeyPrefix,
+  importCsv: legacyIssueCommands.importCsv,
+  milestoneCreate: routeIssueMutationCommand(legacyIssueCommands.milestoneCreate, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const id = IssueMilestoneId.make(randomUUID());
+      const timestamp = new Date().toISOString();
+      const milestone: IssueMilestone = {
+        id,
+        projectId: input.projectId,
+        name: input.name,
+        description: input.description ?? null,
+        startDate: input.startDate ?? null,
+        targetDate: input.targetDate ?? null,
+        position: input.position ?? Number.MAX_SAFE_INTEGER,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const milestones = [...registry.get(issuesStoreAtom).milestones, milestone].sort(
+        (left, right) =>
+          left.projectId.localeCompare(right.projectId) ||
+          left.position - right.position ||
+          left.id.localeCompare(right.id),
+      );
+      return {
+        operations: [issueMilestoneCreateOperation(input, id)],
+        result: () => ({ milestone, milestones }),
+      };
+    },
+  }),
+  milestoneUpdate: routeIssueMutationCommand(legacyIssueCommands.milestoneUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueMilestoneUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  milestoneDelete: routeIssueMutationCommand(legacyIssueCommands.milestoneDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueMilestoneDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  milestonesReorder: routeIssueMutationCommand(legacyIssueCommands.milestonesReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueMilestonesReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleCreate: routeIssueMutationCommand(legacyIssueCommands.cycleCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleCreateOperation(input, IssueCycleId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleUpdate: routeIssueMutationCommand(legacyIssueCommands.cycleUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleDelete: routeIssueMutationCommand(legacyIssueCommands.cycleDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todoCreate: routeIssueMutationCommand(legacyIssueCommands.todoCreate, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const todos = registry
+        .get(syncedIssueDomainAtom)
+        .issueTodos.filter((todo) => todo.issueId === input.issueId);
+      const sortOrder = issueTodoCreateSortOrder(input.position, todos);
+      return {
+        operations: [issueTodoCreateOperation(input, IssueTodoId.make(randomUUID()), sortOrder)],
+        result: receiptMappedResult,
+      };
+    },
+  }),
+  todoUpdate: routeIssueMutationCommand(legacyIssueCommands.todoUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueTodoUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todoDelete: routeIssueMutationCommand(legacyIssueCommands.todoDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueTodoDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todosReorder: routeIssueMutationCommand(legacyIssueCommands.todosReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueTodosReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  relationCreate: routeIssueMutationCommand(legacyIssueCommands.relationCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueRelationCreateOperation(input, IssueRelationId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  relationDelete: routeIssueMutationCommand(legacyIssueCommands.relationDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueRelationDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentCreate: routeIssueMutationCommand(legacyIssueCommands.commentCreate, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "agentMention" in input,
+    plan: (input) => ({
+      operations: [issueCommentCreateOperation(input, IssueCommentId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentUpdate: routeIssueMutationCommand(legacyIssueCommands.commentUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCommentUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentDelete: routeIssueMutationCommand(legacyIssueCommands.commentDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCommentDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  cancelCommentAgentRun: legacyIssueCommands.cancelCommentAgentRun,
+  retryCommentAgentRun: legacyIssueCommands.retryCommentAgentRun,
+  uploadCommentAttachment: legacyIssueCommands.uploadCommentAttachment,
+  viewCreate: routeIssueMutationCommand(legacyIssueCommands.viewCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewCreateOperation(input, IssueViewId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewUpdate: routeIssueMutationCommand(legacyIssueCommands.viewUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewDelete: routeIssueMutationCommand(legacyIssueCommands.viewDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewsReorder: routeIssueMutationCommand(legacyIssueCommands.viewsReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueViewsReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  startEnrichment: legacyIssueCommands.startEnrichment,
+  cancelEnrichment: legacyIssueCommands.cancelEnrichment,
+  linkThread: legacyIssueCommands.linkThread,
+  unlinkThread: legacyIssueCommands.unlinkThread,
+  slackSetToken: legacyIssueCommands.slackSetToken,
+  slackListChannels: legacyIssueCommands.slackListChannels,
+  slackWatchCreate: legacyIssueCommands.slackWatchCreate,
+  slackWatchUpdate: legacyIssueCommands.slackWatchUpdate,
+  slackWatchDelete: legacyIssueCommands.slackWatchDelete,
+  triageAccept: triageAcceptCommand,
+  triageReject: routeIssueMutationCommand(legacyIssueCommands.triageReject, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
+      if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+      const timestamp = new Date().toISOString();
+      return {
+        operations: [issueTriageRejectOperation(input)],
+        result: () => ({
+          issue: { ...current, updatedAt: timestamp, deletedAt: timestamp },
+        }),
+      };
+    },
+  }),
+} as const;
+
 type IssueCommandInput<C> =
   C extends AtomCommand<infer W, infer _A, infer _E>
     ? W extends { readonly input: infer I }
@@ -2191,7 +2758,7 @@ export const useTriageReject = () => usePrimaryIssueCommand(issueCommands.triage
  * row, so neighbours are never rewritten and two clients that drop a row in the same place
  * converge.
  */
-export { pinOrderKeyBetween as issueSortOrderBetween } from "@t3tools/client-runtime/state/thread-sort";
+export { pinOrderKeyBetween as issueSortOrderBetween } from "@spiritdevs/client-runtime/state/thread-sort";
 
 /**
  * The key a dropped row takes. `siblings` is the destination group in display order with the

@@ -20,7 +20,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
     teamId: "team-id",
     keyId: "key-id",
     privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.pathway.dev",
+    bundleId: "com.spiritdevs.pathway.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
@@ -423,8 +423,8 @@ describe("ManagedEndpointProvider", () => {
     );
   });
 
-  it.effect("checks the managed tunnel limit before reserving an allocation", () => {
-    const limitCalls: Array<{ readonly userId: string; readonly environmentId: string }> = [];
+  it.effect("reserves the allocation with the identity the tunnel limit is counted against", () => {
+    const allocationCalls: AllocationCall[] = [];
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
@@ -434,15 +434,16 @@ describe("ManagedEndpointProvider", () => {
         origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
 
-      expect(limitCalls).toEqual([{ userId: "user_ABC", environmentId: "env_ABC" }]);
+      // The tunnel limit is enforced inside the reservation itself, so the reserve call must be
+      // first and must carry the identity the limit is counted against.
+      expect(allocationCalls[0]?.operation).toBe("reserve");
+      expect(allocationCalls[0]?.input).toMatchObject({
+        userId: "user_ABC",
+        environmentId: "env_ABC",
+      });
     }).pipe(
       Effect.provide(
-        providerLayer(
-          makeTunnelClient(),
-          makeDnsClient(),
-          makeAllocations(),
-          makeTunnelLimits(limitCalls),
-        ),
+        providerLayer(makeTunnelClient(), makeDnsClient(), makeAllocations(allocationCalls)),
       ),
     );
   });
@@ -450,12 +451,17 @@ describe("ManagedEndpointProvider", () => {
   it.effect("refuses to provision past the managed tunnel limit without side effects", () => {
     const tunnelCalls: TunnelCall[] = [];
     const dnsCalls: DnsCall[] = [];
-    const allocationCalls: AllocationCall[] = [];
     const exceeded = new ManagedTunnelLimits.ManagedTunnelLimitExceeded({
       userId: "user_ABC",
       environmentId: "env_ABC",
       maxTunnels: 10,
       activeTunnels: 10,
+    });
+    // The reservation enforces the limit atomically, so an exceeded limit surfaces as a reserve
+    // failure — nothing is provisioned and there is no advisory pre-check to bypass.
+    const allocations = ManagedEndpointAllocations.ManagedEndpointAllocations.of({
+      ...makeAllocations(),
+      reserve: () => Effect.fail(exceeded),
     });
 
     return Effect.gen(function* () {
@@ -471,15 +477,9 @@ describe("ManagedEndpointProvider", () => {
       expect(error).toBe(exceeded);
       expect(tunnelCalls).toEqual([]);
       expect(dnsCalls).toEqual([]);
-      expect(allocationCalls).toEqual([]);
     }).pipe(
       Effect.provide(
-        providerLayer(
-          makeTunnelClient(tunnelCalls),
-          makeDnsClient(dnsCalls),
-          makeAllocations(allocationCalls),
-          makeTunnelLimits([], exceeded),
-        ),
+        providerLayer(makeTunnelClient(tunnelCalls), makeDnsClient(dnsCalls), allocations),
       ),
     );
   });

@@ -6,7 +6,7 @@ import {
   type IssueStatus,
   type IssueThreadLink,
   type IssueThreadLinkOrigin,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";

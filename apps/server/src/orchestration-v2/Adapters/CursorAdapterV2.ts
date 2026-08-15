@@ -7,7 +7,7 @@ import type {
   SDKUserMessage,
   ToolCall,
 } from "@cursor/sdk";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
 import {
   CursorSettings,
   defaultInstanceIdForDriver,
@@ -26,7 +26,7 @@ import {
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

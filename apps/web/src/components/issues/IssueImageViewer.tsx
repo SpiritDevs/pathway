@@ -1,10 +1,11 @@
-import type { ChatAttachmentId, EnvironmentId } from "@t3tools/contracts";
+import type { ChatAttachmentId, EnvironmentId, IssueId } from "@spiritdevs/contracts";
 import { MessagesSquareIcon } from "lucide-react";
 import { useMemo } from "react";
 
-import { useAssetUrlsState } from "~/assets/assetUrls";
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { ImageLightbox, type ImageLightboxAction } from "../media/ImageLightbox";
 import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 export function issueAttachmentDisplayName(position: number): string {
   return `Issue attachment ${position}`;
@@ -17,7 +18,9 @@ export function issueAttachmentDisplayName(position: number): string {
  */
 export function IssueImageViewer({
   attachmentIds,
+  cloud,
   environmentId,
+  issueId,
   selectedAttachmentId,
   startThreadDisabled,
   onClose,
@@ -25,30 +28,44 @@ export function IssueImageViewer({
   onStartThread,
 }: {
   attachmentIds: ReadonlyArray<ChatAttachmentId>;
-  environmentId: EnvironmentId;
+  cloud: ReplicaIssueAttachmentCloud | null;
+  environmentId: EnvironmentId | null;
+  issueId: IssueId;
   selectedAttachmentId: ChatAttachmentId;
   startThreadDisabled: boolean;
   onClose: () => void;
   onComment: (body: string, attachmentId: ChatAttachmentId) => void;
   onStartThread: (src: string) => void;
 }) {
-  const resources = useMemo(
-    () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
-    [attachmentIds],
-  );
-  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
-  const ready = urls.every((url) => url !== null);
+  const { attachments, refresh } = useIssueAttachmentUrls({
+    attachmentIds,
+    cloud,
+    environmentId,
+    issueId,
+  });
+  const ready = attachments.every((attachment) => attachment !== null);
 
   // Videos play inline on the issue rather than in the image viewer, so they are skipped
   // here — which also means positions are resolved against the filtered list.
   const images = useMemo(
     () =>
       attachmentIds.flatMap((attachmentId, position) => {
-        const src = urls[position] ?? null;
-        if (src === null || isIssueVideoAttachmentUrl(src)) return [];
-        return [{ attachmentId, src, name: issueAttachmentDisplayName(position + 1) }];
+        const attachment = attachments[position] ?? null;
+        if (
+          attachment === null ||
+          attachment.mimeType?.startsWith("video/") === true ||
+          isIssueVideoAttachmentUrl(attachment.url)
+        )
+          return [];
+        return [
+          {
+            attachmentId,
+            src: attachment.url,
+            name: attachment.fileName ?? issueAttachmentDisplayName(position + 1),
+          },
+        ];
       }),
-    [attachmentIds, urls],
+    [attachmentIds, attachments],
   );
 
   const index = images.findIndex((image) => image.attachmentId === selectedAttachmentId);
@@ -87,7 +104,9 @@ export function IssueImageViewer({
       initialIndex={index}
       onClose={onClose}
       onImageError={(failedImage) => {
-        const failedIndex = urls.indexOf(failedImage.src);
+        const failedIndex = attachments.findIndex(
+          (attachment) => attachment?.url === failedImage.src,
+        );
         if (failedIndex >= 0) refresh(failedIndex);
       }}
     />

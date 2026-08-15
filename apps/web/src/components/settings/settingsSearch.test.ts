@@ -157,6 +157,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
   it("groups the tracker pages under Issues", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
       "Workspace",
+      "Company",
       "Agents",
       "Issues",
       "Email",
@@ -168,8 +169,26 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
+      "/settings/issues-migration",
       "/settings/issues-enrichment",
     ]);
+  });
+
+  it("puts environment discovery and control in the Company group", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Company")?.paths).toEqual([
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/sync",
+      "/settings/environments",
+    ]);
+    expect(searchSettings("company sync status")[0]).toMatchObject({
+      id: "company-sync",
+      to: "/settings/sync",
+    });
+    expect(searchSettings("company environments")[0]).toMatchObject({
+      id: "company-environments",
+      to: "/settings/environments",
+    });
   });
 
   it("keeps Projects in the Workspace group with its own settings page", () => {

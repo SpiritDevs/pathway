@@ -19,9 +19,9 @@ import type {
   ProviderDriverKind,
   ProviderInstanceId,
   ProjectId,
-} from "@t3tools/contracts";
-import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
-import { createModelSelection, resolveSelectableModel } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@spiritdevs/contracts";
+import { createModelSelection, resolveSelectableModel } from "@spiritdevs/shared/model";
 
 import { appendIssueContextsToPrompt, type IssueContextSelection } from "~/lib/issueContext";
 import type { ProviderInstanceEntry } from "~/providerInstances";

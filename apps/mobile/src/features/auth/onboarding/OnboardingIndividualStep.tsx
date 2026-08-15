@@ -3,7 +3,7 @@ import {
   REFERRAL_SOURCE_OPTIONS,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 import { AuthCard, AuthChip, AuthChipGroup, AuthField } from "../components/AuthControls";
 

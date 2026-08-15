@@ -14,7 +14,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { ContextMenuItem } from "@t3tools/contracts";
+import type { ContextMenuItem } from "@spiritdevs/contracts";
 import {
   BotIcon,
   CalendarDaysIcon,

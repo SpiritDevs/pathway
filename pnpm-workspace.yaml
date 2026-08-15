@@ -35,7 +35,6 @@ catalog:
   "@effect/platform-bun": 4.0.0-beta.103
   "@effect/platform-node": 4.0.0-beta.103
   "@effect/platform-node-shared": 4.0.0-beta.103
-  "@effect/sql-pg": 4.0.0-beta.103
   "@effect/sql-sqlite-bun": 4.0.0-beta.103
   "@effect/tsgo": 0.13.2
   "@effect/vitest": 4.0.0-beta.103
@@ -64,13 +63,11 @@ minimumReleaseAgeExclude:
   - "@distilled.cloud/cloudflare@0.30.2"
   - "@distilled.cloud/core@0.30.2"
   - "@distilled.cloud/neon@0.30.2"
-  - "@distilled.cloud/planetscale@0.30.2"
   - "@effect/atom-react@4.0.0-beta.103"
   - "@effect/openapi-generator@4.0.0-beta.103"
   - "@effect/platform-bun@4.0.0-beta.103"
   - "@effect/platform-node-shared@4.0.0-beta.103"
   - "@effect/platform-node@4.0.0-beta.103"
-  - "@effect/sql-pg@4.0.0-beta.103"
   - "@effect/sql-sqlite-bun@4.0.0-beta.103"
   - "@effect/vitest@4.0.0-beta.103"
   - alchemy@2.0.0-beta.65
@@ -95,7 +92,6 @@ overrides:
   "@effect/platform-bun": "catalog:"
   "@effect/platform-node": "catalog:"
   "@effect/platform-node-shared": "catalog:"
-  "@effect/sql-pg": "catalog:"
   "@effect/sql-sqlite-bun": "catalog:"
   "@effect/vitest": "catalog:"
   "@effect/vitest>vitest": "-"
@@ -133,6 +129,7 @@ patchedDependencies:
   "@react-native-menu/menu@2.0.0": patches/@react-native-menu__menu@2.0.0.patch
   "@react-native/gradle-plugin@0.85.3": patches/@react-native__gradle-plugin@0.85.3.patch
   "@react-navigation/native-stack@7.17.6": patches/@react-navigation%2Fnative-stack@7.17.6.patch
+  alchemy@2.0.0-beta.65: patches/alchemy@2.0.0-beta.65.patch
   effect@4.0.0-beta.103: patches/effect@4.0.0-beta.103.patch
   expo-modules-jsi@56.0.10: patches/expo-modules-jsi@56.0.10.patch
   react-native-gesture-handler@2.31.2: patches/react-native-gesture-handler@2.31.2.patch

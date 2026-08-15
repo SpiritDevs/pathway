@@ -14,14 +14,14 @@
  *
  * @module issues/IssueEnrichmentEngine
  */
-import { IssueTrackerError } from "@t3tools/contracts";
+import { IssueTrackerError } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueEnrichmentResult,
   IssueEnrichmentRun,
   IssueEnrichmentRunId,
   ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -88,7 +88,7 @@ export interface IssueEnrichmentEngineShape {
 export class IssueEnrichmentEngine extends Context.Service<
   IssueEnrichmentEngine,
   IssueEnrichmentEngineShape
->()("t3/issues/IssueEnrichmentEngine") {}
+>()("@spiritdevs/pathway/issues/IssueEnrichmentEngine") {}
 
 /** Every refusal this stub gives, so the message is one string rather than three. */
 const UNAVAILABLE = "Issue enrichment is not available on this server.";

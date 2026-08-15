@@ -4,7 +4,7 @@
  *
  * @module components/issues/IssueLabelsPicker
  */
-import type { IssueLabel, IssueLabelId } from "@t3tools/contracts";
+import type { IssueLabel, IssueLabelId } from "@spiritdevs/contracts";
 import { CheckIcon, PlusIcon } from "lucide-react";
 import { useState, type ReactElement } from "react";
 

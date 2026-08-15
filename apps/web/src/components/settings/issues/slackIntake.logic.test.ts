@@ -5,7 +5,7 @@ import {
   type SlackChannelWatch,
   type SlackIntakeStatus,
   type SlackIntakeTrigger,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

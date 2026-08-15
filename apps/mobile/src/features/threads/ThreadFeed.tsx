@@ -1,16 +1,19 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import { canForkProjectedAssistantItem } from "@spiritdevs/client-runtime/state/thread-workflows";
 import {
   type EnvironmentId,
   type MessageId,
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
   type ThreadId,
-} from "@t3tools/contracts";
-import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
+} from "@spiritdevs/contracts";
+import {
+  CHAT_LIST_ANCHOR_OFFSET,
+  resolveChatListAnchoredEndSpace,
+} from "@spiritdevs/shared/chatList";
+import { formatElapsed } from "@spiritdevs/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
@@ -96,8 +99,8 @@ import {
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
-import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
-import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/links";
+import { markdownFileIconSource } from "@spiritdevs/mobile-markdown-text/file-icons";
+import { resolveMarkdownLinkPresentation } from "@spiritdevs/mobile-markdown-text/links";
 import {
   deriveThreadFeedPresentation,
   threadFeedRunIsUnsettled,
@@ -187,7 +190,7 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onContinueFromRun: (input: {
-    readonly sourceThreadId: import("@t3tools/contracts").ThreadId;
+    readonly sourceThreadId: import("@spiritdevs/contracts").ThreadId;
     readonly sourceRunId: RunId;
   }) => void;
 }

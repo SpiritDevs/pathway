@@ -1,5 +1,5 @@
 import { useAuth, useUser } from "@clerk/expo";
-import { isOnboardingComplete, parseProfileMetadata } from "@t3tools/client-runtime/profile";
+import { isOnboardingComplete, parseProfileMetadata } from "@spiritdevs/client-runtime/profile";
 import type { ReactNode } from "react";
 import { StatusBar, View, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

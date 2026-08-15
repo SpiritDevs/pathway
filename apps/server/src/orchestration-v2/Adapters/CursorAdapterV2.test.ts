@@ -4,7 +4,7 @@ import {
   type ModelSelection,
   ProviderInstanceId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { subagentChildModelSelection } from "../SubagentProjection.ts";

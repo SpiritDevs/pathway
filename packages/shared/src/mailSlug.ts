@@ -1,4 +1,4 @@
-import { EMAIL_MAIL_SLUG_MAX_LENGTH } from "@t3tools/contracts";
+import { EMAIL_MAIL_SLUG_MAX_LENGTH } from "@spiritdevs/contracts";
 
 export const MAIL_SLUG_MAX_LENGTH = EMAIL_MAIL_SLUG_MAX_LENGTH;
 

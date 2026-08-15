@@ -103,6 +103,47 @@ describe("loadRepoEnv", () => {
     });
   });
 
+  /**
+   * The cloud-sync knob is the only one whose two consumers parse the value rather than pass it
+   * along: the deployment half (Convex's `requireCloudSyncEnabled`, the server daemon) demands
+   * exactly `"enabled"`, while the web build reads a boolean flag. Projecting the operator's string
+   * verbatim to both names could only ever satisfy one of them, so it is normalized here.
+   */
+  it("normalizes every affirmative spelling so one knob enables both halves", () => {
+    /** Restates the deployment-side gate: apps/server syncDaemon and convex/lib/capability. */
+    const deploymentGateAccepts = (value: string | undefined) => value?.trim() === "enabled";
+    /** Restates apps/web/src/cloud/publicConfig.ts `parseCloudSyncFlag`. */
+    const webGateAccepts = (value: string | undefined) =>
+      ["enabled", "1", "true", "on", "yes"].includes(value?.trim().toLowerCase() ?? "");
+
+    for (const written of ["enabled", "true", "1", "yes", "ON"]) {
+      const env = loadRepoEnv({
+        baseEnv: { PATHWAY_CLOUD_SYNC: written },
+        repoRoot: makeTemporaryDirectory(),
+      });
+
+      expect(deploymentGateAccepts(env.PATHWAY_CLOUD_SYNC)).toBe(true);
+      expect(webGateAccepts(env.VITE_PATHWAY_CLOUD_SYNC)).toBe(true);
+    }
+
+    // An operator who writes the VITE_ spelling instead gets the same pair back.
+    const fromViteSpelling = loadRepoEnv({
+      baseEnv: { VITE_PATHWAY_CLOUD_SYNC: "true" },
+      repoRoot: makeTemporaryDirectory(),
+    });
+    expect(deploymentGateAccepts(fromViteSpelling.PATHWAY_CLOUD_SYNC)).toBe(true);
+    expect(webGateAccepts(fromViteSpelling.VITE_PATHWAY_CLOUD_SYNC)).toBe(true);
+
+    // Off stays off at both ends, in the operator's own wording.
+    const off = loadRepoEnv({
+      baseEnv: { PATHWAY_CLOUD_SYNC: "false" },
+      repoRoot: makeTemporaryDirectory(),
+    });
+    expect(off.PATHWAY_CLOUD_SYNC).toBe("false");
+    expect(deploymentGateAccepts(off.PATHWAY_CLOUD_SYNC)).toBe(false);
+    expect(webGateAccepts(off.VITE_PATHWAY_CLOUD_SYNC)).toBe(false);
+  });
+
   it("projects canonical relay client tracing values to web build aliases", () => {
     expect(
       loadRepoEnv({

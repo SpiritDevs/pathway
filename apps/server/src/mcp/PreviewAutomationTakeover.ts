@@ -1,4 +1,4 @@
-import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import { type EnvironmentId, type ThreadId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -78,7 +78,7 @@ export class PreviewAutomationTakeoverFence extends Context.Service<
       readonly tabId: string | null;
     }) => Effect.Effect<void>;
   }
->()("t3/mcp/PreviewAutomationTakeover/PreviewAutomationTakeoverFence") {}
+>()("@spiritdevs/pathway/mcp/PreviewAutomationTakeover/PreviewAutomationTakeoverFence") {}
 
 /**
  * One preview automation host/tab observation for a thread. The broker emits
@@ -100,6 +100,6 @@ export interface PreviewActivityRecord {
  */
 export class PreviewAutomationActivitySink extends Context.Reference<{
   readonly record: (record: PreviewActivityRecord) => Effect.Effect<void>;
-}>("t3/mcp/PreviewAutomationTakeover/PreviewAutomationActivitySink", {
+}>("@spiritdevs/pathway/mcp/PreviewAutomationTakeover/PreviewAutomationActivitySink", {
   defaultValue: () => ({ record: () => Effect.void }),
 }) {}

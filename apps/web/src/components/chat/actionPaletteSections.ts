@@ -1,4 +1,4 @@
-import type { ActionPaletteSectionPreference } from "@t3tools/contracts";
+import type { ActionPaletteSectionPreference } from "@spiritdevs/contracts";
 
 export interface ActionPaletteSectionDefinition {
   readonly id: string;

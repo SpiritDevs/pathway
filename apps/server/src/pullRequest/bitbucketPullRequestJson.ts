@@ -14,9 +14,9 @@ import type {
   PullRequestReviewThread,
   PullRequestReviewerCandidate,
   PullRequestState,
-} from "@t3tools/contracts";
-import { TrimmedNonEmptyString } from "@t3tools/contracts";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+} from "@spiritdevs/contracts";
+import { TrimmedNonEmptyString } from "@spiritdevs/contracts";
+import { decodeJsonResult } from "@spiritdevs/shared/schemaJson";
 
 /**
  * Bitbucket's enums are decoded as plain strings and normalized here, in the same tolerant

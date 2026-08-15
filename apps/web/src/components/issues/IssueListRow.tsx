@@ -16,7 +16,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { ChevronRightIcon } from "lucide-react";
 import { memo, type MouseEvent } from "react";
 
@@ -93,6 +93,7 @@ export function IssueGroupHeader({
 
 export interface IssueListRowProps {
   readonly issue: Issue;
+  readonly assigneeLabel?: string | undefined;
   readonly status: IssueStatus | null;
   readonly statuses: ReadonlyArray<IssueStatus>;
   readonly labels: ReadonlyArray<IssueLabel>;
@@ -141,6 +142,7 @@ interface IssueListRowImplProps extends IssueListRowProps {
 
 function IssueListRowImpl({
   issue,
+  assigneeLabel,
   status,
   statuses,
   labels,
@@ -325,7 +327,7 @@ function IssueListRowImpl({
         </span>
       )}
 
-      <IssueAssigneeGlyph assignee={issue.assignee} className="shrink-0" />
+      <IssueAssigneeGlyph assignee={issue.assignee} className="shrink-0" label={assigneeLabel} />
     </div>
   );
 }

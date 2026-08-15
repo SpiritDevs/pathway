@@ -1,4 +1,4 @@
-import type { GitRunStackedActionResult } from "@t3tools/contracts";
+import type { GitRunStackedActionResult } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { sourceControlMarkerFromGitResult } from "./SourceControlMarker.ts";

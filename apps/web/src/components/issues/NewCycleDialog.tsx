@@ -7,7 +7,7 @@
  *
  * @module components/issues/NewCycleDialog
  */
-import type { IssueDate } from "@t3tools/contracts";
+import type { IssueDate } from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useRef, useState } from "react";
 

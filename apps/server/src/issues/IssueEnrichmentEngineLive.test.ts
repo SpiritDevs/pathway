@@ -30,7 +30,7 @@ import {
   type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
   type IssueId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 

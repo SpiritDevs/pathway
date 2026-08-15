@@ -1,4 +1,4 @@
-import type { DevelopmentServerPortRange, DiscoveredLocalServer } from "@t3tools/contracts";
+import type { DevelopmentServerPortRange, DiscoveredLocalServer } from "@spiritdevs/contracts";
 
 export function filterDiscoveredPorts(
   ports: ReadonlyArray<DiscoveredLocalServer>,

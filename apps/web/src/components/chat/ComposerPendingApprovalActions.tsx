@@ -1,4 +1,4 @@
-import { type RuntimeRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
+import { type RuntimeRequestId, type ProviderApprovalDecision } from "@spiritdevs/contracts";
 import { memo } from "react";
 import { Button } from "../ui/button";
 

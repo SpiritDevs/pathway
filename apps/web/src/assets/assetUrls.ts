@@ -1,13 +1,13 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { resolveCurrentAssetUrl } from "@t3tools/client-runtime/state/assets";
-import type { AssetResource, EnvironmentId } from "@t3tools/contracts";
+import { resolveCurrentAssetUrl } from "@spiritdevs/client-runtime/state/assets";
+import type { AssetResource, EnvironmentId } from "@spiritdevs/contracts";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useContext, useMemo, useRef } from "react";
 
 import { assetEnvironment } from "~/state/assets";
 import { usePreparedConnection } from "~/state/session";
 
-export { resolveAssetUrl, resolveCurrentAssetUrl } from "@t3tools/client-runtime/state/assets";
+export { resolveAssetUrl, resolveCurrentAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 
 export type AssetUrlState =
   | { readonly _tag: "Loading" }

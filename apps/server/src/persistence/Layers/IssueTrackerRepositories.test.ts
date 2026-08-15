@@ -21,7 +21,7 @@ import {
   type IssueCommentAgentRun,
   type IssueEnrichmentRun,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -120,6 +120,7 @@ const makeIssue = (overrides: Partial<IssueRecord> = {}): IssueRecord => ({
   dueDate: null,
   triage: false,
   slackSource: null,
+  pullRequest: null,
   createdAt: "2026-08-12T00:00:00.000Z",
   updatedAt: "2026-08-12T00:00:00.000Z",
   deletedAt: null,

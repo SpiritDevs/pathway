@@ -178,6 +178,12 @@ import {
   SlackWatchUpdateInput,
   SlackWatchesResult,
 } from "./issues.ts";
+import {
+  IssueImportExecuteResult,
+  IssueImportPreviewResult,
+  IssueImportRequest,
+  IssueImportRpcError,
+} from "./issueImport.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ServerGetProviderUsageInput, ServerProviderUsageSnapshot } from "./providerUsage.ts";
 import {
@@ -422,6 +428,8 @@ export const WS_METHODS = {
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+  cloudIssueImportPreview: "cloud.issueImport.preview",
+  cloudIssueImportExecute: "cloud.issueImport.execute",
 
   // Pull request methods
   pullRequestsList: "pullRequests.list",
@@ -598,6 +606,19 @@ export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRela
   payload: Schema.Struct({}),
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsCloudIssueImportPreviewRpc = Rpc.make(WS_METHODS.cloudIssueImportPreview, {
+  payload: IssueImportRequest,
+  success: IssueImportPreviewResult,
+  error: Schema.Union([IssueImportRpcError, EnvironmentAuthorizationError]),
+});
+
+export const WsCloudIssueImportExecuteRpc = Rpc.make(WS_METHODS.cloudIssueImportExecute, {
+  payload: IssueImportRequest,
+  success: IssueImportExecuteResult,
+  error: Schema.Union([IssueImportRpcError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -1560,7 +1581,10 @@ export const WsIssuesTriageRejectRpc = Rpc.make(ISSUES_WS_METHODS.triageReject, 
 });
 
 export const WsIssuesStreamRpc = Rpc.make(ISSUES_WS_METHODS.stream, {
-  payload: Schema.Struct({}),
+  payload: Schema.Struct({
+    /** C8 capability: absent means a pre-cutover client that may only receive the safe stream. */
+    clientProtocolVersion: Schema.optionalKey(Schema.Literal(1)),
+  }),
   success: IssuesStreamEvent,
   error: IssuesRpcError,
   stream: true,
@@ -1756,6 +1780,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsCloudIssueImportPreviewRpc,
+  WsCloudIssueImportExecuteRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsDetailRpc,

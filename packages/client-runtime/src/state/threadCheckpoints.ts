@@ -5,7 +5,7 @@ import type {
   MessageId,
   OrchestrationV2ThreadProjection,
   RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 export interface ThreadCheckpointSummary {

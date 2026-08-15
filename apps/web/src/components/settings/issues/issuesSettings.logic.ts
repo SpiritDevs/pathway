@@ -16,8 +16,8 @@ import type {
   IssueStatus,
   IssueStatusCategory,
   ProjectId,
-} from "@t3tools/contracts";
-import type { IssueCsvColumnName } from "@t3tools/shared/issuesCsv";
+} from "@spiritdevs/contracts";
+import type { IssueCsvColumnName } from "@spiritdevs/shared/issuesCsv";
 
 import type { IssuesStore } from "../../../state/issues";
 import { isCompleteIssueDate } from "../../issues/issueDetail.logic";

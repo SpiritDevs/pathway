@@ -1,4 +1,4 @@
-import { resolveOnboardingStep } from "@t3tools/client-runtime/profile";
+import { resolveOnboardingStep } from "@spiritdevs/client-runtime/profile";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

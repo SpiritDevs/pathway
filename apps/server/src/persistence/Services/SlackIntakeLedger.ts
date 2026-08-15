@@ -15,7 +15,7 @@
  *
  * @module SlackIntakeLedgerRepository
  */
-import { IsoDateTime, IssueId, SlackChannelId, SlackMessageTs } from "@t3tools/contracts";
+import { IsoDateTime, IssueId, SlackChannelId, SlackMessageTs } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -126,4 +126,4 @@ export interface SlackIntakeLedgerRepositoryShape {
 export class SlackIntakeLedgerRepository extends Context.Service<
   SlackIntakeLedgerRepository,
   SlackIntakeLedgerRepositoryShape
->()("t3/persistence/Services/SlackIntakeLedger/SlackIntakeLedgerRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/SlackIntakeLedger/SlackIntakeLedgerRepository") {}

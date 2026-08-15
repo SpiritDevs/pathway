@@ -3,13 +3,13 @@ import {
   scopedProjectKey,
   scopeProjectRef,
   scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+} from "@spiritdevs/client-runtime/environment";
 import {
   DEFAULT_RUNTIME_MODE,
   type ScopedProjectRef,
   type ThreadId,
   type ThreadLocation,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -27,7 +27,7 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
+import { resolveDefaultThreadEnvMode } from "@spiritdevs/shared/threadEnvMode";
 import { readThreadShell, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";

@@ -1,4 +1,4 @@
-import type { IssuePullRequest } from "@t3tools/contracts";
+import type { IssuePullRequest } from "@spiritdevs/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import type { MouseEvent, PointerEvent } from "react";
 

@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { PreparedConnection } from "@t3tools/client-runtime/connection";
-import type { EnvironmentId } from "@t3tools/contracts";
-import type { ServerConfig } from "@t3tools/contracts";
+import type { PreparedConnection } from "@spiritdevs/client-runtime/connection";
+import type { EnvironmentId } from "@spiritdevs/contracts";
+import type { ServerConfig } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";

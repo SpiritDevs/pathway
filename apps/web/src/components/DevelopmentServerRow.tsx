@@ -1,4 +1,4 @@
-import type { DiscoveredLocalServer } from "@t3tools/contracts";
+import type { DiscoveredLocalServer } from "@spiritdevs/contracts";
 import { CopyIcon, ExternalLinkIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
 
 import { Button } from "./ui/button";

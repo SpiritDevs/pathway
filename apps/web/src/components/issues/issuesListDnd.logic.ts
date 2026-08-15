@@ -8,7 +8,7 @@
  *
  * @module components/issues/issuesListDnd.logic
  */
-import type { Issue, IssueId, IssueStatusId } from "@t3tools/contracts";
+import type { Issue, IssueId, IssueStatusId } from "@spiritdevs/contracts";
 
 import { issueSortOrderForDrop } from "~/state/issues";
 import type { IssuesView, IssuesViewGroup } from "./issuesList.logic";

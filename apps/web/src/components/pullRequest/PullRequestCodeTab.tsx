@@ -6,7 +6,7 @@ import type {
   PullRequestDiffSide,
   PullRequestRef,
   PullRequestReviewThread,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ChevronRightIcon,

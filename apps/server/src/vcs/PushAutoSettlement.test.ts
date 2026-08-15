@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, RunId, ThreadId } from "@t3tools/contracts";
+import { CommandId, RunId, ThreadId } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";

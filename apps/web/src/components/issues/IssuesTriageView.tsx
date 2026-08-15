@@ -12,7 +12,7 @@
  * @module components/issues/IssuesTriageView
  */
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import type { Issue, IssueId, ProjectId, ProviderDriverKind } from "@t3tools/contracts";
+import type { Issue, IssueId, ProjectId, ProviderDriverKind } from "@spiritdevs/contracts";
 import { CheckIcon, InboxIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 

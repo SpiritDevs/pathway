@@ -19,9 +19,9 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import { threadIsVisibleAt } from "@t3tools/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueCycleId,
@@ -33,7 +33,8 @@ import type {
   IssueStatusId,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { Link } from "@tanstack/react-router";
 import { ColumnsIcon, ListTodoIcon, PanelRightIcon, PlusIcon, Rows3Icon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -77,7 +78,6 @@ import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { Toggle } from "../ui/toggle";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
@@ -97,7 +97,8 @@ import {
   issueContextMenuIssues,
   type IssueContextMenuCopyField,
 } from "./issueContextMenu.logic";
-import { issueAssigneeOptions } from "./issueDetail.logic";
+import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
+import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
 import { buildIssuesTalkContexts, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
@@ -124,6 +125,7 @@ import {
   issuesSearchSortMode,
   issuesSearchViewMode,
   pruneIssuesSelection,
+  resolveIssuesFilterUserAssignee,
   resolveIssuesListKeyAction,
   selectIssueRow,
   soleIssuesFilterValue,
@@ -152,21 +154,6 @@ const TABS: ReadonlyArray<{ readonly value: IssuesTab; readonly label: string }>
 
 /** A header is 32px and a row 36px; the list is dense enough that one estimate covers both. */
 const ESTIMATED_ROW_HEIGHT = 36;
-
-/**
- * The driver list is a module constant, so the options built from it can be one too. Unassigned is
- * dropped: it is a real value for the assignee *editor* and not a value a filter chip can hold.
- */
-const ASSIGNEE_FILTER_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS).flatMap(
-  (option) =>
-    option.assignee === null
-      ? []
-      : [{ value: option.value, label: option.label, assignee: option.assignee }],
-);
-
-const ASSIGNEE_GROUP_LABELS = new Map(
-  ASSIGNEE_FILTER_OPTIONS.map((option) => [option.value, option.label]),
-);
 
 /** The board draws its own cards, so the flat row array is dead weight while it is up. */
 const NO_ISSUES_LIST_ROWS: ReadonlyArray<IssuesListRowModel> = [];
@@ -200,6 +187,33 @@ function IssuesListView({
   search: IssuesSearch;
   onSearch: (patch: IssuesSearchPatch) => void;
 }) {
+  const memberDirectory = useIssueMemberDirectory();
+  const assigneeOptions = useIssueAssigneeOptions();
+  const assigneeFilterOptions = useMemo(() => {
+    const active = assigneeOptions.flatMap((option) =>
+      option.assignee === null
+        ? []
+        : [{ value: option.value, label: option.label, assignee: option.assignee }],
+    );
+    const known = new Set(active.map((option) => option.value));
+    const historical = [...memberDirectory.names].flatMap(([membershipId, label]) => {
+      const value = `member:${membershipId}`;
+      return known.has(value)
+        ? []
+        : [
+            {
+              value,
+              label,
+              assignee: { kind: "member" as const, membershipId: MembershipId.make(membershipId) },
+            },
+          ];
+    });
+    return [...active, ...historical];
+  }, [assigneeOptions, memberDirectory.names]);
+  const assigneeGroupLabels = useMemo(
+    () => new Map(assigneeFilterOptions.map((option) => [option.value, option.label])),
+    [assigneeFilterOptions],
+  );
   const tab = search.tab ?? DEFAULT_ISSUES_TAB;
   const store = useIssuesStore();
   const storeStatus = useIssuesStoreStatus();
@@ -292,6 +306,10 @@ function IssuesListView({
     });
   }, [closedAssistantThreadIds, threads]);
   const filter = useMemo(() => issuesSearchFilter(search), [search]);
+  const effectiveFilter = useMemo(
+    () => resolveIssuesFilterUserAssignee(filter, memberDirectory.currentMembershipId),
+    [filter, memberDirectory.currentMembershipId],
+  );
   const viewMode = issuesSearchViewMode(search);
   const groupBy = effectiveIssuesGrouping(issuesSearchGrouping(search), viewMode);
   const sortMode = issuesSearchSortMode(search);
@@ -308,14 +326,14 @@ function IssuesListView({
     () =>
       buildIssuesView({
         grouping,
-        filter,
+        filter: effectiveFilter,
         today,
         groupBy,
         sortMode,
         projectTitles,
-        assigneeLabels: ASSIGNEE_GROUP_LABELS,
+        assigneeLabels: assigneeGroupLabels,
       }),
-    [filter, groupBy, grouping, projectTitles, sortMode, today],
+    [assigneeGroupLabels, effectiveFilter, groupBy, grouping, projectTitles, sortMode, today],
   );
   // Both are narrowings of the one view, so the filter, the comparator, and the group order are
   // computed once no matter which layout is up.
@@ -915,6 +933,7 @@ function IssuesListView({
         childRollup={childRollups.get(item.issue.id) ?? null}
         investigating={investigatingIssueIds.has(item.issue.id)}
         issue={item.issue}
+        assigneeLabel={issueAssigneeDisplayName(memberDirectory, item.issue.assignee)}
         labels={labels}
         labelsById={labelsById}
         onContextMenu={handleRowContextMenu}
@@ -1039,11 +1058,16 @@ function IssuesListView({
         </div>
 
         <IssuesFilterBar
-          actions={<SaveIssueViewControl search={search} />}
-          assigneeOptions={ASSIGNEE_FILTER_OPTIONS}
+          actions={
+            <SaveIssueViewControl
+              currentMembershipId={memberDirectory.currentMembershipId}
+              search={search}
+            />
+          }
+          assigneeOptions={assigneeFilterOptions}
           className="border-b border-border/50 px-3 py-1.5 sm:px-5"
           cycles={cycles}
-          filter={filter}
+          filter={effectiveFilter}
           labels={labels}
           milestones={milestones}
           onChange={setFilter}
@@ -1118,6 +1142,7 @@ function IssuesListView({
             </Empty>
           ) : viewMode === "board" ? (
             <IssuesBoard
+              assigneeNames={memberDirectory.names}
               childRollups={childRollups}
               columns={boardColumns}
               investigatingIssueIds={investigatingIssueIds}

@@ -17,6 +17,7 @@ import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SyncStatusIndicator } from "./SyncStatusIndicator";
 import { type WorkspaceHistoryEntry, workspaceHistoryTracker } from "./workspaceHistory.logic";
 
 const HISTORY_LONG_PRESS_MS = 500;
@@ -195,7 +196,10 @@ export function WorkspaceTopBar() {
       data-workspace-top-bar=""
     >
       <WorkspaceHistoryControls />
-      <T3ConnectProfileButton />
+      <div className="flex items-center gap-2">
+        <SyncStatusIndicator />
+        <T3ConnectProfileButton />
+      </div>
     </header>
   );
 }

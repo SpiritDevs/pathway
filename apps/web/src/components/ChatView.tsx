@@ -22,43 +22,46 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
-} from "@t3tools/client-runtime/connection";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
-import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+} from "@spiritdevs/client-runtime/connection";
+import { deriveThreadTitleSeed } from "@spiritdevs/client-runtime/operations";
+import {
+  effectiveSettled,
+  effectiveSnoozed,
+} from "@spiritdevs/client-runtime/state/thread-settled";
 import {
   deriveThreadActivityRun,
   deriveLatestThreadRun,
   deriveThreadRuntime,
-} from "@t3tools/client-runtime/state/thread-execution";
+} from "@spiritdevs/client-runtime/state/thread-execution";
 import {
   resolveActiveThreadRun,
   resolveLatestForkableRun,
   resolveThreadProviderSession,
-} from "@t3tools/client-runtime/state/thread-workflows";
-import { USAGE_LIMIT_RECOVERY_PROMPT } from "@t3tools/client-runtime/state/usage-limit-recovery";
-import { resolveThreadForkKind } from "@t3tools/client-runtime/state/thread-relationships";
+} from "@spiritdevs/client-runtime/state/thread-workflows";
+import { USAGE_LIMIT_RECOVERY_PROMPT } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
+import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Sidebar.logic";
-import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
+import { derivePendingThreadRequests } from "@spiritdevs/client-runtime/state/thread-requests";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+} from "@spiritdevs/client-runtime/environment";
 import {
   applyClaudePromptEffortPrefix,
   createModelSelection,
   resolvePromptInjectedEffort,
-} from "@t3tools/shared/model";
-import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
+} from "@spiritdevs/shared/model";
+import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { truncate } from "@t3tools/shared/String";
-import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
+import { truncate } from "@spiritdevs/shared/String";
+import { nextTerminalId, resolveTerminalSessionLabel } from "@spiritdevs/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -81,7 +84,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -295,7 +298,7 @@ import { AgentsPanel } from "./AgentsPanel";
 import {
   deriveAgentPanelModel,
   projectedSubagentsToRuntime,
-} from "@t3tools/client-runtime/state/subagentRuntime";
+} from "@spiritdevs/client-runtime/state/subagentRuntime";
 import { resolveEffectiveEnvMode, resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   getProviderStatusBannerKey,

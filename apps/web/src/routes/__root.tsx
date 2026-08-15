@@ -1,7 +1,7 @@
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { isOnboardingComplete, parseProfileMetadata } from "@t3tools/client-runtime/profile";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
+import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { isOnboardingComplete, parseProfileMetadata } from "@spiritdevs/client-runtime/profile";
+import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import { useAuth, useUser } from "@clerk/react";
 import {
   Outlet,

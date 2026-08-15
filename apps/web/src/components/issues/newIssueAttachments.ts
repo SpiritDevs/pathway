@@ -12,7 +12,7 @@ import {
   ISSUE_COMMENT_ATTACHMENT_MAX_DATA_URL_CHARS,
   ISSUE_COMMENT_MAX_ATTACHMENTS,
   type IssueComment,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export interface NewIssueAttachmentCandidate {
   readonly type: string;

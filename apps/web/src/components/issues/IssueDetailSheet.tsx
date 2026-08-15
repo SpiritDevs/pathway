@@ -11,8 +11,8 @@
  * @module components/issues/IssueDetailSheet
  */
 import { useAtomValue } from "@effect/atom-react";
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import type {
   ChatAttachmentId,
   Issue,
@@ -39,7 +39,7 @@ import type {
   ProviderDriverKind,
   ThreadId,
   UploadChatAttachment,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
@@ -65,7 +65,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { useAssetUrls } from "~/assets/assetUrls";
+import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -157,6 +157,7 @@ import { IssueDeleteMenu } from "./IssuePropertyMenus";
 import { IssueInvestigateProjectMenu } from "./IssueInvestigateProjectMenu";
 import { issueAttachmentIds } from "./issueCommentAttachments";
 import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
@@ -542,7 +543,8 @@ function IssueDetailBody({
     refreshEvents();
   }, [issue.pullRequest?.updatedAt, refreshEvents]);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
-  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id);
+  const attachmentCloud = useReplicaIssueAttachmentCloud();
+  const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id, attachmentCloud);
   const childRollup = useIssueChildRollup(issue.id);
   const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -649,15 +651,15 @@ function IssueDetailBody({
     () => issueStartWorkAttachmentIds(detail?.comments ?? EMPTY_COMMENTS),
     [detail?.comments],
   );
-  const startWorkAttachmentResources = useMemo(
-    () =>
-      startWorkAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [startWorkAttachmentIds],
+  const { attachments: startWorkAttachments } = useIssueAttachmentUrls({
+    attachmentIds: startWorkAttachmentIds,
+    cloud: attachmentCloud,
+    environmentId: primaryEnvironmentId,
+    issueId: issue.id,
+  });
+  const startWorkAttachmentUrls = startWorkAttachments.map((attachment) =>
+    attachment === null ? null : attachment.url,
   );
-  const startWorkAttachmentUrls = useAssetUrls(primaryEnvironmentId, startWorkAttachmentResources);
   const startWorkAttachmentsReady = startWorkAttachmentUrls.every((url) => url !== null);
 
   const openIssue = useCallback((target: Issue) => onOpenIssueKey(target.key), [onOpenIssueKey]);
@@ -1493,8 +1495,10 @@ function IssueDetailBody({
               />
 
               <IssueAttachments
+                cloud={attachmentCloud}
                 comments={comments}
                 drafts={attachmentDrafts}
+                issueId={issue.id}
                 onCreateComment={handleCreateComment}
                 onOpenImage={setViewedAttachmentId}
                 onRemoveAttachment={(commentId, attachmentId) => {
@@ -1599,6 +1603,7 @@ function IssueDetailBody({
               ) : activeTab === "comments" ? (
                 <div aria-labelledby="issue-comments-tab" id="issue-comments-panel" role="tabpanel">
                   <IssueComments
+                    cloud={attachmentCloud}
                     comments={discussionComments}
                     instanceEntries={providerInstanceEntries}
                     isPending={detailPending}
@@ -1762,10 +1767,13 @@ function IssueDetailBody({
           </div>
         </ScrollArea>
       </div>
-      {viewedAttachmentId === null || primaryEnvironmentId === null ? null : (
+      {viewedAttachmentId === null ||
+      (attachmentCloud === null && primaryEnvironmentId === null) ? null : (
         <IssueImageViewer
           attachmentIds={galleryAttachmentIds}
+          cloud={attachmentCloud}
           environmentId={primaryEnvironmentId}
+          issueId={issue.id}
           onClose={() => setViewedAttachmentId(null)}
           onComment={(body, attachmentId) => handleCreateComment(body, [attachmentId])}
           onStartThread={handleStartThreadWithImage}

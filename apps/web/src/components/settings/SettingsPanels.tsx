@@ -10,14 +10,14 @@ import {
   threadIsVisibleAt,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
-} from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
+} from "@spiritdevs/contracts";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import {
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import {
   DEFAULT_ACTIVE_TURN_SEND_MODE,
   DEFAULT_DEVELOPMENT_SERVER_PORT_RANGE,
@@ -39,9 +39,9 @@ import {
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_TERMINAL_FONT_SIZE,
-} from "@t3tools/contracts/settings";
-import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { createModelSelection } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts/settings";
+import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";

@@ -10,14 +10,14 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationV2DomainEvent,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   OrchestrationActorKind,
   OrchestrationAggregateKind,
   OrchestrationEvent,
   OrchestrationEventMetadata,
   OrchestrationEventType,
-} from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts/legacy-orchestration";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";

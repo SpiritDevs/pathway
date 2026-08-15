@@ -5,7 +5,7 @@ import type {
   IssueLabelId,
   IssuePriority,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export interface SubIssueDraft {
   readonly title: string;

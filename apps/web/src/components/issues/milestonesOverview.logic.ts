@@ -14,7 +14,7 @@ import type {
   IssueMilestoneStatus,
   IssueStatusCategory,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type { IssueProgress } from "~/state/issues";
 import { formatIssueDateRange, formatIssueDueDate } from "./issuesList.logic";

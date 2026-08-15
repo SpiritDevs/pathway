@@ -28,7 +28,7 @@ import {
   type EmailStreamEvent,
   type EmailWaitRegistration,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -101,7 +101,7 @@ export interface EmailCaptureServiceShape {
 export class EmailCaptureService extends Context.Service<
   EmailCaptureService,
   EmailCaptureServiceShape
->()("t3/email/EmailCaptureService") {}
+>()("@spiritdevs/pathway/email/EmailCaptureService") {}
 
 const captureError = (reason: EmailCaptureError["reason"], message: string) =>
   new EmailCaptureError({ reason, message });

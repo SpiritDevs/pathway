@@ -26,7 +26,9 @@ describe("browser takeover pill", () => {
   });
 
   it("spins while the takeover is still moving and holds still once it lands", () => {
-    expect(resolveBrowserTakeoverPill({ status: "requested", failure: null })?.kind).toBe("working");
+    expect(resolveBrowserTakeoverPill({ status: "requested", failure: null })?.kind).toBe(
+      "working",
+    );
     expect(resolveBrowserTakeoverPill({ status: "pausing", failure: null })?.kind).toBe("working");
     expect(resolveBrowserTakeoverPill({ status: "proceeding", failure: null })?.kind).toBe(
       "working",

@@ -10,10 +10,10 @@ import {
   RelayEnvironmentHealthResponseProofPayload,
   RelayEnvironmentMintResponse,
   RelayEnvironmentMintResponseProofPayload,
-} from "@t3tools/contracts/relay";
+} from "@spiritdevs/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
-import { RELAY_HEALTH_RESPONSE_TYP, RELAY_MINT_RESPONSE_TYP } from "@t3tools/shared/relayJwt";
+import { RELAY_HEALTH_RESPONSE_TYP, RELAY_MINT_RESPONSE_TYP } from "@spiritdevs/shared/relayJwt";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -68,7 +68,7 @@ const settings = RelayConfiguration.RelayConfiguration.of({
     teamId: "team-id",
     keyId: "key-id",
     privateKey: Redacted.make("private-key"),
-    bundleId: "com.t3tools.pathway.dev",
+    bundleId: "com.spiritdevs.pathway.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
@@ -646,7 +646,7 @@ describe("EnvironmentConnector", () => {
     );
   });
 
-  it.effect("mints a one-time environment credential through the linked endpoint", () => {
+  it.effect("keeps the existing no-grant mint flow unchanged", () => {
     const seenUrls: Array<string> = [];
     const seenProofs: Array<RelayCloudMintCredentialProofPayload> = [];
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
@@ -690,6 +690,103 @@ describe("EnvironmentConnector", () => {
       });
     }).pipe(Effect.provide(connectorTestLayer(execute)));
   });
+
+  it.effect("forwards accepted connect grant identity in the signed mint proof", () => {
+    let seenProof: RelayCloudMintCredentialProofPayload | undefined;
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        const mintRequest = decodeMintRequestBody(requestBodyText(request));
+        seenProof = decodeRequestProof(mintRequest.proof);
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(signMintResponse(mintRequest), { status: 200 }),
+        );
+      });
+
+    return Effect.gen(function* () {
+      const connector = yield* EnvironmentConnector.EnvironmentConnector;
+      yield* connector.connect({
+        userId: "user_123",
+        environmentId: "env-connector-test",
+        clientProofKeyThumbprint: "client-proof-key-thumbprint",
+        connectGrant: {
+          environmentId: "env-connector-test" as never,
+          membershipId: "membership-123" as never,
+          permission: "remoteAgents.control",
+        },
+      });
+
+      expect(seenProof?.connectGrant).toEqual({
+        environmentId: "env-connector-test",
+        membershipId: "membership-123",
+        permission: "remoteAgents.control",
+      });
+    }).pipe(Effect.provide(connectorTestLayer(execute)));
+  });
+
+  it.effect(
+    "forwards the initiating environment and grant through an existing counted allocation",
+    () => {
+      let seenProof: RelayCloudMintCredentialProofPayload | undefined;
+      const allocationLookups: Array<{ readonly userId: string; readonly environmentId: string }> =
+        [];
+      const allocations = makeAllocations();
+      const links = makeLinks();
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.sync(() => {
+          const mintRequest = decodeMintRequestBody(requestBodyText(request));
+          seenProof = decodeRequestProof(mintRequest.proof);
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json(signMintResponse(mintRequest), { status: 200 }),
+          );
+        });
+
+      return Effect.gen(function* () {
+        const connector = yield* EnvironmentConnector.EnvironmentConnector;
+        yield* connector.connect({
+          initiatingEnvironmentId: "env-initiator" as never,
+          environmentId: "env-connector-test",
+          clientProofKeyThumbprint: "client-proof-key-thumbprint",
+          connectGrant: {
+            environmentId: "env-connector-test" as never,
+            membershipId: "membership-123" as never,
+            permission: "remoteAgents.control",
+          },
+        });
+
+        expect(allocationLookups).toEqual([
+          { userId: "link-owner-user", environmentId: "env-connector-test" },
+        ]);
+        expect(seenProof).toMatchObject({
+          sub: "env-initiator",
+          initiatingEnvironmentId: "env-initiator",
+          environmentId: "env-connector-test",
+          connectGrant: {
+            environmentId: "env-connector-test",
+            membershipId: "membership-123",
+            permission: "remoteAgents.control",
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          connectorTestLayer(execute, {
+            links: {
+              ...links,
+              listUsersForEnvironment: () => Effect.succeed(["link-owner-user"]),
+            },
+            allocations: {
+              ...allocations,
+              get: (input) =>
+                Effect.sync(() => {
+                  allocationLookups.push(input);
+                }).pipe(Effect.andThen(allocations.get(input))),
+            },
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("only accepts mint responses signed by the user's linked environment key", () => {
     const execute = (request: HttpClientRequest.HttpClientRequest) =>

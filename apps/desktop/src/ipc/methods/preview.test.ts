@@ -1,5 +1,5 @@
 import { it as effectIt } from "@effect/vitest";
-import { PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES } from "@t3tools/contracts";
+import { PREVIEW_AUTOMATION_RECORDING_CHUNK_MAX_BYTES } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";

@@ -356,11 +356,10 @@ flowchart LR
   subgraph Relay["Pathway Relay on Cloudflare"]
     Worker["Relay Worker<br/>HTTP API"]
     Queue["APNs delivery queue<br/>with dead-letter queue"]
-    Hyperdrive["Hyperdrive"]
     CF["Cloudflare tunnel + DNS APIs"]
   end
 
-  DB["PlanetScale Postgres<br/>prod database + stage branches"]
+  DB["Convex<br/>relay operational state"]
   APNs["Apple Push Notification service"]
   Traces["Axiom OTLP traces"]
 
@@ -378,7 +377,7 @@ flowchart LR
   Web --> Clerk
   Mobile --> Clerk
   CLI -->|"PKCE authorization code flow"| Clerk
-  Worker --> Hyperdrive --> DB
+  Worker -->|"ES256 relay-control-plane JWT"| DB
   Worker --> Traces
   Worker --> CF
   Worker --> Queue --> APNs
@@ -492,7 +491,7 @@ flowchart LR
             <tr>
               <td>Relay environment bearer credential</td>
               <td>Relay</td>
-              <td>Hashed in relay Postgres; plaintext in local server secret store</td>
+              <td>Hashed in Convex; plaintext in local server secret store</td>
               <td>Authenticate environment-to-relay agent-activity publication.</td>
             </tr>
             <tr>
@@ -585,13 +584,13 @@ sequenceDiagram
           <pre class="diagram mermaid">
 sequenceDiagram
   participant U as Operator
-  participant CLI as t3 connect CLI
+  participant CLI as pathway connect CLI
   participant Clerk as Clerk OAuth
   participant S as Environment server on next start
   participant R as Relay Worker
   participant RC as Local relay client
 
-  U->>CLI: t3 connect link
+  U->>CLI: pathway connect link
   CLI->>CLI: Resolve relay client
   alt relay client is missing
     CLI->>U: Confirm managed relay-client install
@@ -607,9 +606,9 @@ sequenceDiagram
   S->>RC: Start relay client
           </pre>
           <p>
-            <code>t3 connect login</code> stores authorization without enabling exposure.
-            <code>t3 connect unlink</code> disables exposure while retaining authorization.
-            <code>t3 connect logout</code> also removes the stored CLI authorization.
+            <code>pathway connect login</code> stores authorization without enabling exposure.
+            <code>pathway connect unlink</code> disables exposure while retaining authorization.
+            <code>pathway connect logout</code> also removes the stored CLI authorization.
           </p>
         </article>
 
@@ -650,7 +649,7 @@ sequenceDiagram
 sequenceDiagram
   participant E as Local environment
   participant R as Relay Worker
-  participant DB as Relay Postgres
+  participant DB as Convex
   participant Q as APNs queue
   participant APNs as Apple Push Notification service
   participant M as Mobile app
@@ -677,7 +676,7 @@ sequenceDiagram
           <p>
             Managed endpoint resources are keyed by <code>(userId, environmentId)</code>. The relay
             reserves a stable hostname and tunnel name before provisioning, then checkpoints the
-            tunnel ID, DNS record ID, and ready state in Postgres.
+            tunnel ID, DNS record ID, and ready state in Convex.
           </p>
           <div class="flow">
             <div class="step">
@@ -794,7 +793,7 @@ sequenceDiagram
             <tr>
               <td>A stored endpoint is replaced with an arbitrary external URL.</td>
               <td>
-                Connect and status resolve a ready allocation from Postgres and require a hostname
+                Connect and status resolve a ready allocation from Convex and require a hostname
                 under the configured managed endpoint zone.
               </td>
             </tr>
@@ -1010,12 +1009,13 @@ sequenceDiagram
           <h2>Relay Infrastructure</h2>
           <ul>
             <li>Cloudflare Worker for the hosted relay HTTP API.</li>
-            <li>PlanetScale Postgres database named <code>pathwayrelay</code>.</li>
             <li>
-              Production uses the shared database; non-production stages use database branches.
+              Convex stores relay links, credentials, allocations, replay proofs, and notification
+              state.
             </li>
             <li>
-              Cloudflare Hyperdrive with caching disabled and a constrained origin connection limit.
+              The Worker authenticates with a short-lived ES256 relay-control-plane JWT; no Convex
+              deploy key is installed at runtime.
             </li>
             <li>Cloudflare tunnel and DNS bindings for managed endpoint reconciliation.</li>
             <li>Cloudflare APNs delivery queue plus dead-letter queue.</li>

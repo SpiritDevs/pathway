@@ -6,7 +6,7 @@ import {
   type OrchestrationV2ThreadProjection,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";

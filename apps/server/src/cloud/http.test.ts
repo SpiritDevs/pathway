@@ -1,6 +1,8 @@
+import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -13,9 +15,19 @@ import {
   HttpServerRequest,
   type HttpClientRequest,
 } from "effect/unstable/http";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { EnvironmentId } from "@t3tools/contracts";
-import { RelayClientTracer } from "@t3tools/shared/relayTracing";
+import { EnvironmentId } from "@spiritdevs/contracts";
+import type {
+  RelayCloudMintCredentialProofPayload,
+  RelayValidatedConnectGrantIdentity,
+} from "@spiritdevs/contracts/relay";
+import { RelayClientTracer } from "@spiritdevs/shared/relayTracing";
+import {
+  normalizeRelayIssuer,
+  RELAY_MINT_REQUEST_TYP,
+  signRelayJwt,
+} from "@spiritdevs/shared/relayJwt";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfigModule from "../config.ts";
@@ -29,9 +41,17 @@ import {
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { CLOUD_CLI_DESIRED_LINK_SECRET } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
-import type { RelayLinkProofRequest } from "@t3tools/contracts/relay";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG, RELAY_URL_SECRET } from "./config.ts";
+import type { RelayLinkProofRequest } from "@spiritdevs/contracts/relay";
 import {
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINKED_USER_ID,
+  CLOUD_MINT_PUBLIC_KEY,
+  RELAY_ISSUER_SECRET,
+  RELAY_URL_SECRET,
+} from "./config.ts";
+import {
+  type CloudHttpDependencies,
+  cloudMintCredentialHandler,
   consumeCloudReplayGuards,
   isSupportedLinkProviderKind,
   linkProofScopes,
@@ -120,6 +140,207 @@ describe("consumeCloudReplayGuards", () => {
   );
 });
 
+describe("cloud mint credential handler", () => {
+  const TARGET_ENVIRONMENT_ID = EnvironmentId.make("environment-target");
+  const INITIATING_ENVIRONMENT_ID = EnvironmentId.make("environment-initiating");
+  const RELAY_ISSUER = "https://relay.example.test";
+  const LINKED_CLOUD_USER_ID = "cloud-user-linked";
+  const ACTING_CLOUD_USER_ID = "cloud-user-acting";
+  const relayKeys = NodeCrypto.generateKeyPairSync("ed25519", {
+    privateKeyEncoding: { format: "pem", type: "pkcs8" },
+    publicKeyEncoding: { format: "pem", type: "spki" },
+  });
+  const connectGrant: RelayValidatedConnectGrantIdentity = {
+    environmentId: TARGET_ENVIRONMENT_ID,
+    membershipId: "membership-acting" as never,
+    permission: "remoteAgents.control",
+  };
+
+  interface MintHarnessOptions {
+    readonly environmentSubject?: boolean;
+    readonly includeConnectGrant?: boolean;
+    readonly resolvedActor?: string | null;
+  }
+
+  const makeMintHarness = Effect.fn("CloudHttpTest.makeMintHarness")(function* (
+    options: MintHarnessOptions = {},
+  ) {
+    const encoded = (value: string) => new TextEncoder().encode(value);
+    const secrets = new Map<string, Uint8Array>([
+      [CLOUD_MINT_PUBLIC_KEY, encoded(relayKeys.publicKey)],
+      [RELAY_ISSUER_SECRET, encoded(RELAY_ISSUER)],
+      [CLOUD_LINKED_USER_ID, encoded(LINKED_CLOUD_USER_ID)],
+    ]);
+    const secretReads: string[] = [];
+    const secretCreates: string[] = [];
+    const secretStore: ServerSecretStore.ServerSecretStore["Service"] = {
+      get: (name) =>
+        Effect.sync(() => {
+          secretReads.push(name);
+          return Option.fromUndefinedOr(secrets.get(name));
+        }),
+      set: (name, value) =>
+        Effect.sync(() => {
+          secrets.set(name, value);
+        }),
+      create: (name, value) =>
+        Effect.sync(() => {
+          secretCreates.push(name);
+          secrets.set(name, value);
+        }),
+      getOrCreateRandom: unusedSecretStoreOperation,
+      remove: (name) =>
+        Effect.sync(() => {
+          secrets.delete(name);
+        }),
+    };
+    const pairingInputs: Array<
+      NonNullable<Parameters<EnvironmentAuth.EnvironmentAuth["Service"]["createPairingLink"]>[0]>
+    > = [];
+    const environmentAuth = EnvironmentAuth.EnvironmentAuth.of({
+      createPairingLink: (
+        input: Parameters<EnvironmentAuth.EnvironmentAuth["Service"]["createPairingLink"]>[0],
+      ) =>
+        Effect.gen(function* () {
+          pairingInputs.push(input ?? {});
+          const createdAt = DateTime.toUtc(yield* DateTime.now);
+          return {
+            id: "pairing-link-id",
+            credential: "target-bootstrap-credential",
+            scopes: input?.scopes ?? [],
+            subject: input?.subject ?? "one-time-token",
+            ...(input?.initiatingEnvironmentId
+              ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+              : {}),
+            ...(input?.label ? { label: input.label } : {}),
+            createdAt,
+            expiresAt: DateTime.toUtc(DateTime.add(createdAt, { minutes: 2 })),
+          };
+        }),
+    } as unknown as EnvironmentAuth.EnvironmentAuth["Service"]);
+    const dependencies: CloudHttpDependencies = {
+      secrets: secretStore,
+      environment: ServerEnvironment.ServerEnvironment.of({
+        getEnvironmentId: Effect.succeed(TARGET_ENVIRONMENT_ID),
+        getDescriptor: Effect.die("unused environment descriptor"),
+      }),
+      endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of(
+        {} as ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"],
+      ),
+      environmentAuth,
+      cliTokenManager: CliTokenManager.CloudCliTokenManager.of(
+        {} as CliTokenManager.CloudCliTokenManager["Service"],
+      ),
+      httpClient: HttpClient.make(() => Effect.die("unused HTTP client")),
+      authorizeConnectGrant: () => Effect.succeed(true),
+      resolveConnectGrantActor: () =>
+        Effect.succeed(
+          options.resolvedActor === undefined ? ACTING_CLOUD_USER_ID : options.resolvedActor,
+        ),
+    };
+    const now = yield* DateTime.now;
+    const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
+    const environmentSubject = options.environmentSubject === true;
+    const includeConnectGrant = options.includeConnectGrant !== false;
+    const payload = {
+      iss: normalizeRelayIssuer(RELAY_ISSUER),
+      aud: `t3-env:${TARGET_ENVIRONMENT_ID}`,
+      sub: environmentSubject ? INITIATING_ENVIRONMENT_ID : LINKED_CLOUD_USER_ID,
+      jti: "mint-proof-jti",
+      iat: nowSeconds,
+      exp: nowSeconds + 120,
+      environmentId: TARGET_ENVIRONMENT_ID,
+      ...(environmentSubject ? { initiatingEnvironmentId: INITIATING_ENVIRONMENT_ID } : {}),
+      clientProofKeyThumbprint: "client-proof-thumbprint",
+      cnf: { jkt: "client-proof-thumbprint" },
+      ...(includeConnectGrant ? { connectGrant } : {}),
+      nonce: "mint-proof-nonce",
+      scope: ["environment:connect"],
+    } satisfies RelayCloudMintCredentialProofPayload;
+    const proof = yield* signRelayJwt({
+      privateKey: relayKeys.privateKey,
+      typ: RELAY_MINT_REQUEST_TYP,
+      payload,
+    });
+    const request = HttpServerRequest.fromWeb(
+      new Request("https://target.example.test/api/t3-cloud/mint-credential"),
+    );
+    const run = cloudMintCredentialHandler(dependencies, { proof }).pipe(
+      Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      Effect.provideService(
+        SqlClient.SqlClient,
+        SqlClient.SqlClient.of({} as Parameters<typeof SqlClient.SqlClient.of>[0]),
+      ),
+      Effect.provide(NodeServices.layer),
+    );
+
+    return { run, pairingInputs, secretReads, secretCreates };
+  });
+
+  it.effect("mints an environment-subject credential for the replica-resolved user", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeMintHarness({ environmentSubject: true });
+      const result = yield* harness.run;
+
+      expect(result.credential).toBe("target-bootstrap-credential");
+      expect(harness.pairingInputs).toHaveLength(1);
+      expect(harness.pairingInputs[0]).toMatchObject({
+        subject: ACTING_CLOUD_USER_ID,
+        initiatingEnvironmentId: INITIATING_ENVIRONMENT_ID,
+      });
+      expect(harness.secretReads).not.toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect(
+    "refuses an environment subject without grant identity before consuming replay guards",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeMintHarness({
+          environmentSubject: true,
+          includeConnectGrant: false,
+        });
+        const error = yield* Effect.flip(harness.run);
+
+        expect(error).toMatchObject({
+          _tag: "EnvironmentHttpUnauthorizedError",
+          message: "Invalid cloud mint request.",
+        });
+        expect(harness.pairingInputs).toEqual([]);
+        expect(harness.secretCreates).toEqual([]);
+      }),
+  );
+
+  it.effect("refuses an environment subject whose grant user is absent from the replica", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeMintHarness({
+        environmentSubject: true,
+        resolvedActor: null,
+      });
+      const error = yield* Effect.flip(harness.run);
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentHttpUnauthorizedError",
+        message: "Invalid cloud mint request.",
+      });
+      expect(harness.pairingInputs).toEqual([]);
+      expect(harness.secretCreates).toEqual([]);
+    }),
+  );
+
+  it.effect("keeps user-subject credential identity unchanged", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeMintHarness();
+      yield* harness.run;
+
+      expect(harness.pairingInputs).toHaveLength(1);
+      expect(harness.pairingInputs[0]?.subject).toBe("cloud-connect");
+      expect(harness.pairingInputs[0]?.initiatingEnvironmentId).toBeUndefined();
+      expect(harness.secretReads).toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+});
+
 describe("relay request tracing", () => {
   it.effect("does not accept an unauthenticated request trace parent", () =>
     Effect.gen(function* () {
@@ -191,7 +412,7 @@ describe("reconcileDesiredCloudLink", () => {
 
       expect(error).toMatchObject({
         _tag: "EnvironmentHttpUnauthorizedError",
-        message: "Run `t3 connect link` to authorize this environment.",
+        message: "Run `pathway connect link` to authorize this environment.",
       });
     }).pipe(
       Effect.provideService(
@@ -455,7 +676,7 @@ describe("releaseManagedTunnelOnShutdown", () => {
   });
 
   it.effect("still releases a pending update when the launcher is stopping", () => {
-    // `t3 service uninstall` or `systemctl stop` during the pending window:
+    // `pathway service uninstall` or `systemctl stop` during the pending window:
     // the launcher writes its stop marker before signalling the child, so no
     // replacement server is coming and the tunnel must not be kept.
     const { store, values } = makeMemorySecretStore(managedLinkSecrets);

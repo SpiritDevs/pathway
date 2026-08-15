@@ -11,7 +11,7 @@
  *
  * @module components/issues/TriageAcceptDialog
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   Issue,
   IssueAssignee,
@@ -19,7 +19,7 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { CircleDotIcon, FolderIcon, PlayIcon, SignalHighIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
@@ -51,6 +51,7 @@ import {
   IssueStatusMenu,
 } from "./IssuePropertyMenus";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS } from "./issueEnrichment.logic";
+import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
 import {
@@ -89,6 +90,7 @@ export function TriageAcceptDialog({
   const acceptTriage = useTriageAccept();
   const investigatedIssueIds = useInvestigatedIssueIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const memberDirectory = useIssueMemberDirectory();
   const [draft, setDraft] = useState<TriageAcceptDraft>({
     statusId: null,
     projectId: null,
@@ -161,12 +163,10 @@ export function TriageAcceptDialog({
   const selectedStatus = statuses.find((status) => status.id === draft.statusId) ?? null;
   const selectedProject = projects.find((project) => project.id === draft.projectId) ?? null;
   const selectedAssigneeLabel =
-    draft.assignee === null
-      ? "Unassigned"
-      : draft.assignee.kind === "user"
-        ? "You"
-        : (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
-          draft.assignee.provider);
+    draft.assignee?.kind === "agent"
+      ? (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
+        draft.assignee.provider)
+      : issueAssigneeDisplayName(memberDirectory, draft.assignee);
   const alreadyInvestigated =
     singleIssue !== null && issueHasCompletedInvestigation(singleIssue, enrichmentRuns);
   const submitting = submittingAction !== null;
@@ -289,7 +289,11 @@ export function TriageAcceptDialog({
                 onSelect={(assignee: IssueAssignee | null) => patch({ assignee })}
                 trigger={
                   <button className={PICKER_CLASS} disabled={submitting} type="button">
-                    <IssueAssigneeGlyph assignee={draft.assignee} className="size-3.5" />
+                    <IssueAssigneeGlyph
+                      assignee={draft.assignee}
+                      className="size-3.5"
+                      label={selectedAssigneeLabel}
+                    />
                     <span
                       className={cn("truncate", draft.assignee === null && "text-muted-foreground")}
                     >

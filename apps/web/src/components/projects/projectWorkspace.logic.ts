@@ -23,8 +23,8 @@ import {
   isExplicitRelativeProjectPath,
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
-} from "@t3tools/client-runtime/state/projects";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/projects";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 
 // ── Ensuring a workspace root ──────────────────────────────────────────
 
@@ -64,7 +64,7 @@ export function ensureProjectWorkspaceDecision(
 
 /**
  * The directory a command should run in: the worktree when there is one, else the project root,
- * else nothing. This is `projectScriptCwd` widened to a nullable root — `@t3tools/shared` keeps the
+ * else nothing. This is `projectScriptCwd` widened to a nullable root — `@spiritdevs/shared` keeps the
  * strict signature because the server only ever calls it with a rooted project.
  */
 export function projectWorkspaceCwd(input: {

@@ -1,11 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useMemo, useState } from "react";
 
-import { type ProviderApprovalDecision, type RuntimeRequestId } from "@t3tools/contracts";
+import { type ProviderApprovalDecision, type RuntimeRequestId } from "@spiritdevs/contracts";
 import {
   derivePendingThreadRequests,
   type ThreadUserInputQuestion,
-} from "@t3tools/client-runtime/state/thread-requests";
+} from "@spiritdevs/client-runtime/state/thread-requests";
 import { Atom } from "effect/unstable/reactivity";
 
 import { threadEnvironment } from "../state/threads";

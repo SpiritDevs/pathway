@@ -1,11 +1,21 @@
 import { useAuth, useClerk, useUser } from "@clerk/react";
-import { GaugeIcon, LogInIcon, LogOutIcon, SmartphoneIcon, UserRoundIcon } from "lucide-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
+import {
+  Building2Icon,
+  GaugeIcon,
+  LogInIcon,
+  LogOutIcon,
+  SmartphoneIcon,
+  UserRoundIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import { activeCompanyIdAtom, companyListAtom } from "../../cloud/activeCompany";
 import { hasClerkPublicConfig, hasCloudPublicConfig } from "../../cloud/publicConfig";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -59,6 +69,8 @@ export function T3ConnectProfileButton() {
 function ConfiguredT3ConnectProfileButton() {
   const { openUserProfile, signOut } = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
+  const companies = useAtomValue(companyListAtom);
+  const [activeCompanyId, setActiveCompanyId] = useAtom(activeCompanyIdAtom);
 
   if (!isLoaded || !isSignedIn || !user) return null;
 
@@ -96,6 +108,27 @@ function ConfiguredT3ConnectProfileButton() {
           </div>
         </div>
         <DropdownMenuSeparator />
+        {companies.length > 0 ? (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Building2Icon />
+              <span>Company</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {companies.map((company) => (
+                <DropdownMenuCheckboxItem
+                  checked={company.id === activeCompanyId}
+                  key={company.id}
+                  onCheckedChange={(checked) => {
+                    if (checked) setActiveCompanyId(company.id);
+                  }}
+                >
+                  {company.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        ) : null}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <GaugeIcon />

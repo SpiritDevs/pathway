@@ -4,8 +4,8 @@ import {
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
-} from "@t3tools/contracts";
-import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime/rpc";
+} from "@spiritdevs/contracts";
+import { makeEnvironmentHttpApiClient } from "@spiritdevs/client-runtime/rpc";
 import {
   RelayCloudEnvironmentHealthProofPayload,
   RelayEnvironmentHealthResponse,
@@ -16,7 +16,8 @@ import {
   RelayEnvironmentConnectNotAuthorizedReason,
   type RelayEnvironmentConnectResponse,
   type RelayEnvironmentStatusResponse,
-} from "@t3tools/contracts/relay";
+  type RelayValidatedConnectGrantIdentity,
+} from "@spiritdevs/contracts/relay";
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
@@ -25,8 +26,8 @@ import {
   RELAY_MINT_RESPONSE_TYP,
   signRelayJwt,
   verifyRelayJwt,
-} from "@t3tools/shared/relayJwt";
-import { stableStringify } from "@t3tools/shared/relaySigning";
+} from "@spiritdevs/shared/relayJwt";
+import { stableStringify } from "@spiritdevs/shared/relaySigning";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -51,6 +52,8 @@ function environmentConnectNotAuthorizedReasonMessage(
   switch (reason) {
     case "client_proof_key_thumbprint_missing":
       return "the client proof key thumbprint is missing";
+    case "connect_grant_refused":
+      return "the presented connect grant was refused";
     case "environment_link_not_found":
       return "no active environment link was found";
     case "endpoint_provider_not_managed":
@@ -65,6 +68,8 @@ function environmentConnectNotAuthorizedReasonMessage(
       return "the managed endpoint hostname is invalid";
     case "managed_endpoint_mismatch":
       return "the linked endpoint does not match its managed allocation";
+    case "self_connect_refused":
+      return "an environment cannot connect to itself";
   }
 }
 
@@ -123,21 +128,33 @@ export type EnvironmentConnectorError =
   | EnvironmentMintRequestFailed
   | EnvironmentMintRequestTimedOut
   | EnvironmentMintResponseInvalid
+  | EnvironmentLinks.EnvironmentLinkUserListPersistenceError
   | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError;
 
 export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 10_000;
 const ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS = 60 * 1_000;
 
+type EnvironmentConnectIdentity =
+  | { readonly userId: string; readonly initiatingEnvironmentId?: never }
+  | {
+      readonly userId?: never;
+      readonly initiatingEnvironmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    };
+
+type EnvironmentConnectInput = EnvironmentConnectIdentity & {
+  readonly environmentId: string;
+  readonly clientProofKeyThumbprint: string;
+  readonly deviceId?: string;
+  readonly connectGrant?: RelayValidatedConnectGrantIdentity;
+};
+
 export class EnvironmentConnector extends Context.Service<
   EnvironmentConnector,
   {
-    readonly connect: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-      readonly clientProofKeyThumbprint: string;
-      readonly deviceId?: string;
-    }) => Effect.Effect<RelayEnvironmentConnectResponse, EnvironmentConnectorError>;
+    readonly connect: (
+      input: EnvironmentConnectInput,
+    ) => Effect.Effect<RelayEnvironmentConnectResponse, EnvironmentConnectorError>;
     readonly status: (input: {
       readonly userId: string;
       readonly environmentId: string;
@@ -391,6 +408,73 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const resolveConnectTarget = Effect.fn("relay.environment_connector.resolve_connect_target")(
+    function* (
+      input: {
+        readonly environmentId: string;
+      } & EnvironmentConnectIdentity,
+    ) {
+      if (input.userId !== undefined) {
+        return yield* Effect.all(
+          {
+            link: links.getForUser({ userId: input.userId, environmentId: input.environmentId }),
+            allocation: allocations.get({
+              userId: input.userId,
+              environmentId: input.environmentId,
+            }),
+          },
+          { concurrency: 2 },
+        );
+      }
+      const allocationOwners = [
+        ...(yield* links.listUsersForEnvironment({ environmentId: input.environmentId })),
+      ].sort();
+      const candidates = yield* Effect.forEach(
+        allocationOwners,
+        (userId) =>
+          Effect.all(
+            {
+              link: links.getForUser({ userId, environmentId: input.environmentId }),
+              allocation: allocations.get({ userId, environmentId: input.environmentId }),
+            },
+            { concurrency: 2 },
+          ),
+        { concurrency: 4 },
+      );
+      const linked = candidates.filter(
+        (
+          candidate,
+        ): candidate is typeof candidate & { readonly link: NonNullable<typeof candidate.link> } =>
+          candidate.link !== null,
+      );
+      if (linked.length === 0) {
+        return { link: null, allocation: null };
+      }
+      const allocated = linked.filter(
+        (
+          candidate,
+        ): candidate is typeof candidate & {
+          readonly allocation: NonNullable<typeof candidate.allocation>;
+        } => candidate.allocation !== null,
+      );
+      const ready = allocated.find((candidate) => {
+        const endpoint = ManagedEndpointAllocations.resolveReadyManagedEndpoint({
+          allocation: candidate.allocation,
+          baseDomain: settings.managedEndpointBaseDomain,
+        });
+        return (
+          endpoint?.httpBaseUrl === candidate.link.endpoint.httpBaseUrl &&
+          endpoint.wsBaseUrl === candidate.link.endpoint.wsBaseUrl
+        );
+      });
+      // An environment-initiated connect reuses an already-provisioned target
+      // allocation. That allocation remains counted under the link owner who
+      // reserved it; this path neither creates an uncounted tunnel nor accepts
+      // a target that has no managed allocation.
+      return ready ?? allocated[0] ?? linked[0]!;
+    },
+  );
+
   return EnvironmentConnector.of({
     status: Effect.fn("relay.environment_connector.status")(function* (input) {
       yield* Effect.annotateCurrentSpan({
@@ -552,13 +636,7 @@ const make = Effect.gen(function* () {
           reason: "client_proof_key_thumbprint_missing",
         });
       }
-      const { link, allocation } = yield* Effect.all(
-        {
-          link: links.getForUser(input),
-          allocation: allocations.get(input),
-        },
-        { concurrency: 2 },
-      );
+      const { link, allocation } = yield* resolveConnectTarget(input);
       if (!link) {
         return yield* new EnvironmentConnectNotAuthorized({
           environmentId: input.environmentId,
@@ -586,7 +664,7 @@ const make = Effect.gen(function* () {
       const payload = {
         iss: relayIssuer,
         aud: `t3-env:${link.environmentId}`,
-        sub: input.userId,
+        sub: input.initiatingEnvironmentId ?? input.userId,
         jti: yield* crypto.randomUUIDv4.pipe(
           Effect.mapError(
             (cause) =>
@@ -600,9 +678,13 @@ const make = Effect.gen(function* () {
         iat: Math.floor(now.epochMilliseconds / 1_000),
         exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
         environmentId: link.environmentId,
+        ...(input.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+          : {}),
         clientProofKeyThumbprint: input.clientProofKeyThumbprint,
         cnf: { jkt: input.clientProofKeyThumbprint },
         ...(input.deviceId ? { deviceId: input.deviceId } : {}),
+        ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
         nonce,
         scope: ["environment:connect"],
       } satisfies RelayCloudMintCredentialProofPayload;

@@ -2,7 +2,7 @@ import type {
   ModelSelection,
   ProviderInstanceId,
   ResolvedKeybindingsConfig,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { GitForkIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderInstanceEntry } from "../../providerInstances";

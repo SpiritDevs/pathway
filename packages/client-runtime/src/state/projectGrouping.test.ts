@@ -1,4 +1,4 @@
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "./models.ts";
@@ -17,7 +17,7 @@ const repositoryIdentity = {
     remoteUrl: "https://github.com/coreybain/pathway.git",
   },
   provider: "github",
-  owner: "t3tools",
+  owner: "spiritdevs",
   name: "pathway",
   displayName: "Pathway",
 };
@@ -165,7 +165,7 @@ describe("buildProjectGroups", () => {
   it("uses the freshest winner's repository identity when stale duplicates disagree", () => {
     const staleIdentity = {
       ...repositoryIdentity,
-      canonicalKey: "github.com/t3tools/old-repository",
+      canonicalKey: "github.com/spiritdevs/old-repository",
       name: "old-repository",
       displayName: "Old Repository",
     };
@@ -189,7 +189,7 @@ describe("buildProjectGroups", () => {
   it("uses the freshest identity-bearing duplicate when the winner lacks identity", () => {
     const staleIdentity = {
       ...repositoryIdentity,
-      canonicalKey: "github.com/t3tools/old-repository",
+      canonicalKey: "github.com/spiritdevs/old-repository",
       name: "old-repository",
       displayName: "Old Repository",
     };

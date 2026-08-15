@@ -24,7 +24,7 @@ This document covers the unified release workflow for stable and nightly desktop
   - Nightly runs are always GitHub prereleases and never marked latest.
   - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
 - Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing from the same workflow file:
+- Publishes the CLI package (`apps/server`, npm package `@spiritdevs/pathway`) with OIDC trusted publishing from the same workflow file:
   - stable releases publish npm dist-tag `latest`
   - nightly releases publish npm dist-tag `nightly`
 - Deploys the hosted web app to Vercel only after a release is published:
@@ -57,24 +57,26 @@ GitHub Actions environment before building desktop, CLI, or hosted web artifacts
 Required repository variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
 
 Required repository secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
 - `AXIOM_TOKEN`
 
 Required `production` environment variables:
 
 - `RELAY_API_ZONE_NAME`
 - `RELAY_TUNNEL_ZONE_NAME`
+- `CONVEX_URL`
 - `CLERK_PUBLISHABLE_KEY`
 - `CLERK_JWT_AUDIENCE`
 - `CLERK_JWT_TEMPLATE`
 - `CLERK_CLI_OAUTH_CLIENT_ID`
+- `APNS_ENABLED`
+
+Required only when `APNS_ENABLED=true`:
+
 - `APNS_ENVIRONMENT`
 - `APNS_TEAM_ID`
 - `APNS_KEY_ID`
@@ -87,19 +89,33 @@ Optional `production` environment variables:
 Required `production` environment secrets:
 
 - `CLERK_SECRET_KEY`
+
+Required only when `APNS_ENABLED=true`:
+
 - `APNS_PRIVATE_KEY`
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The `prod` stage owns the retained PlanetScale
-database. Local personal stages provision isolated branches from it and are never deployed by CI.
-Production adopts the configured relay API and tunnel DNS zones as retained Cloudflare resources.
-Personal stages reference the production-owned zones.
+The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages;
+they are not bound into the relay Worker. The production deployment uses an Axiom personal access
+token, so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. Relay operational state lives in the Convex
+deployment named by `CONVEX_URL`; the Worker authenticates with its Alchemy-managed ES256 service
+key rather than a Convex deploy key. Production adopts the configured relay API and tunnel DNS
+zones as retained Cloudflare resources. Personal stages reference the production-owned zones.
+
+For the current production infrastructure, configure both zone variables as `spiritdevs.com`. The
+derived production relay is `https://relay.spiritdevs.com`; `RELAY_DOMAIN` should remain unset unless
+the derived hostname needs to be overridden.
+
+When provisioning a new Convex/relay pair, create the Convex deployment and set its Clerk issuer,
+then deploy the relay with that deployment's `CONVEX_URL`. Verify the relay's
+`/.well-known/jwks.json`, set both `PATHWAY_RELAY_JWT_ISSUER` and `PATHWAY_RELAY_JWKS_URL` in Convex,
+and deploy the functions. The JWKS route does not depend on Convex persistence, so the Worker can
+safely come first; normal relay requests become healthy after the function deployment. Convex
+statically requires both relay variables before codegen or deployment.
 
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter pathway-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter pathway-relay deploy --stage "$USER" --env-file .env.local
 ```
 
 ## Hosted web app release deployment
@@ -118,20 +134,20 @@ Required GitHub Actions secrets:
 Optional GitHub Actions variables:
 
 - `VERCEL_TEAM_SLUG`: overrides the Vercel CLI scope when the team slug is preferred over the `VERCEL_ORG_ID` secret.
-- `PATHWAY_WEB_ROUTER_URL`: defaults to `https://app.t3.codes`.
-- `PATHWAY_WEB_LATEST_DOMAIN`: defaults to `latest.app.t3.codes`.
-- `PATHWAY_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.t3.codes`.
+- `PATHWAY_WEB_ROUTER_URL`: defaults to `https://app.spiritdevs.com`.
+- `PATHWAY_WEB_LATEST_DOMAIN`: defaults to `latest.app.spiritdevs.com`.
+- `PATHWAY_WEB_NIGHTLY_DOMAIN`: defaults to `nightly.app.spiritdevs.com`.
 
 Required Vercel domains:
 
-- `app.t3.codes`: the router domain users open, updated by stable releases.
-- `latest.app.t3.codes`: channel alias updated by stable releases.
-- `nightly.app.t3.codes`: channel alias updated by nightly releases.
+- `app.spiritdevs.com`: the router domain users open, updated by stable releases.
+- `latest.app.spiritdevs.com`: channel alias updated by stable releases.
+- `nightly.app.spiritdevs.com`: channel alias updated by nightly releases.
 
 The router domain uses `apps/web/vercel.ts` routes. Users opt into a channel by
 visiting `/__pathway/channel?channel=latest` or
 `/__pathway/channel?channel=nightly`; the router stores the
-`pathway_web_channel` cookie and rewrites future requests on `app.t3.codes` to
+`pathway_web_channel` cookie and rewrites future requests on `app.spiritdevs.com` to
 the matching channel alias.
 
 The release deploy job rewrites release package versions before upload so the
@@ -151,7 +167,7 @@ One-time Vercel dashboard setup:
    `vercel.ts` setting is the source-of-truth, but disconnecting Git in the
    dashboard is also safe.
 4. Run one stable release deployment, or manually alias the current stable
-   deployment, so `app.t3.codes` points at a deployment containing the router
+   deployment, so `app.spiritdevs.com` points at a deployment containing the router
    rules in `apps/web/vercel.ts`. Future stable releases keep this alias current.
 
 ## Nightly builds
@@ -168,13 +184,13 @@ One-time Vercel dashboard setup:
   - `make_latest` is always `false`
 - Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
 - Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
+- Publishes the CLI package (`apps/server`, npm package `@spiritdevs/pathway`) to the `nightly` npm dist-tag using the same nightly version.
 - Does not commit version bumps back to `main`.
 
 ## Server self-update release invariant
 
 Connected servers update to the client's exact version, not to an npm dist-tag. Every released
-desktop or hosted client version must therefore have a matching `t3@<version>` package available on
+desktop or hosted client version must therefore have a matching `@spiritdevs/pathway@<version>` package available on
 npm before users can receive that client.
 
 The workflow enforces this ordering:
@@ -186,11 +202,11 @@ The workflow enforces this ordering:
 Preserve these dependencies when changing the release graph. Publishing a client first would leave
 the **Update server** action targeting a package version that does not exist yet.
 
-For a release smoke test, confirm `npm view t3@<version> version` returns the expected version, then
+For a release smoke test, confirm `npm view @spiritdevs/pathway@<version> version` returns the expected version, then
 connect the new client to a server on the previous version and verify that the update action
 reconnects to the matching server. Use releases with identical migration manifests for the
 automatic path. When the manifest changed, verify that the remote action stops before restart and
-shows the exact local `npx t3@<version> service update` command. Also test the manual or
+shows the exact local `npx @spiritdevs/pathway@<version> service update` command. Also test the manual or
 desktop-managed guidance when those environments are available.
 
 ## Desktop auto-update notes
@@ -217,12 +233,12 @@ desktop-managed guidance when those environments are available.
 ## 0) npm OIDC trusted publishing setup (CLI)
 
 The workflow invokes `node apps/server/scripts/cli.ts publish` after aligning package versions. That
-script temporarily prepares the `t3` package, then runs `vp pm publish --filter t3 ...` from the
+script temporarily prepares the `@spiritdevs/pathway` package, then runs `vp pm publish --filter @spiritdevs/pathway ...` from the
 repository root so workspace publish configuration is applied correctly.
 
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm the npm organization owns `@spiritdevs/pathway` and has configured trusted publishing.
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -238,9 +254,9 @@ Checklist:
 ## 1) Release validation and unsigned builds
 
 There is no dry-run tag path. Pushing any accepted non-nightly tag, including
-`v0.0.0-test.1`, classifies the run as the stable channel. It publishes `t3` with npm dist-tag
-`latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.t3.codes` and
-`app.t3.codes`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
+`v0.0.0-test.1`, classifies the run as the stable channel. It publishes `@spiritdevs/pathway` with npm dist-tag
+`latest`, creates a real GitHub Release, aliases the hosted app to `latest.app.spiritdevs.com` and
+`app.spiritdevs.com`, and can commit a version bump to `main` in the finalize job. Do not push a test tag
 to validate the workflow.
 
 The workflow has no non-publishing `workflow_dispatch` mode. Use normal CI or local quality gates to
@@ -276,7 +292,7 @@ Checklist:
 
 1. Apple Developer account access:
    - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.t3tools.pathway` and enable Associated Domains.
+2. Create an explicit App ID for `com.spiritdevs.pathway` and enable Associated Domains.
 3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
    App ID with Associated Domains enabled.
 4. Export the certificate + private key as `.p12` from Keychain.
@@ -343,7 +359,7 @@ Checklist:
 
 - macOS build unsigned when expected signed:
   - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
-  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.t3tools.pathway` and includes
+  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.spiritdevs.pathway` and includes
     Associated Domains.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.

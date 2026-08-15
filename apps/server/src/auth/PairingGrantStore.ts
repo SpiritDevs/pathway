@@ -3,8 +3,9 @@ import {
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
   type AuthPairingLink,
+  type EnvironmentId,
   type ServerAuthBootstrapMethod,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -24,6 +25,7 @@ export interface BootstrapGrant {
   readonly method: ServerAuthBootstrapMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
   readonly expiresAt: DateTime.DateTime;
@@ -200,6 +202,7 @@ export class PairingGrantStore extends Context.Service<
       readonly ttl?: Duration.Duration;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
+      readonly initiatingEnvironmentId?: EnvironmentId;
       readonly label?: string;
       readonly proofKeyThumbprint?: string;
       /**
@@ -221,7 +224,7 @@ export class PairingGrantStore extends Context.Service<
       },
     ) => Effect.Effect<BootstrapGrant, BootstrapCredentialError>;
   }
->()("t3/auth/PairingGrantStore") {}
+>()("@spiritdevs/pathway/auth/PairingGrantStore") {}
 
 interface StoredBootstrapGrant extends BootstrapGrant {
   readonly remainingUses: number | "unbounded";
@@ -406,6 +409,7 @@ export const make = Effect.gen(function* () {
         method: "one-time-token",
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject,
+        initiatingEnvironmentId: input?.initiatingEnvironmentId ?? null,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
         createdAt: now,
@@ -495,6 +499,9 @@ export const make = Effect.gen(function* () {
                 method: grant.method,
                 scopes: grant.scopes,
                 subject: grant.subject,
+                ...(grant.initiatingEnvironmentId
+                  ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
+                  : {}),
                 ...(grant.label ? { label: grant.label } : {}),
                 ...(grant.proofKeyThumbprint
                   ? { proofKeyThumbprint: grant.proofKeyThumbprint }
@@ -529,6 +536,9 @@ export const make = Effect.gen(function* () {
           method: consumed.value.method,
           scopes: consumed.value.scopes,
           subject: consumed.value.subject,
+          ...(consumed.value.initiatingEnvironmentId
+            ? { initiatingEnvironmentId: consumed.value.initiatingEnvironmentId }
+            : {}),
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           ...(consumed.value.proofKeyThumbprint
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }

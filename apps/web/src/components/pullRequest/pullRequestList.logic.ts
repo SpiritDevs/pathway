@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
-import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
+import { PullRequestListEntry, PullRequestListResult } from "@spiritdevs/contracts";
+import type { PullRequestInvolvement, PullRequestListState } from "@spiritdevs/contracts";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 

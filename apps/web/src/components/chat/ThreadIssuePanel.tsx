@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import type { Issue, IssueStatus, IssueThreadLinkOrigin, ThreadId } from "@t3tools/contracts";
+import type { Issue, IssueStatus, IssueThreadLinkOrigin, ThreadId } from "@spiritdevs/contracts";
 import { CalendarIcon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 

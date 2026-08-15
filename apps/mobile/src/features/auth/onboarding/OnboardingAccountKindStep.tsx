@@ -1,4 +1,4 @@
-import type { AccountKind } from "@t3tools/client-runtime/profile";
+import type { AccountKind } from "@spiritdevs/client-runtime/profile";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../../components/AppText";

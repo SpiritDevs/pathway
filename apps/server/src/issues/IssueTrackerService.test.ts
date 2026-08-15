@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  EnvironmentId,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   IssueCommentAgentRunId,
   IssueEnrichmentRunId,
@@ -17,7 +18,27 @@ import {
   type IssueEnrichmentRun,
   type IssueViewConfig,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import {
+  applySyncStoreBatch,
+  cloudEntityCodec,
+  issueSyncDomainAdapter,
+  SYNC_BOOTSTRAP_GENERATION,
+  SYNC_DOCUMENT_SCHEMA_VERSION,
+  type CloudSyncEntity,
+  type StoredSyncEntity,
+  type StoredSyncState,
+} from "@spiritdevs/client-runtime/sync";
+import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import {
+  AuthorizationEpoch,
+  CompanyVersion,
+  LocalSequence,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientId,
+  SyncEntityId,
+  type SyncEntityKind,
+} from "@spiritdevs/contracts/cloudSync";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -25,11 +46,18 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { CLOUD_LINKED_USER_ID } from "../cloud/config.ts";
+import {
+  CloudSyncEngineRegistry,
+  type CloudSyncEngineRegistryShape,
+  type CloudSyncIssueEngineHandle,
+} from "../cloud/CloudSyncEngineRegistry.ts";
 import * as ServerConfig from "../config.ts";
 import { IssueCommentRepositoryLive } from "../persistence/Layers/IssueComments.ts";
 import { IssueCycleRepositoryLive } from "../persistence/Layers/IssueCycles.ts";
@@ -57,14 +85,60 @@ import {
 } from "./IssueCommentAgentEngine.ts";
 import { IssueEnrichmentEngine, type IssueEnrichmentEngineShape } from "./IssueEnrichmentEngine.ts";
 import { SlackIntakeEngine, type SlackIntakeEngineShape } from "./slack/SlackIntakeEngine.ts";
-import { IssueTrackerService, layer } from "./IssueTrackerService.ts";
+import { IssueTrackerService, layer, makeIssueTrackerService } from "./IssueTrackerService.ts";
+import { issueReadModelFromStoredReplica, type IssueReplicaReader } from "./IssueReplicaReader.ts";
 
 const ACTOR: IssueActor = { kind: "user" };
 const AGENT: IssueActor = { kind: "agent", provider: ProviderDriverKind.make("claudeAgent") };
+/** Two people in the same company: the pair every ownership check has to tell apart. */
+const MEMBER_A: IssueActor = { kind: "member", membershipId: MembershipId.make("membership-a") };
+const MEMBER_B: IssueActor = { kind: "member", membershipId: MembershipId.make("membership-b") };
 const PROJECT = ProjectId.make("project-alpha");
 const OTHER_PROJECT = ProjectId.make("project-beta");
 /** Created from a name alone, never given a directory: the case enrichment has to refuse. */
 const ROOTLESS_PROJECT = ProjectId.make("project-rootless");
+
+const ROUTED_COMPANY_ID = CompanyId.make("company-routed-issue-writes");
+const ROUTED_ENVIRONMENT_ID = EnvironmentId.make("environment-routed-issue-writes");
+
+function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): IssueReplicaReader {
+  const readModel = issueReadModelFromStoredReplica({
+    checkpoint: {
+      schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+      bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+      companyId: ROUTED_COMPANY_ID,
+      cursor: CompanyVersion.make(1),
+      authorizationEpoch: AuthorizationEpoch.make(1),
+      bootstrapped: true,
+    },
+    entities,
+    outbox: [],
+    rejected: [],
+    quarantined: [],
+    localSequenceHighWater: LocalSequence.make(0),
+  });
+  if (readModel === null) throw new Error("The ready replica fixture did not decode.");
+  return {
+    companyId: ROUTED_COMPANY_ID,
+    read: Effect.succeed(readModel),
+    memberActorForCloudUserId: () => Effect.succeed(null),
+  };
+}
+
+function routedStoredEntity(
+  entityKind: SyncEntityKind,
+  payload: Record<string, unknown>,
+): StoredSyncEntity {
+  const codec = cloudEntityCodec(entityKind);
+  if (codec === null) throw new Error(`Missing codec for ${entityKind}.`);
+  const decoded: CloudSyncEntity = Option.getOrThrow(codec.decode(payload));
+  return {
+    entityKind,
+    entityId: SyncEntityId.make(payload["id"] as string),
+    version: CompanyVersion.make(1),
+    payload: codec.encode(decoded),
+  };
+}
 
 /**
  * Cycle finalisation compares against the local calendar day, so the fixtures are relative to it:
@@ -256,6 +330,322 @@ const LINEAR_EXPORT = [
 ].join("\n");
 
 describe("IssueTrackerService", () => {
+  it.effect("resolves the linked cloud identity to its active replica membership", () =>
+    Effect.gen(function* () {
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("user-a"));
+      const replicaReader = readyReplicaReader();
+      const tracker = yield* makeIssueTrackerService({
+        replicaReader: {
+          ...replicaReader,
+          memberActorForCloudUserId: (userId) =>
+            Effect.succeed(userId === "user-a" ? MEMBER_A : null),
+        },
+        syncEngineRegistry: null,
+      });
+
+      assert.deepStrictEqual(yield* tracker.linkedMemberActor, MEMBER_A);
+      assert.deepStrictEqual(yield* tracker.memberActorForCloudUserId("user-a"), MEMBER_A);
+      assert.isNull(yield* tracker.memberActorForCloudUserId("user-b"));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeDependencyLayer(),
+          Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+          Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+          Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+        ),
+      ),
+    ),
+  );
+
+  it.effect(
+    "refuses every legacy attachment producer when the company replica is authoritative",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* makeIssueTrackerService({
+          replicaReader: readyReplicaReader(),
+          syncEngineRegistry: null,
+        });
+        const uploadError = yield* tracker
+          .uploadCommentAttachment({
+            issueId: IssueId.make("replica-issue"),
+            dataUrl: `data:image/png;base64,${PNG_BASE64}`,
+          })
+          .pipe(Effect.flip);
+        const evidenceError = yield* tracker
+          .storeCommentEvidence({
+            issueId: IssueId.make("replica-issue"),
+            mimeType: "image/png",
+            bytes: Buffer.from("proof"),
+          })
+          .pipe(Effect.flip);
+        for (const error of [uploadError, evidenceError]) {
+          assert.strictEqual(error.reason, "invalid");
+          assert.include(error.message, "not supported for cloud-synced companies");
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeDependencyLayer(),
+            Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+            Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+            Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("routes a server write to the durable outbox and reads its optimistic replica", () =>
+    Effect.gen(function* () {
+      const stored = yield* Ref.make<StoredSyncState>({
+        checkpoint: {
+          schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+          bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+          companyId: ROUTED_COMPANY_ID,
+          cursor: CompanyVersion.make(1),
+          authorizationEpoch: AuthorizationEpoch.make(1),
+          bootstrapped: true,
+        },
+        entities: [
+          routedStoredEntity("issueStatus", {
+            id: "status-routed",
+            scope: "company",
+            teamId: null,
+            baseStatusId: null,
+            name: "Ready",
+            color: "#123456",
+            category: "unstarted",
+            position: 0,
+            hidden: false,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+        ],
+        outbox: [],
+        rejected: [],
+        quarantined: [],
+        localSequenceHighWater: LocalSequence.make(0),
+      });
+      const sequence = yield* Ref.make(0);
+      const handle: CloudSyncIssueEngineHandle = {
+        companyId: ROUTED_COMPANY_ID,
+        environmentId: ROUTED_ENVIRONMENT_ID,
+        enqueue: ({ operationId, operation, actor }) =>
+          Effect.gen(function* () {
+            const localSequence = LocalSequence.make(
+              yield* Ref.updateAndGet(sequence, (n) => n + 1),
+            );
+            const envelope = {
+              protocolVersion: SYNC_PROTOCOL_VERSION,
+              operationId,
+              companyId: ROUTED_COMPANY_ID,
+              clientId: SyncClientId.make("server-routed-test"),
+              environmentId: ROUTED_ENVIRONMENT_ID,
+              actor: actor ?? {
+                kind: "environment" as const,
+                environmentId: ROUTED_ENVIRONMENT_ID,
+              },
+              localSequence,
+              baseVersion: CompanyVersion.make(1),
+              kind: operation.kind,
+              entityId: operation.entityId,
+              args: issueSyncDomainAdapter.operationCodec.encode(operation),
+              dependsOn: operation.dependsOn ?? [],
+            };
+            yield* Ref.update(stored, (current) =>
+              applySyncStoreBatch(current, {
+                upsertOutbox: [
+                  { envelope, status: { _tag: "Pending" }, occurredAt: 1_700_000_001_000 },
+                ],
+                localSequenceHighWater: localSequence,
+              }),
+            );
+            return {
+              accepted: true,
+              operationId,
+              localSequence,
+              status: { _tag: "Pending" as const },
+            };
+          }),
+        sync: Effect.die(new Error("restore is not used by this test")),
+        operationDisposition: () => Effect.succeed({ _tag: "Pending" }),
+      };
+      const registry = CloudSyncEngineRegistry.of({
+        registerIssueEngine: () => Effect.void,
+        issueEngine: () => Effect.succeed(handle),
+      } satisfies CloudSyncEngineRegistryShape);
+      const replicaReader: IssueReplicaReader = {
+        companyId: ROUTED_COMPANY_ID,
+        read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
+        memberActorForCloudUserId: () => Effect.succeed(null),
+      };
+
+      const tracker = yield* makeIssueTrackerService({
+        replicaReader,
+        syncEngineRegistry: registry,
+      });
+      const created = yield* tracker.create(
+        { title: "Server-routed", statusId: IssueStatusId.make("status-routed") },
+        AGENT,
+      );
+      assert.strictEqual(created.issue.key, "Draft");
+      assert.strictEqual(created.issue.title, "Server-routed");
+      const snapshot = yield* tracker.getSnapshot();
+      assert.strictEqual(snapshot.issues[0]?.id, created.issue.id);
+
+      const comment = yield* tracker.commentCreate(
+        { issueId: created.issue.id, body: "Written by MCP" },
+        AGENT,
+      );
+      assert.deepStrictEqual(comment.comment.author, { kind: "system", source: "automation" });
+      assert.strictEqual(
+        (yield* tracker.commentsList({ issueId: created.issue.id })).comments.length,
+        1,
+      );
+
+      const local = yield* tracker.readLocalIssueSnapshot;
+      assert.strictEqual(local.issues.length, 0);
+      assert.strictEqual(local.comments.length, 0);
+
+      const intake = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        title: "Replica Slack intake",
+        permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+        authorName: "Corey",
+      });
+      if (!intake.created) throw new Error("intake should have filed an issue");
+      assert.isTrue(intake.issue.triage);
+      assert.strictEqual(intake.issue.slackSource?.channelId, "C123");
+      const duplicate = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        title: "Replica Slack intake",
+      });
+      assert.isFalse(duplicate.created);
+      assert.strictEqual(duplicate.issue?.id, intake.issue.id);
+
+      const accepted = yield* tracker.triageAccept(
+        {
+          issueId: intake.issue.id,
+          statusId: IssueStatusId.make("status-routed"),
+          runEnrichment: false,
+        },
+        AGENT,
+      );
+      assert.isFalse(accepted.issue.triage);
+
+      const rejectable = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459201.001901",
+        title: "Reject this Slack intake",
+      });
+      if (!rejectable.created) throw new Error("second intake should have filed an issue");
+      const rejected = yield* tracker.triageReject({ issueId: rejectable.issue.id }, AGENT);
+      assert.isNotNull(rejected.issue.deletedAt);
+
+      // An overlapping poll re-seeing the rejected message must not resurrect it: the ledger
+      // decision stands even though the replica keeps no row for the tombstoned issue.
+      const refused = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459201.001901",
+        title: "Reject this Slack intake",
+      });
+      assert.isFalse(refused.created);
+      assert.isNull(refused.issue);
+
+      const routedState = yield* Ref.get(stored);
+      const intakeCreates = routedState.outbox.filter(
+        (entry) =>
+          entry.envelope.kind === "issue.create" &&
+          (entry.envelope.args as { readonly slackSource?: unknown }).slackSource !== undefined,
+      );
+      assert.strictEqual(intakeCreates.length, 2);
+      assert.deepStrictEqual(
+        intakeCreates.map((entry) => entry.envelope.actor),
+        [
+          { kind: "system", source: "slack" },
+          { kind: "system", source: "slack" },
+        ],
+      );
+      assert.isTrue(
+        routedState.outbox.some((entry) => entry.envelope.kind === "issue.triageReject"),
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeDependencyLayer(),
+          Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+          Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+          Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+        ),
+      ),
+    ),
+  );
+
+  it.effect(
+    "limits a replica-routed issue stream to empty issue state and local client corners",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* makeIssueTrackerService({
+          replicaReader: readyReplicaReader(),
+          syncEngineRegistry: null,
+        });
+
+        const events = yield* Stream.runCollect(
+          Stream.take(tracker.stream, 11).pipe(
+            Stream.merge(
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  yield* tracker.importCsv({ csvText: "ID,Title\nPAT-1,Legacy intake\n" }, ACTOR);
+                  yield* tracker.slackWatchCreate({
+                    channelId: "C1",
+                    channelName: "triage",
+                  });
+                  yield* tracker.slackRecordPoll({ error: null });
+                }),
+              ).pipe(Stream.drain),
+            ),
+          ),
+        );
+
+        assert.deepStrictEqual(
+          events.map((event) => event._tag),
+          [
+            "StatusesChanged",
+            "LabelsChanged",
+            "MilestonesChanged",
+            "CyclesChanged",
+            "ViewsChanged",
+            "SlackWatchesChanged",
+            "SlackStatusChanged",
+            "ConfigChanged",
+            "ConfigChanged",
+            "SlackWatchesChanged",
+            "SlackStatusChanged",
+          ],
+        );
+        assert.isFalse(events.some((event) => event._tag === "IssueUpserted"));
+        for (const event of events.slice(0, 5)) {
+          if (event._tag === "StatusesChanged") assert.deepStrictEqual(event.statuses, []);
+          if (event._tag === "LabelsChanged") assert.deepStrictEqual(event.labels, []);
+          if (event._tag === "MilestonesChanged") assert.deepStrictEqual(event.milestones, []);
+          if (event._tag === "CyclesChanged") assert.deepStrictEqual(event.cycles, []);
+          if (event._tag === "ViewsChanged") assert.deepStrictEqual(event.views, []);
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            makeDependencyLayer(),
+            Layer.succeed(IssueEnrichmentEngine, makeFakeEngine()),
+            Layer.succeed(IssueCommentAgentEngine, makeFakeCommentAgentEngine()),
+            Layer.succeed(SlackIntakeEngine, makeFakeSlackEngine()),
+          ),
+        ),
+      ),
+  );
+
   it.effect("allocates keys in order and appends each issue after the last in its column", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
@@ -1212,6 +1602,34 @@ describe("IssueTrackerService", () => {
     }).pipe(Effect.provide(makeTestLayer())),
   );
 
+  it.effect("keeps one company member off another member's comment", () =>
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      const { issue } = yield* tracker.create({ title: "Two people" }, MEMBER_A);
+
+      const mine = yield* tracker.commentCreate({ issueId: issue.id, body: "Mine" }, MEMBER_A);
+      assert.deepStrictEqual(mine.comment.author, MEMBER_A);
+
+      // Membership is the identity: kind alone would make everybody in the company one writer.
+      const theirEdit = yield* tracker
+        .commentUpdate({ commentId: mine.comment.id, patch: { body: "Rewritten" } }, MEMBER_B)
+        .pipe(Effect.flip);
+      assert.strictEqual(theirEdit.reason, "invalid");
+      const theirDelete = yield* tracker
+        .commentDelete({ commentId: mine.comment.id }, MEMBER_B)
+        .pipe(Effect.flip);
+      assert.strictEqual(theirDelete.reason, "invalid");
+
+      const edited = yield* tracker.commentUpdate(
+        { commentId: mine.comment.id, patch: { body: "Mine, revised" } },
+        MEMBER_A,
+      );
+      assert.strictEqual(edited.comment.body, "Mine, revised");
+      const { comments } = yield* tracker.commentDelete({ commentId: mine.comment.id }, MEMBER_A);
+      assert.deepStrictEqual(comments, []);
+    }).pipe(Effect.provide(makeTestLayer())),
+  );
+
   it.effect("only accepts attachments minted for the issue the comment is on", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
@@ -1991,13 +2409,14 @@ describe("IssueTrackerService", () => {
         }),
       );
       yield* seedProject(PROJECT, "/tmp/pathway");
-      const { issue } = yield* tracker.intakeCreateIssue({
+      const { issue, created } = yield* tracker.intakeCreateIssue({
         channelId: "C1",
         messageTs: "1723459200.000100",
         title: "editor menu has no actions",
         description: "**Slack comment:**\n\neditor menu has no actions",
         projectId: PROJECT,
       });
+      if (!created) throw new Error("intake should have filed an issue");
 
       yield* tracker.startEnrichment({ issueId: issue.id });
       yield* Deferred.await(finished);
@@ -2148,9 +2567,10 @@ describe("IssueTrackerService", () => {
           body: "[@Claude](mention:agent:claudeAgent) what broke?",
           agentMention: { modelSelection: ENRICHMENT_MODEL },
         },
-        ACTOR,
+        MEMBER_A,
       );
 
+      assert.deepStrictEqual(comment.author, MEMBER_A);
       assert.strictEqual(comment.agentRun?.state, "queued");
       assert.strictEqual(comment.agentRun?.transcript, "");
       assert.isNull(comment.agentRun?.phase ?? null);
@@ -2176,7 +2596,7 @@ describe("IssueTrackerService", () => {
       yield* tracker.commentCreate({ issueId: issue.id, body: "Never mind" }, ACTOR);
       yield* tracker.commentUpdate(
         { commentId: comment.id, patch: { body: "[@Claude](mention:agent:claudeAgent) again?" } },
-        ACTOR,
+        MEMBER_A,
       );
       assert.strictEqual((yield* Ref.get(requests)).length, 1);
     }).pipe(Effect.provide(makeDependencyLayer())),
@@ -2786,7 +3206,7 @@ describe("IssueTrackerService", () => {
         authorName: "  Corey  ",
       });
 
-      assert.isTrue(filed.created);
+      if (!filed.created) throw new Error("intake should have filed an issue");
       // A triage item has no status presence: it is in no board and no count until it is accepted.
       assert.isTrue(filed.issue.triage);
       assert.strictEqual(filed.issue.projectId, PROJECT);
@@ -2807,7 +3227,7 @@ describe("IssueTrackerService", () => {
         title: "The deploy is stuck on staging",
       });
       assert.isFalse(again.created);
-      assert.strictEqual(again.issue.id, filed.issue.id);
+      assert.strictEqual(again.issue?.id, filed.issue.id);
       assert.strictEqual((yield* tracker.getSnapshot()).issues.length, 1);
 
       // The same ts in another channel is another message: Slack's ts is unique per channel only.
@@ -2835,6 +3255,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "The deploy is stuck",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const attached = yield* tracker.intakeAddComment({
         channelId: "C1",
@@ -2882,6 +3303,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "The deploy is stuck",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const accepted = yield* tracker.triageAccept(
         {
@@ -2988,6 +3410,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "Somebody said hello",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const rejected = yield* tracker.triageReject({ issueId: filed.issue.id }, ACTOR);
       assert.isNotNull(rejected.issue.deletedAt);

@@ -1,4 +1,4 @@
-import { IssueRelation, type IssueRelationEdge } from "@t3tools/contracts";
+import { IssueRelation, type IssueRelationEdge } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

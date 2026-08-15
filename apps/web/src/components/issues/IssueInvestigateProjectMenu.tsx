@@ -4,8 +4,8 @@
  * Choosing is the action: callers assign the issue first when needed, then start the read-only
  * investigation. Only projects with a workspace are passed here, so every visible choice can run.
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
-import type { ProjectId } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
+import type { ProjectId } from "@spiritdevs/contracts";
 import { CheckIcon, ChevronDownIcon, FolderIcon } from "lucide-react";
 import type { ReactNode } from "react";
 

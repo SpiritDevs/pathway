@@ -11,8 +11,8 @@
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/runtime";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { useCallback } from "react";
 
 import { newProjectId } from "~/lib/utils";

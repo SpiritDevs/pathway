@@ -7,7 +7,7 @@ import {
   ProviderTurnId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -162,7 +162,7 @@ export interface CommandPolicyV2Shape {
 }
 
 export class CommandPolicyV2 extends Context.Service<CommandPolicyV2, CommandPolicyV2Shape>()(
-  "t3/orchestration-v2/CommandPolicy/CommandPolicyV2",
+  "@spiritdevs/pathway/orchestration-v2/CommandPolicy/CommandPolicyV2",
 ) {}
 
 function unsupported(

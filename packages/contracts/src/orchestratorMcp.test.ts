@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpDelegateTaskInput,
+  OrchestratorMcpDelegateTaskOutcome,
   OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpThreadInterruptInput,
   OrchestratorMcpThreadListInput,
@@ -15,6 +16,7 @@ import {
 
 const decodeCreateThreadsInput = Schema.decodeUnknownSync(OrchestratorMcpCreateThreadsInput);
 const decodeDelegateTaskInput = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskInput);
+const decodeDelegateTaskOutcome = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskOutcome);
 const decodeDelegateTaskResult = Schema.decodeUnknownSync(OrchestratorMcpDelegateTaskResult);
 const decodeThreadInterruptInput = Schema.decodeUnknownSync(OrchestratorMcpThreadInterruptInput);
 const decodeThreadListInput = Schema.decodeUnknownSync(OrchestratorMcpThreadListInput);
@@ -53,6 +55,31 @@ describe("orchestrator MCP contracts", () => {
     expect(request.target?.providerInstanceId).toBe("claudeAgent");
     expect(result.status).toBe("completed");
     expect(result.summary).toBe("Workspace inspected.");
+  });
+
+  it("keeps local delegation unchanged and decodes explicit remote targeting", () => {
+    expect(decodeDelegateTaskInput({ task: "Stay local." })).toEqual({ task: "Stay local." });
+
+    const request = decodeDelegateTaskInput({
+      task: "Run on the build host.",
+      targetEnvironmentId: "environment-build",
+      targetProjectId: "project-build",
+      cloudProjectId: "cloud-project-build",
+      connectGrantToken: "single-use-grant",
+    });
+    const result = decodeDelegateTaskOutcome({
+      environmentCommandId: "environment-command-build",
+      targetEnvironmentId: "environment-build",
+      delivery: "deferred",
+      threadId: null,
+      status: "queued",
+      providerInstanceId: null,
+      model: null,
+    });
+
+    expect(request.targetEnvironmentId).toBe("environment-build");
+    expect(request.connectGrantToken).toBe("single-use-grant");
+    expect(result).toMatchObject({ delivery: "deferred", threadId: null, status: "queued" });
   });
 
   it("decodes target model options in canonical and shorthand shapes", () => {

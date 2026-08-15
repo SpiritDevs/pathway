@@ -11,7 +11,7 @@
  *
  * @module issues/slack/SlackIntakeEngineLive
  */
-import { IssueTrackerError } from "@t3tools/contracts";
+import { IssueTrackerError } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";

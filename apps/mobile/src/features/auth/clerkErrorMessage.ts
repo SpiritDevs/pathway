@@ -6,7 +6,7 @@
  * uniform.
  *
  * Ported from `apps/web/src/components/auth/clerkErrorMessage.ts`. Both copies
- * belong in `@t3tools/client-runtime` eventually; until that move happens the
+ * belong in `@spiritdevs/client-runtime` eventually; until that move happens the
  * table is duplicated rather than imported across app boundaries.
  */
 const CLERK_ERROR_COPY: Record<string, string> = {

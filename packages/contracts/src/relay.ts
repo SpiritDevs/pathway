@@ -9,6 +9,11 @@ import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
 import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  CompanyPermission,
+  MembershipId,
+  type CompanyPermission as CompanyPermissionType,
+} from "./company.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literal("ios");
@@ -373,6 +378,7 @@ export class RelayEnvironmentLinkProofInvalidError extends Schema.TaggedErrorCla
 
 export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "client_proof_key_thumbprint_missing",
+  "connect_grant_refused",
   "environment_link_not_found",
   "endpoint_provider_not_managed",
   "managed_endpoint_allocation_not_found",
@@ -380,6 +386,7 @@ export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
   "managed_endpoint_allocation_not_ready",
   "managed_endpoint_hostname_invalid",
   "managed_endpoint_mismatch",
+  "self_connect_refused",
 ]);
 export type RelayEnvironmentConnectNotAuthorizedReason =
   typeof RelayEnvironmentConnectNotAuthorizedReason.Type;
@@ -558,12 +565,14 @@ const RelayAgentActivityPublishErrors = [
 export class RelayClientPrincipal extends Context.Service<
   RelayClientPrincipal,
   {
-    readonly userId: string;
+    readonly subject:
+      | { readonly _tag: "User"; readonly userId: string }
+      | { readonly _tag: "Environment"; readonly environmentId: EnvironmentId };
     readonly token: string;
     readonly proofKeyThumbprint?: string;
     readonly dpopScopes?: ReadonlyArray<RelayDpopAccessTokenScope>;
   }
->()("@t3tools/contracts/relay/RelayClientPrincipal") {}
+>()("@spiritdevs/contracts/relay/RelayClientPrincipal") {}
 
 export class RelayEnvironmentPrincipal extends Context.Service<
   RelayEnvironmentPrincipal,
@@ -571,7 +580,7 @@ export class RelayEnvironmentPrincipal extends Context.Service<
     readonly environmentId: string;
     readonly environmentPublicKey: string;
   }
->()("@t3tools/contracts/relay/RelayEnvironmentPrincipal") {}
+>()("@spiritdevs/contracts/relay/RelayEnvironmentPrincipal") {}
 
 const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
   HttpApiSecurity.annotate(
@@ -631,6 +640,9 @@ export const RelayListEnvironmentsResponse = Schema.Struct({
 });
 export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
 
+export const RelayConvexConnectGrant = TrimmedNonEmptyString;
+export type RelayConvexConnectGrant = typeof RelayConvexConnectGrant.Type;
+
 export const RelayEnvironmentConnectRequest = Schema.Struct({
   deviceId: Schema.optional(
     TrimmedNonEmptyString.annotate({
@@ -645,6 +657,12 @@ export const RelayEnvironmentConnectRequest = Schema.Struct({
   clientProofKeyThumbprint: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description: "JWK thumbprint that the minted environment credential must be bound to.",
+    }),
+  ),
+  connectGrant: Schema.optional(
+    RelayConvexConnectGrant.annotate({
+      description:
+        "Single-use Convex grant for this environment connection. Optional for user-subject tokens and required for environment-subject tokens.",
     }),
   ),
 }).annotate({ description: "Requests a short-lived credential for connecting to an environment." });
@@ -668,6 +686,13 @@ export const RelayPublicClientId = Schema.Literals(["t3-mobile", "t3-web"]);
 export type RelayPublicClientId = typeof RelayPublicClientId.Type;
 export const RelayMobileClientId = "t3-mobile" as const;
 export const RelayWebClientId = "t3-web" as const;
+export const RelayEnvironmentClientId = "t3-env" as const;
+export const RelayDpopClientId = Schema.Literals([
+  RelayMobileClientId,
+  RelayWebClientId,
+  RelayEnvironmentClientId,
+]);
+export type RelayDpopClientId = typeof RelayDpopClientId.Type;
 
 export const RelayDpopAccessTokenRequest = Schema.Struct({
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
@@ -696,6 +721,173 @@ export const RelayDpopAccessTokenResponse = Schema.Struct({
   scope: TrimmedNonEmptyString,
 });
 export type RelayDpopAccessTokenResponse = typeof RelayDpopAccessTokenResponse.Type;
+
+/**
+ * JWT type of the assertion by which a linked environment authorizes a DPoP
+ * proof key to receive a relay access token.
+ */
+export const RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP =
+  "t3-env-relay-access-assertion+jwt" as const;
+
+export const RelayEnvironmentDpopAccessAssertionPayload = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  environmentId: EnvironmentId,
+  /** Thumbprint of the DPoP proof key authorized for this exchange. */
+  jkt: TrimmedNonEmptyString,
+}).annotate({
+  description:
+    "Claims of an environment-signed relay access assertion. `iss` is `t3-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
+});
+export type RelayEnvironmentDpopAccessAssertionPayload =
+  typeof RelayEnvironmentDpopAccessAssertionPayload.Type;
+
+export const RelayEnvironmentDpopAccessTokenRequest = Schema.Struct({
+  grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
+  subject_token: TrimmedNonEmptyString.annotate({
+    description: "Assertion signed by the initiating environment's linked Ed25519 key.",
+  }),
+  subject_token_type: Schema.Literal(RelayJwtSubjectTokenType),
+  requested_token_type: Schema.Literal(RelayAccessTokenType),
+  resource: TrimmedNonEmptyString.annotate({
+    description: "Relay issuer URL that will receive the DPoP-bound access token.",
+  }),
+  scope: Schema.Literal(RelayEnvironmentConnectScope),
+  client_id: Schema.Literal(RelayEnvironmentClientId),
+})
+  .annotate({
+    description: "OAuth token exchange request for an environment-subject DPoP relay access token.",
+  })
+  .pipe(HttpApiSchema.asFormUrlEncoded());
+export type RelayEnvironmentDpopAccessTokenRequest =
+  typeof RelayEnvironmentDpopAccessTokenRequest.Type;
+
+// Every other relay token is self-audienced (`aud === iss`) because the relay is
+// both issuer and verifier. Convex is the first foreign audience: an environment
+// presents this token to Convex, which trusts the relay as a custom JWT provider.
+export const RelayConvexAudience = "pathway-convex" as const;
+export const RelayConvexControlPlaneSubject = "pathway-relay" as const;
+export const RelayConvexControlPlaneTokenKind = "relay-control-plane" as const;
+
+// RFC 8693 subject-token type for the opaque `t3env_…` credential a linked
+// environment already holds. It is relay-specific, so it uses a relay URN rather
+// than one of the IETF-registered token types.
+export const RelayEnvironmentCredentialTokenType =
+  "urn:spiritdevs:params:oauth:token-type:environment-credential" as const;
+
+/**
+ * JWT type of the environment-signed assertion that names the DPoP key an
+ * exchange may bind. Lives here rather than in `@spiritdevs/shared/relayJwt`
+ * because it is only ever produced and consumed alongside this request shape.
+ */
+export const RELAY_CONVEX_KEY_BINDING_TYP = "t3-env-convex-key-binding+jwt" as const;
+
+/**
+ * Signed by the environment's link key, which the relay stored when the
+ * environment linked. It is what ties an ephemeral DPoP proof key to a
+ * registered environment: the environment credential is a bearer secret, so
+ * without this assertion whoever holds the credential could have a service
+ * token minted against a DPoP key of their own.
+ */
+export const RelayConvexKeyBindingPayload = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  environmentId: EnvironmentId,
+  /** Thumbprint of the DPoP proof key the environment authorizes for this exchange. */
+  jkt: TrimmedNonEmptyString,
+}).annotate({
+  description:
+    "Claims of an environment-signed Convex key-binding assertion. `iss` is `t3-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
+});
+export type RelayConvexKeyBindingPayload = typeof RelayConvexKeyBindingPayload.Type;
+
+export const RelayConvexServiceTokenRequest = Schema.Struct({
+  grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
+  subject_token: TrimmedNonEmptyString.annotate({
+    description: "Relay-issued environment credential installed when the environment was linked.",
+  }),
+  subject_token_type: Schema.Literal(RelayEnvironmentCredentialTokenType),
+  requested_token_type: Schema.Literal(RelayAccessTokenType),
+  audience: Schema.Literal(RelayConvexAudience).annotate({
+    description: "Logical audience of the issued service token.",
+  }),
+  key_binding: TrimmedNonEmptyString.annotate({
+    description:
+      "Environment-signed JWT naming the DPoP proof-key thumbprint this exchange may bind. Verified against the link public key the environment credential belongs to.",
+  }),
+})
+  .annotate({
+    description:
+      "OAuth token exchange request for a short-lived Convex-audience environment service token.",
+  })
+  .pipe(HttpApiSchema.asFormUrlEncoded());
+export type RelayConvexServiceTokenRequest = typeof RelayConvexServiceTokenRequest.Type;
+
+export const RelayConvexServiceTokenResponse = Schema.Struct({
+  access_token: TrimmedNonEmptyString,
+  issued_token_type: Schema.Literal(RelayAccessTokenType),
+  // Convex verifies the JWT signature and claims; it does not verify DPoP
+  // proofs, so the token is presented as a bearer token whose `cnf.jkt` records
+  // the proof key the relay bound it to.
+  token_type: Schema.Literal("Bearer"),
+  expires_in: Schema.Int.check(Schema.isGreaterThan(0)),
+  audience: Schema.Literal(RelayConvexAudience),
+});
+export type RelayConvexServiceTokenResponse = typeof RelayConvexServiceTokenResponse.Type;
+
+export const RelayConvexServiceTokenClaims = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  aud: Schema.Literal(RelayConvexAudience),
+  environmentId: EnvironmentId,
+  cnf: Schema.Struct({
+    jkt: TrimmedNonEmptyString,
+  }),
+}).annotate({
+  description:
+    "Claims of a relay-issued Convex service token. `sub` is the environment ID and `cnf.jkt` is the DPoP proof-key thumbprint presented at exchange.",
+});
+export type RelayConvexServiceTokenClaims = typeof RelayConvexServiceTokenClaims.Type;
+
+export const RelayConvexControlPlaneTokenClaims = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  aud: Schema.Literal(RelayConvexAudience),
+  sub: Schema.Literal(RelayConvexControlPlaneSubject),
+  tokenKind: Schema.Literal(RelayConvexControlPlaneTokenKind),
+}).annotate({
+  description:
+    "Claims of the relay's short-lived Convex control-plane token. Convex authorizes this service identity separately from environment tokens.",
+});
+export type RelayConvexControlPlaneTokenClaims = typeof RelayConvexControlPlaneTokenClaims.Type;
+
+// Permission a Convex-issued connect grant asserts for the acting user. The
+// spelling is the company vocabulary's, not a relay dialect: these literals are
+// checked against `CompanyPermission` so a rename in the canonical contract
+// fails this file rather than silently producing grants Convex never mints.
+export const RELAY_CONVEX_CONNECT_GRANT_PERMISSIONS = [
+  "environments.read",
+  "environments.manage",
+  "remoteAgents.control",
+] as const satisfies ReadonlyArray<CompanyPermissionType>;
+
+export const RelayConvexConnectGrantPermission = Schema.Literals(
+  RELAY_CONVEX_CONNECT_GRANT_PERMISSIONS,
+);
+export type RelayConvexConnectGrantPermission = typeof RelayConvexConnectGrantPermission.Type;
+
+export const RelayConvexConnectGrantClaims = Schema.Struct({
+  ...RelaySignedJwtRegisteredClaims,
+  environmentId: EnvironmentId,
+  permission: RelayConvexConnectGrantPermission,
+}).annotate({
+  description:
+    "Claims of a Convex-issued connect grant. `iss` is the configured Convex issuer, `aud` the relay issuer, `sub` the acting user, and `exp` the grant expiry.",
+});
+export type RelayConvexConnectGrantClaims = typeof RelayConvexConnectGrantClaims.Type;
+
+export const RelayValidatedConnectGrantIdentity = Schema.Struct({
+  environmentId: EnvironmentId,
+  membershipId: MembershipId,
+  permission: CompanyPermission,
+});
+export type RelayValidatedConnectGrantIdentity = typeof RelayValidatedConnectGrantIdentity.Type;
 
 export const RelayBearerRequestHeaders = Schema.Struct({
   authorization: TrimmedNonEmptyString,
@@ -757,11 +949,13 @@ export type RelayEnvironmentStatusResponse = typeof RelayEnvironmentStatusRespon
 export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
   environmentId: EnvironmentId,
+  initiatingEnvironmentId: Schema.optional(EnvironmentId),
   clientProofKeyThumbprint: TrimmedNonEmptyString,
   cnf: Schema.Struct({
     jkt: TrimmedNonEmptyString,
   }),
   deviceId: Schema.optional(TrimmedNonEmptyString),
+  connectGrant: Schema.optional(RelayValidatedConnectGrantIdentity),
   nonce: TrimmedNonEmptyString,
   scope: Schema.Array(Schema.Literal("environment:connect")),
 });
@@ -1015,8 +1209,44 @@ export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
     "Bootstrap endpoint. Send the DPoP proof JWT in the dpop header and the Clerk token in subject_token. The returned access token is bound to the proof key.",
   );
 
+export const RelayExchangeConvexServiceTokenEndpoint = HttpApiEndpoint.post(
+  "exchangeConvexServiceToken",
+  "/v1/environment/convex-token",
+  {
+    headers: RelayDpopProofRequestHeaders,
+    payload: RelayConvexServiceTokenRequest,
+    success: RelayConvexServiceTokenResponse,
+    error: RelayAuthAndInternalErrors,
+  },
+)
+  .annotate(OpenApi.Summary, "Exchange an environment credential for a Convex service token")
+  .annotate(
+    OpenApi.Description,
+    "Send the DPoP proof JWT in the dpop header, the environment credential in subject_token, and an environment-signed key-binding assertion naming the proof key in key_binding. The returned bearer token carries aud=pathway-convex, the environment ID, and the proof-key thumbprint, and is accepted by Convex as a custom JWT provider.",
+  );
+
+export const RelayExchangeEnvironmentDpopAccessTokenEndpoint = HttpApiEndpoint.post(
+  "exchangeEnvironmentDpopAccessToken",
+  "/v1/environment/dpop-token",
+  {
+    headers: RelayDpopProofRequestHeaders,
+    payload: RelayEnvironmentDpopAccessTokenRequest,
+    success: RelayDpopAccessTokenResponse,
+    error: RelayAuthAndInternalErrors,
+  },
+)
+  .annotate(OpenApi.Summary, "Exchange an environment assertion for a DPoP access token")
+  .annotate(
+    OpenApi.Description,
+    "Send a fresh DPoP proof and an assertion signed by the environment's active relay-link key. The returned token has an environment subject and only the environment:connect scope.",
+  );
+
 export const RelayTokenGroup = HttpApiGroup.make("token")
-  .add(RelayExchangeDpopAccessTokenEndpoint)
+  .add(
+    RelayExchangeDpopAccessTokenEndpoint,
+    RelayExchangeConvexServiceTokenEndpoint,
+    RelayExchangeEnvironmentDpopAccessTokenEndpoint,
+  )
   .annotate(OpenApi.Description, "OAuth token exchange for DPoP-bound client access.");
 
 export const RelayConnectEnvironmentEndpoint = HttpApiEndpoint.post(

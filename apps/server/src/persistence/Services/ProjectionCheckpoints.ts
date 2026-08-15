@@ -13,11 +13,11 @@ import {
   NonNegativeInt,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   OrchestrationCheckpointFile,
   OrchestrationCheckpointStatus,
-} from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts/legacy-orchestration";
 import * as Option from "effect/Option";
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
@@ -94,4 +94,6 @@ export interface ProjectionCheckpointRepositoryShape {
 export class ProjectionCheckpointRepository extends Context.Service<
   ProjectionCheckpointRepository,
   ProjectionCheckpointRepositoryShape
->()("t3/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/ProjectionCheckpoints/ProjectionCheckpointRepository",
+) {}

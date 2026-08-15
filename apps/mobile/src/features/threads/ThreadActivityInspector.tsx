@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { SymbolView } from "expo-symbols";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { buildOrchestrationErrorFixPrompt } from "@t3tools/shared/orchestrationV2Timeline";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import { buildOrchestrationErrorFixPrompt } from "@spiritdevs/shared/orchestrationV2Timeline";
 import { useNavigation } from "@react-navigation/native";
 import { useMemo, useState } from "react";
 import { Linking, Pressable, ScrollView, type ColorValue, View } from "react-native";

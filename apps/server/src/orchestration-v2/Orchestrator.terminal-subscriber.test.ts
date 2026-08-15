@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import type { OrchestrationV2StoredEvent } from "@t3tools/contracts";
+import type { OrchestrationV2StoredEvent } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 

@@ -1,9 +1,9 @@
 import {
   threadRuntimeIsActive,
   type EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/models";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { parsePullRequestReviewThreadTitle } from "@t3tools/shared/pullRequestReview";
+} from "@spiritdevs/client-runtime/state/models";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import { parsePullRequestReviewThreadTitle } from "@spiritdevs/shared/pullRequestReview";
 
 type PullRequestReviewActivityThread = Pick<
   EnvironmentThreadShell,

@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import { useNavigation } from "@react-navigation/native";
 import { LayoutAnimation, Linking, Pressable, useColorScheme, View } from "react-native";
 

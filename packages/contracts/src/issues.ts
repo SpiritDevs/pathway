@@ -349,29 +349,58 @@ export type IssueStatus = typeof IssueStatus.Type;
 export const IssuePriority = Schema.Literals(["none", "urgent", "high", "medium", "low"]);
 export type IssuePriority = typeof IssuePriority.Type;
 
-/** The sole human on this environment. Carries no identity because there is nobody to tell apart. */
+/**
+ * The sole human on an environment-scoped tracker. Carries no identity because there is nobody to
+ * tell apart. Every row written before the tracker joined a company still reads this way, so it
+ * stays valid forever; new writes in a company use {@link IssueMemberActor}.
+ */
 const IssueUserActor = Schema.Struct({ kind: Schema.Literal("user") });
-const IssueAgentActor = Schema.Struct({
+/**
+ * Declared here rather than imported from {@link module:company} because that module reads
+ * {@link IssueKeyPrefix} from this one, and an import cycle between two modules that both build
+ * schemas at load time evaluates one of them against undefined. The brand matches `company`'s
+ * `MembershipId` exactly, so the two are the same type to every consumer.
+ */
+const MembershipId = makeIssueEntityId("MembershipId");
+
+/**
+ * A named person, by their membership in one company. The membership rather than the user is what
+ * is referenced, and memberships survive a departure as tombstones, so historical attribution
+ * still reads as a person after somebody leaves.
+ */
+export const IssueMemberActor = Schema.Struct({
+  kind: Schema.Literal("member"),
+  membershipId: MembershipId,
+});
+export type IssueMemberActor = typeof IssueMemberActor.Type;
+export const IssueAgentActor = Schema.Struct({
   kind: Schema.Literal("agent"),
   provider: ProviderDriverKind,
 });
+export type IssueAgentActor = typeof IssueAgentActor.Type;
 /**
  * Not a person: a write the tracker made on somebody's behalf. `cycles` is the lazy carry-over of
  * an ended cycle, which is the one write nobody asked for. `slack` lands with intake.
  */
-const IssueSystemActor = Schema.Struct({
+export const IssueSystemActor = Schema.Struct({
   kind: Schema.Literal("system"),
   source: Schema.Literals(["import", "cycles", "slack", "automation"]),
 });
+export type IssueSystemActor = typeof IssueSystemActor.Type;
 
 /**
  * Assignment records intent. It does not start anything: a stray kanban drag must not spawn three
  * agents, so an assigned agent surfaces a "Start work" button rather than a running turn.
  */
-export const IssueAssignee = Schema.Union([IssueUserActor, IssueAgentActor]);
+export const IssueAssignee = Schema.Union([IssueUserActor, IssueMemberActor, IssueAgentActor]);
 export type IssueAssignee = typeof IssueAssignee.Type;
 
-export const IssueActor = Schema.Union([IssueUserActor, IssueAgentActor, IssueSystemActor]);
+export const IssueActor = Schema.Union([
+  IssueUserActor,
+  IssueMemberActor,
+  IssueAgentActor,
+  IssueSystemActor,
+]);
 export type IssueActor = typeof IssueActor.Type;
 
 /**

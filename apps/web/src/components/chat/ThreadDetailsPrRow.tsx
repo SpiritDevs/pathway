@@ -11,8 +11,8 @@
  * Until the detail arrives — or where pull requests are not supported at all — the row renders
  * from the `vcs.status` summary alone, which is the plain row this panel showed before.
  */
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId, ProjectId, PullRequestRef } from "@t3tools/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
+import type { EnvironmentId, ProjectId, PullRequestRef } from "@spiritdevs/contracts";
 import { ArrowUpRightIcon, TriangleAlertIcon } from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 

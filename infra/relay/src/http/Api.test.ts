@@ -1,7 +1,10 @@
+import * as NodeCrypto from "node:crypto";
+
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -14,11 +17,27 @@ import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { EnvironmentId } from "@t3tools/contracts";
-import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
+import { EnvironmentId } from "@spiritdevs/contracts";
+import {
+  RelayAccessTokenType,
+  RelayConvexAudience,
+  RelayDpopTokenExchangeGrantType,
+  RelayEnvironmentClientId,
+  RelayEnvironmentAuth,
+  RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
+  RelayEnvironmentCredentialTokenType,
+  RelayEnvironmentConnectScope,
+  type RelayConvexServiceTokenRequest,
+  type RelayEnvironmentDpopAccessTokenRequest,
+} from "@spiritdevs/contracts/relay";
+import { computeDpopJwkThumbprint, type DpopPublicJwk } from "@spiritdevs/shared/dpop";
+import { decodeRelayJwt } from "@spiritdevs/shared/relayJwt";
 
 import {
   RELAY_REQUEST_DEADLINE_MS,
+  authorizeEnvironmentConnectPrincipal,
+  exchangeConvexServiceToken,
+  exchangeEnvironmentDpopAccessToken,
   relayCors,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
@@ -26,9 +45,13 @@ import {
   revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
   unlinkEnvironmentRecord,
+  validatePresentedConnectGrant,
   verifyRelayClientBearerToken,
   withoutCapturedParentSpan,
 } from "./Api.ts";
+import * as DpopProofs from "../auth/DpopProofs.ts";
+import * as ConvexConnectGrants from "../auth/ConvexConnectGrants.ts";
+import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as RelayDb from "../db.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
@@ -115,6 +138,147 @@ describe("relay client authentication", () => {
   );
 });
 
+describe("relay environment connect grants", () => {
+  it.effect("returns accepted grant identity to the connect path", () => {
+    const identity = {
+      environmentId: "environment-1" as never,
+      membershipId: "membership-1" as never,
+      permission: "remoteAgents.control" as const,
+    };
+    return Effect.gen(function* () {
+      expect(
+        yield* validatePresentedConnectGrant({
+          connectGrant: "accepted-grant",
+          environmentId: "environment-1",
+        }),
+      ).toEqual(identity);
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.succeed(identity),
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses a connect when a presented grant is not accepted", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        validatePresentedConnectGrant({
+          connectGrant: "refused-grant",
+          environmentId: "environment-1",
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentConnectNotAuthorized",
+        environmentId: "environment-1",
+        operation: "connect",
+        reason: "connect_grant_refused",
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.succeed(null),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("leaves the existing no-grant connect path untouched", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* validatePresentedConnectGrant({ environmentId: "environment-1" }),
+      ).toBeUndefined();
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.die("grant validation must not run"),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("requires a connect grant for environment-subject connects", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        authorizeEnvironmentConnectPrincipal({
+          subject: { _tag: "Environment", environmentId: EnvironmentId.make("environment-1") },
+          targetEnvironmentId: "environment-2",
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentConnectNotAuthorized",
+        operation: "connect",
+        reason: "connect_grant_refused",
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.die("missing grant must not be validated"),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("accepts an environment-subject connect only with a validated grant", () => {
+    const identity = {
+      environmentId: EnvironmentId.make("environment-2"),
+      membershipId: "membership-1" as never,
+      permission: "remoteAgents.control" as const,
+    };
+    return Effect.gen(function* () {
+      expect(
+        yield* authorizeEnvironmentConnectPrincipal({
+          subject: { _tag: "Environment", environmentId: EnvironmentId.make("environment-1") },
+          targetEnvironmentId: "environment-2",
+          connectGrant: "accepted-grant",
+        }),
+      ).toEqual({
+        initiatingEnvironmentId: "environment-1",
+        connectGrant: identity,
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.succeed(identity),
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses an environment connecting to itself before consuming a grant", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        authorizeEnvironmentConnectPrincipal({
+          subject: { _tag: "Environment", environmentId: EnvironmentId.make("environment-1") },
+          targetEnvironmentId: "environment-1",
+          connectGrant: "must-not-be-consumed",
+        }),
+      );
+
+      expect(error).toMatchObject({
+        _tag: "EnvironmentConnectNotAuthorized",
+        operation: "connect",
+        reason: "self_connect_refused",
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.die("self-connect must not consume a grant"),
+        }),
+      ),
+    ),
+  );
+});
+
 describe("relay environment authentication", () => {
   it.effect("preserves credential lookup persistence failures as internal errors", () => {
     const failure = new EnvironmentCredentials.EnvironmentCredentialAuthenticatePersistenceError({
@@ -123,6 +287,7 @@ describe("relay environment authentication", () => {
     });
     const credentials: EnvironmentCredentials.EnvironmentCredentials["Service"] = {
       create: () => Effect.die("unused create"),
+      replaceLinkAndCreate: () => Effect.die("unused replaceLinkAndCreate"),
       authenticate: () => Effect.fail(failure),
       revokeForEnvironmentPublicKey: () => Effect.die("unused revoke"),
     };
@@ -162,19 +327,27 @@ describe("relay environment authentication", () => {
 });
 
 function relayUnlinkTestLayer(input?: {
-  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
+  readonly revoke?: (
+    args: unknown,
+  ) => Effect.Effect<
+    { readonly linkRevoked: boolean; readonly credentialsRevoked: boolean },
+    RelayDb.RelayConvexClientError
+  >;
   readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
-  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
   readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
   readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return Layer.mergeAll(
     Layer.succeed(
-      RelayDb.RelayTransactions,
-      RelayDb.RelayTransactions.of({
-        withTransaction: input?.withTransaction ?? ((effect) => effect),
-      }),
+      RelayDb.RelayConvexClient,
+      RelayDb.RelayConvexClient.of({
+        query: () => Effect.die("unused query"),
+        mutation: (_reference: unknown, args: unknown) =>
+          (
+            input?.revoke ??
+            (() => Effect.succeed({ linkRevoked: false, credentialsRevoked: false }))
+          )(args),
+      } as unknown as RelayDb.RelayConvexClient["Service"]),
     ),
     Layer.succeed(
       EnvironmentLinks.EnvironmentLinks,
@@ -185,15 +358,7 @@ function relayUnlinkTestLayer(input?: {
         listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
         listForUser: () => Effect.die("unused listForUser"),
         getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
-        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentCredentials.EnvironmentCredentials,
-      EnvironmentCredentials.EnvironmentCredentials.of({
-        create: () => Effect.die("unused create"),
-        authenticate: () => Effect.die("unused authenticate"),
-        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
+        revokeForUser: () => Effect.die("unused revokeForUser"),
       }),
     ),
     Layer.succeed(
@@ -221,8 +386,8 @@ const linkedEnvironmentRecord = {
 } as const;
 
 describe("relay environment unlink", () => {
-  it.effect("revokes the link and its credentials in one database transaction", () => {
-    const calls: Array<string> = [];
+  it.effect("revokes the link and its credentials with one atomic Convex mutation", () => {
+    let mutationArgs: unknown = null;
     return Effect.gen(function* () {
       expect(
         yield* revokeEnvironmentLinkRecord({
@@ -231,23 +396,18 @@ describe("relay environment unlink", () => {
           environmentPublicKey: "public-key",
         }),
       ).toBe(true);
-      expect(calls).toEqual(["transaction", "link", "credential"]);
+      expect(mutationArgs).toMatchObject({
+        userId: "user-1",
+        environmentId: "environment-1",
+        now: "1970-01-01T00:00:00.000Z",
+      });
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
-          revokeForUser: () =>
+          revoke: (args) =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
+              mutationArgs = args;
+              return { linkRevoked: true, credentialsRevoked: true };
             }),
         }),
       ),
@@ -274,35 +434,19 @@ describe("relay environment unlink", () => {
           environmentId: "environment-1",
         }),
       ).toBe(true);
-      expect(calls).toEqual([
-        "prepare",
-        "lookup",
-        "transaction",
-        "link",
-        "credential",
-        "deprovision",
-      ]);
+      expect(calls).toEqual(["prepare", "lookup", "mutation", "deprovision"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
           getForUser: () =>
             Effect.sync(() => {
               calls.push("lookup");
               return linkedEnvironmentRecord;
             }),
-          revokeForUser: () =>
+          revoke: () =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
+              calls.push("mutation");
+              return { linkRevoked: true, credentialsRevoked: true };
             }),
           prepareDeprovision: () =>
             Effect.sync(() => {
@@ -321,8 +465,8 @@ describe("relay environment unlink", () => {
 
   it.effect("does not deprovision when database revocation fails", () => {
     const calls: Array<string> = [];
-    const failure = new EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError({
-      environmentId: "environment-1",
+    const failure = new RelayDb.RelayConvexClientError({
+      operation: "mutation",
       cause: "database unavailable",
     });
 
@@ -334,24 +478,20 @@ describe("relay environment unlink", () => {
             environmentId: "environment-1",
           }),
         ),
-      ).toBe(failure);
-      expect(calls).toEqual(["prepare", "transaction", "link", "credential"]);
+      ).toMatchObject({
+        _tag: "EnvironmentLinkRevokePersistenceError",
+        userId: "user-1",
+        environmentId: "environment-1",
+        cause: failure,
+      });
+      expect(calls).toEqual(["prepare", "mutation"]);
     }).pipe(
       Effect.provide(
         relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
           getForUser: () => Effect.succeed(linkedEnvironmentRecord),
-          revokeForUser: () =>
+          revoke: () =>
             Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
+              calls.push("mutation");
             }).pipe(Effect.andThen(Effect.fail(failure))),
           prepareDeprovision: () =>
             Effect.sync(() => {
@@ -389,6 +529,619 @@ describe("relay environment unlink", () => {
             Effect.sync(() => {
               calls.push("deprovision");
             }),
+        }),
+      ),
+    );
+  });
+});
+
+const convexMintKeyPair = NodeCrypto.generateKeyPairSync("ec", {
+  namedCurve: "P-256",
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+
+const enabledCloudSync = {
+  serviceTokensEnabled: true,
+  convexUrl: "https://convex.example.test",
+  signingKey: {
+    keyId: "relay-convex-test",
+    privateKey: Redacted.make(convexMintKeyPair.privateKey),
+    publicKey: convexMintKeyPair.publicKey,
+  },
+  verificationKeys: [{ keyId: "relay-convex-test", publicKey: convexMintKeyPair.publicKey }],
+} satisfies RelayConfiguration.RelayCloudSyncConfiguration;
+
+// The request URL the relay reconstructs from the incoming host header, which is
+// what the DPoP proof's `htu` has to match.
+const convexTokenUrl = "http://relay.example.test/v1/environment/convex-token";
+
+// The link key the relay stored for environment-1, which the key-binding
+// assertion is verified against.
+const convexEnvironmentKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+
+const environmentPrincipal: EnvironmentCredentials.EnvironmentCredentialPrincipal = {
+  credentialId: "credential-1",
+  environmentId: "environment-1",
+  environmentPublicKey: convexEnvironmentKeyPair.publicKey,
+};
+
+function signConvexKeyBinding(input: {
+  readonly jkt: string;
+  readonly privateKey?: string;
+  readonly claims?: Record<string, unknown>;
+}) {
+  const header = Buffer.from(
+    JSON.stringify({ alg: "EdDSA", typ: "t3-env-convex-key-binding+jwt" }),
+  ).toString("base64url");
+  // it.effect runs on the TestClock, which starts at the epoch.
+  const payload = Buffer.from(
+    JSON.stringify({
+      iss: "t3-env:environment-1",
+      aud: "https://relay.example.test",
+      sub: "environment-1",
+      jti: `key-binding-${input.jkt}`,
+      iat: 0,
+      exp: 600,
+      environmentId: "environment-1",
+      jkt: input.jkt,
+      ...input.claims,
+    }),
+  ).toString("base64url");
+  const signature = NodeCrypto.sign(
+    null,
+    Buffer.from(`${header}.${payload}`),
+    NodeCrypto.createPrivateKey(input.privateKey ?? convexEnvironmentKeyPair.privateKey),
+  ).toString("base64url");
+  return `${header}.${payload}.${signature}`;
+}
+
+function convexServiceTokenPayload(keyBinding: string): RelayConvexServiceTokenRequest {
+  return {
+    grant_type: RelayDpopTokenExchangeGrantType,
+    subject_token: "t3env_environment-1_secret",
+    subject_token_type: RelayEnvironmentCredentialTokenType,
+    requested_token_type: RelayAccessTokenType,
+    audience: RelayConvexAudience,
+    key_binding: keyBinding,
+  };
+}
+
+function makeConvexExchangeDpopProof(jti: string) {
+  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const publicJwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
+  const header = Buffer.from(
+    JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk: publicJwk }),
+  ).toString("base64url");
+  // it.effect runs on the TestClock, which starts at the epoch.
+  const payload = Buffer.from(
+    JSON.stringify({ htm: "POST", htu: convexTokenUrl, jti, iat: 0 }),
+  ).toString("base64url");
+  const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  }).toString("base64url");
+  return {
+    proof: `${header}.${payload}.${signature}`,
+    thumbprint: computeDpopJwkThumbprint(publicJwk),
+  };
+}
+
+function convexExchangeTestLayer(input: {
+  readonly cloudSync?: RelayConfiguration.RelayCloudSyncConfiguration | undefined;
+  readonly authenticate?: EnvironmentCredentials.EnvironmentCredentials["Service"]["authenticate"];
+  readonly consumedProofs: Set<string>;
+}) {
+  const settings: RelayConfiguration.RelayConfiguration["Service"] = {
+    ...relaySettings,
+    cloudMintPrivateKey: Redacted.make(convexMintKeyPair.privateKey),
+    cloudMintPublicKey: convexMintKeyPair.publicKey,
+    cloudSync: input.cloudSync,
+  };
+  const fakeClient = RelayDb.RelayConvexClient.of({
+    query: () => Effect.die("unused query"),
+    mutation: (_reference: unknown, args: unknown) =>
+      Effect.sync(() => {
+        const values = args as { readonly thumbprint: string; readonly jti: string };
+        const key = `${values.thumbprint}:${values.jti}`;
+        if (input.consumedProofs.has(key)) return false;
+        input.consumedProofs.add(key);
+        return true;
+      }),
+  } as unknown as RelayDb.RelayConvexClient["Service"]);
+
+  const configLayer = RelayConfiguration.layer(settings);
+  return Layer.mergeAll(
+    configLayer,
+    RelayTokens.layer.pipe(Layer.provide(configLayer)),
+    DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayConvexClient, fakeClient))),
+    Layer.succeed(
+      EnvironmentCredentials.EnvironmentCredentials,
+      EnvironmentCredentials.EnvironmentCredentials.of({
+        create: () => Effect.die("unused create"),
+        replaceLinkAndCreate: () => Effect.die("unused replaceLinkAndCreate"),
+        authenticate:
+          input.authenticate ?? (() => Effect.succeed(Option.some(environmentPrincipal))),
+        revokeForEnvironmentPublicKey: () => Effect.die("unused revoke"),
+      }),
+    ),
+    Layer.succeed(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => new Uint8Array(size),
+        digest: (_algorithm, data) => Effect.succeed(data),
+      }),
+    ),
+  );
+}
+
+function convexExchangeRequest(proof: string) {
+  return HttpServerRequest.fromWeb(
+    new Request(convexTokenUrl, {
+      method: "POST",
+      headers: { dpop: proof, host: "relay.example.test" },
+    }),
+  );
+}
+
+describe("relay Convex service token exchange", () => {
+  it.effect("issues a pathway-convex token bound to the environment and proof key", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-1");
+
+    return Effect.gen(function* () {
+      const response = yield* exchangeConvexServiceToken(
+        convexServiceTokenPayload(signConvexKeyBinding({ jkt: proof.thumbprint })),
+      );
+
+      expect(response).toMatchObject({
+        issued_token_type: RelayAccessTokenType,
+        token_type: "Bearer",
+        expires_in: 600,
+        audience: "pathway-convex",
+      });
+      expect(decodeRelayJwt(response.access_token)).toMatchObject({
+        iss: "https://relay.example.test",
+        aud: "pathway-convex",
+        sub: "environment-1",
+        environmentId: "environment-1",
+        cnf: { jkt: proof.thumbprint },
+        iat: 0,
+        exp: 600,
+      });
+      expect(consumedProofs.size).toBe(1);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses to exchange while the cloud-sync capability is disabled", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-disabled");
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(signConvexKeyBinding({ jkt: proof.thumbprint })),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "RelayAuthInvalidError")).toBe(true);
+      if (Predicate.isTagged(error, "RelayAuthInvalidError")) {
+        expect(error.reason).toBe("not_authorized");
+      }
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(convexExchangeTestLayer({ consumedProofs, cloudSync: undefined })),
+    );
+  });
+
+  it.effect("rejects a revoked environment credential without burning the DPoP proof", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-revoked");
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(signConvexKeyBinding({ jkt: proof.thumbprint })),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "RelayAuthInvalidError")).toBe(true);
+      if (Predicate.isTagged(error, "RelayAuthInvalidError")) {
+        expect(error.reason).toBe("invalid_bearer");
+      }
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          authenticate: () => Effect.succeed(Option.none()),
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects a replayed DPoP proof on a second exchange", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-replayed");
+
+    return Effect.gen(function* () {
+      yield* exchangeConvexServiceToken(
+        convexServiceTokenPayload(signConvexKeyBinding({ jkt: proof.thumbprint })),
+      );
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(signConvexKeyBinding({ jkt: proof.thumbprint })),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "Unauthorized")).toBe(true);
+      expect(consumedProofs.size).toBe(1);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses to mint against a DPoP key the environment never authorized", () => {
+    const consumedProofs = new Set<string>();
+    // A caller holding a stolen environment credential proves possession of a
+    // key of their own; the binding the environment signed names a different one.
+    const stolenProof = makeConvexExchangeDpopProof("convex-exchange-proof-foreign-key");
+    const authorized = makeConvexExchangeDpopProof("convex-exchange-proof-authorized");
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(signConvexKeyBinding({ jkt: authorized.thumbprint })),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "Unauthorized")).toBe(true);
+      // The mismatch is caught before the jti is spent, so the attacker cannot
+      // burn proofs the environment might still want to use.
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(stolenProof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects a key binding signed by anything but the environment's link key", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-forged-binding");
+    const forger = NodeCrypto.generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" },
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(
+            signConvexKeyBinding({ jkt: proof.thumbprint, privateKey: forger.privateKey }),
+          ),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "RelayAuthInvalidError")).toBe(true);
+      if (Predicate.isTagged(error, "RelayAuthInvalidError")) {
+        expect(error.reason).toBe("invalid_bearer");
+      }
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+
+  it.effect("rejects a key binding issued for another environment", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeConvexExchangeDpopProof("convex-exchange-proof-wrong-environment");
+
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeConvexServiceToken(
+          convexServiceTokenPayload(
+            signConvexKeyBinding({
+              jkt: proof.thumbprint,
+              claims: { environmentId: "environment-2" },
+            }),
+          ),
+        ),
+      );
+
+      expect(Predicate.isTagged(error, "RelayAuthInvalidError")).toBe(true);
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        convexExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        convexExchangeTestLayer({
+          consumedProofs,
+          cloudSync: enabledCloudSync,
+        }),
+      ),
+    );
+  });
+});
+
+const environmentDpopTokenUrl = "http://relay.example.test/v1/environment/dpop-token";
+const environmentAccessMintKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
+
+function makeEnvironmentExchangeDpopProof(jti: string) {
+  const { privateKey, publicKey } = NodeCrypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const publicJwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
+  const header = Buffer.from(
+    JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk: publicJwk }),
+  ).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({ htm: "POST", htu: environmentDpopTokenUrl, jti, iat: 0 }),
+  ).toString("base64url");
+  const signature = NodeCrypto.sign("sha256", Buffer.from(`${header}.${payload}`), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  }).toString("base64url");
+  return {
+    proof: `${header}.${payload}.${signature}`,
+    thumbprint: computeDpopJwkThumbprint(publicJwk),
+  };
+}
+
+function signEnvironmentAccessAssertion(input: {
+  readonly jkt: string;
+  readonly privateKey?: string;
+}) {
+  const header = Buffer.from(
+    JSON.stringify({ alg: "EdDSA", typ: RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP }),
+  ).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      iss: "t3-env:environment-1",
+      aud: "https://relay.example.test",
+      sub: "environment-1",
+      jti: `relay-access-${input.jkt}`,
+      iat: 0,
+      exp: 600,
+      environmentId: "environment-1",
+      jkt: input.jkt,
+    }),
+  ).toString("base64url");
+  const signature = NodeCrypto.sign(
+    null,
+    Buffer.from(`${header}.${payload}`),
+    NodeCrypto.createPrivateKey(input.privateKey ?? convexEnvironmentKeyPair.privateKey),
+  ).toString("base64url");
+  return `${header}.${payload}.${signature}`;
+}
+
+function environmentDpopTokenPayload(assertion: string): RelayEnvironmentDpopAccessTokenRequest {
+  return {
+    grant_type: RelayDpopTokenExchangeGrantType,
+    subject_token: assertion,
+    subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+    requested_token_type: RelayAccessTokenType,
+    resource: "https://relay.example.test",
+    scope: RelayEnvironmentConnectScope,
+    client_id: RelayEnvironmentClientId,
+  };
+}
+
+function environmentExchangeTestLayer(input: {
+  readonly activePublicKeys: ReadonlyArray<string>;
+  readonly consumedProofs: Set<string>;
+}) {
+  const settings: RelayConfiguration.RelayConfiguration["Service"] = {
+    ...relaySettings,
+    cloudMintPrivateKey: Redacted.make(environmentAccessMintKeyPair.privateKey),
+    cloudMintPublicKey: environmentAccessMintKeyPair.publicKey,
+  };
+  const fakeClient = RelayDb.RelayConvexClient.of({
+    query: () => Effect.die("unused query"),
+    mutation: (_reference: unknown, args: unknown) =>
+      Effect.sync(() => {
+        const values = args as { readonly thumbprint: string; readonly jti: string };
+        const key = `${values.thumbprint}:${values.jti}`;
+        if (input.consumedProofs.has(key)) return false;
+        input.consumedProofs.add(key);
+        return true;
+      }),
+  } as unknown as RelayDb.RelayConvexClient["Service"]);
+  const environmentLinks = EnvironmentLinks.EnvironmentLinks.of({
+    upsert: () => Effect.die("unused upsert"),
+    listUsersForEnvironment: () => Effect.die("unused listUsersForEnvironment"),
+    listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
+    listPublicKeysForEnvironment: () => Effect.succeed(input.activePublicKeys),
+    listForUser: () => Effect.die("unused listForUser"),
+    getForUser: () => Effect.die("unused getForUser"),
+    revokeForUser: () => Effect.die("unused revokeForUser"),
+  });
+  const configLayer = RelayConfiguration.layer(settings);
+  return Layer.mergeAll(
+    configLayer,
+    RelayTokens.layer.pipe(Layer.provide(configLayer)),
+    DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayConvexClient, fakeClient))),
+    Layer.succeed(EnvironmentLinks.EnvironmentLinks, environmentLinks),
+    Layer.succeed(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => new Uint8Array(size),
+        digest: (_algorithm, data) => Effect.succeed(data),
+      }),
+    ),
+  );
+}
+
+function environmentExchangeRequest(proof: string) {
+  return HttpServerRequest.fromWeb(
+    new Request(environmentDpopTokenUrl, {
+      method: "POST",
+      headers: { dpop: proof, host: "relay.example.test" },
+    }),
+  );
+}
+
+describe("relay environment DPoP access token exchange", () => {
+  it.effect("issues a DPoP-bound environment token with exactly environment connect scope", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeEnvironmentExchangeDpopProof("environment-exchange-proof-1");
+    return Effect.gen(function* () {
+      const response = yield* exchangeEnvironmentDpopAccessToken(
+        environmentDpopTokenPayload(signEnvironmentAccessAssertion({ jkt: proof.thumbprint })),
+      );
+
+      expect(response).toMatchObject({
+        issued_token_type: RelayAccessTokenType,
+        token_type: "DPoP",
+        scope: "environment:connect",
+      });
+      expect(decodeRelayJwt(response.access_token)).toMatchObject({
+        sub: "environment-1",
+        client_id: "t3-env",
+        subject_kind: "environment",
+        scope: "environment:connect",
+        cnf: { jkt: proof.thumbprint },
+      });
+      expect(consumedProofs.size).toBe(1);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        environmentExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        environmentExchangeTestLayer({
+          activePublicKeys: [convexEnvironmentKeyPair.publicKey],
+          consumedProofs,
+        }),
+      ),
+    );
+  });
+
+  it.effect("uniformly refuses an unlinked or revoked environment", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeEnvironmentExchangeDpopProof("environment-exchange-proof-unlinked");
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeEnvironmentDpopAccessToken(
+          environmentDpopTokenPayload(signEnvironmentAccessAssertion({ jkt: proof.thumbprint })),
+        ),
+      );
+      expect(error).toMatchObject({ _tag: "RelayAuthInvalidError", reason: "invalid_bearer" });
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        environmentExchangeRequest(proof.proof),
+      ),
+      Effect.provide(environmentExchangeTestLayer({ activePublicKeys: [], consumedProofs })),
+    );
+  });
+
+  it.effect("refuses an assertion signed by a key outside the active link record", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeEnvironmentExchangeDpopProof("environment-exchange-proof-wrong-key");
+    const wrongKey = NodeCrypto.generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      publicKeyEncoding: { format: "pem", type: "spki" },
+    });
+    return Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        exchangeEnvironmentDpopAccessToken(
+          environmentDpopTokenPayload(
+            signEnvironmentAccessAssertion({
+              jkt: proof.thumbprint,
+              privateKey: wrongKey.privateKey,
+            }),
+          ),
+        ),
+      );
+      expect(error).toMatchObject({ _tag: "RelayAuthInvalidError", reason: "invalid_bearer" });
+      expect(consumedProofs.size).toBe(0);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        environmentExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        environmentExchangeTestLayer({
+          activePublicKeys: [convexEnvironmentKeyPair.publicKey],
+          consumedProofs,
+        }),
+      ),
+    );
+  });
+
+  it.effect("refuses a replayed environment exchange DPoP proof", () => {
+    const consumedProofs = new Set<string>();
+    const proof = makeEnvironmentExchangeDpopProof("environment-exchange-proof-replayed");
+    const payload = environmentDpopTokenPayload(
+      signEnvironmentAccessAssertion({ jkt: proof.thumbprint }),
+    );
+    return Effect.gen(function* () {
+      yield* exchangeEnvironmentDpopAccessToken(payload);
+      const error = yield* Effect.flip(exchangeEnvironmentDpopAccessToken(payload));
+      expect(Predicate.isTagged(error, "Unauthorized")).toBe(true);
+      expect(consumedProofs.size).toBe(1);
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        environmentExchangeRequest(proof.proof),
+      ),
+      Effect.provide(
+        environmentExchangeTestLayer({
+          activePublicKeys: [convexEnvironmentKeyPair.publicKey],
+          consumedProofs,
         }),
       ),
     );

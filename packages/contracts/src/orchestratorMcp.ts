@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   ContextTransferId,
+  EnvironmentId,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -16,6 +17,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
+import { CloudProjectId, EnvironmentCommandId } from "./cloudProject.ts";
 import {
   ScheduledTaskRunStatus,
   ScheduledTaskSchedule,
@@ -167,6 +169,30 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(OrchestratorMcpRuntimeMode),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
+  targetEnvironmentId: Schema.optional(
+    EnvironmentId.annotate({
+      description:
+        "Environment that should own and execute this task. Omit for the current environment.",
+    }),
+  ),
+  targetProjectId: Schema.optional(
+    ProjectId.annotate({
+      description:
+        "Target-environment local project id for a direct launch. Required when direct delivery is attempted.",
+    }),
+  ),
+  cloudProjectId: Schema.optional(
+    CloudProjectId.annotate({
+      description:
+        "Company cloud-project id used by durable fallback when the target cannot be reached directly.",
+    }),
+  ),
+  connectGrantToken: Schema.optional(
+    TrimmedNonEmptyString.annotate({
+      description:
+        "Caller-supplied, single-use connect grant for one direct environment connection attempt.",
+    }),
+  ),
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
@@ -183,6 +209,32 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   waitTimedOut: Schema.Boolean,
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
+
+export const OrchestratorMcpRemoteDelegateTaskResult = Schema.Struct({
+  environmentCommandId: EnvironmentCommandId,
+  targetEnvironmentId: EnvironmentId,
+  delivery: Schema.Literals(["direct", "deferred"]),
+  threadId: Schema.NullOr(ThreadId),
+  status: Schema.Literals([
+    "queued",
+    "running",
+    "waiting",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+  ]),
+  providerInstanceId: Schema.NullOr(ProviderInstanceId),
+  model: Schema.NullOr(Schema.String),
+});
+export type OrchestratorMcpRemoteDelegateTaskResult =
+  typeof OrchestratorMcpRemoteDelegateTaskResult.Type;
+
+export const OrchestratorMcpDelegateTaskOutcome = Schema.Union([
+  OrchestratorMcpDelegateTaskResult,
+  OrchestratorMcpRemoteDelegateTaskResult,
+]);
+export type OrchestratorMcpDelegateTaskOutcome = typeof OrchestratorMcpDelegateTaskOutcome.Type;
 
 export const OrchestratorMcpTaskStatusInput = Schema.Struct({
   taskId: NodeId,
@@ -554,6 +606,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedErrorClass<Orchestrator
       "thread_not_interruptible",
       "invalid_request",
       "orchestration_error",
+      "remote_dispatch_unavailable",
     ]),
     message: Schema.String,
   },

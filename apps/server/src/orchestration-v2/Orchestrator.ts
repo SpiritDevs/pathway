@@ -30,8 +30,8 @@ import {
   type ProviderSessionId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -203,7 +203,7 @@ export interface OrchestratorV2Shape {
 }
 
 export class OrchestratorV2 extends Context.Service<OrchestratorV2, OrchestratorV2Shape>()(
-  "t3/orchestration-v2/Orchestrator/OrchestratorV2",
+  "@spiritdevs/pathway/orchestration-v2/Orchestrator/OrchestratorV2",
 ) {}
 
 export function handleTerminalEventWithPoisonIsolation<E>(input: {

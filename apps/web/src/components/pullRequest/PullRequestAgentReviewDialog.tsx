@@ -1,5 +1,5 @@
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+import type { ModelSelection, ProviderInstanceId } from "@spiritdevs/contracts";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import { BotIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 

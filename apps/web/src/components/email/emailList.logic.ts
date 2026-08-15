@@ -13,7 +13,7 @@ import type {
   ContextMenuItem,
   EmailAddress,
   EmailMessageId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 // ── Search ─────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import type { OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import type { OrchestrationV2ThreadShell, ThreadId } from "@spiritdevs/contracts";
 
 /** Archived snapshots may lag the live stream. Live shells win for duplicate ids. */
 export function mergeRelationshipThreadShells(

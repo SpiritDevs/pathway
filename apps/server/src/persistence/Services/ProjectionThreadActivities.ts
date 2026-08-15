@@ -6,8 +6,8 @@
  *
  * @module ProjectionThreadActivityRepository
  */
-import { EventId, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@t3tools/contracts";
-import { OrchestrationThreadActivityTone } from "@t3tools/contracts/legacy-orchestration";
+import { EventId, IsoDateTime, NonNegativeInt, ThreadId, TurnId } from "@spiritdevs/contracts";
+import { OrchestrationThreadActivityTone } from "@spiritdevs/contracts/legacy-orchestration";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -75,4 +75,6 @@ export interface ProjectionThreadActivityRepositoryShape {
 export class ProjectionThreadActivityRepository extends Context.Service<
   ProjectionThreadActivityRepository,
   ProjectionThreadActivityRepositoryShape
->()("t3/persistence/Services/ProjectionThreadActivities/ProjectionThreadActivityRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/ProjectionThreadActivities/ProjectionThreadActivityRepository",
+) {}

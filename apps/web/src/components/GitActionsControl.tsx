@@ -3,11 +3,11 @@ import {
   PUSH_AUTO_SETTLE_DELAY_MS,
   shouldStartPushAutoSettlement,
   type ScopedThreadRef,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
@@ -17,7 +17,7 @@ import type {
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
   VcsStatusResult,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";

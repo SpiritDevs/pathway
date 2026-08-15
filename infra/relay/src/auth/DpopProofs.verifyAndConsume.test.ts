@@ -5,16 +5,15 @@ import {
   computeDpopAccessTokenHash,
   computeDpopJwkThumbprint,
   type DpopPublicJwk,
-} from "@t3tools/shared/dpop";
+} from "@spiritdevs/shared/dpop";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as RelayDb from "../db.ts";
-import { relayDpopProofs } from "../persistence/schema.ts";
+import { RelayConvexClient, RelayConvexClientError } from "../db.ts";
 import * as DpopProofs from "./DpopProofs.ts";
 
-interface DpopProofInsertValues {
+interface ConsumedProof {
   readonly thumbprint: string;
   readonly jti: string;
   readonly iat: number;
@@ -34,11 +33,7 @@ function makeDpopProof(input: {
   });
   const publicJwk = publicKey.export({ format: "jwk" }) as DpopPublicJwk;
   const header = Buffer.from(
-    JSON.stringify({
-      typ: "dpop+jwt",
-      alg: "ES256",
-      jwk: publicJwk,
-    }),
+    JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk: publicJwk }),
   ).toString("base64url");
   const payload = Buffer.from(
     JSON.stringify({
@@ -59,167 +54,142 @@ function makeDpopProof(input: {
   };
 }
 
-function layer(
-  insert: (
-    values: DpopProofInsertValues,
-  ) => Effect.Effect<ReadonlyArray<{ readonly jti: string }>, { _tag: string }>,
-) {
-  const fakeDb = {
-    insert: (table: unknown) => {
-      expect(table).toBe(relayDpopProofs);
-      return {
-        values: (values: DpopProofInsertValues) => ({
-          onConflictDoNothing: () => ({
-            returning: (selection: unknown) => {
-              expect(selection).toBeDefined();
-              return insert(values);
-            },
-          }),
-        }),
-      };
-    },
-  } as unknown as RelayDb.RelayDb["Service"];
-  return DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)));
+function layer(consume: (values: ConsumedProof) => Effect.Effect<boolean, RelayConvexClientError>) {
+  const client = RelayConvexClient.of({
+    query: () => Effect.die("unexpected query"),
+    mutation: (_reference: unknown, args: unknown) => consume(args as ConsumedProof),
+  } as unknown as RelayConvexClient["Service"]);
+  return DpopProofs.layer.pipe(Layer.provide(Layer.succeed(RelayConvexClient, client)));
 }
 
 function consumeEachProofOnce() {
   const consumed = new Set<string>();
-  return (values: DpopProofInsertValues) =>
+  return (values: ConsumedProof) =>
     Effect.sync(() => {
       const key = `${values.thumbprint}:${values.jti}`;
-      if (consumed.has(key)) {
-        return [];
-      }
+      if (consumed.has(key)) return false;
       consumed.add(key);
-      return [{ jti: values.jti }];
+      return true;
     });
 }
 
 describe("DpopProofReplay.verifyAndConsume", () => {
-  it.effect("rejects replayed proofs after persistence consumes the jti once", () => {
+  it.effect("rejects replayed proofs after Convex consumes the jti once", () => {
     const now = DateTime.makeUnsafe("2026-05-25T12:00:00.000Z");
+    const url = "https://relay.example.com/v1/environments/env/connect";
     const proof = makeDpopProof({
       method: "POST",
-      url: "https://relay.example.com/v1/environments/env/connect",
+      url,
       iat: Math.floor(now.epochMilliseconds / 1_000),
       jti: "proof-1",
     });
-
     return Effect.gen(function* () {
       const replay = yield* DpopProofs.DpopProofReplay;
-      const first = yield* replay.verifyAndConsume({
-        proof: proof.proof,
-        method: "POST",
-        url: "https://relay.example.com/v1/environments/env/connect",
-        expectedThumbprint: proof.thumbprint,
-        now,
-      });
-      const second = yield* Effect.exit(
-        replay.verifyAndConsume({
+      expect(
+        yield* replay.verifyAndConsume({
           proof: proof.proof,
           method: "POST",
-          url: "https://relay.example.com/v1/environments/env/connect",
+          url,
           expectedThumbprint: proof.thumbprint,
           now,
         }),
-      );
-
-      expect(first).toBe(proof.thumbprint);
-      expect(second._tag).toBe("Failure");
+      ).toBe(proof.thumbprint);
+      expect(
+        (yield* Effect.exit(
+          replay.verifyAndConsume({
+            proof: proof.proof,
+            method: "POST",
+            url,
+            expectedThumbprint: proof.thumbprint,
+            now,
+          }),
+        ))._tag,
+      ).toBe("Failure");
     }).pipe(Effect.provide(layer(consumeEachProofOnce())));
   });
 
-  it.effect("rejects proofs missing the expected access token hash", () => {
+  it.effect("rejects proofs missing the expected access-token hash before persistence", () => {
     const now = DateTime.makeUnsafe("2026-05-25T12:00:00.000Z");
+    const url = "https://relay.example.com/v1/environments/env/connect";
     const proof = makeDpopProof({
       method: "POST",
-      url: "https://relay.example.com/v1/environments/env/connect",
+      url,
       iat: Math.floor(now.epochMilliseconds / 1_000),
-      jti: "proof-1",
+      jti: "proof-2",
     });
-
     return Effect.gen(function* () {
       const replay = yield* DpopProofs.DpopProofReplay;
-      const result = yield* Effect.exit(
-        replay.verifyAndConsume({
-          proof: proof.proof,
-          method: "POST",
-          url: "https://relay.example.com/v1/environments/env/connect",
-          expectedThumbprint: proof.thumbprint,
-          expectedAccessToken: "clerk-access-token",
-          now,
-        }),
-      );
-
-      expect(result._tag).toBe("Failure");
+      expect(
+        (yield* Effect.exit(
+          replay.verifyAndConsume({
+            proof: proof.proof,
+            method: "POST",
+            url,
+            expectedThumbprint: proof.thumbprint,
+            expectedAccessToken: "clerk-access-token",
+            now,
+          }),
+        ))._tag,
+      ).toBe("Failure");
     }).pipe(Effect.provide(layer(() => Effect.die("unexpected DPoP replay persistence"))));
   });
 
-  it.effect("preserves replay persistence failures", () => {
+  it.effect("preserves Convex replay persistence failures without exposing the proof", () => {
     const now = DateTime.makeUnsafe("2026-05-25T12:00:00.000Z");
+    const url = "https://relay.example.com/v1/environments/env/connect";
     const proof = makeDpopProof({
       method: "POST",
-      url: "https://relay.example.com/v1/environments/env/connect",
+      url,
       iat: Math.floor(now.epochMilliseconds / 1_000),
       jti: "proof-persistence-failure",
     });
-    const cause = { _tag: "DatabaseUnavailable" } as const;
-
+    const cause = new RelayConvexClientError({
+      operation: "mutation",
+      cause: new Error("offline"),
+    });
     return Effect.gen(function* () {
       const replay = yield* DpopProofs.DpopProofReplay;
       const error = yield* Effect.flip(
         replay.verifyAndConsume({
           proof: proof.proof,
           method: "POST",
-          url: "https://relay.example.com/v1/environments/env/connect",
+          url,
           expectedThumbprint: proof.thumbprint,
           now,
         }),
       );
-
       expect(error).toMatchObject({
         _tag: "DpopProofReplayPersistenceError",
         operation: "consume",
         thumbprint: proof.thumbprint,
         jti: "proof-persistence-failure",
-        iat: Math.floor(now.epochMilliseconds / 1_000),
+        cause,
       });
-      expect(error.cause).toBe(cause);
       expect(error).not.toHaveProperty("proof");
     }).pipe(Effect.provide(layer(() => Effect.fail(cause))));
   });
 
-  it.effect("accepts proofs bound to the access token hash", () => {
+  it.effect("accepts proofs bound to the access-token hash", () => {
     const now = DateTime.makeUnsafe("2026-05-25T12:00:00.000Z");
+    const url = "https://relay.example.com/v1/environments/env/status";
     const proof = makeDpopProof({
       method: "POST",
-      url: "https://relay.example.com/v1/environments/env/status",
+      url,
       iat: Math.floor(now.epochMilliseconds / 1_000),
       jti: "proof-status-1",
       accessToken: "clerk-access-token",
     });
-
     return Effect.gen(function* () {
       const replay = yield* DpopProofs.DpopProofReplay;
-      const thumbprint = yield* replay.verifyAndConsume({
-        proof: proof.proof,
-        method: "POST",
-        url: "https://relay.example.com/v1/environments/env/status",
-        expectedAccessToken: "clerk-access-token",
-        now,
-      });
-      const second = yield* Effect.exit(
-        replay.verifyAndConsume({
+      expect(
+        yield* replay.verifyAndConsume({
           proof: proof.proof,
           method: "POST",
-          url: "https://relay.example.com/v1/environments/env/status",
+          url,
           expectedAccessToken: "clerk-access-token",
           now,
         }),
-      );
-
-      expect(thumbprint).toBe(proof.thumbprint);
-      expect(second._tag).toBe("Failure");
+      ).toBe(proof.thumbprint);
     }).pipe(Effect.provide(layer(consumeEachProofOnce())));
   });
 });

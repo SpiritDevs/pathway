@@ -1,6 +1,23 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const { atoms, testState } = vi.hoisted(() => ({
+  atoms: {
+    activeCompanyId: Symbol("active-company-id"),
+    companyList: Symbol("company-list"),
+  },
+  testState: {
+    activeCompanyId: "company-b",
+    companies: [] as ReadonlyArray<{ readonly id: string; readonly name: string }>,
+    setActiveCompanyId: vi.fn(),
+  },
+}));
+
+vi.mock("@effect/atom-react", () => ({
+  useAtom: (atom: symbol) => [testState.activeCompanyId, testState.setActiveCompanyId],
+  useAtomValue: (atom: symbol) => (atom === atoms.companyList ? testState.companies : null),
+}));
 
 vi.mock("@clerk/react", () => ({
   useAuth: () => ({ isLoaded: true, isSignedIn: true }),
@@ -21,9 +38,17 @@ vi.mock("../../cloud/publicConfig", () => ({
   hasCloudPublicConfig: () => true,
 }));
 
+vi.mock("../../cloud/activeCompany", () => ({
+  activeCompanyIdAtom: atoms.activeCompanyId,
+  companyListAtom: atoms.companyList,
+}));
+
 vi.mock("../ui/menu", () => ({
   DropdownMenu: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuCheckboxItem: ({ checked, children }: { checked: boolean; children: ReactNode }) => (
+    <button data-checked={checked}>{children}</button>
+  ),
   DropdownMenuItem: ({ children }: { children: ReactNode }) => <button>{children}</button>,
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuSub: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -45,6 +70,12 @@ vi.mock("../usage/ProviderUsage", () => ({
 import { T3ConnectProfileButton } from "./T3ConnectSidebarSignIn";
 
 describe("T3ConnectProfileButton", () => {
+  beforeEach(() => {
+    testState.activeCompanyId = "company-b";
+    testState.companies = [];
+    testState.setActiveCompanyId.mockClear();
+  });
+
   it("renders the signed-in user and the existing account actions in a Pathway menu", () => {
     const markup = renderToStaticMarkup(<T3ConnectProfileButton />);
 
@@ -56,5 +87,27 @@ describe("T3ConnectProfileButton", () => {
     expect(markup).toContain("Manage account");
     expect(markup).toContain("Sign out");
     expect(markup).not.toContain("cl-userButton");
+  });
+
+  it("hides the company section when the synced company list is empty", () => {
+    testState.companies = [];
+
+    const markup = renderToStaticMarkup(<T3ConnectProfileButton />);
+
+    expect(markup).not.toContain("Company");
+  });
+
+  it("lists synced companies and checks the active company", () => {
+    testState.companies = [
+      { id: "company-a", name: "Acme" },
+      { id: "company-b", name: "Beta Labs" },
+    ];
+
+    const markup = renderToStaticMarkup(<T3ConnectProfileButton />);
+
+    expect(markup).toContain("Company");
+    expect(markup).toContain("Acme");
+    expect(markup).toContain("Beta Labs");
+    expect(markup).toContain('<button data-checked="true">Beta Labs</button>');
   });
 });

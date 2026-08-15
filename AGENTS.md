@@ -14,15 +14,15 @@ Lots of apps have gotten bogged down with bad tech decisions and "slop". We have
 
 ### 2. Remote ready
 
-The architecture of Pathway's websocket layer (npx t3) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with Pathway Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
+The architecture of Pathway's websocket layer (npx @spiritdevs/pathway) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with Pathway Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
 
 ### 3. Multi-surface
 
 Pathway has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
-**Web** is kind of two surfaces, as we have the public facing "app.t3.codes" as well as locally hosting the web app through the `npx t3` command. Both need to be supported by all new features where reasonable.
+**Web** is kind of two surfaces, as we have the public facing "app.spiritdevs.com" as well as locally hosting the web app through the `npx @spiritdevs/pathway` command. Both need to be supported by all new features where reasonable.
 
-**Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from app.t3.codes or the mobile app.
+**Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from app.spiritdevs.com or the mobile app.
 
 **Mobile** is a React Native app for both iOS and Android, available on the App Store and Google Play. The mobile app allows for connecting to any Pathway server to control work remotely.
 

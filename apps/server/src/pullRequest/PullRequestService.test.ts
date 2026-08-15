@@ -7,7 +7,7 @@ import type {
   PullRequestReviewCapabilities,
   PullRequestReviewerCapabilities,
   SourceControlProviderKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";

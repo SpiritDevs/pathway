@@ -7,7 +7,7 @@
  *
  * @module IssueRelationRepository
  */
-import { IssueId, IssueRelation, IssueRelationEdge, IssueRelationId } from "@t3tools/contracts";
+import { IssueId, IssueRelation, IssueRelationEdge, IssueRelationId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -65,4 +65,4 @@ export interface IssueRelationRepositoryShape {
 export class IssueRelationRepository extends Context.Service<
   IssueRelationRepository,
   IssueRelationRepositoryShape
->()("t3/persistence/Services/IssueRelations/IssueRelationRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueRelations/IssueRelationRepository") {}

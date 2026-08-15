@@ -21,8 +21,8 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+} from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import {
   CalendarIcon,
   CalendarRangeIcon,
@@ -40,7 +40,6 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 
-import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import {
   Menu,
   MenuCheckboxItem,
@@ -64,7 +63,8 @@ import {
   IssuePriorityIcon,
   IssueStatusDot,
 } from "./IssueGlyphs";
-import { issueAssigneeOptionValue, issueAssigneeOptions } from "./issueDetail.logic";
+import { issueAssigneeOptionValue } from "./issueDetail.logic";
+import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import {
   ISSUE_CONTEXT_MENU_COPY_FIELDS,
   ISSUE_CONTEXT_MENU_COPY_LABELS,
@@ -84,9 +84,6 @@ import {
   ISSUE_PRIORITY_ORDER,
   issueLabelSelectionState,
 } from "./issuesList.logic";
-
-/** The driver list is a module constant, so the options built from it can be one too. */
-const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
 
 /** A null `value` means "clear it": the same sentinel every nullable picker in the tracker uses. */
 const NONE_VALUE = "";
@@ -140,6 +137,7 @@ export function IssueContextMenu({
   onCopy,
   onDelete,
 }: IssueContextMenuProps) {
+  const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
   const x = target?.x ?? 0;
   const y = target?.y ?? 0;
   // A zero-size rect at the pointer: the popup's own collision handling does the rest, which is
@@ -275,7 +273,11 @@ export function IssueContextMenu({
               {ASSIGNEE_OPTIONS.map((option) => (
                 <MenuRadioItem closeOnClick key={option.value} value={option.value}>
                   <span className="flex min-w-0 items-center gap-2">
-                    <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                    <IssueAssigneeGlyph
+                      assignee={option.assignee}
+                      className="size-4"
+                      label={option.label}
+                    />
                     <span className="truncate">{option.label}</span>
                   </span>
                 </MenuRadioItem>

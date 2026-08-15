@@ -8,10 +8,11 @@
  * Cmd/Ctrl+Enter submits, and images arrive by paste or drop.
  *
  * **Attachments:** an image pasted or dropped on the composer is compressed to the wire cap the
- * same way the chat composer's is, read to a base64 data URL, and handed to
- * `issues.uploadCommentAttachment`, which answers with the id the comment will carry. The bytes go
- * to the attachment store, not into the comment, so what a posted comment holds is a list of ids
- * and the assets route resolves them — exactly as it already did for an id minted elsewhere.
+ * same way the chat composer's is, then handed to the active company's attachment pipeline, which
+ * answers with the id the comment will carry.
+ * Legacy companies use `issues.uploadCommentAttachment`; replica companies prepare in Convex,
+ * upload directly to UploadThing, and finalize before the draft becomes submittable. Posted
+ * comments hold only ids, resolved through the matching permission-checked URL surface.
  *
  * @module components/issues/IssueComments
  */
@@ -25,11 +26,11 @@ import type {
   IssueId,
   ModelSelection,
   ProviderInstanceId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { ChevronRightIcon, ImagePlusIcon, PencilIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAssetUrlsState } from "~/assets/assetUrls";
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import type { ProviderInstanceEntry } from "~/providerInstances";
@@ -42,6 +43,7 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { IssueAssigneeGlyph, IssueSlackGlyph } from "./IssueGlyphs";
 import {
   issueCommentAgentRunPresentation,
@@ -67,17 +69,17 @@ import {
   resolveIssueCommentMention,
 } from "./issueCommentMention.logic";
 import { canEditIssueComment, issueActorLabel, type IssueEventNaming } from "./issueDetail.logic";
+import { useIssueMemberDirectory } from "./issueMemberDirectory";
 import { resolveIssueStartWorkModelSelection } from "./issueStartWork.logic";
 import {
   PendingIssueImageAttachment,
   useIssueImageAttachmentDrafts,
 } from "./useIssueImageAttachmentDrafts";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition.label]),
 );
-
-const COMMENT_NAMING: IssueEventNaming = { providerLabels: PROVIDER_LABELS };
 
 const EMPTY_INSTANCE_ENTRIES: ReadonlyArray<ProviderInstanceEntry> = [];
 const EMPTY_MODEL_OPTIONS: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>> = new Map();
@@ -156,26 +158,32 @@ function CommentAgentRun({
 
 /** A signed URL is minted per attachment, so this mounts only when there is something to fetch. */
 function CommentAttachments({
+  cloud,
   environmentId,
   attachmentIds,
+  issueId,
   onOpenImage,
 }: {
-  environmentId: EnvironmentId;
+  cloud: ReplicaIssueAttachmentCloud | null;
+  environmentId: EnvironmentId | null;
   attachmentIds: ReadonlyArray<ChatAttachmentId>;
+  issueId: IssueId;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
 }) {
-  const resources = useMemo(
-    () => attachmentIds.map((attachmentId) => ({ _tag: "attachment" as const, attachmentId })),
-    [attachmentIds],
-  );
-  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
+  const { attachments: resolved, refresh } = useIssueAttachmentUrls({
+    attachmentIds,
+    cloud,
+    environmentId,
+    issueId,
+  });
 
   return (
     <div className="mt-1.5 flex flex-wrap gap-2">
       {attachmentIds.map((attachmentId, index) => {
-        const url = urls[index] ?? null;
-        if (url === null) return null;
-        return isIssueVideoAttachmentUrl(url) ? (
+        const attachment = resolved[index] ?? null;
+        if (attachment === null) return null;
+        return attachment.mimeType?.startsWith("video/") === true ||
+          isIssueVideoAttachmentUrl(attachment.url) ? (
           <video
             aria-label="Comment video attachment"
             className="max-h-64 max-w-full rounded-lg border border-border/60"
@@ -184,7 +192,7 @@ function CommentAttachments({
             onError={() => refresh(index)}
             playsInline
             preload="metadata"
-            src={url}
+            src={attachment.url}
           />
         ) : (
           <button
@@ -198,7 +206,7 @@ function CommentAttachments({
               alt="Comment attachment"
               className="max-h-40 rounded-lg border border-border/60 transition-opacity hover:opacity-80"
               onError={() => refresh(index)}
-              src={url}
+              src={attachment.url}
             />
           </button>
         );
@@ -209,7 +217,9 @@ function CommentAttachments({
 
 function CommentRow({
   comment,
+  cloud,
   environmentId,
+  memberNames,
   onEdit,
   onDelete,
   onCancelAgentRun,
@@ -217,13 +227,16 @@ function CommentRow({
   onRetryAgentRun,
 }: {
   comment: IssueComment;
+  cloud: ReplicaIssueAttachmentCloud | null;
   environmentId: EnvironmentId | null;
+  memberNames: ReadonlyMap<string, string>;
   onEdit: (comment: IssueComment, body: string) => void;
   onDelete: (commentId: IssueCommentId) => void;
   onCancelAgentRun: (commentId: IssueCommentId) => void;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
   onRetryAgentRun: (commentId: IssueCommentId) => void;
 }) {
+  const naming: IssueEventNaming = { providerLabels: PROVIDER_LABELS, memberNames };
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.body);
@@ -250,12 +263,17 @@ function CommentRow({
         <IssueAssigneeGlyph
           assignee={comment.author.kind === "system" ? null : comment.author}
           className="mt-0.5 size-5 shrink-0"
+          label={
+            comment.author.kind === "member"
+              ? memberNames.get(comment.author.membershipId)
+              : undefined
+          }
         />
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="text-[13px] font-medium text-foreground">
-            {issueActorLabel(comment.author, COMMENT_NAMING)}
+            {issueActorLabel(comment.author, naming)}
           </span>
           <time
             className="text-[11px] text-muted-foreground/70"
@@ -326,10 +344,13 @@ function CommentRow({
         ) : (
           <>
             <ChatMarkdown className="text-[13px]" cwd={undefined} text={comment.body} />
-            {comment.attachmentIds.length === 0 || environmentId === null ? null : (
+            {comment.attachmentIds.length === 0 ||
+            (cloud === null && environmentId === null) ? null : (
               <CommentAttachments
                 attachmentIds={comment.attachmentIds}
+                cloud={cloud}
                 environmentId={environmentId}
+                issueId={comment.issueId}
                 onOpenImage={onOpenImage}
               />
             )}
@@ -348,6 +369,7 @@ function CommentRow({
 }
 
 export function IssueComments({
+  cloud,
   comments,
   isPending,
   issueId,
@@ -360,6 +382,7 @@ export function IssueComments({
   instanceEntries = EMPTY_INSTANCE_ENTRIES,
   modelOptionsByInstance = EMPTY_MODEL_OPTIONS,
 }: {
+  cloud: ReplicaIssueAttachmentCloud | null;
   /** Already chronological — the state layer sorts the read and its live patches together. */
   comments: ReadonlyArray<IssueComment>;
   isPending: boolean;
@@ -382,6 +405,7 @@ export function IssueComments({
   modelOptionsByInstance?: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
 }) {
   const environmentId = usePrimaryEnvironmentId();
+  const memberDirectory = useIssueMemberDirectory();
   // No draft persistence: the sheet's body is keyed on the issue id, so walking the list with `j`
   // discards a half-written comment rather than carrying it to the next issue. Staged images go
   // with it — they are already in the store, and an orphan there costs a file, not a row.
@@ -399,7 +423,7 @@ export function IssueComments({
   const [dismissedRaw, setDismissedRaw] = useState<string | null>(null);
   const [mentionSelection, setMentionSelection] = useState<ModelSelection | null>(null);
   const { attachments, addFiles, removeAttachment, clearAttachments } =
-    useIssueImageAttachmentDrafts(issueId);
+    useIssueImageAttachmentDrafts(issueId, cloud);
   const composer = issueCommentComposerState({ draft, attachments });
 
   const mentionAgents = useMemo(
@@ -495,11 +519,23 @@ export function IssueComments({
       submitted === null || selection === null
         ? composer.body
         : issueCommentMentionBody(composer.body, submitted);
-    clearComposer();
     if (submitted === null || selection === null) {
+      clearComposer();
       onCreate(body, attachmentIds);
       return;
     }
+    if (cloud !== null && attachmentIds.length > 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Comment not posted",
+          description:
+            "Cloud-synced attachments cannot start an agent run yet. Remove the agent mention or the attachments and try again.",
+        }),
+      );
+      return;
+    }
+    clearComposer();
     onCreate(body, attachmentIds, { modelSelection: selection });
   };
 
@@ -516,8 +552,10 @@ export function IssueComments({
           {comments.map((comment) => (
             <CommentRow
               comment={comment}
+              cloud={cloud}
               environmentId={environmentId}
               key={comment.id}
+              memberNames={memberDirectory.names}
               onCancelAgentRun={onCancelAgentRun}
               onDelete={onDelete}
               onEdit={onEdit}
@@ -623,7 +661,11 @@ export function IssueComments({
               addFiles(files);
             }}
             onSelect={(event) => setDraftCaret(event.currentTarget.selectionStart)}
-            placeholder="Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
+            placeholder={
+              cloud !== null && !cloud.isOnline
+                ? "Leave a comment… (attachments unavailable offline)"
+                : "Leave a comment… (⌘↵ to send, paste or drop an image to attach)"
+            }
             ref={textareaRef}
             value={draft}
           />

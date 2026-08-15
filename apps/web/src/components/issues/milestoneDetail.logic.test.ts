@@ -1,4 +1,4 @@
-import type { IssueMilestone, IssueStatusCategory } from "@t3tools/contracts";
+import type { IssueMilestone, IssueStatusCategory } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

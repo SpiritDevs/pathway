@@ -1,0 +1,80 @@
+{
+  "name": "@spiritdevs/backend",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./companies": {
+      "types": "./src/companies.ts",
+      "import": "./src/companies.ts"
+    },
+    "./connectGrants": {
+      "types": "./src/connectGrants.ts",
+      "import": "./src/connectGrants.ts"
+    },
+    "./convexApi": {
+      "types": "./src/convexApi.ts",
+      "import": "./src/convexApi.ts"
+    },
+    "./invitations": {
+      "types": "./src/invitations.ts",
+      "import": "./src/invitations.ts"
+    },
+    "./issueKeys": {
+      "types": "./src/issueKeys.ts",
+      "import": "./src/issueKeys.ts"
+    },
+    "./ownership": {
+      "types": "./src/ownership.ts",
+      "import": "./src/ownership.ts"
+    },
+    "./permissions": {
+      "types": "./src/permissions.ts",
+      "import": "./src/permissions.ts"
+    },
+    "./smokeSeed": {
+      "types": "./src/smokeSeed.ts",
+      "import": "./src/smokeSeed.ts"
+    },
+    "./sync/changeFeed": {
+      "types": "./src/sync/changeFeed.ts",
+      "import": "./src/sync/changeFeed.ts"
+    },
+    "./sync/issueOps": {
+      "types": "./src/sync/issueOps.ts",
+      "import": "./src/sync/issueOps.ts"
+    },
+    "./sync/issueLegacyProjection": {
+      "types": "./src/sync/issueLegacyProjection.ts",
+      "import": "./src/sync/issueLegacyProjection.ts"
+    },
+    "./sync/operations": {
+      "types": "./src/sync/operations.ts",
+      "import": "./src/sync/operations.ts"
+    },
+    "./sync/protocol": {
+      "types": "./src/sync/protocol.ts",
+      "import": "./src/sync/protocol.ts"
+    },
+    "./sync/workflow": {
+      "types": "./src/sync/workflow.ts",
+      "import": "./src/sync/workflow.ts"
+    }
+  },
+  "scripts": {
+    "codegen": "convex codegen --typecheck disable",
+    "dev": "convex dev",
+    "typecheck": "tsgo --noEmit",
+    "test": "vp test run"
+  },
+  "dependencies": {
+    "@spiritdevs/client-runtime": "workspace:*",
+    "@spiritdevs/contracts": "workspace:*",
+    "convex": "^1.16.0",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "convex-test": "0.0.55",
+    "vite-plus": "catalog:"
+  }
+}

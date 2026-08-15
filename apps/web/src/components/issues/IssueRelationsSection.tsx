@@ -14,7 +14,7 @@ import type {
   IssueRelationId,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 

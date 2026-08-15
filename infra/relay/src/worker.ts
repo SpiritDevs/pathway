@@ -1,6 +1,6 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import * as Drizzle from "alchemy/Drizzle";
+import { ConvexHttpClient } from "convex/browser";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -13,7 +13,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
-import { RelayApi } from "@t3tools/contracts/relay";
+import { RelayApi } from "@spiritdevs/contracts/relay";
 
 import {
   clientApi,
@@ -38,6 +38,8 @@ import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
 import * as Devices from "./agentActivity/Devices.ts";
 import * as DpopProofs from "./auth/DpopProofs.ts";
+import * as ConvexConnectGrants from "./auth/ConvexConnectGrants.ts";
+import * as ConvexJwks from "./auth/ConvexJwks.ts";
 import * as RelayTokens from "./auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./environments/EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
@@ -92,6 +94,11 @@ const relayApiLayer = Layer.mergeAll(
 );
 
 const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
+export const RELAY_CONVEX_SIGNING_KEY_ID = "pathway-convex-2026-08-01";
+const ConvexRelaySigningKey = Alchemy.KeyPair("ConvexRelaySigningKey", {
+  algorithm: "ec",
+  namedCurve: "P-256",
+});
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
@@ -118,6 +125,7 @@ export const ApiLive = Api.make(
     const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
     const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
+    const convexRelaySigningKey = yield* ConvexRelaySigningKey;
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
     const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
@@ -126,14 +134,7 @@ export const ApiLive = Api.make(
     //
     // 2. Create bindings
     //
-    const environment = yield* Config.schema(
-      RelayConfiguration.ApnsEnvironment,
-      "APNS_ENVIRONMENT",
-    );
-    const apnsTeamId = yield* Config.string("APNS_TEAM_ID");
-    const apnsKeyId = yield* Config.string("APNS_KEY_ID");
-    const apnsBundleId = yield* Config.string("APNS_BUNDLE_ID");
-    const apnsPrivateKey = yield* Config.redacted("APNS_PRIVATE_KEY");
+    const apns = yield* RelayConfiguration.loadApnsCredentials;
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
 
@@ -144,11 +145,12 @@ export const ApiLive = Api.make(
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
     const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
+    const convexUrl = yield* Config.nonEmptyString("CONVEX_URL");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
-    const hyperdrive = yield* Cloudflare.Hyperdrive.Connect(yield* RelayDb.RelayHyperdrive);
-    const db = yield* Drizzle.Postgres(hyperdrive.connectionString);
+    const convexRelayPrivateKey = yield* convexRelaySigningKey.privateKey;
+    const convexRelayPublicKey = yield* convexRelaySigningKey.publicKey;
 
     const managedEndpointTunnelBinding = yield* Cloudflare.Tunnel.ReadWriteTunnel();
     // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
@@ -161,26 +163,49 @@ export const ApiLive = Api.make(
     //
     const alchemyRuntimeContext: Alchemy.BaseRuntimeContext = yield* Cloudflare.Worker;
 
-    const loadSettings = Effect.gen(function* () {
-      return RelayConfiguration.RelayConfiguration.of({
-        relayIssuer: relayPublicOrigin,
-        apns: {
-          environment,
-          teamId: apnsTeamId,
-          keyId: apnsKeyId,
-          bundleId: apnsBundleId,
-          privateKey: apnsPrivateKey,
+    const relaySettings = RelayConfiguration.RelayConfiguration.of({
+      relayIssuer: relayPublicOrigin,
+      apns,
+      apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
+      clerkSecretKey,
+      clerkPublishableKey,
+      clerkJwtAudience,
+      cloudMintPrivateKey: yield* cloudMintPrivateKey,
+      cloudMintPublicKey: yield* cloudMintPublicKey,
+      managedEndpointBaseDomain: yield* managedEndpointZoneName,
+      managedEndpointNamespace: stage,
+      cloudSync: {
+        serviceTokensEnabled: true,
+        convexUrl,
+        signingKey: {
+          keyId: RELAY_CONVEX_SIGNING_KEY_ID,
+          privateKey: yield* convexRelayPrivateKey,
+          publicKey: yield* convexRelayPublicKey,
         },
-        apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
-        clerkSecretKey,
-        clerkPublishableKey,
-        clerkJwtAudience,
-        cloudMintPrivateKey: yield* cloudMintPrivateKey,
-        cloudMintPublicKey: yield* cloudMintPublicKey,
-        managedEndpointBaseDomain: yield* managedEndpointZoneName,
-        managedEndpointNamespace: stage,
-      });
+        verificationKeys: [
+          {
+            keyId: RELAY_CONVEX_SIGNING_KEY_ID,
+            publicKey: yield* convexRelayPublicKey,
+          },
+        ],
+      },
     });
+    const relayConfigurationLayer = Layer.succeed(
+      RelayConfiguration.RelayConfiguration,
+      relaySettings,
+    );
+    const relayTokenLayer = RelayTokens.layer.pipe(Layer.provide(relayConfigurationLayer));
+    const getConvexControlPlaneToken = Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const now = yield* DateTime.now;
+      const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_CONVEX_CONTROL_PLANE_TOKEN_TTL);
+      return yield* relayTokens.issueConvexControlPlaneToken({
+        jti: yield* crypto.randomUUIDv4,
+        issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+        expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+      });
+    }).pipe(Effect.provide([relayTokenLayer, webcryptoLayer]));
 
     const relayTraceLayer = Layer.unwrap(
       Effect.all({
@@ -188,6 +213,18 @@ export const ApiLive = Api.make(
         tracesEndpoint: axiomTracesEndpoint,
         ingestToken: axiomIngestToken,
       }).pipe(Effect.map(makeRelayTraceLayer)),
+    );
+
+    const cloudSyncRuntimeLayer = Layer.empty.pipe(
+      Layer.provideMerge(
+        RelayDb.RelayConvexClient.layer({
+          makeClient: () => new ConvexHttpClient(convexUrl),
+          getToken: getConvexControlPlaneToken,
+        }),
+      ),
+      Layer.provideMerge(ConvexJwks.layer),
+      Layer.provideMerge(relayConfigurationLayer),
+      Layer.provideMerge(webcryptoLayer),
     );
 
     const runtimeLayer = Layer.empty.pipe(
@@ -204,6 +241,7 @@ export const ApiLive = Api.make(
         ),
       ),
       Layer.provideMerge(DpopProofs.layer),
+      Layer.provideMerge(ConvexConnectGrants.layer),
       Layer.provideMerge(ApnsDeliveries.layer),
       Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
       Layer.provideMerge(
@@ -222,13 +260,7 @@ export const ApiLive = Api.make(
       Layer.provideMerge(LiveActivities.layer),
       Layer.provideMerge(DeliveryAttempts.layer),
       Layer.provideMerge(RelayTokens.layer),
-      Layer.provideMerge(
-        RelayDb.RelayTransactions.layer.pipe(
-          Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
-        ),
-      ),
-      Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
-      Layer.provideMerge(webcryptoLayer),
+      Layer.provideMerge(cloudSyncRuntimeLayer),
     );
 
     const appLayer = relayApiLayer.pipe(
@@ -260,19 +292,34 @@ export const ApiLive = Api.make(
         ),
     );
 
+    const MAX_PRUNE_BATCHES_PER_RUN = 10;
+    const drainPruneBatches = <E, R>(
+      prune: Effect.Effect<number, E, R>,
+      batchSize: number,
+      batchesRemaining = MAX_PRUNE_BATCHES_PER_RUN,
+    ): Effect.Effect<void, E, R> =>
+      prune.pipe(
+        Effect.flatMap((deleted) =>
+          deleted === batchSize && batchesRemaining > 1
+            ? drainPruneBatches(prune, batchSize, batchesRemaining - 1)
+            : Effect.void,
+        ),
+      );
+
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
-      DpopProofs.DpopProofReplay.pipe(
-        Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
-        // Terminal thread rows are kept briefly so finished agents show as
-        // Done/Failed in the Live Activity; sweep them once they age out.
-        Effect.andThen(
-          Effect.all([AgentActivityRows.AgentActivityRows, DateTime.now]).pipe(
-            Effect.flatMap(([activityRows, now]) =>
-              activityRows.pruneTerminal({
+      DateTime.now.pipe(
+        Effect.flatMap((now) =>
+          Effect.all([
+            drainPruneBatches(DpopProofs.pruneExpiredBatch, DpopProofs.DPOP_PROOF_PRUNE_BATCH_SIZE),
+            // Terminal thread rows are kept briefly so finished agents show as
+            // Done/Failed in the Live Activity; sweep them once they age out.
+            drainPruneBatches(
+              AgentActivityRows.pruneTerminalBatch({
                 updatedBefore: DateTime.formatIso(DateTime.subtract(now, { minutes: 30 })),
               }),
+              AgentActivityRows.AGENT_ACTIVITY_PRUNE_BATCH_SIZE,
             ),
-          ),
+          ]),
         ),
         Effect.withSpan("relay.cron.prune_expired_state"),
         Effect.provide(runtimeLayer),
@@ -286,19 +333,21 @@ export const ApiLive = Api.make(
         ),
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         relayDocsRedirectRoute,
+        ConvexJwks.route,
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
       withoutCapturedParentSpan,
-      Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, relayTraceLayer)),
+      Effect.flatMap((httpEffect) =>
+        traceRelayHttpRequestWith(httpEffect.pipe(Effect.provide(runtimeLayer)), relayTraceLayer),
+      ),
     );
 
     return { fetch };
   }).pipe(
     Effect.provide(
       Layer.empty.pipe(
-        Layer.provideMerge(Cloudflare.Hyperdrive.ConnectBinding),
         Layer.provideMerge(Cloudflare.Workers.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.Queues.WriteQueueBinding),
         Layer.provideMerge(Cloudflare.Queues.EventSourceLive),

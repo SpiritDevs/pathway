@@ -1,4 +1,4 @@
-import type { DiscoveredLocalServer } from "@t3tools/contracts";
+import type { DiscoveredLocalServer } from "@spiritdevs/contracts";
 
 export const DEVELOPMENT_SERVER_ROW_ACTIONS = {
   open: "Open",

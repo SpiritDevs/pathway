@@ -11,7 +11,7 @@ import {
   EnvironmentHttpConflictError,
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   RelayCloudEnvironmentHealthProofPayload,
   RelayCloudEnvironmentHealthRequest,
@@ -29,8 +29,9 @@ import {
   RelayLinkProofRequest,
   RelayManagedEndpointOrigin,
   RelayOkResponse,
-} from "@t3tools/contracts/relay";
-import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
+  type RelayValidatedConnectGrantIdentity,
+} from "@spiritdevs/contracts/relay";
+import { withRelayClientTracing } from "@spiritdevs/shared/relayTracing";
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
@@ -40,8 +41,8 @@ import {
   RELAY_MINT_RESPONSE_TYP,
   signRelayJwt,
   verifyRelayJwt,
-} from "@t3tools/shared/relayJwt";
-import { isSecureRelayUrl } from "@t3tools/shared/relayUrl";
+} from "@spiritdevs/shared/relayJwt";
+import { isSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -54,6 +55,7 @@ import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -83,6 +85,10 @@ import {
   setCliDesiredCloudLink,
 } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
+import {
+  authorizeConnectGrantFromLocalReplica,
+  resolveConnectGrantActorFromLocalReplica,
+} from "./connectGrantAuthorization.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
 
@@ -353,13 +359,21 @@ function hasBoundedCloudProofLifetime(input: {
 const decodeCloudHealthProof = Schema.decodeUnknownEffect(RelayCloudEnvironmentHealthProofPayload);
 const decodeCloudMintProof = Schema.decodeUnknownEffect(RelayCloudMintCredentialProofPayload);
 
-interface CloudHttpDependencies {
+export interface CloudHttpDependencies {
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly environment: ServerEnvironment.ServerEnvironment["Service"];
   readonly endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"];
   readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
   readonly cliTokenManager: CliTokenManager.CloudCliTokenManager["Service"];
   readonly httpClient: HttpClient.HttpClient;
+  readonly authorizeConnectGrant: (input: {
+    readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) => Effect.Effect<boolean, never, SqlClient.SqlClient>;
+  readonly resolveConnectGrantActor: (input: {
+    readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) => Effect.Effect<string | null, never, SqlClient.SqlClient>;
 }
 
 const cloudHttpDependencies = Effect.gen(function* () {
@@ -370,8 +384,34 @@ const cloudHttpDependencies = Effect.gen(function* () {
     environmentAuth: yield* EnvironmentAuth.EnvironmentAuth,
     cliTokenManager: yield* CliTokenManager.CloudCliTokenManager,
     httpClient: yield* HttpClient.HttpClient,
+    authorizeConnectGrant: authorizeConnectGrantFromLocalReplica,
+    resolveConnectGrantActor: resolveConnectGrantActorFromLocalReplica,
   } satisfies CloudHttpDependencies;
 });
+
+export function requireCloudMintConnectGrantAuthorization<R>(
+  dependencies: {
+    readonly authorizeConnectGrant: (input: {
+      readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+      readonly connectGrant: RelayValidatedConnectGrantIdentity;
+    }) => Effect.Effect<boolean, never, R>;
+  },
+  proof: RelayCloudMintCredentialProofPayload,
+  environmentId: RelayCloudMintCredentialProofPayload["environmentId"],
+): Effect.Effect<void, EnvironmentHttpUnauthorizedError, R> {
+  return Effect.gen(function* () {
+    if (proof.connectGrant === undefined) return;
+    const authorized = yield* dependencies.authorizeConnectGrant({
+      environmentId,
+      connectGrant: proof.connectGrant,
+    });
+    if (!authorized) {
+      return yield* new EnvironmentHttpUnauthorizedError({
+        message: "Invalid cloud mint request.",
+      });
+    }
+  });
+}
 
 const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function* (
   dependencies: CloudHttpDependencies,
@@ -558,7 +598,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
           onNone: () =>
             Effect.fail(
               new EnvironmentHttpUnauthorizedError({
-                message: "Run `t3 connect link` to authorize this environment.",
+                message: "Run `pathway connect link` to authorize this environment.",
               }),
             ),
           onSome: Effect.succeed,
@@ -649,7 +689,7 @@ export const pendingServiceUpdateExists = Effect.gen(function* () {
 });
 
 // A pending update alone is not proof a replacement server is coming: an
-// explicit launcher stop (`t3 service uninstall`, `systemctl stop`) during
+// explicit launcher stop (`pathway service uninstall`, `systemctl stop`) during
 // the pending window also tears this server down. The launcher marks that case
 // just before it signals the child, so pending + no marker is the handoff.
 const pendingUpdateHandoffExists = Effect.gen(function* () {
@@ -945,7 +985,7 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
   ),
 );
 
-const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")(
+export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")(
   function* (dependencies: CloudHttpDependencies, request: RelayCloudMintCredentialRequest) {
     const cloudMintPublicKey = yield* dependencies.secrets
       .get(CLOUD_MINT_PUBLIC_KEY)
@@ -974,7 +1014,6 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
         ),
       );
     const environmentId = yield* dependencies.environment.getEnvironmentId;
-    const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
     const now = yield* DateTime.now;
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
     const proofOption = yield* verifyRelayJwt({
@@ -988,7 +1027,6 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
     if (
       Option.isNone(proofOption) ||
       proofOption.value.environmentId !== environmentId ||
-      proofOption.value.sub !== linkedCloudUserId ||
       proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
       !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
       !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
@@ -998,6 +1036,37 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       });
     }
     const proof = proofOption.value;
+    const sessionIdentity = yield* proof.initiatingEnvironmentId === undefined
+      ? Effect.gen(function* () {
+          const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
+          if (proof.sub !== linkedCloudUserId) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
+          return { subject: "cloud-connect" } as const;
+        })
+      : Effect.gen(function* () {
+          if (proof.sub !== proof.initiatingEnvironmentId || proof.connectGrant === undefined) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          const actingUserId = yield* dependencies.resolveConnectGrantActor({
+            environmentId,
+            connectGrant: proof.connectGrant,
+          });
+          if (actingUserId === null) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          return {
+            subject: actingUserId,
+            initiatingEnvironmentId: proof.initiatingEnvironmentId,
+          } as const;
+        });
 
     const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
     const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
@@ -1015,7 +1084,7 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
       scopes: AuthStandardClientScopes,
-      subject: "cloud-connect",
+      ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",
       proofKeyThumbprint: proof.clientProofKeyThumbprint,

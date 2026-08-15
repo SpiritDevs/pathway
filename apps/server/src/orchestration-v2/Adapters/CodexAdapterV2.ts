@@ -1,7 +1,11 @@
-import { CodexSettings, defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import {
+  CodexSettings,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+} from "@spiritdevs/contracts";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
+import { getModelSelectionStringOptionValue } from "@spiritdevs/shared/model";
+import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -28,7 +32,7 @@ import type {
   RuntimeMode,
   RuntimeRequestId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Context from "effect/Context";
@@ -1156,7 +1160,7 @@ export interface CodexAppServerClientFactoryShape {
 export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactory,
   CodexAppServerClientFactoryShape
->()("t3/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
+>()("@spiritdevs/pathway/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
 export function codexThreadRuntimeParams(input: {
   readonly threadId: ThreadId | null;

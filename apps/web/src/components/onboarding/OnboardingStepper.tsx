@@ -9,7 +9,7 @@ import {
   type ProfileMetadata,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 import { useUser } from "@clerk/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useState } from "react";

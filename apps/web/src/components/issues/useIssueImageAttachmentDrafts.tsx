@@ -1,8 +1,9 @@
-import type { IssueId } from "@t3tools/contracts";
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES } from "@t3tools/contracts";
+import type { ChatAttachmentId, IssueId } from "@spiritdevs/contracts";
+import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES } from "@spiritdevs/contracts";
 import { XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { randomUUID } from "~/lib/utils";
 import { useUploadIssueCommentAttachment } from "~/state/issues";
@@ -65,6 +66,7 @@ export interface IssueImageAttachmentDraftController {
  */
 export function useIssueImageAttachmentDrafts(
   issueId: IssueId,
+  cloud: ReplicaIssueAttachmentCloud | null,
 ): IssueImageAttachmentDraftController {
   const [attachments, setAttachments] = useState<ReadonlyArray<IssueCommentAttachmentDraft>>([]);
   const uploadAttachment = useUploadIssueCommentAttachment();
@@ -126,24 +128,40 @@ export function useIssueImageAttachmentDrafts(
         );
         return;
       }
-      const dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
-      if (dataUrl === null) {
-        fail(`${name} could not be read as an image.`);
-        return;
-      }
-      const rejection = issueCommentAttachmentDataUrlRejection({ name, dataUrl });
-      if (rejection !== null) {
-        fail(rejection);
-        return;
-      }
+      let attachmentId: ChatAttachmentId;
+      if (cloud !== null) {
+        try {
+          attachmentId = await cloud.client.upload({
+            companyId: cloud.companyId,
+            issueId,
+            clientRequestId: draftId,
+            fileName: name,
+            file: compressed.file,
+          });
+        } catch (error) {
+          fail(error instanceof Error ? error.message : `${name} could not be uploaded.`);
+          return;
+        }
+      } else {
+        const dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
+        if (dataUrl === null) {
+          fail(`${name} could not be read as an image.`);
+          return;
+        }
+        const rejection = issueCommentAttachmentDataUrlRejection({ name, dataUrl });
+        if (rejection !== null) {
+          fail(rejection);
+          return;
+        }
 
-      const result = await uploadAttachment({ issueId, dataUrl });
-      if (result._tag !== "Success") {
-        discard();
-        reportIssueWriteFailure("Failed to attach the image", result);
-        return;
+        const result = await uploadAttachment({ issueId, dataUrl });
+        if (result._tag !== "Success") {
+          discard();
+          reportIssueWriteFailure("Failed to attach the image", result);
+          return;
+        }
+        attachmentId = result.value.attachmentId;
       }
-      const { attachmentId } = result.value;
       setAttachments((current) =>
         current.map((attachment) =>
           attachment.draftId === draftId
@@ -152,16 +170,22 @@ export function useIssueImageAttachmentDrafts(
         ),
       );
     },
-    [issueId, reportRejection, uploadAttachment],
+    [cloud, issueId, reportRejection, uploadAttachment],
   );
 
   const addFiles = useCallback(
     (files: ReadonlyArray<File>) => {
+      if (cloud !== null && !cloud.isOnline) {
+        reportRejection(
+          "Attachments need an internet connection on cloud-synced issues. You can still post a text comment offline.",
+        );
+        return;
+      }
       const intake = issueCommentAttachmentIntake({ files, currentCount: attachments.length });
       if (intake.rejection !== null) reportRejection(intake.rejection);
       for (const file of intake.accepted) void uploadFile(file);
     },
-    [attachments.length, reportRejection, uploadFile],
+    [attachments.length, cloud, reportRejection, uploadFile],
   );
 
   return { attachments, addFiles, removeAttachment, clearAttachments } as const;

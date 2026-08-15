@@ -15,7 +15,8 @@ import {
   type IssueEvent,
   type IssueEventKind,
   type IssueTodo,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { IssueRelationLabel } from "~/state/issues";
@@ -108,6 +109,9 @@ function event(overrides: Partial<IssueEvent> & { kind: IssueEventKind }): Issue
   };
 }
 
+const MEMBER_A = MembershipId.make("membership-a");
+const MEMBER_B = MembershipId.make("membership-b");
+
 const PROVIDER_LABELS = new Map([
   ["codex", "Codex"],
   ["claudeAgent", "Claude"],
@@ -199,6 +203,23 @@ describe("issueAssigneeOptions", () => {
   it("gives unassigned the empty value a radio group can carry", () => {
     expect(options[0]?.value).toBe(ISSUE_ASSIGNEE_NONE_VALUE);
   });
+
+  it("uses the signed-in membership for You and offers active teammates by name", () => {
+    const memberOptions = issueAssigneeOptions(
+      [],
+      [
+        { membershipId: MEMBER_A, label: "Ada" },
+        { membershipId: MEMBER_B, label: "Grace" },
+      ],
+      MEMBER_A,
+    );
+    expect(memberOptions.map((option) => option.label)).toEqual(["Unassigned", "You", "Grace"]);
+    expect(memberOptions[1]?.assignee).toEqual({ kind: "member", membershipId: MEMBER_A });
+    expect(issueAssigneeOptions([], [], MEMBER_A)[1]?.assignee).toEqual({
+      kind: "member",
+      membershipId: MEMBER_A,
+    });
+  });
 });
 
 describe("sameIssueAssignee", () => {
@@ -209,6 +230,28 @@ describe("sameIssueAssignee", () => {
     ).toBe(true);
     expect(sameIssueAssignee({ kind: "user" }, null)).toBe(false);
     expect(sameIssueAssignee(null, null)).toBe(true);
+  });
+
+  it("does not read one company member as another", () => {
+    expect(
+      sameIssueAssignee(
+        { kind: "member", membershipId: MEMBER_A },
+        { kind: "member", membershipId: MEMBER_A },
+      ),
+    ).toBe(true);
+    // Reassigning from one teammate to another is a real change, so the patch has to survive it.
+    expect(
+      sameIssueAssignee(
+        { kind: "member", membershipId: MEMBER_A },
+        { kind: "member", membershipId: MEMBER_B },
+      ),
+    ).toBe(false);
+    expect(
+      issueAssigneePatch(issue({ assignee: { kind: "member", membershipId: MEMBER_A } }), {
+        kind: "member",
+        membershipId: MEMBER_B,
+      }),
+    ).toEqual({ assignee: { kind: "member", membershipId: MEMBER_B } });
   });
 });
 
@@ -289,6 +332,15 @@ describe("issueActorLabel", () => {
     );
     expect(issueActorLabel({ kind: "system", source: "import" })).toBe("CSV import");
     expect(issueActorLabel({ kind: "system", source: "slack" })).toBe("Slack");
+  });
+
+  it("names each company member apart, by name when it knows one", () => {
+    const naming = { memberNames: new Map([["membership-a", "Ada"]]) };
+    expect(issueActorLabel({ kind: "member", membershipId: MEMBER_A }, naming)).toBe("Ada");
+    // Never a bare "Member": two teammates sharing one line is two people losing their words.
+    expect(issueActorLabel({ kind: "member", membershipId: MEMBER_B }, naming)).toBe(
+      "Unknown member",
+    );
   });
 
   it("names the cycle carry-over as itself rather than as Slack", () => {
@@ -373,6 +425,28 @@ describe("describeIssueEvent", () => {
         event({ kind: "field_changed", field: "assignee", before: null, after: "user" }),
       ).summary,
     ).toBe("assigned this to you");
+    // A teammate reads by name when the directory knows them, and by membership when it does not.
+    expect(
+      describeIssueEvent(
+        event({
+          kind: "field_changed",
+          field: "assignee",
+          before: null,
+          after: "member:membership-a",
+        }),
+        { memberNames: new Map([["membership-a", "Ada"]]) },
+      ).summary,
+    ).toBe("assigned this to Ada");
+    expect(
+      describeIssueEvent(
+        event({
+          kind: "field_changed",
+          field: "assignee",
+          before: null,
+          after: "member:membership-b",
+        }),
+      ).summary,
+    ).toBe("assigned this to Unknown member");
   });
 
   it("names a project by title and falls back to the raw id", () => {

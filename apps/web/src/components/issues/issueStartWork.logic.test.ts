@@ -10,7 +10,7 @@ import {
   type Issue,
   type IssueTodo,
   type ServerProvider,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { deriveProviderInstanceEntries } from "~/providerInstances";

@@ -10,7 +10,7 @@
  *
  * @module components/email/emailView.logic
  */
-import type { EmailAddress, EmailInboxScope, ProjectId } from "@t3tools/contracts";
+import type { EmailAddress, EmailInboxScope, ProjectId } from "@spiritdevs/contracts";
 
 // ── URL ────────────────────────────────────────────────────────────────
 

@@ -14,12 +14,12 @@ import {
   type IssuePriority,
   type IssueStatusCategory,
   type IssuesImportCsvSkip,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   normalizeIssueCsvHeader,
   parseCsv,
   resolveIssueCsvColumns,
-} from "@t3tools/shared/issuesCsv";
+} from "@spiritdevs/shared/issuesCsv";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 

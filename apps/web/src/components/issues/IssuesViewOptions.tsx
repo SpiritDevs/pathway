@@ -6,7 +6,7 @@
  *
  * @module components/issues/IssuesViewOptions
  */
-import type { IssueViewGrouping, IssueViewMode, IssueViewSortMode } from "@t3tools/contracts";
+import type { IssueViewGrouping, IssueViewMode, IssueViewSortMode } from "@spiritdevs/contracts";
 import { SlidersHorizontalIcon } from "lucide-react";
 
 import { Button } from "../ui/button";

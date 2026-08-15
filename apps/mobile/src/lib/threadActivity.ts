@@ -2,13 +2,13 @@ import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
   ThreadUserInputQuestion,
-} from "@t3tools/client-runtime/state/thread-requests";
-import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+} from "@spiritdevs/client-runtime/state/thread-requests";
+import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import {
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolLogo,
   type PathwayMcpToolPresentation,
-} from "@t3tools/shared/pathwayMcpToolPresentation";
+} from "@spiritdevs/shared/pathwayMcpToolPresentation";
 import type {
   ChatAttachment,
   MessageId,
@@ -20,9 +20,9 @@ import type {
   OrchestrationV2UserMessageInputIntent,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
-import { sourceControlMarkerLabel } from "@t3tools/shared/sourceControl";
+} from "@spiritdevs/contracts";
+import { formatDuration } from "@spiritdevs/shared/orchestrationTiming";
+import { sourceControlMarkerLabel } from "@spiritdevs/shared/sourceControl";
 import * as DateTime from "effect/DateTime";
 
 export type PendingApproval = ThreadPendingApproval;

@@ -1,6 +1,6 @@
-import type { V2ItemSupport } from "@t3tools/client-runtime/state/item-support";
-import type { ThreadId } from "@t3tools/contracts";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import type { V2ItemSupport } from "@spiritdevs/client-runtime/state/item-support";
+import type { ThreadId } from "@spiritdevs/contracts";
+import { formatDuration } from "@spiritdevs/shared/orchestrationTiming";
 import * as DateTime from "effect/DateTime";
 
 import type { ThreadFeedActivity } from "./threadActivity";

@@ -1,6 +1,6 @@
-import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
+import { type EnvironmentConnectionPhase } from "@spiritdevs/client-runtime/connection";
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
+import type { EnvironmentThreadStatus } from "@spiritdevs/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -14,8 +14,8 @@ import type {
   RuntimeRequestId,
   ServerConfig as T3ServerConfig,
   ThreadId,
-} from "@t3tools/contracts";
-import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
+} from "@spiritdevs/contracts";
+import type { ThreadUserInputQuestion } from "@spiritdevs/client-runtime/state/thread-requests";
 import * as Haptics from "expo-haptics";
 import {
   memo,

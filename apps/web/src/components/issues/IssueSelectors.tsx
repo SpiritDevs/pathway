@@ -18,7 +18,7 @@ import type {
   IssueMilestoneId,
   IssueStatus,
   IssueStatusId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { CalendarRangeIcon, CheckIcon, FlagIcon, GitBranchIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 

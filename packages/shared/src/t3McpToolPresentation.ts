@@ -1,4 +1,4 @@
-/** @deprecated Import from `@t3tools/shared/pathwayMcpToolPresentation`. */
+/** @deprecated Import from `@spiritdevs/shared/pathwayMcpToolPresentation`. */
 export {
   resolvePathwayMcpToolPresentation as resolveT3McpToolPresentation,
   type PathwayMcpToolLogo as T3McpToolLogo,

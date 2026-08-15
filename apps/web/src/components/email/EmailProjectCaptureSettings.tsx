@@ -12,7 +12,7 @@
  *
  * @module components/email/EmailProjectCaptureSettings
  */
-import type { EmailCaptureSettings, EmailProjectSettings } from "@t3tools/contracts";
+import type { EmailCaptureSettings, EmailProjectSettings } from "@spiritdevs/contracts";
 import { BellIcon, ChevronRightIcon, MailIcon } from "lucide-react";
 import { useState } from "react";
 

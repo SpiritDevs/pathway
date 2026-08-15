@@ -19,7 +19,7 @@ import type {
   IssueStatus,
   IssueStatusId,
   IssueViewSortMode,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import { issueSortOrderForDrop } from "~/state/issues";
 import type { IssuesView } from "./issuesList.logic";

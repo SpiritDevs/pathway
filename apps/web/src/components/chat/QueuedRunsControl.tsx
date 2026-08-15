@@ -35,15 +35,15 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   deriveThreadQueueWorkflowState,
   isQueuedRunOrderStale,
   orderQueuedRuns,
   resolveQueuedRunReorder,
   type QueuedThreadRun,
-} from "@t3tools/client-runtime/state/thread-workflows";
-import type { EnvironmentId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/thread-workflows";
+import type { EnvironmentId, MessageId, RunId, ThreadId } from "@spiritdevs/contracts";
 import {
   BotIcon,
   CheckIcon,

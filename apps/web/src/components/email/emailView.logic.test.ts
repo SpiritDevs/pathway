@@ -1,4 +1,4 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

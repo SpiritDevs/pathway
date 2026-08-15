@@ -4,7 +4,7 @@ import {
   ProjectId,
   CommandId,
   SourceControlDiscoveryResult,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 
 import {

@@ -11,13 +11,13 @@
  *
  * @module components/issues/MilestonesOverviewPage
  */
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import {
   issueMilestoneStatusOn,
   type IssueMilestone,
   type IssueMilestoneId,
-} from "@t3tools/contracts";
-import type { IssueDate, IssueStatusCategory, ProjectId } from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
+import type { IssueDate, IssueStatusCategory, ProjectId } from "@spiritdevs/contracts";
 import { Link } from "@tanstack/react-router";
 import {
   CalendarRangeIcon,

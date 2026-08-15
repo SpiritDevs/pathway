@@ -6,8 +6,14 @@
  *
  * @module ProjectionThreadSessionRepository
  */
-import { RuntimeMode, IsoDateTime, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
-import { OrchestrationSessionStatus } from "@t3tools/contracts/legacy-orchestration";
+import {
+  RuntimeMode,
+  IsoDateTime,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@spiritdevs/contracts";
+import { OrchestrationSessionStatus } from "@spiritdevs/contracts/legacy-orchestration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
@@ -69,4 +75,6 @@ export interface ProjectionThreadSessionRepositoryShape {
 export class ProjectionThreadSessionRepository extends Context.Service<
   ProjectionThreadSessionRepository,
   ProjectionThreadSessionRepositoryShape
->()("t3/persistence/Services/ProjectionThreadSessions/ProjectionThreadSessionRepository") {}
+>()(
+  "@spiritdevs/pathway/persistence/Services/ProjectionThreadSessions/ProjectionThreadSessionRepository",
+) {}

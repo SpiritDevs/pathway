@@ -1,4 +1,4 @@
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
+import { tokenizeCliArgs } from "@spiritdevs/shared/cliArgs";
 
 export const PATHWAY_CODEX_LAUNCH_ARGS_ENV = "PATHWAY_CODEX_LAUNCH_ARGS";
 

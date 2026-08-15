@@ -2,11 +2,12 @@ import {
   AuthSessionId,
   AuthStandardClientScopes,
   AuthEnvironmentScopes,
+  EnvironmentId,
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthEnvironmentScope,
   type ServerAuthSessionMethod,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -47,6 +48,7 @@ export interface VerifiedSession {
   readonly client: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
 }
@@ -362,6 +364,7 @@ export class SessionStore extends Context.Service<
     readonly issue: (input?: {
       readonly ttl?: Duration.Duration;
       readonly subject?: string;
+      readonly initiatingEnvironmentId?: EnvironmentId;
       readonly method?: ServerAuthSessionMethod;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly client?: AuthClientMetadata;
@@ -397,7 +400,7 @@ export class SessionStore extends Context.Service<
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   }
->()("t3/auth/SessionStore") {}
+>()("@spiritdevs/pathway/auth/SessionStore") {}
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
@@ -408,6 +411,7 @@ const SessionClaims = Schema.Struct({
   kind: Schema.Literal("session"),
   sid: AuthSessionId,
   sub: Schema.String,
+  initiatingEnvironmentId: Schema.optionalKey(EnvironmentId),
   scopes: AuthEnvironmentScopes,
   method: Schema.Literals(["browser-session-cookie", "bearer-access-token", "dpop-access-token"]),
   jkt: Schema.optionalKey(Schema.String),
@@ -499,6 +503,9 @@ export const make = Effect.gen(function* () {
         toAuthClientSession({
           sessionId: row.value.sessionId,
           subject: row.value.subject,
+          ...(row.value.initiatingEnvironmentId
+            ? { initiatingEnvironmentId: row.value.initiatingEnvironmentId }
+            : {}),
           scopes: row.value.scopes,
           method: row.value.method,
           client: toClientMetadata(row.value.client),
@@ -587,6 +594,9 @@ export const make = Effect.gen(function* () {
         kind: "session",
         sid: sessionId,
         sub: input?.subject ?? "browser",
+        ...(input?.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+          : {}),
         scopes: input?.scopes ?? AuthStandardClientScopes,
         method: input?.method ?? "browser-session-cookie",
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
@@ -614,6 +624,7 @@ export const make = Effect.gen(function* () {
         .create({
           sessionId,
           subject: claims.sub,
+          initiatingEnvironmentId: claims.initiatingEnvironmentId ?? null,
           scopes: claims.scopes,
           method: claims.method,
           client: {
@@ -632,6 +643,9 @@ export const make = Effect.gen(function* () {
         toAuthClientSession({
           sessionId,
           subject: claims.sub,
+          ...(claims.initiatingEnvironmentId
+            ? { initiatingEnvironmentId: claims.initiatingEnvironmentId }
+            : {}),
           scopes: claims.scopes,
           method: claims.method,
           client,
@@ -710,6 +724,9 @@ export const make = Effect.gen(function* () {
         client: toClientMetadata(row.value.client),
         expiresAt: expiresAt.value,
         subject: claims.sub,
+        ...(claims.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: claims.initiatingEnvironmentId }
+          : {}),
         scopes: claims.scopes,
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
       } satisfies VerifiedSession;
@@ -816,6 +833,9 @@ export const make = Effect.gen(function* () {
       client: toClientMetadata(row.value.client),
       expiresAt: row.value.expiresAt,
       subject: row.value.subject,
+      ...(row.value.initiatingEnvironmentId
+        ? { initiatingEnvironmentId: row.value.initiatingEnvironmentId }
+        : {}),
       scopes: row.value.scopes,
     } satisfies VerifiedSession;
   });
@@ -830,6 +850,9 @@ export const make = Effect.gen(function* () {
         toAuthClientSession({
           sessionId: row.sessionId,
           subject: row.subject,
+          ...(row.initiatingEnvironmentId
+            ? { initiatingEnvironmentId: row.initiatingEnvironmentId }
+            : {}),
           scopes: row.scopes,
           method: row.method,
           client: toClientMetadata(row.client),

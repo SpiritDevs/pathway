@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 
 import type { DraftId } from "~/composerDraftStore";
 import type { RightPanelSurface } from "~/rightPanelStore";

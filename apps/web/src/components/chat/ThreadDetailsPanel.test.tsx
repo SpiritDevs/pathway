@@ -3,7 +3,7 @@ import type {
   ServerProvider,
   T3ProjectFileScript,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 

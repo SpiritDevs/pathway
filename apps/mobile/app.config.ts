@@ -63,25 +63,25 @@ const VARIANT_CONFIG = {
   development: {
     appName: "Pathway Dev",
     scheme: "pathway-dev",
-    iosBundleIdentifier: "com.t3tools.pathway.dev",
-    androidPackage: "com.t3tools.pathway.dev",
-    relyingParty: "clerk.t3.codes",
+    iosBundleIdentifier: "com.spiritdevs.pathway.dev",
+    androidPackage: "com.spiritdevs.pathway.dev",
+    relyingParty: "clerk.spiritdevs.com",
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
     appName: "Pathway Preview",
     scheme: "pathway-preview",
-    iosBundleIdentifier: "com.t3tools.pathway.preview",
-    androidPackage: "com.t3tools.pathway.preview",
-    relyingParty: "clerk.t3.codes",
+    iosBundleIdentifier: "com.spiritdevs.pathway.preview",
+    androidPackage: "com.spiritdevs.pathway.preview",
+    relyingParty: "clerk.spiritdevs.com",
     assets: PREVIEW_ASSETS,
   },
   production: {
     appName: "Pathway",
     scheme: "pathway",
-    iosBundleIdentifier: "com.t3tools.pathway",
-    androidPackage: "com.t3tools.pathway",
-    relyingParty: "clerk.t3.codes",
+    iosBundleIdentifier: "com.spiritdevs.pathway",
+    androidPackage: "com.spiritdevs.pathway",
+    relyingParty: "clerk.spiritdevs.com",
     assets: RELEASE_ASSETS,
   },
 } as const;
@@ -185,7 +185,7 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
+    // Pin code signing to the Spirit Devs team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
     appleTeamId: "ARK85ZXQ4Z",

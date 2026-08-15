@@ -15,7 +15,7 @@ import type {
   ProviderTurnId,
   ThreadId,
   TurnItemId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 
 function trimmed(value: string | null | undefined): string | undefined {

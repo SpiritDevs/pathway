@@ -6,7 +6,7 @@
  *
  * @module IssueLabelRepository
  */
-import { IssueId, IssueLabel, IssueLabelId } from "@t3tools/contracts";
+import { IssueId, IssueLabel, IssueLabelId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -95,4 +95,4 @@ export interface IssueLabelRepositoryShape {
 export class IssueLabelRepository extends Context.Service<
   IssueLabelRepository,
   IssueLabelRepositoryShape
->()("t3/persistence/Services/IssueLabels/IssueLabelRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueLabels/IssueLabelRepository") {}

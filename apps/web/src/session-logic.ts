@@ -10,14 +10,17 @@ import {
   type PlanId,
   type RunId,
   type ThreadId,
-} from "@t3tools/contracts";
-import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
+} from "@spiritdevs/contracts";
+import type { ThreadCheckpointSummary } from "@spiritdevs/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
-} from "@t3tools/client-runtime/state/thread-requests";
-import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/shell";
-import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+} from "@spiritdevs/client-runtime/state/thread-requests";
+import type {
+  ThreadRunSummary,
+  ThreadRuntimeSummary,
+} from "@spiritdevs/client-runtime/state/shell";
+import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 
 import type { ChatMessage, ProposedPlan, SessionPhase, TurnDiffSummary } from "./types";
 import * as DateTime from "effect/DateTime";

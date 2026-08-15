@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/contracts",
+  "name": "@spiritdevs/contracts",
   "version": "0.0.33",
   "private": true,
   "files": [
@@ -18,6 +18,18 @@
     "./relay": {
       "types": "./src/relay.ts",
       "import": "./src/relay.ts"
+    },
+    "./company": {
+      "types": "./src/company.ts",
+      "import": "./src/company.ts"
+    },
+    "./cloudProject": {
+      "types": "./src/cloudProject.ts",
+      "import": "./src/cloudProject.ts"
+    },
+    "./cloudSync": {
+      "types": "./src/cloudSync.ts",
+      "import": "./src/cloudSync.ts"
     },
     "./legacy-orchestration": {
       "types": "./src/orchestration.ts",

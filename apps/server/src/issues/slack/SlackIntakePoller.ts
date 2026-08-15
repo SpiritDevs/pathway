@@ -40,7 +40,7 @@ import {
   type IssueId,
   type IssuesStreamEvent,
   type SlackChannelWatch,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -117,7 +117,10 @@ const SLACK_SYSTEM_ACTOR_LABELS: Record<"import" | "cycles" | "slack" | "automat
 /** Who to say did it, in a sentence a Slack reader can follow. */
 export function slackActorLabel(actor: IssueActor): string {
   switch (actor.kind) {
+    // A member is a person, and their membership id is not a name a Slack reader would recognise,
+    // so they read the same way the sole human does rather than as an agent or the tracker itself.
     case "user":
+    case "member":
       return SLACK_USER_ACTOR_LABEL;
     case "agent":
       return actor.provider.charAt(0).toUpperCase() + actor.provider.slice(1);

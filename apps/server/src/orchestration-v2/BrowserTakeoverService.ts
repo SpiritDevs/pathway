@@ -4,7 +4,7 @@ import {
   type OrchestrationV2BrowserTakeoverFailure,
   type OrchestrationV2ThreadProjection,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -82,7 +82,7 @@ export interface BrowserTakeoverFenceRegistryShape {
 export class BrowserTakeoverFenceRegistry extends Context.Service<
   BrowserTakeoverFenceRegistry,
   BrowserTakeoverFenceRegistryShape
->()("t3/orchestration-v2/BrowserTakeoverService/BrowserTakeoverFenceRegistry") {}
+>()("@spiritdevs/pathway/orchestration-v2/BrowserTakeoverService/BrowserTakeoverFenceRegistry") {}
 
 export const fenceRegistryLayer = Layer.effect(
   BrowserTakeoverFenceRegistry,
@@ -202,7 +202,7 @@ export interface BrowserTakeoverServiceShape {
 export class BrowserTakeoverService extends Context.Service<
   BrowserTakeoverService,
   BrowserTakeoverServiceShape
->()("t3/orchestration-v2/BrowserTakeoverService") {}
+>()("@spiritdevs/pathway/orchestration-v2/BrowserTakeoverService") {}
 
 /** The message a proceed attempt sends. Deterministic so recovery can find it. */
 function continuationMessageIdPrefix(takeoverId: CommandId): string {
@@ -252,10 +252,7 @@ export const make = Effect.gen(function* () {
     rearm: (input) => Effect.flatMap(fenceRegistry.current, (current) => current.rearm(input)),
   };
 
-  const loadMarker = (input: {
-    readonly threadId: ThreadId;
-    readonly takeoverId: CommandId;
-  }) =>
+  const loadMarker = (input: { readonly threadId: ThreadId; readonly takeoverId: CommandId }) =>
     Effect.gen(function* () {
       const projection = yield* threads.getThreadProjection(input.threadId);
       const marker = projection.thread.browserTakeover ?? null;
@@ -308,8 +305,10 @@ export const make = Effect.gen(function* () {
         ),
       );
 
-  const failStep = (input: BrowserTakeoverStepInput, failure: OrchestrationV2BrowserTakeoverFailure) =>
-    transition({ ...input, step: "takeover-failed", to: "failed", failure }).pipe(Effect.asVoid);
+  const failStep = (
+    input: BrowserTakeoverStepInput,
+    failure: OrchestrationV2BrowserTakeoverFailure,
+  ) => transition({ ...input, step: "takeover-failed", to: "failed", failure }).pipe(Effect.asVoid);
 
   /**
    * Wraps a step so an unexpected defect still lands the marker in a terminal
@@ -605,40 +604,37 @@ export const layer = Layer.effect(BrowserTakeoverService, make);
  * where the broker layer is built so the broker keeps depending only on the
  * seam.
  */
-export const activitySinkLayer: Layer.Layer<
-  never,
-  never,
-  ThreadManagementService | Crypto.Crypto
-> = Layer.effect(
-  PreviewAutomationActivitySink,
-  Effect.gen(function* () {
-    const threads = yield* ThreadManagementService;
-    const crypto = yield* Crypto.Crypto;
-    return {
-      record: (record) =>
-        Effect.gen(function* () {
-          const commandId = yield* crypto.randomUUIDv4;
-          yield* threads.dispatch({
-            type: "thread.preview-activity.record",
-            commandId: CommandId.make(`command:preview-activity:${commandId}`),
-            threadId: record.threadId,
-            // The broker cannot know which run is live; the decider derives the
-            // run from the projection and ignores this hint.
-            runId: null,
-            providerSessionId: record.providerSessionId,
-            tabId: record.tabId,
-            hostClientId: record.hostClientId,
-          });
-        }).pipe(
-          // An unchanged tuple is rejected by the decider so it writes no event.
-          // That is the common case for a re-observed host, not a problem.
-          Effect.catchCause((cause) =>
-            Effect.logDebug("Preview activity was not recorded", {
+export const activitySinkLayer: Layer.Layer<never, never, ThreadManagementService | Crypto.Crypto> =
+  Layer.effect(
+    PreviewAutomationActivitySink,
+    Effect.gen(function* () {
+      const threads = yield* ThreadManagementService;
+      const crypto = yield* Crypto.Crypto;
+      return {
+        record: (record) =>
+          Effect.gen(function* () {
+            const commandId = yield* crypto.randomUUIDv4;
+            yield* threads.dispatch({
+              type: "thread.preview-activity.record",
+              commandId: CommandId.make(`command:preview-activity:${commandId}`),
               threadId: record.threadId,
-              cause,
-            }),
+              // The broker cannot know which run is live; the decider derives the
+              // run from the projection and ignores this hint.
+              runId: null,
+              providerSessionId: record.providerSessionId,
+              tabId: record.tabId,
+              hostClientId: record.hostClientId,
+            });
+          }).pipe(
+            // An unchanged tuple is rejected by the decider so it writes no event.
+            // That is the common case for a re-observed host, not a problem.
+            Effect.catchCause((cause) =>
+              Effect.logDebug("Preview activity was not recorded", {
+                threadId: record.threadId,
+                cause,
+              }),
+            ),
           ),
-        ),
-    };
-  }),
-);
+      };
+    }),
+  );

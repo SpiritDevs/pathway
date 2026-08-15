@@ -13,8 +13,8 @@
  *
  * @module issues/slack/SlackIntakeEngine
  */
-import { IssueTrackerError } from "@t3tools/contracts";
-import type { SlackChannelId, SlackChannelRef, SlackMessageTs } from "@t3tools/contracts";
+import { IssueTrackerError } from "@spiritdevs/contracts";
+import type { SlackChannelId, SlackChannelRef, SlackMessageTs } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -72,7 +72,7 @@ export interface SlackIntakeEngineShape {
 }
 
 export class SlackIntakeEngine extends Context.Service<SlackIntakeEngine, SlackIntakeEngineShape>()(
-  "t3/issues/slack/SlackIntakeEngine",
+  "@spiritdevs/pathway/issues/slack/SlackIntakeEngine",
 ) {}
 
 /** Every refusal this stub gives, so the message is one string rather than three. */

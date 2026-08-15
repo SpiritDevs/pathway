@@ -4,7 +4,7 @@ import {
   EnvironmentId,
   ProjectId,
   type ProjectEntry,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -146,14 +146,14 @@ function makeProject(
     title: "Pathway",
     workspaceRoot,
     repositoryIdentity: {
-      canonicalKey: "github.com/t3tools/pathway",
+      canonicalKey: "github.com/spiritdevs/pathway",
       locator: {
         source: "git-remote",
         remoteName: "origin",
-        remoteUrl: "https://github.com/t3tools/pathway.git",
+        remoteUrl: "https://github.com/spiritdevs/pathway.git",
       },
       provider: "github",
-      owner: "t3tools",
+      owner: "spiritdevs",
       name: "pathway",
       displayName: "Pathway",
     },

@@ -6,7 +6,7 @@
  *
  * @module IssueStatusRepository
  */
-import { IsoDateTime, IssueStatus, IssueStatusId } from "@t3tools/contracts";
+import { IsoDateTime, IssueStatus, IssueStatusId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -77,4 +77,4 @@ export interface IssueStatusRepositoryShape {
 export class IssueStatusRepository extends Context.Service<
   IssueStatusRepository,
   IssueStatusRepositoryShape
->()("t3/persistence/Services/IssueStatuses/IssueStatusRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueStatuses/IssueStatusRepository") {}

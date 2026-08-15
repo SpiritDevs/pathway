@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@spiritdevs/contracts";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { resolveInitialContinuationSelection } from "./ContinuationDialog.logic";
 

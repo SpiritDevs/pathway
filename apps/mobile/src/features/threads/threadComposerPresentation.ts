@@ -1,7 +1,7 @@
 import type {
   OrchestrationV2BrowserTakeoverFailure,
   OrchestrationV2BrowserTakeoverStatus,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export type CollapsedComposerAction = "send" | "stop";
 

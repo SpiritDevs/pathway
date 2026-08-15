@@ -3,6 +3,10 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/projects"
+  | "/settings/company-members"
+  | "/settings/company-teams"
+  | "/settings/sync"
+  | "/settings/environments"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -12,6 +16,7 @@ export type SettingsPath =
   | "/settings/issues-milestones"
   | "/settings/issues-intake"
   | "/settings/issues-import"
+  | "/settings/issues-migration"
   | "/settings/issues-enrichment"
   | "/settings/email"
   | "/settings/connections"
@@ -41,6 +46,10 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/projects": "Projects",
+  "/settings/company-members": "Members",
+  "/settings/company-teams": "Teams & Roles",
+  "/settings/sync": "Sync",
+  "/settings/environments": "Environments",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -50,6 +59,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-milestones": "Milestones",
   "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
+  "/settings/issues-migration": "Migration",
   "/settings/issues-enrichment": "Enrichment",
   "/settings/email": "Capture",
   "/settings/connections": "Connections",
@@ -77,6 +87,15 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
+    label: "Company",
+    paths: [
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/sync",
+      "/settings/environments",
+    ],
+  },
+  {
     label: "Agents",
     paths: [
       "/settings/providers",
@@ -93,6 +112,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
+      "/settings/issues-migration",
       "/settings/issues-enrichment",
     ],
   },
@@ -115,6 +135,31 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "company-members",
+    title: "Company members",
+    to: "/settings/company-members",
+  },
+  {
+    id: "company-teams",
+    title: "Company teams",
+    to: "/settings/company-teams",
+  },
+  {
+    id: "company-roles",
+    title: "Company roles",
+    to: "/settings/company-teams",
+  },
+  {
+    id: "company-sync",
+    title: "Company sync status",
+    to: "/settings/sync",
+  },
+  {
+    id: "company-environments",
+    title: "Company environments",
+    to: "/settings/environments",
+  },
   {
     id: "color-scheme",
     title: "Color scheme",
@@ -339,6 +384,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "issue-import",
     title: "Import issues",
     to: "/settings/issues-import",
+  },
+  {
+    id: "issue-cloud-migration",
+    title: "Cloud issue migration",
+    to: "/settings/issues-migration",
   },
   {
     id: "issue-intake",

@@ -1,4 +1,4 @@
-import type { AssetCreateUrlResult } from "@t3tools/contracts";
+import type { AssetCreateUrlResult } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveAssetUrl, resolveCurrentAssetUrl } from "./assetUrls";

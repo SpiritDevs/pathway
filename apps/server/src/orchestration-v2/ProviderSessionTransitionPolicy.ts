@@ -4,8 +4,8 @@ import type {
   ProviderDriverKind,
   ProviderInteractionMode,
   RuntimeMode,
-} from "@t3tools/contracts";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+} from "@spiritdevs/contracts";
+import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 
 import type { ProviderContinuationIdentity } from "../provider/ProviderDriver.ts";
 import type { ProviderSelectionTransitionPlan } from "./ProviderSelectionTransition.ts";

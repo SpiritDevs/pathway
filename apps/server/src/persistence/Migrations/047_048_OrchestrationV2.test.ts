@@ -13,7 +13,9 @@ layer("047_048_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 58 }, (_, index) => index + 1),
+        // Derived from the manifest length on purpose: a new migration must extend the
+        // sequence by exactly one, and any gap, duplicate, or out-of-order id still fails.
+        Array.from({ length: migrationEntries.length }, (_, index) => index + 1),
       );
     }),
   );

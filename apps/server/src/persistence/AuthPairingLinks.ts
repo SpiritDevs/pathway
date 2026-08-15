@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import { AuthEnvironmentScopes } from "@t3tools/contracts";
+import { AuthEnvironmentScopes, EnvironmentId } from "@spiritdevs/contracts";
 
 import {
   type AuthPairingLinkRepositoryError,
@@ -21,6 +21,7 @@ export const AuthPairingLinkRecord = Schema.Struct({
   method: Schema.Literals(["desktop-bootstrap", "one-time-token"]),
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   subject: Schema.String,
+  initiatingEnvironmentId: Schema.NullOr(EnvironmentId),
   label: Schema.NullOr(Schema.String),
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   createdAt: Schema.DateTimeUtcFromString,
@@ -36,6 +37,7 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   method: Schema.Literals(["desktop-bootstrap", "one-time-token"]),
   scopes: AuthEnvironmentScopes,
   subject: Schema.String,
+  initiatingEnvironmentId: Schema.NullOr(EnvironmentId),
   label: Schema.NullOr(Schema.String),
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   createdAt: Schema.DateTimeUtcFromString,
@@ -73,6 +75,7 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   method: Schema.Unknown,
   scopes: Schema.Unknown,
   subject: Schema.Unknown,
+  initiatingEnvironmentId: Schema.Unknown,
   label: Schema.Unknown,
   proofKeyThumbprint: Schema.Unknown,
   createdAt: Schema.Unknown,
@@ -102,7 +105,7 @@ export class AuthPairingLinkRepository extends Context.Service<
       input: GetAuthPairingLinkByCredentialInput,
     ) => Effect.Effect<Option.Option<AuthPairingLinkRecord>, AuthPairingLinkRepositoryError>;
   }
->()("t3/persistence/AuthPairingLinks/AuthPairingLinkRepository") {}
+>()("@spiritdevs/pathway/persistence/AuthPairingLinks/AuthPairingLinkRepository") {}
 
 function toPersistenceSqlOrDecodeError(
   sqlOperation: string,
@@ -132,6 +135,7 @@ export const make = Effect.gen(function* () {
           method,
           scopes,
           subject,
+          initiating_environment_id,
           label,
           proof_key_thumbprint,
           created_at,
@@ -145,6 +149,7 @@ export const make = Effect.gen(function* () {
           ${input.method},
           ${JSON.stringify(input.scopes)},
           ${input.subject},
+          ${input.initiatingEnvironmentId},
           ${input.label},
           ${input.proofKeyThumbprint},
           ${input.createdAt},
@@ -176,6 +181,7 @@ export const make = Effect.gen(function* () {
           method AS "method",
           scopes AS "scopes",
           subject AS "subject",
+          initiating_environment_id AS "initiatingEnvironmentId",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
           created_at AS "createdAt",
@@ -196,6 +202,7 @@ export const make = Effect.gen(function* () {
           method AS "method",
           scopes AS "scopes",
           subject AS "subject",
+          initiating_environment_id AS "initiatingEnvironmentId",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
           created_at AS "createdAt",
@@ -235,6 +242,7 @@ export const make = Effect.gen(function* () {
           method AS "method",
           scopes AS "scopes",
           subject AS "subject",
+          initiating_environment_id AS "initiatingEnvironmentId",
           label AS "label",
           proof_key_thumbprint AS "proofKeyThumbprint",
           created_at AS "createdAt",

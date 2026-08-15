@@ -3,7 +3,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadProjection,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -54,7 +54,7 @@ export class ProviderRuntimeRecoveryService extends Context.Service<
     ) => Effect.Effect<ProviderRuntimeReconciliationSummary, ProviderRuntimeRecoveryError>;
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
->()("t3/orchestration-v2/ProviderRuntimeRecoveryService") {}
+>()("@spiritdevs/pathway/orchestration-v2/ProviderRuntimeRecoveryService") {}
 
 function nonterminalRuns(projection: OrchestrationV2ThreadProjection) {
   return projection.runs.filter((run) => {

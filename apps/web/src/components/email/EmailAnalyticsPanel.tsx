@@ -26,7 +26,7 @@ import type {
   EmailAnalyticsResult,
   EmailInboxScope,
   ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { BarChart3Icon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 

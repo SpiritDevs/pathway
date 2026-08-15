@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ClientSettingsSchema, type ClientSettings } from "@t3tools/contracts";
+import { ClientSettingsSchema, type ClientSettings } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -13,10 +13,13 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  activeTurnSendMode: "steer",
+  actionPaletteSections: [],
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],
   diffIgnoreWhitespace: true,
+  developmentServerPortRange: { from: 3_000, to: 9_999 },
   environmentIdentificationMode: "artwork",
   favorites: [],
   fontFamilyCode: "",
@@ -31,6 +34,18 @@ const clientSettings: ClientSettings = {
   glassOpacity: 80,
   planModeEnabled: false,
   persistComposerContextStrip: true,
+  primaryNavigationViewOrder: [
+    "threads",
+    "projects",
+    "issues",
+    "pull-requests",
+    "calendar",
+    "email",
+    "contacts",
+    "time-tracker",
+    "files",
+    "browser",
+  ],
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",

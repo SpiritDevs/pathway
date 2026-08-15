@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 

@@ -13,7 +13,7 @@ import {
   EmailWaitRegistrationId,
   type ProviderInstanceId,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -132,7 +132,7 @@ export class EmailWaitStore extends Context.Service<
       Scope.Scope
     >;
   }
->()("t3/email/EmailWaitStore") {}
+>()("@spiritdevs/pathway/email/EmailWaitStore") {}
 
 const initialize = (database: NodeSqlite.DatabaseSync): void => {
   database.exec(`

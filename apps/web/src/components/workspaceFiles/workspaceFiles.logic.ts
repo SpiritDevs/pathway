@@ -1,4 +1,4 @@
-import type { ProjectEntry } from "@t3tools/contracts";
+import type { ProjectEntry } from "@spiritdevs/contracts";
 
 export interface FileManagerItem extends ProjectEntry {
   readonly name: string;

@@ -11,7 +11,7 @@
  *
  * @module components/settings/EmailSettingsPanel
  */
-import type { EmailCaptureSettings, ProjectId } from "@t3tools/contracts";
+import type { EmailCaptureSettings, ProjectId } from "@spiritdevs/contracts";
 import { BellIcon, MailIcon, RadioIcon, Trash2Icon } from "lucide-react";
 import { useState } from "react";
 

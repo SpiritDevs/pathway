@@ -1,4 +1,4 @@
-import { type OrchestrationV2StoredEvent, ThreadId } from "@t3tools/contracts";
+import { type OrchestrationV2StoredEvent, ThreadId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -47,7 +47,7 @@ export interface ProjectionMaintenanceV2Shape {
 export class ProjectionMaintenanceV2 extends Context.Service<
   ProjectionMaintenanceV2,
   ProjectionMaintenanceV2Shape
->()("t3/orchestration-v2/ProjectionMaintenance/ProjectionMaintenanceV2") {}
+>()("@spiritdevs/pathway/orchestration-v2/ProjectionMaintenance/ProjectionMaintenanceV2") {}
 
 type ProjectionMetadataRow = {
   readonly schema_version: number;

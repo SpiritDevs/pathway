@@ -1,4 +1,4 @@
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { ServerProviderSkill } from "@spiritdevs/contracts";
 
 function titleCaseWords(value: string): string {
   const words: string[] = [];

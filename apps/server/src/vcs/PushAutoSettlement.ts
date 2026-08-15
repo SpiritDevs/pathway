@@ -5,7 +5,7 @@ import {
   pushAutoSettlementActivityKey,
   pushAutoSettlementStillEligible,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 

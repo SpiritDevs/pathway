@@ -28,7 +28,7 @@ export interface SlackIntakeSignalShape {
 }
 
 export class SlackIntakeSignal extends Context.Service<SlackIntakeSignal, SlackIntakeSignalShape>()(
-  "t3/issues/slack/SlackIntakeSignal",
+  "@spiritdevs/pathway/issues/slack/SlackIntakeSignal",
 ) {}
 
 export const make = Effect.gen(function* () {

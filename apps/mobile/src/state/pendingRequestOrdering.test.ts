@@ -1,4 +1,4 @@
-import { RuntimeRequestId } from "@t3tools/contracts";
+import { RuntimeRequestId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { sortPendingRequestsOldestFirst } from "./pendingRequestOrdering";

@@ -2,7 +2,7 @@ import type {
   OrchestrationV2TurnItem,
   SourceControlProviderInfo,
   SourceControlProviderKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 export function sourceControlMarkerLabel(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,

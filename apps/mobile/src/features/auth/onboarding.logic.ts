@@ -8,12 +8,12 @@ import {
   type OnboardingStep,
   type ProviderUsage,
   type ReferralSource,
-} from "@t3tools/client-runtime/profile";
+} from "@spiritdevs/client-runtime/profile";
 
 /**
  * Mobile-side glue for the shared onboarding step graph. The graph itself
  * (`resolveOnboardingStep`, `onboardingStepIndex`, the option lists) lives in
- * `@t3tools/client-runtime/profile` and is shared with web; only the pieces
+ * `@spiritdevs/client-runtime/profile` and is shared with web; only the pieces
  * the native stepper needs on top of it live here.
  */
 

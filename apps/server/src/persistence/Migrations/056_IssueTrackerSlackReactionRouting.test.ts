@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { SlackReactionRoute } from "@t3tools/contracts";
+import { SlackReactionRoute } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";

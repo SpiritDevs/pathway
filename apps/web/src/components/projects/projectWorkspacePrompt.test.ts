@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import {
   completeProjectWorkspacePromptClose,
   readProjectWorkspacePromptState,

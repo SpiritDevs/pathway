@@ -18,7 +18,7 @@ import type {
   IssueLabel,
   IssueLabelId,
   IssuePriority,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   ArrowDownIcon,
   CheckIcon,

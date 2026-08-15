@@ -11,7 +11,7 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusCategory,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import { UserIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
@@ -230,9 +230,11 @@ export function IssueLabelDot({ color, className }: { color: string; className?:
 /** A person is a circle; an agent wears its provider's mark, which is how threads name them too. */
 export function IssueAssigneeGlyph({
   assignee,
+  label,
   className,
 }: {
   assignee: IssueAssignee | null;
+  label?: string | undefined;
   className?: string;
 }) {
   if (assignee === null) {
@@ -255,6 +257,22 @@ export function IssueAssigneeGlyph({
         aria-label="Assigned to you"
         className={cn(
           "flex size-5 items-center justify-center rounded-full bg-primary/16 text-primary",
+          className,
+        )}
+        role="img"
+      >
+        <UserIcon className="size-2.5" />
+      </span>
+    );
+  }
+  // A teammate is a person, so the same circle as you, without the "this is mine" accent. The
+  // accessible label carries the replica-resolved name; an opaque membership id is never UI copy.
+  if (assignee.kind === "member") {
+    return (
+      <span
+        aria-label={`Assigned to ${label ?? "Unknown member"}`}
+        className={cn(
+          "flex size-5 items-center justify-center rounded-full bg-muted text-foreground/80",
           className,
         )}
         role="img"

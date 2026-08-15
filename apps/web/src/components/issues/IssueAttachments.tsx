@@ -3,7 +3,8 @@ import type {
   EnvironmentId,
   IssueComment,
   IssueCommentId,
-} from "@t3tools/contracts";
+  IssueId,
+} from "@spiritdevs/contracts";
 import {
   ChevronDownIcon,
   ClipboardPasteIcon,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
-import { useAssetUrlsState } from "~/assets/assetUrls";
+import type { ReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { cn } from "~/lib/utils";
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { Button } from "../ui/button";
@@ -30,32 +31,43 @@ import {
 } from "./issueCommentAttachments";
 import { PendingIssueImageAttachment } from "./useIssueImageAttachmentDrafts";
 import type { IssueImageAttachmentDraftController } from "./useIssueImageAttachmentDrafts";
+import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 function AttachmentGallery({
   attachments,
+  cloud,
   environmentId,
+  issueId,
   onOpenImage,
   onRemoveAttachment,
 }: {
   attachments: ReadonlyArray<IssueAttachmentReference>;
-  environmentId: EnvironmentId;
+  cloud: ReplicaIssueAttachmentCloud | null;
+  environmentId: EnvironmentId | null;
+  issueId: IssueId;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
   onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
 }) {
-  const resources = useMemo(
-    () => attachments.map(({ attachmentId }) => ({ _tag: "attachment" as const, attachmentId })),
+  const attachmentIds = useMemo(
+    () => attachments.map(({ attachmentId }) => attachmentId),
     [attachments],
   );
-  const { urls, refresh } = useAssetUrlsState(environmentId, resources);
+  const { attachments: resolved, refresh } = useIssueAttachmentUrls({
+    attachmentIds,
+    cloud,
+    environmentId,
+    issueId,
+  });
 
   return (
     <ul className="flex min-w-0 gap-2 overflow-x-auto pb-1">
       {attachments.map(({ attachmentId, commentId }, index) => {
-        const url = urls[index] ?? null;
-        if (url === null) return null;
+        const attachment = resolved[index] ?? null;
+        if (attachment === null) return null;
         return (
           <li className="group relative shrink-0" key={attachmentId}>
-            {isIssueVideoAttachmentUrl(url) ? (
+            {attachment.mimeType?.startsWith("video/") === true ||
+            isIssueVideoAttachmentUrl(attachment.url) ? (
               <video
                 aria-label={`Issue recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
@@ -63,7 +75,7 @@ function AttachmentGallery({
                 onError={() => refresh(index)}
                 playsInline
                 preload="metadata"
-                src={url}
+                src={attachment.url}
               />
             ) : (
               <button
@@ -76,7 +88,7 @@ function AttachmentGallery({
                   alt={`Issue attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
                   onError={() => refresh(index)}
-                  src={url}
+                  src={attachment.url}
                 />
               </button>
             )}
@@ -98,17 +110,21 @@ function AttachmentGallery({
 }
 
 export function IssueAttachments({
+  cloud,
   comments,
   onCreateComment,
   onOpenImage,
   onRemoveAttachment,
   drafts,
+  issueId,
 }: {
+  cloud: ReplicaIssueAttachmentCloud | null;
   comments: ReadonlyArray<IssueComment>;
   onCreateComment: (body: string, attachmentIds: ReadonlyArray<ChatAttachmentId>) => void;
   onOpenImage: (attachmentId: ChatAttachmentId) => void;
   onRemoveAttachment: (commentId: IssueCommentId, attachmentId: ChatAttachmentId) => void;
   drafts: IssueImageAttachmentDraftController;
+  issueId: IssueId;
 }) {
   const environmentId = usePrimaryEnvironmentId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -190,9 +206,14 @@ export function IssueAttachments({
         <Menu>
           <MenuTrigger
             render={
-              <Button className="ms-auto text-muted-foreground" size="xs" variant="ghost">
+              <Button
+                className="ms-auto text-muted-foreground"
+                disabled={cloud !== null && !cloud.isOnline}
+                size="xs"
+                variant="ghost"
+              >
                 <ImagePlusIcon />
-                Add images
+                {cloud !== null && !cloud.isOnline ? "Attachments offline" : "Add images"}
                 <ChevronDownIcon className="size-3" />
               </Button>
             }
@@ -221,14 +242,22 @@ export function IssueAttachments({
         />
       </div>
 
-      {storedAttachments.length === 0 || environmentId === null ? null : (
+      {storedAttachments.length === 0 || (cloud === null && environmentId === null) ? null : (
         <AttachmentGallery
           attachments={storedAttachments}
+          cloud={cloud}
           environmentId={environmentId}
+          issueId={issueId}
           onOpenImage={onOpenImage}
           onRemoveAttachment={onRemoveAttachment}
         />
       )}
+
+      {cloud !== null && !cloud.isOnline ? (
+        <p className="text-[11px] text-muted-foreground/70">
+          Connect to add attachments. Text comments still queue offline.
+        </p>
+      ) : null}
 
       {attachments.length === 0 ? null : (
         <div className="flex flex-col gap-2 border-t border-border/50 pt-2">

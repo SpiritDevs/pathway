@@ -1,5 +1,5 @@
-import type { Issue, IssueId, IssueLabelId, IssueStatusId, ProjectId } from "@t3tools/contracts";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import type { Issue, IssueId, IssueLabelId, IssueStatusId, ProjectId } from "@spiritdevs/contracts";
+import { ProviderDriverKind } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { subIssueCreateInput } from "./issueSubIssues.logic";

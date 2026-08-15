@@ -8,7 +8,7 @@
  *
  * @module components/email/EmailBulkBar
  */
-import type { CapturedEmailSummary } from "@t3tools/contracts";
+import type { CapturedEmailSummary } from "@spiritdevs/contracts";
 import { MailIcon, MailOpenIcon, XIcon } from "lucide-react";
 
 import { Button } from "../ui/button";

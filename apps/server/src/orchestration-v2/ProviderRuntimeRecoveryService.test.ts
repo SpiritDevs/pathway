@@ -13,7 +13,7 @@ import {
   ThreadId,
   TurnItemId,
   type OrchestrationV2ThreadProjection,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -559,6 +559,9 @@ it.effect(
         "provider-turn.restart",
         "provider-thread.rollback-and-start",
         "runtime-request.respond",
+        "browser-takeover.establish",
+        "browser-takeover.proceed",
+        "browser-takeover.release",
       ]);
       const events = committedInput?.events ?? [];
       assert.deepEqual(

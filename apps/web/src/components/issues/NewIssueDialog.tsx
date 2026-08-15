@@ -4,7 +4,7 @@
  *
  * @module components/issues/NewIssueDialog
  */
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
+import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@spiritdevs/contracts";
 import type {
   ChatAttachmentId,
   Issue,
@@ -19,8 +19,8 @@ import type {
   IssueStatus,
   IssueStatusId,
   ProjectId,
-} from "@t3tools/contracts";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
+} from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CalendarRangeIcon,
@@ -62,7 +62,6 @@ import {
 import { usePrimaryEnvironmentId } from "~/state/environments";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { QuickCreateProjectDialog } from "../projects/QuickCreateProjectDialog";
-import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -88,7 +87,6 @@ import { IssueLabelsPicker } from "./IssueLabelsPicker";
 import {
   buildIssueTreeIndex,
   issueAncestorDepth,
-  issueAssigneeOptions,
   issueAssigneeOptionValue,
   searchIssues,
 } from "./issueDetail.logic";
@@ -103,6 +101,7 @@ import {
   newIssueAttachmentIntake,
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
+import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { canResizeNewIssueDialog } from "./newIssueDialog.logic";
 
 const PICKER_CLASS =
@@ -110,8 +109,6 @@ const PICKER_CLASS =
 const PICKER_OPTION_CLASS =
   "flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11";
 const PICKER_VIEWPORT_CLASS = "p-1.5 [--viewport-inline-padding:--spacing(1.5)]";
-const ASSIGNEE_OPTIONS = issueAssigneeOptions(PROVIDER_CLIENT_DEFINITIONS);
-
 function PickerPopover({
   title,
   trigger,
@@ -285,6 +282,7 @@ export function NewIssueDialog({
   /** Set by "Add sub-issue", which is the only path that opens this dialog with a parent. */
   defaultParentId?: IssueId | null;
 }) {
+  const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
   const createIssue = useCreateIssue();
   const createComment = useCreateIssueComment();
   const createLabel = useCreateIssueLabel();
@@ -753,7 +751,11 @@ export function NewIssueDialog({
                 title="Assignee"
                 trigger={
                   <button className={PICKER_CLASS} type="button">
-                    <IssueAssigneeGlyph assignee={assignee} className="size-3.5" />
+                    <IssueAssigneeGlyph
+                      assignee={assignee}
+                      className="size-3.5"
+                      label={selectedAssignee?.label}
+                    />
                     {selectedAssignee?.label ?? "Assignee"}
                   </button>
                 }
@@ -768,7 +770,11 @@ export function NewIssueDialog({
                       }}
                       selected={option.value === issueAssigneeOptionValue(assignee)}
                     >
-                      <IssueAssigneeGlyph assignee={option.assignee} className="size-4" />
+                      <IssueAssigneeGlyph
+                        assignee={option.assignee}
+                        className="size-4"
+                        label={option.label}
+                      />
                       {option.label}
                     </PickerOption>
                   ))

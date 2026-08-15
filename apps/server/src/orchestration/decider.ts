@@ -1,9 +1,9 @@
-import { EventId } from "@t3tools/contracts";
+import { EventId } from "@spiritdevs/contracts";
 import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
-} from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts/legacy-orchestration";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";

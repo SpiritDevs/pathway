@@ -8,9 +8,9 @@ Date: 2026-08-11
 Nothing in Pathway is user-scoped. `apps/web/src/hooks/useSettings.ts` documents the only two
 storage tiers that exist: server-authoritative settings in `settings.json`, owned by one Pathway server
 on one machine, and client-only settings in localStorage. Both are per-machine by construction,
-because each computer runs its own server. The relay's schema
-(`infra/relay/src/persistence/schema.ts`) has no users table — a Clerk `sub` appears only as a
-partition key on devices, links, and allocations.
+because each computer runs its own server. At the time of this decision, the relay schema had no
+users table — a Clerk `sub` appeared only as a partition key on devices, links, and allocations.
+Relay persistence later moved to Convex; see [0009](0009-convex-relay-persistence.md).
 
 A user profile is therefore the first user-scoped aggregate in the system, and neither existing
 tier can hold it.

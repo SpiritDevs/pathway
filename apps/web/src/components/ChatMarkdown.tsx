@@ -18,12 +18,12 @@ import {
   parseIssueAgentMentionHref,
   type ScopedThreadRef,
   type ServerProviderSkill,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {

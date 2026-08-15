@@ -19,8 +19,8 @@
  * @module state/email
  */
 import { useAtomValue } from "@effect/atom-react";
-import { EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
-import { subscribe } from "@t3tools/client-runtime/rpc";
+import { EnvironmentSupervisor } from "@spiritdevs/client-runtime/connection";
+import { subscribe } from "@spiritdevs/client-runtime/rpc";
 import {
   type AtomCommand,
   type AtomCommandResult,
@@ -29,7 +29,7 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
   followStreamInEnvironment,
-} from "@t3tools/client-runtime/state/runtime";
+} from "@spiritdevs/client-runtime/state/runtime";
 import {
   EMAIL_WS_METHODS,
   type CapturedEmailMessage,
@@ -47,7 +47,7 @@ import {
   type EmailTriggerRule,
   type EnvironmentId,
   type ProjectId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";

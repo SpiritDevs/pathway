@@ -10,7 +10,7 @@
  *
  * @module components/email/EmailSidebar
  */
-import type { EmailInboxScope, ProjectId } from "@t3tools/contracts";
+import type { EmailInboxScope, ProjectId } from "@spiritdevs/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   BarChart3Icon,

@@ -1,4 +1,4 @@
-import type { DetectedEmailCode } from "@t3tools/contracts";
+import type { DetectedEmailCode } from "@spiritdevs/contracts";
 
 import { visibleHtmlText } from "./DeliverabilityAnalyzer.ts";
 

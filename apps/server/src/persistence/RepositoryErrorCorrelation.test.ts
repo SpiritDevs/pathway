@@ -1,4 +1,4 @@
-import { AuthSessionId, ThreadId, type AuthEnvironmentScope } from "@t3tools/contracts";
+import { AuthSessionId, ThreadId, type AuthEnvironmentScope } from "@spiritdevs/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -36,6 +36,7 @@ describe("persistence error correlation", () => {
       yield* sessions.create({
         sessionId,
         subject,
+        initiatingEnvironmentId: null,
         scopes,
         method: "browser-session-cookie",
         client: {
@@ -71,6 +72,7 @@ describe("persistence error correlation", () => {
         sessions.create({
           sessionId,
           subject,
+          initiatingEnvironmentId: null,
           scopes,
           method: "browser-session-cookie",
           client: {
@@ -162,6 +164,7 @@ describe("persistence error correlation", () => {
           method: "one-time-token",
           scopes,
           subject,
+          initiatingEnvironmentId: null,
           label: null,
           proofKeyThumbprint: null,
           createdAt: issuedAt,

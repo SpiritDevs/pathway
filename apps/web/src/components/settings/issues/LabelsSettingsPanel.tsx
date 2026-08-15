@@ -1,5 +1,5 @@
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type { IssueLabel } from "@t3tools/contracts";
+import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
+import type { IssueLabel } from "@spiritdevs/contracts";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 

@@ -7,7 +7,7 @@
  *
  * @module IssueThreadLinkRepository
  */
-import { IssueId, IssueThreadLink, ThreadId } from "@t3tools/contracts";
+import { IssueId, IssueThreadLink, ThreadId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -73,4 +73,4 @@ export interface IssueThreadLinkRepositoryShape {
 export class IssueThreadLinkRepository extends Context.Service<
   IssueThreadLinkRepository,
   IssueThreadLinkRepositoryShape
->()("t3/persistence/Services/IssueThreadLinks/IssueThreadLinkRepository") {}
+>()("@spiritdevs/pathway/persistence/Services/IssueThreadLinks/IssueThreadLinkRepository") {}

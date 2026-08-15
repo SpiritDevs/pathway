@@ -14,12 +14,12 @@ import {
   ensureBrowseDirectoryPath,
   getBrowseParentPath,
   isExplicitRelativeProjectPath,
-} from "@t3tools/client-runtime/state/projects";
+} from "@spiritdevs/client-runtime/state/projects";
 import {
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
-} from "@t3tools/client-runtime/state/filesystem";
-import type { EnvironmentId, FilesystemBrowseResult } from "@t3tools/contracts";
+} from "@spiritdevs/client-runtime/state/filesystem";
+import type { EnvironmentId, FilesystemBrowseResult } from "@spiritdevs/contracts";
 import { CornerLeftUpIcon, FolderIcon } from "lucide-react";
 import { useMemo } from "react";
 

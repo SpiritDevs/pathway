@@ -7,7 +7,7 @@
  *
  * @module components/issues/IssueActivityFeed
  */
-import type { IssueEvent } from "@t3tools/contracts";
+import type { IssueEvent } from "@spiritdevs/contracts";
 import { useMemo } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
@@ -15,17 +15,25 @@ import { formatChatTimestampTooltip, formatRelativeTimeLabel } from "~/timestamp
 import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { IssueAssigneeGlyph } from "./IssueGlyphs";
 import { describeIssueEvent, sortIssueEvents, type IssueEventNaming } from "./issueDetail.logic";
+import { useIssueMemberDirectory } from "./issueMemberDirectory";
 
 const PROVIDER_LABELS: ReadonlyMap<string, string> = new Map(
   PROVIDER_CLIENT_DEFINITIONS.map((definition) => [definition.value, definition.label]),
 );
 
 /** The feed's glyph column: a person, a provider mark, or the dashed circle a system write gets. */
-function ActorGlyph({ actor }: { actor: IssueEvent["actor"] }) {
+function ActorGlyph({
+  actor,
+  memberNames,
+}: {
+  actor: IssueEvent["actor"];
+  memberNames: ReadonlyMap<string, string>;
+}) {
   return (
     <IssueAssigneeGlyph
       assignee={actor.kind === "system" ? null : actor}
       className="mt-px size-5 shrink-0"
+      label={actor.kind === "member" ? memberNames.get(actor.membershipId) : undefined}
     />
   );
 }
@@ -39,9 +47,15 @@ export function IssueActivityFeed({
   projectTitles: ReadonlyMap<string, string>;
   issueKeys: ReadonlyMap<string, string>;
 }) {
+  const directory = useIssueMemberDirectory();
   const naming = useMemo<IssueEventNaming>(
-    () => ({ projectTitles, providerLabels: PROVIDER_LABELS, issueKeys }),
-    [issueKeys, projectTitles],
+    () => ({
+      projectTitles,
+      providerLabels: PROVIDER_LABELS,
+      memberNames: directory.names,
+      issueKeys,
+    }),
+    [directory.names, issueKeys, projectTitles],
   );
   const ordered = useMemo(() => sortIssueEvents(events), [events]);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
@@ -56,7 +70,7 @@ export function IssueActivityFeed({
         const described = describeIssueEvent(event, naming);
         return (
           <li className="flex items-start gap-2 text-[13px]" key={event.id}>
-            <ActorGlyph actor={event.actor} />
+            <ActorGlyph actor={event.actor} memberNames={directory.names} />
             <p className="min-w-0 flex-1 text-muted-foreground">
               <span className="font-medium text-foreground">{described.actor}</span>{" "}
               {described.summary}{" "}

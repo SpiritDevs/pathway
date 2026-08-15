@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { IssueEnrichmentResult, isPlaceholderIssueTitle } from "@t3tools/contracts";
+import { IssueEnrichmentResult, isPlaceholderIssueTitle } from "@spiritdevs/contracts";
 
 import { SLACK_UNTITLED_ISSUE_TITLE } from "./IssueTrackerService.ts";
 import {

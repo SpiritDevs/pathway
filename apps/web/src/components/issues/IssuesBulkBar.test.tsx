@@ -1,4 +1,4 @@
-import { IssueId, IssueStatusId, type Issue } from "@t3tools/contracts";
+import { IssueId, IssueStatusId, type Issue } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 

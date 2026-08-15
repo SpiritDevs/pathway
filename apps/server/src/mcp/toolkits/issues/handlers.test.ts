@@ -10,8 +10,9 @@ import {
   ProviderInstanceId,
   ThreadId,
   IssueTrackerError,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import { MembershipId } from "@spiritdevs/contracts/company";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -48,7 +49,7 @@ import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import { IssuesToolkitHandlersLive } from "./handlers.ts";
+import { IssuesToolkitHandlersLive, parseIssueAssignee, resolveIssueAssignee } from "./handlers.ts";
 import {
   IssuesToolkit,
   type IssuesMcpGetAttachmentResult,
@@ -164,6 +165,35 @@ const seedProject = (projectId: ProjectId, title: string) =>
   );
 
 describe("issues MCP toolkit", () => {
+  it.effect(
+    "resolves human aliases to the bound member in replica mode and accepts explicit members",
+    () =>
+      Effect.gen(function* () {
+        const member = {
+          kind: "member" as const,
+          membershipId: MembershipId.make("membership-bound"),
+        };
+        assert.deepEqual(parseIssueAssignee("member:membership-explicit", AGENT_DRIVER), {
+          kind: "member",
+          membershipId: MembershipId.make("membership-explicit"),
+        });
+        assert.deepEqual(
+          yield* resolveIssueAssignee(
+            { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(member) },
+            "me",
+            AGENT_DRIVER,
+          ),
+          member,
+        );
+        const error = yield* resolveIssueAssignee(
+          { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(null) },
+          "user",
+          AGENT_DRIVER,
+        ).pipe(Effect.flip);
+        assert.include(error.message, "explicit");
+      }),
+  );
+
   it.effect("filters the list by status name, category, project, label, and text", () =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;

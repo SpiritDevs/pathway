@@ -9,7 +9,7 @@ import type {
   ProviderTurnId,
   RunId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import type * as DateTime from "effect/DateTime";
 
 import type { IdAllocatorV2Shape } from "./IdAllocator.ts";

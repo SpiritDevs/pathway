@@ -3,7 +3,7 @@ import {
   AssetResource,
   EnvironmentId,
   WS_METHODS,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 

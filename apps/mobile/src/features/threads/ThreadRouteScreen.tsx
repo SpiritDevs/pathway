@@ -15,13 +15,13 @@ import {
   type ModelSelection,
   type ProjectScript,
   type RunId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import {
   isUsageLimitFailure,
   resolveUsageLimitResetAt,
   USAGE_LIMIT_RECOVERY_PROMPT,
-} from "@t3tools/client-runtime/state/usage-limit-recovery";
-import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
+} from "@spiritdevs/client-runtime/state/usage-limit-recovery";
+import { projectScriptCwd, projectScriptRuntimeEnv } from "@spiritdevs/shared/projectScripts";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";

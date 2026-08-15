@@ -11,7 +11,7 @@
  *
  * @module components/issues/issueDetail.logic
  */
-import { ISSUE_MAX_PARENT_DEPTH } from "@t3tools/contracts";
+import { ISSUE_MAX_PARENT_DEPTH } from "@spiritdevs/contracts";
 import type {
   Issue,
   IssueAssignee,
@@ -33,7 +33,7 @@ import type {
   IssueTodoPatch,
   ProjectId,
   ProviderDriverKind,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 
 import type {
   IssueProgress,
@@ -41,8 +41,11 @@ import type {
   IssueRelationLabel,
   IssuesStoreStatus,
 } from "~/state/issues";
+import type { MembershipId } from "@spiritdevs/contracts/company";
+import type { IssueMemberOption } from "./issueMemberDirectory";
 import {
   ISSUE_ASSIGNEE_AGENT_PREFIX,
+  ISSUE_ASSIGNEE_MEMBER_PREFIX,
   ISSUE_ASSIGNEE_USER_VALUE,
   ISSUE_PRIORITY_LABELS,
   issueAssigneeValue,
@@ -123,10 +126,29 @@ export interface IssueAssigneeOption {
  */
 export function issueAssigneeOptions(
   providers: ReadonlyArray<{ readonly value: ProviderDriverKind; readonly label: string }>,
+  members: ReadonlyArray<IssueMemberOption> = [],
+  currentMembershipId: MembershipId | null = null,
 ): ReadonlyArray<IssueAssigneeOption> {
+  const humanOptions: ReadonlyArray<IssueAssigneeOption> =
+    currentMembershipId === null
+      ? [{ value: ISSUE_ASSIGNEE_USER_VALUE, label: "You", assignee: { kind: "user" } }]
+      : [
+          {
+            value: `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${currentMembershipId}`,
+            label: "You",
+            assignee: { kind: "member", membershipId: currentMembershipId } as const,
+          },
+          ...members
+            .filter((member) => member.membershipId !== currentMembershipId)
+            .map((member) => ({
+              value: `${ISSUE_ASSIGNEE_MEMBER_PREFIX}${member.membershipId}`,
+              label: member.label,
+              assignee: { kind: "member", membershipId: member.membershipId } as const,
+            })),
+        ];
   return [
     { value: ISSUE_ASSIGNEE_NONE_VALUE, label: "Unassigned", assignee: null },
-    { value: ISSUE_ASSIGNEE_USER_VALUE, label: "You", assignee: { kind: "user" } },
+    ...humanOptions,
     ...providers.map((provider) => ({
       value: `${ISSUE_ASSIGNEE_AGENT_PREFIX}${provider.value}`,
       label: provider.label,
@@ -243,6 +265,12 @@ export interface IssueEventNaming {
   /** `project` events carry a raw `ProjectId`, which is a nanoid, not a name. */
   readonly projectTitles?: ReadonlyMap<string, string> | undefined;
   readonly providerLabels?: ReadonlyMap<string, string> | undefined;
+  /**
+   * A `member` actor carries a `MembershipId`, which is an id and not a name. Keyed by membership
+   * rather than by person because attribution outlives a departure: the tombstoned membership is
+   * still what the row points at.
+   */
+  readonly memberNames?: ReadonlyMap<string, string> | undefined;
   /** `parent` events carry a raw `IssueId`; the key is what a human recognises. */
   readonly issueKeys?: ReadonlyMap<string, string> | undefined;
 }
@@ -274,22 +302,37 @@ export function issueActorLabel(
   actor: IssueEvent["actor"],
   naming: IssueEventNaming = EMPTY_NAMING,
 ): string {
-  if (actor.kind === "user") return "You";
-  if (actor.kind === "agent") return naming.providerLabels?.get(actor.provider) ?? actor.provider;
-  return ISSUE_SYSTEM_ACTOR_LABELS[actor.source];
+  switch (actor.kind) {
+    case "user":
+      return "You";
+    // A teammate reads as a person, never as an opaque membership identifier.
+    case "member":
+      return naming.memberNames?.get(actor.membershipId) ?? "Unknown member";
+    case "agent":
+      return naming.providerLabels?.get(actor.provider) ?? actor.provider;
+    case "system":
+      return ISSUE_SYSTEM_ACTOR_LABELS[actor.source];
+  }
 }
 
 function quote(value: string): string {
   return `“${value}”`;
 }
 
-/** `agent:codex` and `user` are how the log stores an assignee; neither is a sentence. */
+/**
+ * `agent:codex`, `member:<membershipId>` and `user` are how the log stores an assignee; none of
+ * them is a sentence.
+ */
 function assigneeEventLabel(value: string | null, naming: IssueEventNaming): string | null {
   if (value === null || value.length === 0) return null;
   if (value === ISSUE_ASSIGNEE_USER_VALUE) return "you";
   if (value.startsWith(ISSUE_ASSIGNEE_AGENT_PREFIX)) {
     const provider = value.slice(ISSUE_ASSIGNEE_AGENT_PREFIX.length);
     return naming.providerLabels?.get(provider) ?? provider;
+  }
+  if (value.startsWith(ISSUE_ASSIGNEE_MEMBER_PREFIX)) {
+    const membershipId = value.slice(ISSUE_ASSIGNEE_MEMBER_PREFIX.length);
+    return naming.memberNames?.get(membershipId) ?? "Unknown member";
   }
   return value;
 }

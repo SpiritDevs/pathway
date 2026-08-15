@@ -1,4 +1,4 @@
-import type { RelayAgentActivityState, RelayDeliveryResult } from "@t3tools/contracts/relay";
+import type { RelayAgentActivityState, RelayDeliveryResult } from "@spiritdevs/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -62,7 +62,7 @@ function makeAgentActivityRows(
   return {
     upsert: () => Effect.void,
     remove: () => Effect.void,
-    pruneTerminal: () => Effect.void,
+    pruneTerminal: () => Effect.succeed(0),
     listForUser: () => Effect.succeed([state]),
     getForUserThread: () => Effect.succeed(state),
     ...overrides,

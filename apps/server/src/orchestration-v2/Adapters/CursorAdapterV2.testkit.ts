@@ -5,7 +5,7 @@ import {
   type ModelSelection,
   type ProviderReplayTranscript,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -560,7 +560,7 @@ function makeReplayServerConfig(
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpExportIntervalMs: 10_000,
-      otlpServiceName: "t3-server",
+      otlpServiceName: "pathway-server",
       mode: "web",
       port: 0,
       host: undefined,

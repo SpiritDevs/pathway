@@ -12,7 +12,7 @@
  *
  * @module components/issues/MilestoneBurnUpChart
  */
-import type { IssueMilestone } from "@t3tools/contracts";
+import type { IssueMilestone } from "@spiritdevs/contracts";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";

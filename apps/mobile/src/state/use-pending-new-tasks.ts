@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
+import { deriveThreadTitleSeed } from "@spiritdevs/client-runtime/operations";
 
 import {
   flattenQueuedThreadMessages,

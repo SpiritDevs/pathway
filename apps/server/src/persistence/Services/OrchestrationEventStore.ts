@@ -16,8 +16,8 @@ import type {
   OrchestrationV2DomainEvent,
   OrchestrationV2StoredEvent,
   ThreadId,
-} from "@t3tools/contracts";
-import type { OrchestrationEvent } from "@t3tools/contracts/legacy-orchestration";
+} from "@spiritdevs/contracts";
+import type { OrchestrationEvent } from "@spiritdevs/contracts/legacy-orchestration";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -111,4 +111,4 @@ export interface OrchestrationEventStoreShape {
 export class OrchestrationEventStore extends Context.Service<
   OrchestrationEventStore,
   OrchestrationEventStoreShape
->()("t3/persistence/Services/OrchestrationEventStore") {}
+>()("@spiritdevs/pathway/persistence/Services/OrchestrationEventStore") {}
