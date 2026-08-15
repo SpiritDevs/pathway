@@ -816,6 +816,48 @@ describe("SyncEngine", () => {
     }),
   );
 
+  it.effect("syncs an enqueue while running without waiting for the remote head to move", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      // This feed deliberately never announces anything. The only event capable of starting a
+      // cycle is the local enqueue wakeup; once that cycle applies the operation, its own server
+      // write still cannot feed back through this stream.
+      const transport = SyncTransport.of({
+        ...harness.server.transport,
+        latestVersion: () => Stream.never,
+      });
+      const layer = Layer.mergeAll(
+        Layer.succeed(SyncStore, harness.store.service),
+        Layer.succeed(SyncTransport, transport),
+      );
+
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-a");
+        yield* engine.sync;
+        const headBeforeEnqueue = yield* harness.server.head;
+        const driver = yield* Effect.forkChild(engine.run, { startImmediately: true });
+        yield* Effect.yieldNow;
+
+        yield* engine.enqueue({
+          operationId: operationId("op-local-create"),
+          operation: createNote({ id: NOTE_A, title: "from-this-client", body: "" }),
+        });
+        const flushed = yield* SubscriptionRef.changes(engine.state).pipe(
+          Stream.filter(
+            (state) => confirmedNote(state, NOTE_A) !== null && state.pending.length === 0,
+          ),
+          Stream.runHead,
+          Effect.map(Option.getOrThrow),
+        );
+
+        expect(confirmedNote(flushed, NOTE_A)?.title).toBe("from-this-client");
+        expect((yield* harness.server.submissions).get(operationId("op-local-create"))).toBe(1);
+        expect((yield* harness.server.head).version).toBeGreaterThan(headBeforeEnqueue.version);
+        yield* Fiber.interrupt(driver);
+      }).pipe(Effect.provide(layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
   it.effect("re-arms a cycle that failed, without waiting for the head to move again", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

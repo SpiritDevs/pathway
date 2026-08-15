@@ -33,6 +33,7 @@ import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
@@ -228,6 +229,10 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   const transport = yield* SyncTransport;
   // One cycle at a time: draining and flushing both move the cursor and the outbox.
   const cycleLock = yield* Semaphore.make(1);
+  // Enqueues can happen faster than the network can flush them. One pending wake is enough: the
+  // next cycle reads the whole durable outbox, so retaining N identical signals would only run N
+  // empty follow-up cycles.
+  const localWakeups = yield* Queue.sliding<void>(1);
 
   const stored = yield* store.read(companyId);
   const checkpoint = stored.checkpoint;
@@ -684,6 +689,10 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     yield* Ref.set(highWaterRef, localSequence);
     yield* Ref.set(entriesRef, [...entries, entry]);
     yield* publish;
+    // Persistence and the optimistic view land before the driver is poked. If `run` has not started
+    // yet, the sliding queue retains this wake; if a cycle is already in flight, it guarantees one
+    // follow-up pass that sees everything enqueued meanwhile.
+    yield* Queue.offer(localWakeups, undefined);
 
     const published = yield* SubscriptionRef.get(state);
     const status: PendingSyncStatus = published.pending.find(
@@ -743,7 +752,12 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
 
   const run: Effect.Effect<void, SyncStoreError> = Effect.suspend(() =>
     whenCloudSyncEnabled(
-      transport.latestVersion({ companyId }).pipe(
+      Stream.merge(transport.latestVersion({ companyId }), Stream.fromQueue(localWakeups), {
+        // The remote subscription still owns the driver's lifetime. A cleanly ended or failed
+        // feed must stop `run` so its existing supervisor can reconnect it; the local queue never
+        // ends on its own.
+        haltStrategy: "left",
+      }).pipe(
         Stream.runForEach(() => syncUntilSettled),
         Effect.catch((error: SyncTransportError | SyncStoreError) =>
           error._tag === "SyncStoreError"

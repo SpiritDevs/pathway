@@ -354,6 +354,47 @@ describe("runCloudSyncEngines", () => {
     }),
   );
 
+  it.effect("publishes only live mutation handles across reconciliation and teardown", () =>
+    Effect.gen(function* () {
+      const { transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const published = yield* Queue.unbounded<{
+        readonly companyId: CompanyId;
+        readonly available: boolean;
+      }>();
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+          publishCompanySyncEngineHandle: (companyId, handle) =>
+            Queue.offer(published, { companyId, available: handle !== null }),
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+        { startImmediately: true },
+      );
+
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, available: true });
+
+      // Reconciliation closes the company scope and waits for the engine driver to retract itself.
+      yield* Queue.offer(listings, cleanListing());
+      expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, available: false });
+
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, available: true });
+
+      // Leadership loss/runtime teardown interrupts every remaining company scope through the same
+      // path, so no dead handle survives it either.
+      yield* Fiber.interrupt(supervisor);
+      expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, available: false });
+    }),
+  );
+
   it.effect("runs one engine per company and follows the membership listing", () =>
     Effect.gen(function* () {
       const { events, transport } = yield* makeFeedTransport();
@@ -588,17 +629,21 @@ describe("runCloudSyncEngines", () => {
 const makeFailingFeedTransport = (error: SyncTransportError) =>
   Effect.gen(function* () {
     const attempts = yield* Ref.make(0);
+    const attempted = yield* Queue.unbounded<void>();
     const transport = SyncTransport.of({
       bootstrap: () => unusedEndpoint("bootstrap"),
       listChanges: () => unusedEndpoint("listChanges"),
       applyOperations: () => unusedEndpoint("applyOperations"),
       reserveIssueKeys: () => unusedEndpoint("reserveIssueKeys"),
       latestVersion: () =>
-        Stream.fromEffect(Ref.update(attempts, (count) => count + 1)).pipe(
-          Stream.flatMap(() => Stream.fail(error)),
-        ),
+        Stream.fromEffect(
+          Effect.all([
+            Ref.update(attempts, (count) => count + 1),
+            Queue.offer(attempted, undefined),
+          ]),
+        ).pipe(Stream.flatMap(() => Stream.fail(error))),
     });
-    return { attempts, transport };
+    return { attempted, attempts, transport };
   });
 
 describe("runCloudSyncEngines restart policy", () => {
@@ -606,7 +651,7 @@ describe("runCloudSyncEngines restart policy", () => {
 
   const runUntilQuiet = (error: SyncTransportError) =>
     Effect.gen(function* () {
-      const { attempts, transport } = yield* makeFailingFeedTransport(error);
+      const { attempted, attempts, transport } = yield* makeFailingFeedTransport(error);
       const store = yield* makeMemorySyncStore();
       const election = yield* makeWebLeaderElection({
         scope: "user_123",
@@ -625,6 +670,7 @@ describe("runCloudSyncEngines restart policy", () => {
       );
 
       yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      yield* Queue.take(attempted);
       // Well past several restart delays: whatever this policy is going to do, it has done.
       yield* TestClock.adjust(Duration.seconds(60));
       const count = yield* Ref.get(attempts);
@@ -654,7 +700,7 @@ describe("runCloudSyncEngines restart policy", () => {
 
   it.effect("does not purge when an authorized company engine stops as unauthorized", () =>
     Effect.gen(function* () {
-      const { attempts, transport } = yield* makeFailingFeedTransport(
+      const { attempted, attempts, transport } = yield* makeFailingFeedTransport(
         new SyncTransportError({ reason: "unauthorized", message: "membership changed" }),
       );
       const store = yield* makeMemorySyncStore();
@@ -677,6 +723,7 @@ describe("runCloudSyncEngines restart policy", () => {
       );
 
       yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      yield* Queue.take(attempted);
       yield* TestClock.adjust(Duration.seconds(60));
       expect(yield* Ref.get(attempts)).toBe(1);
       expect((yield* store.snapshot(COMPANY_A)).localSequenceHighWater).toBe(1);

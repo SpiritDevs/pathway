@@ -56,6 +56,10 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { publishCompanyRegistryReplica } from "./companyRegistryReplica";
+import {
+  publishCompanySyncEngineHandle,
+  type CompanySyncEngineMutationHandle,
+} from "./companySyncEngines";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
@@ -362,6 +366,11 @@ export interface CloudSyncEnginesOptions {
     companyId: CompanyId,
     replica: { readonly view: ReadonlyMap<string, unknown> } | null,
   ) => Effect.Effect<void>;
+  /** Publishes the narrow mutation surface only while its engine is alive in this leader tab. */
+  readonly publishCompanySyncEngineHandle?: (
+    companyId: CompanyId,
+    handle: CompanySyncEngineMutationHandle | null,
+  ) => Effect.Effect<void>;
   /** Publishes the compact health state alongside the replica view. */
   readonly publishCompanySyncStatus?: (
     companyId: CompanyId,
@@ -441,12 +450,25 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
           Effect.forkChild,
         );
       }
-      yield* engine.run;
-      const { lastError } = yield* SubscriptionRef.get(engine.state);
-      return {
-        retryable: lastError === null || isRetryableTransportError(lastError),
-        error: lastError,
-      } satisfies CloudSyncEngineStop;
+      const drive = Effect.gen(function* () {
+        yield* engine.run;
+        const { lastError } = yield* SubscriptionRef.get(engine.state);
+        return {
+          retryable: lastError === null || isRetryableTransportError(lastError),
+          error: lastError,
+        } satisfies CloudSyncEngineStop;
+      });
+      const publishHandle = options.publishCompanySyncEngineHandle;
+      if (publishHandle === undefined) return yield* drive;
+
+      yield* publishHandle(company.companyId, {
+        enqueue: engine.enqueue,
+        discardRejected: engine.discardRejected,
+      });
+      // Covers every exit: authenticated terminal errors, retryable feed loss, membership removal,
+      // leadership loss, and runtime teardown. A retry publishes its replacement only after this
+      // handle is gone, so mutations never target an engine whose driver has stopped.
+      return yield* drive.pipe(Effect.ensuring(publishHandle(company.companyId, null)));
     });
 
   /**
@@ -681,6 +703,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
     election,
     connect,
     publishCompanyRegistryReplica,
+    publishCompanySyncEngineHandle,
     publishCompanySyncStatus,
     ...(options.restartDelay === undefined ? {} : { restartDelay: options.restartDelay }),
   }).pipe(Effect.provideService(SyncStore, store.service));
