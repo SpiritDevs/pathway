@@ -944,7 +944,7 @@ export interface IssuesSelection {
   readonly ids: ReadonlySet<IssueId>;
   /** Where a shift-click measures from; the last row picked without shift. */
   readonly anchorId: IssueId | null;
-  /** The cursor `j`/`k` moves and Enter opens. Always a member of `ids` when `ids` is non-empty. */
+  /** The cursor `j`/`k` moves and Enter opens. Independent from checkbox selection. */
   readonly activeId: IssueId | null;
 }
 
@@ -958,6 +958,11 @@ export const EMPTY_ISSUES_SELECTION: IssuesSelection = {
 
 /** A click's meaning, already resolved from the modifier keys by the caller. */
 export type IssueSelectMode = "replace" | "toggle" | "range";
+
+/** Moves the list cursor without changing the rows selected for bulk actions. */
+export function activateIssueRow(selection: IssuesSelection, issueId: IssueId): IssuesSelection {
+  return selection.activeId === issueId ? selection : { ...selection, activeId: issueId };
+}
 
 export function issueSelectModeForModifiers(input: {
   readonly shiftKey: boolean;

@@ -16,6 +16,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { EMPTY_ISSUES_STORE, type IssuesGrouping, type IssuesStore } from "~/state/issues";
 import {
   EMPTY_ISSUES_SELECTION,
+  activateIssueRow,
   ISSUE_ASSIGNEE_USER_VALUE,
   NO_ISSUES_LIST_FILTER,
   activeIssuesFilterFields,
@@ -803,6 +804,24 @@ describe("selectIssueRow", () => {
     expect(issueSelectModeForModifiers({ shiftKey: false, metaKey: false, ctrlKey: false })).toBe(
       "replace",
     );
+  });
+});
+
+describe("activateIssueRow", () => {
+  it("moves the active row without changing checkbox selection", () => {
+    const selectedId = IssueId.make("1");
+    const activeId = IssueId.make("2");
+    const selection: IssuesSelection = {
+      ids: new Set([selectedId]),
+      anchorId: selectedId,
+      activeId: selectedId,
+    };
+
+    const activated = activateIssueRow(selection, activeId);
+
+    expect([...activated.ids]).toEqual([selectedId]);
+    expect(activated.anchorId).toBe(selectedId);
+    expect(activated.activeId).toBe(activeId);
   });
 });
 

@@ -94,6 +94,7 @@ import {
 import {
   DEFAULT_ISSUES_TAB,
   EMPTY_ISSUES_SELECTION,
+  activateIssueRow,
   buildIssuesListRows,
   buildIssuesView,
   effectiveIssuesGrouping,
@@ -102,7 +103,6 @@ import {
   NO_ISSUES_LIST_FILTER,
   isIssuesListFilterActive,
   issueIdsInRows,
-  issueSelectModeForModifiers,
   issuesFilterSearchPatch,
   issuesSearchFilter,
   issuesSearchGrouping,
@@ -292,9 +292,7 @@ function IssuesListView({
     // which renders no rows at all.
     if (ids.length === 0 || detailIssue === null || detailIssue.deletedAt !== null) return;
     setSelection((current) =>
-      current.activeId === null
-        ? selectIssueRow(current, { ids, issueId: detailIssue.id, mode: "replace" })
-        : current,
+      current.activeId === null ? activateIssueRow(current, detailIssue.id) : current,
     );
   }, [detailIssue, ids]);
 
@@ -339,9 +337,7 @@ function IssuesListView({
       return;
     }
     scrollToActiveRef.current = true;
-    setSelection((current) =>
-      selectIssueRow(current, { ids, issueId: action.issueId, mode: "replace" }),
-    );
+    setSelection((current) => activateIssueRow(current, action.issueId));
     // An open sheet follows the cursor rather than staying on the row it was opened from, which is
     // what makes `j`/`k` a triage pass rather than a way to lose your place.
     if (detailIssueKey !== null) {
@@ -366,15 +362,9 @@ function IssuesListView({
     listRef.current?.scrollToIndex({ index, viewOffset: 48 });
   }, [rows, selection.activeId]);
 
-  const handleRowClick = (issue: Issue, event: MouseEvent) => {
-    const mode = issueSelectModeForModifiers(event);
-    setSelection((current) => selectIssueRow(current, { ids, issueId: issue.id, mode }));
-    if (mode === "replace") {
-      setBulkSelectionActive(false);
-      openIssue(issue);
-    } else {
-      setBulkSelectionActive(true);
-    }
+  const handleRowClick = (issue: Issue, _event: MouseEvent) => {
+    setSelection((current) => activateIssueRow(current, issue.id));
+    openIssue(issue);
   };
 
   const handleRowSelected = (issue: Issue, selected: boolean) => {
