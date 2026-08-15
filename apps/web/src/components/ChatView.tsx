@@ -39,6 +39,7 @@ import {
   resolveLatestForkableRun,
   resolveThreadProviderSession,
 } from "@t3tools/client-runtime/state/thread-workflows";
+import { USAGE_LIMIT_RECOVERY_PROMPT } from "@t3tools/client-runtime/state/usage-limit-recovery";
 import { resolveThreadForkKind } from "@t3tools/client-runtime/state/thread-relationships";
 import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Sidebar.logic";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
@@ -1369,6 +1370,7 @@ function ChatViewContent(props: ChatViewProps) {
   const launchThreadContinuation = useAtomCommand(threadEnvironment.launchContinuation, {
     reportFailure: false,
   });
+  const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
@@ -4657,6 +4659,44 @@ function ChatViewContent(props: ChatViewProps) {
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
+  const [usageLimitWaitPending, setUsageLimitWaitPending] = useState(false);
+  const onWaitUntilUsageReset = useCallback(
+    async (resetAt: string) => {
+      if (!activeThreadRef || !supportsSnooze || usageLimitWaitPending) return;
+      const resetMs = Date.parse(resetAt);
+      if (!Number.isFinite(resetMs) || resetMs <= Date.now()) return;
+      setUsageLimitWaitPending(true);
+      try {
+        const result = await snoozeThreadMutation({
+          environmentId: activeThreadRef.environmentId,
+          input: { threadId: activeThreadRef.threadId, snoozedUntil: resetAt },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not wait for the usage reset",
+                description: chatActionErrorMessage(error),
+              }),
+            );
+          }
+          return;
+        }
+        toastManager.add(
+          stackedThreadToast({
+            type: "success",
+            title: "Waiting for the usage reset",
+            description: "This thread is snoozed until the provider allowance resets.",
+          }),
+        );
+      } finally {
+        setUsageLimitWaitPending(false);
+      }
+    },
+    [activeThreadRef, snoozeThreadMutation, supportsSnooze, usageLimitWaitPending],
+  );
   const nowMinute = useNowMinute();
   const activeThreadSnoozed =
     activeThreadShell !== null &&
@@ -5591,6 +5631,11 @@ function ChatViewContent(props: ChatViewProps) {
         readonly targetThreadId: ThreadId;
       }
     | { readonly kind: "handoff" }
+    | {
+        readonly kind: "recovery";
+        readonly sourceRunId: RunId;
+        readonly sourceModelSelection: ModelSelection;
+      }
     | null
   >(null);
   const [continuationPending, setContinuationPending] = useState(false);
@@ -5610,6 +5655,17 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeLatestRun?.status !== "completed") return;
     setContinuationRequest({ kind: "handoff" });
   }, [activeLatestRun?.status]);
+  const onRecoverUsageLimit = useCallback(
+    (input: { readonly runId: RunId; readonly sourceModelSelection: ModelSelection }) => {
+      if (activeLatestRun?.runId !== input.runId || activeLatestRun.status !== "failed") return;
+      setContinuationRequest({
+        kind: "recovery",
+        sourceRunId: input.runId,
+        sourceModelSelection: input.sourceModelSelection,
+      });
+    },
+    [activeLatestRun],
+  );
   const onSubmitContinuation = useCallback(
     async (modelSelection: ModelSelection, workspaceTarget: ContinuationWorkspaceTarget) => {
       const request = continuationRequest;
@@ -5626,6 +5682,77 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       setContinuationPending(true);
+      if (request.kind === "recovery") {
+        if (activeLatestRun?.runId !== request.sourceRunId || activeLatestRun.status !== "failed") {
+          setContinuationPending(false);
+          setContinuationRequest(null);
+          return;
+        }
+        const createdAt = new Date().toISOString();
+        const messageId = newMessageId();
+        sendInFlightRef.current = true;
+        beginLocalDispatch({ preparingWorktree: false });
+        setThreadError(activeThread.id, null);
+        try {
+          const settingsResult = await persistThreadSettingsForNextTurn({
+            threadId: activeThread.id,
+            createdAt,
+            modelSelection,
+            runtimeMode,
+            interactionMode,
+          });
+          let failure: AtomCommandResult<unknown, unknown> | null =
+            settingsResult._tag === "Failure" ? settingsResult : null;
+          if (failure === null) {
+            const startResult = await startThreadTurn({
+              environmentId,
+              input: {
+                threadId: activeThread.id,
+                message: {
+                  messageId,
+                  role: "user",
+                  text: USAGE_LIMIT_RECOVERY_PROMPT,
+                  attachments: [],
+                },
+                modelSelection,
+                titleSeed: activeThread.title,
+                runtimeMode,
+                interactionMode,
+                createdAt,
+              },
+            });
+            failure = startResult._tag === "Failure" ? startResult : null;
+          }
+          if (failure !== null) {
+            if (!isAtomCommandInterrupted(failure)) {
+              const error = squashAtomCommandFailure(failure);
+              setThreadError(
+                activeThread.id,
+                error instanceof Error ? error.message : "Failed to recover with another model.",
+              );
+            }
+            return;
+          }
+          setComposerDraftModelSelection(
+            scopeThreadRef(activeThread.environmentId, activeThread.id),
+            modelSelection,
+          );
+          setStickyComposerModelSelection(modelSelection);
+          setContinuationRequest(null);
+          toastManager.add(
+            stackedThreadToast({
+              type: "success",
+              title: "Continuing with another model",
+              description: "The interrupted work was sent to the selected model in this chat.",
+            }),
+          );
+        } finally {
+          sendInFlightRef.current = false;
+          setContinuationPending(false);
+          resetLocalDispatch();
+        }
+        return;
+      }
       if (request.kind === "handoff") {
         const result = await updateThreadMetadata({
           environmentId,
@@ -5693,6 +5820,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeEnvironmentUnavailable,
+      activeLatestRun,
       activePendingApproval,
       activePendingUserInput,
       activeThread,
@@ -5705,10 +5833,14 @@ function ChatViewContent(props: ChatViewProps) {
       isWorking,
       latestRunSettled,
       launchThreadContinuation,
+      beginLocalDispatch,
+      persistThreadSettingsForNextTurn,
+      resetLocalDispatch,
       runtimeMode,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
       setThreadError,
+      startThreadTurn,
       updateThreadMetadata,
     ],
   );
@@ -7394,6 +7526,10 @@ function ChatViewContent(props: ChatViewProps) {
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}
+                onRecoverUsageLimit={onRecoverUsageLimit}
+                onWaitUntilUsageReset={(resetAt) => void onWaitUntilUsageReset(resetAt)}
+                usageLimitRecoveryPending={continuationPending || usageLimitWaitPending}
+                canWaitUntilUsageReset={supportsSnooze}
                 onRollbackCheckpoint={(input) => void onRollbackCheckpoint(input)}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
@@ -7844,7 +7980,11 @@ function ChatViewContent(props: ChatViewProps) {
       <ContinuationDialog
         open={continuationRequest !== null}
         kind={continuationRequest?.kind ?? "continue"}
-        sourceModelSelection={activeThread.modelSelection}
+        sourceModelSelection={
+          continuationRequest?.kind === "recovery"
+            ? continuationRequest.sourceModelSelection
+            : activeThread.modelSelection
+        }
         instanceEntries={continuationProviderEntries}
         modelOptionsByInstance={continuationModelOptionsByInstance}
         keybindings={keybindings}

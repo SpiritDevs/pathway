@@ -10,11 +10,17 @@ import * as Option from "effect/Option";
 import {
   CommandId,
   EnvironmentId,
+  MessageId,
   ThreadId,
   type ModelSelection,
   type ProjectScript,
   type RunId,
 } from "@t3tools/contracts";
+import {
+  isUsageLimitFailure,
+  resolveUsageLimitResetAt,
+  USAGE_LIMIT_RECOVERY_PROMPT,
+} from "@t3tools/client-runtime/state/usage-limit-recovery";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -66,6 +72,7 @@ import { useSelectedThreadRequests } from "../../state/use-selected-thread-reque
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { serverEnvironment } from "../../state/server";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -214,6 +221,14 @@ function ThreadRouteContent(
     threadEnvironment.launchContinuation,
     "thread continuation",
   );
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, {
+    label: "usage limit recovery",
+    reportFailure: false,
+  });
+  const snoozeThread = useAtomCommand(threadEnvironment.snooze, {
+    label: "usage limit wait",
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -236,9 +251,15 @@ function ThreadRouteContent(
         readonly targetThreadId: ThreadId;
       }
     | { readonly kind: "handoff" }
+    | {
+        readonly kind: "recovery";
+        readonly sourceRunId: RunId;
+        readonly sourceModelSelection: ModelSelection;
+      }
     | null
   >(null);
   const [continuationPending, setContinuationPending] = useState(false);
+  const [usageLimitWaitPending, setUsageLimitWaitPending] = useState(false);
   const inspectorMode = (() => {
     if (inspectorSelection?.routeThreadIdentity === routeThreadIdentity) {
       if (inspectorSelection.mode === "files" && selectedThreadCwd === null) {
@@ -295,6 +316,7 @@ function ThreadRouteContent(
     }, [props.renderInspector]),
   );
   const routeEnvironmentRuntime = useRemoteEnvironmentRuntime(environmentId);
+  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeConnectionError = routeEnvironmentRuntime?.connectionError ?? null;
@@ -310,6 +332,53 @@ function ThreadRouteContent(
         : null,
     [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
   );
+  const usageLimitRecoveryCandidate = useMemo(() => {
+    const itemRow = selectedThreadDetail?.visibleTurnItems.findLast(
+      (row) =>
+        row.visibility === "local" &&
+        row.item.type === "error" &&
+        row.item.status === "failed" &&
+        row.item.runId !== null &&
+        isUsageLimitFailure(row.item.failure),
+    );
+    if (itemRow?.item.type !== "error" || itemRow.item.runId === null) return null;
+    const run = selectedThreadDetail?.runs.find((entry) => entry.id === itemRow.item.runId);
+    const latestRun = selectedThreadDetail?.runs.reduce(
+      (latest, entry) => (latest === null || entry.ordinal > latest.ordinal ? entry : latest),
+      null as (typeof selectedThreadDetail.runs)[number] | null,
+    );
+    if (!run || run.status !== "failed" || latestRun?.id !== run.id) return null;
+    return { item: itemRow.item, run };
+  }, [selectedThreadDetail]);
+  const usageLimitProvider =
+    usageLimitRecoveryCandidate === null
+      ? null
+      : (serverConfig?.providers.find(
+          (provider) => provider.instanceId === usageLimitRecoveryCandidate.run.providerInstanceId,
+        ) ?? null);
+  const usageLimitSnapshot = useEnvironmentQuery(
+    selectedThread !== null &&
+      usageLimitProvider !== null &&
+      (usageLimitProvider.driver === "codex" ||
+        usageLimitProvider.driver === "claudeAgent" ||
+        usageLimitProvider.driver === "cursor")
+      ? serverEnvironment.providerUsage({
+          environmentId: selectedThread.environmentId,
+          input: {
+            instanceId: usageLimitProvider.instanceId,
+            provider: usageLimitProvider.driver as "codex" | "claudeAgent" | "cursor",
+          },
+        })
+      : null,
+  );
+  const usageLimitResetAt =
+    usageLimitRecoveryCandidate === null
+      ? null
+      : resolveUsageLimitResetAt({
+          failureMessage: usageLimitRecoveryCandidate.item.failure.message,
+          snapshot: usageLimitSnapshot.data,
+          nowMs: Date.now(),
+        });
   const handleContinueFromRun = useCallback(
     (input: { readonly sourceThreadId: ThreadId; readonly sourceRunId: RunId }) => {
       setContinuationRequest({
@@ -331,6 +400,14 @@ function ThreadRouteContent(
     if (!canHandoff) return;
     setContinuationRequest({ kind: "handoff" });
   }, [canHandoff]);
+  const handleOpenUsageLimitRecovery = useCallback(() => {
+    if (usageLimitRecoveryCandidate === null || composer.activeThreadBusy) return;
+    setContinuationRequest({
+      kind: "recovery",
+      sourceRunId: usageLimitRecoveryCandidate.run.id,
+      sourceModelSelection: usageLimitRecoveryCandidate.run.modelSelection,
+    });
+  }, [composer.activeThreadBusy, usageLimitRecoveryCandidate]);
   const handleSubmitContinuation = useCallback(
     async (modelSelection: ModelSelection, workspaceTarget: MobileContinuationWorkspaceTarget) => {
       const request = continuationRequest;
@@ -346,6 +423,49 @@ function ThreadRouteContent(
         return;
       }
       setContinuationPending(true);
+      if (request.kind === "recovery") {
+        if (usageLimitRecoveryCandidate?.run.id !== request.sourceRunId) {
+          setContinuationPending(false);
+          setContinuationRequest(null);
+          return;
+        }
+        const metadataResult = await updateThreadMetadata({
+          environmentId: selectedThread.environmentId,
+          input: { threadId: selectedThread.id, modelSelection },
+        });
+        if (metadataResult._tag !== "Success") {
+          setContinuationPending(false);
+          Alert.alert("Could not switch models", "The thread provider could not be changed.");
+          return;
+        }
+        const createdAt = new Date().toISOString();
+        const startResult = await startThreadTurn({
+          environmentId: selectedThread.environmentId,
+          input: {
+            threadId: selectedThread.id,
+            message: {
+              messageId: MessageId.make(uuidv4()),
+              role: "user",
+              text: USAGE_LIMIT_RECOVERY_PROMPT,
+              attachments: [],
+            },
+            modelSelection,
+            titleSeed: selectedThread.title,
+            runtimeMode: selectedThreadWithDraftSettings?.runtimeMode ?? selectedThread.runtimeMode,
+            interactionMode:
+              selectedThreadWithDraftSettings?.interactionMode ?? selectedThread.interactionMode,
+            createdAt,
+          },
+        });
+        setContinuationPending(false);
+        if (startResult._tag !== "Success") {
+          Alert.alert("Could not recover this work", "The continuation turn could not be started.");
+          return;
+        }
+        composer.onUpdateModelSelection(modelSelection);
+        setContinuationRequest(null);
+        return;
+      }
       if (request.kind === "handoff") {
         const result = await updateThreadMetadata({
           environmentId: selectedThread.environmentId,
@@ -418,9 +538,45 @@ function ThreadRouteContent(
       selectedThread,
       selectedThreadWithDraftSettings?.interactionMode,
       selectedThreadWithDraftSettings?.runtimeMode,
+      startThreadTurn,
       updateThreadMetadata,
+      usageLimitRecoveryCandidate,
     ],
   );
+  const canWaitUntilUsageReset =
+    serverConfig?.environment.capabilities.threadSnooze === true && usageLimitResetAt !== null;
+  const threadIsWaitingForUsageReset =
+    selectedThread?.snoozedUntil !== null &&
+    selectedThread?.snoozedUntil !== undefined &&
+    Date.parse(selectedThread.snoozedUntil) > Date.now();
+  const handleWaitUntilUsageReset = useCallback(async () => {
+    if (
+      selectedThread === null ||
+      usageLimitResetAt === null ||
+      !canWaitUntilUsageReset ||
+      usageLimitWaitPending
+    ) {
+      return;
+    }
+    setUsageLimitWaitPending(true);
+    try {
+      const result = await snoozeThread({
+        environmentId: selectedThread.environmentId,
+        input: { threadId: selectedThread.id, snoozedUntil: usageLimitResetAt },
+      });
+      if (result._tag !== "Success") {
+        Alert.alert("Could not wait for the reset", "The thread could not be snoozed.");
+      }
+    } finally {
+      setUsageLimitWaitPending(false);
+    }
+  }, [
+    canWaitUntilUsageReset,
+    selectedThread,
+    snoozeThread,
+    usageLimitResetAt,
+    usageLimitWaitPending,
+  ]);
 
   /* ─── Native header theming ──────────────────────────────────────── */
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
@@ -888,7 +1044,6 @@ function ThreadRouteContent(
     detailDeleted: selectedThreadDetailState.status === "deleted",
     connectionState: routeConnectionState,
   });
-  const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
   const renderThreadRouteBody = (showActionControls: boolean) => (
     <>
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
@@ -933,6 +1088,17 @@ function ThreadRouteContent(
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           onContinueFromRun={handleContinueFromRun}
+          usageLimitRecovery={
+            usageLimitRecoveryCandidate === null || threadIsWaitingForUsageReset
+              ? null
+              : {
+                  resetAt: usageLimitResetAt,
+                  pending: continuationPending || usageLimitWaitPending,
+                  canWaitUntilReset: canWaitUntilUsageReset,
+                }
+          }
+          onRecoverUsageLimit={handleOpenUsageLimitRecovery}
+          onWaitUntilUsageReset={() => void handleWaitUntilUsageReset()}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
           onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
@@ -1002,7 +1168,9 @@ function ThreadRouteContent(
         visible={continuationRequest !== null}
         kind={continuationRequest?.kind ?? "continue"}
         sourceModelSelection={
-          selectedThreadWithDraftSettings?.modelSelection ?? selectedThread.modelSelection
+          continuationRequest?.kind === "recovery"
+            ? continuationRequest.sourceModelSelection
+            : (selectedThreadWithDraftSettings?.modelSelection ?? selectedThread.modelSelection)
         }
         serverConfig={serverConfig}
         canCreateWorktree={gitStatus.data?.isRepo === true}

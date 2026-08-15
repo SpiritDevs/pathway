@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import { isUsageLimitFailure } from "@t3tools/client-runtime/state/usage-limit-recovery";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { buildOrchestrationErrorFixPrompt } from "@t3tools/shared/orchestrationV2Timeline";
 import {
@@ -124,6 +125,7 @@ import {
   type SubagentTimelineModel,
 } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { UsageLimitRecoveryActions } from "./UsageLimitRecoveryActions";
 
 import {
   buildInlineTerminalContextText,
@@ -178,6 +180,13 @@ interface TimelineRowSharedState {
   onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
+  onRecoverUsageLimit: (input: {
+    readonly runId: RunId;
+    readonly sourceModelSelection: import("@t3tools/contracts").ModelSelection;
+  }) => void;
+  onWaitUntilUsageReset: (resetAt: string) => void;
+  usageLimitRecoveryPending: boolean;
+  canWaitUntilUsageReset: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -245,6 +254,13 @@ interface MessagesTimelineProps {
     readonly title: string;
   } | null;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
+  onRecoverUsageLimit?: (input: {
+    readonly runId: RunId;
+    readonly sourceModelSelection: import("@t3tools/contracts").ModelSelection;
+  }) => void;
+  onWaitUntilUsageReset?: (resetAt: string) => void;
+  usageLimitRecoveryPending?: boolean;
+  canWaitUntilUsageReset?: boolean;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -284,6 +300,8 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_ASYNC_FALSE = (): Promise<boolean> => Promise.resolve(false);
+const NOOP_RECOVER_USAGE_LIMIT = () => undefined;
+const NOOP_WAIT_FOR_USAGE_RESET = () => undefined;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
@@ -306,6 +324,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenThread,
   parentThreadLink = null,
   onContinueFromRun,
+  onRecoverUsageLimit = NOOP_RECOVER_USAGE_LIMIT,
+  onWaitUntilUsageReset = NOOP_WAIT_FOR_USAGE_RESET,
+  usageLimitRecoveryPending = false,
+  canWaitUntilUsageReset = false,
   onRollbackCheckpoint,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
@@ -653,6 +675,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
+      onRecoverUsageLimit,
+      onWaitUntilUsageReset,
+      usageLimitRecoveryPending,
+      canWaitUntilUsageReset,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -684,6 +710,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onPanelSurfaceOpen,
       onOpenThread,
       onContinueFromRun,
+      onRecoverUsageLimit,
+      onWaitUntilUsageReset,
+      usageLimitRecoveryPending,
+      canWaitUntilUsageReset,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -1708,6 +1738,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
     return (
@@ -1789,6 +1820,29 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
             <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
               From {sourceThreadId}
             </p>
+          ) : null}
+          {visibility === "local" &&
+          item.status === "failed" &&
+          item.runId !== null &&
+          item.runId === activity.latestRunId &&
+          isUsageLimitFailure(item.failure) ? (
+            <div className="mt-3 border-t border-border/45 pt-3">
+              <p className="mb-2 text-xs font-medium text-foreground/90">
+                This work can continue with another model, or wait for this allowance to reset.
+              </p>
+              <UsageLimitRecoveryActions
+                environmentId={ctx.activeThreadEnvironmentId}
+                item={item}
+                providerStatuses={ctx.providerStatuses}
+                runs={ctx.runs}
+                timestampFormat={ctx.timestampFormat}
+                disabled={ctx.usageLimitRecoveryPending}
+                waiting={ctx.usageLimitRecoveryPending}
+                canWaitUntilReset={ctx.canWaitUntilUsageReset}
+                onRecover={ctx.onRecoverUsageLimit}
+                onWaitUntilReset={ctx.onWaitUntilUsageReset}
+              />
+            </div>
           ) : null}
           <div className={presentation.detail ? "mt-2" : undefined}>
             <V2ItemInspector
