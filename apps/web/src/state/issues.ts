@@ -79,7 +79,11 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { activeCompanyReplicaRoutingAtom } from "../cloud/activeCompany";
-import { syncedIssueDomainAtom } from "../cloud/issueDomainReadModel";
+import {
+  syncedIssueDetailAtomFamily,
+  syncedIssueDomainAtom,
+  type SyncedIssueDetail,
+} from "../cloud/issueDomainReadModel";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { randomUUID } from "../lib/utils";
 import {
@@ -119,7 +123,11 @@ import {
   issueViewUpdateOperation,
 } from "./issueOperationsFromRpc";
 import { receiptMappedResult, routeIssueMutationCommand } from "./issueMutationRouting";
-import { issuesStoreFromReplica } from "./issuesFromReplica";
+import {
+  issueDetailProjectionFromReplica,
+  issuesStoreFromReplica,
+  selectReplicaRoutedIssueRead,
+} from "./issuesFromReplica";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
 import { useAtomCommand } from "./use-atom-command";
@@ -1500,6 +1508,24 @@ const issueLinksForThreadQuery = createEnvironmentRpcQueryAtomFamily(connectionA
 
 const EMPTY_ISSUE_EVENTS: ReadonlyArray<IssueEvent> = Object.freeze([]);
 const EMPTY_ISSUE_COMMENTS: ReadonlyArray<IssueComment> = Object.freeze([]);
+const EMPTY_SYNCED_ISSUE_DETAIL_ATOM = Atom.make<SyncedIssueDetail | null>(null).pipe(
+  Atom.withLabel("web-issues:empty-synced-detail"),
+);
+const NOOP_REPLICA_REFRESH = () => undefined;
+
+/**
+ * Replica detail already includes the sync engine's optimistic outbox overlay. The legacy stream
+ * overlay must only participate in the RPC branch or a local comment/todo/relation would appear
+ * twice while its operation is pending.
+ */
+function useReplicaIssueDetailProjection(issueId: IssueId | null) {
+  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const synced = useAtomValue(
+    issueId === null ? EMPTY_SYNCED_ISSUE_DETAIL_ATOM : syncedIssueDetailAtomFamily(issueId),
+  );
+  const projection = useMemo(() => issueDetailProjectionFromReplica(synced), [synced]);
+  return { replicaCompanyId, projection };
+}
 
 /** What a sheet needs to render a read that can fail, lag, or be asked for again. */
 export interface IssueEventsView {
@@ -1510,18 +1536,29 @@ export interface IssueEventsView {
 }
 
 export function useIssueEvents(issueId: IssueId | null): IssueEventsView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueEventsQuery({ environmentId, input: { issueId } }),
   );
-  return {
+  const legacy = {
     events: query.data?.events ?? EMPTY_ISSUE_EVENTS,
     isPending: query.isPending,
     error: query.error,
     refresh: query.refresh,
   };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      events: replica.projection.events,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    legacy,
+  );
 }
 
 export interface IssueDetailView {
@@ -1533,20 +1570,32 @@ export interface IssueDetailView {
 }
 
 export function useIssueDetail(issueId: IssueId | null): IssueDetailView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueDetailQuery({ environmentId, input: { issueId } }),
   );
   const overlay = useAtomValue(
-    issueId === null ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM : issueDetailOverlayAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM
+      : issueDetailOverlayAtomFamily(issueId),
   );
   const detail = useMemo(
     () => (query.data === null ? null : mergeIssueDetail(query.data, overlay)),
     [query.data, overlay],
   );
-  return { detail, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      detail: replica.projection.detail,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    { detail, isPending: query.isPending, error: query.error, refresh: query.refresh },
+  );
 }
 
 export interface IssueCommentsView {
@@ -1561,14 +1610,17 @@ export interface IssueCommentsView {
  * detail sheet reads {@link useIssueDetail} instead — one round trip, same live patching.
  */
 export function useIssueComments(issueId: IssueId | null): IssueCommentsView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueCommentsQuery({ environmentId, input: { issueId } }),
   );
   const overlay = useAtomValue(
-    issueId === null ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM : issueDetailOverlayAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_ISSUE_DETAIL_OVERLAY_ATOM
+      : issueDetailOverlayAtomFamily(issueId),
   );
   const comments = useMemo(
     () =>
@@ -1578,7 +1630,16 @@ export function useIssueComments(issueId: IssueId | null): IssueCommentsView {
             .comments,
     [query.data, overlay],
   );
-  return { comments, isPending: query.isPending, error: query.error, refresh: query.refresh };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      comments: replica.projection.comments,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    { comments, isPending: query.isPending, error: query.error, refresh: query.refresh },
+  );
 }
 
 // ── Agent reads ────────────────────────────────────────────────────────
@@ -1626,21 +1687,34 @@ export interface IssueThreadLinksView {
 
 /** The threads working an issue. The stream carries the whole list, so a patch replaces outright. */
 export function useIssueThreadLinks(issueId: IssueId | null): IssueThreadLinksView {
+  const replica = useReplicaIssueDetailProjection(issueId);
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    environmentId === null || issueId === null
+    replica.replicaCompanyId !== null || environmentId === null || issueId === null
       ? null
       : issueThreadLinksQuery({ environmentId, input: { issueId } }),
   );
   const patch = useAtomValue(
-    issueId === null ? EMPTY_THREAD_LINK_PATCH_ATOM : issueThreadLinkPatchAtomFamily(issueId),
+    replica.replicaCompanyId !== null || issueId === null
+      ? EMPTY_THREAD_LINK_PATCH_ATOM
+      : issueThreadLinkPatchAtomFamily(issueId),
   );
-  return {
+  const legacy = {
     links: patch ?? query.data?.links ?? EMPTY_THREAD_LINKS,
     isPending: query.isPending,
     error: query.error,
     refresh: query.refresh,
   };
+  return selectReplicaRoutedIssueRead(
+    replica.replicaCompanyId,
+    {
+      links: replica.projection.threadLinks,
+      isPending: false,
+      error: null,
+      refresh: NOOP_REPLICA_REFRESH,
+    },
+    legacy,
+  );
 }
 
 /**

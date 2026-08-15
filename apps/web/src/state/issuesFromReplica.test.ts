@@ -2,17 +2,22 @@ import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/con
 import { cloudEntityCodec, type CloudSyncEntity } from "@spiritdevs/client-runtime/sync";
 import { ISSUE_KEY_DRAFT_PLACEHOLDER, type SyncEntityKind } from "@spiritdevs/contracts/cloudSync";
 import { IssueId, SlackChannelWatchId, type SlackChannelWatch } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
-import { syncedIssueDomainFromReplica } from "../cloud/issueDomainReadModel";
+import { syncedIssueDetailById, syncedIssueDomainFromReplica } from "../cloud/issueDomainReadModel";
 import {
   EMPTY_ISSUES_STORE,
   selectIssuesStoreState,
   type IssuesStore,
   type IssuesStoreState,
 } from "./issues";
-import { issuesStoreFromReplica } from "./issuesFromReplica";
+import {
+  issueDetailProjectionFromReplica,
+  issuesStoreFromReplica,
+  selectReplicaRoutedIssueRead,
+} from "./issuesFromReplica";
 
 const JAN_1 = Date.UTC(2026, 0, 1);
 const JAN_2 = Date.UTC(2026, 0, 2);
@@ -335,5 +340,294 @@ describe("selectIssuesStoreState", () => {
       store: replicaStore,
       status: "ready",
     });
+  });
+});
+
+describe("issueDetailProjectionFromReplica", () => {
+  it("maps and legacy-sorts todos, relation edges, comments, and thread links", () => {
+    const readModel = syncedIssueDomainFromReplica(
+      replica(
+        issue({ id: "issue-1", key: "PAT-1", keyNumber: 1, statusId: "status-1" }),
+        issue({ id: "issue-2", key: "PAT-2", keyNumber: 2, statusId: "status-1" }),
+        decoded("issueTodo", {
+          id: "todo-z",
+          issueId: "issue-1",
+          text: "Second",
+          done: false,
+          sortOrder: "z",
+          createdAt: JAN_1,
+          updatedAt: JAN_2,
+        }),
+        decoded("issueTodo", {
+          id: "todo-a",
+          issueId: "issue-1",
+          text: "First",
+          done: true,
+          sortOrder: "a",
+          createdAt: JAN_1,
+          updatedAt: JAN_2,
+        }),
+        // Created first on purpose: legacy relation reads still group outgoing before incoming.
+        decoded("issueRelation", {
+          id: "relation-incoming",
+          issueId: "issue-2",
+          relatedIssueId: "issue-1",
+          kind: "blocks",
+          createdAt: JAN_1,
+        }),
+        decoded("issueRelation", {
+          id: "relation-outgoing",
+          issueId: "issue-1",
+          relatedIssueId: "issue-2",
+          kind: "relates",
+          createdAt: JAN_2,
+        }),
+        decoded("issueComment", {
+          id: "comment-z",
+          issueId: "issue-1",
+          body: "Later id",
+          author: { kind: "member", membershipId: "membership-1" },
+          attachmentIds: [],
+          mentions: [],
+          createdAt: JAN_1,
+          updatedAt: JAN_2,
+        }),
+        decoded("issueComment", {
+          id: "comment-a",
+          issueId: "issue-1",
+          body: "Earlier id",
+          author: null,
+          attachmentIds: ["attachment-1"],
+          mentions: [],
+          createdAt: JAN_1,
+          updatedAt: JAN_1,
+        }),
+        decoded("issueAttachment", {
+          id: "attachment-1",
+          issueId: "issue-1",
+          commentId: "comment-a",
+          fileName: "trace.log",
+          mimeType: "text/plain",
+          byteSize: 42,
+          checksum: "checksum",
+          uploadedByMembershipId: null,
+          state: "finalized",
+          createdAt: JAN_1,
+          updatedAt: JAN_1,
+        }),
+        decoded("issueThreadLink", {
+          id: "link-z",
+          issueId: "issue-1",
+          environmentId: "environment-1",
+          threadId: "thread-z",
+          origin: "manual",
+          createdByMembershipId: "membership-1",
+          createdAt: JAN_1,
+        }),
+        decoded("issueThreadLink", {
+          id: "link-a",
+          issueId: "issue-1",
+          environmentId: "environment-2",
+          threadId: "thread-a",
+          origin: "start-work",
+          createdByMembershipId: null,
+          createdAt: JAN_1,
+        }),
+      ),
+    );
+    const synced = syncedIssueDetailById(readModel, IssueId.make("issue-1"));
+    const projected = issueDetailProjectionFromReplica(synced);
+
+    expect(projected.detail?.todos).toEqual([
+      { id: "todo-a", issueId: "issue-1", text: "First", done: true, position: 0 },
+      { id: "todo-z", issueId: "issue-1", text: "Second", done: false, position: 1 },
+    ]);
+    expect(projected.detail?.relations).toEqual([
+      {
+        relation: {
+          id: "relation-outgoing",
+          issueId: "issue-1",
+          relatedIssueId: "issue-2",
+          kind: "relates",
+        },
+        direction: "outgoing",
+      },
+      {
+        relation: {
+          id: "relation-incoming",
+          issueId: "issue-2",
+          relatedIssueId: "issue-1",
+          kind: "blocks",
+        },
+        direction: "incoming",
+      },
+    ]);
+    expect(projected.comments.map(({ id }) => id)).toEqual(["comment-a", "comment-z"]);
+    expect(projected.detail?.comments).toBe(projected.comments);
+    expect(projected.comments[0]).toMatchObject({
+      author: { kind: "user" },
+      attachmentIds: ["attachment-1"],
+      agentRun: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      editedAt: null,
+    });
+    expect(projected.comments[1]).toMatchObject({
+      author: { kind: "member", membershipId: "membership-1" },
+      editedAt: "2026-01-02T00:00:00.000Z",
+    });
+    expect(projected.threadLinks).toEqual([
+      {
+        issueId: "issue-1",
+        threadId: "thread-a",
+        origin: "start-work",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        issueId: "issue-1",
+        threadId: "thread-z",
+        origin: "manual",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    // Attachment metadata has no field in the legacy IssueDetail; only the comment id reference is
+    // representable.
+    expect(projected.detail).not.toHaveProperty("attachments");
+  });
+
+  it("expands cloud audit batches and documents legacy actor/value narrowing", () => {
+    const readModel = syncedIssueDomainFromReplica(
+      replica(
+        issue({ id: "issue-1", key: "PAT-1", keyNumber: 1, statusId: "status-1" }),
+        decoded("issueAuditEvent", {
+          id: "audit-imported",
+          issueId: "issue-1",
+          kind: "field_changed",
+          actor: { kind: "environment", environmentId: "environment-1" },
+          payload: { field: "title", before: "Before", after: "After" },
+          operationId: null,
+          createdAt: JAN_1,
+        }),
+        decoded("issueAuditEvent", {
+          id: "audit-cloud",
+          issueId: "issue-1",
+          kind: "field_changed",
+          actor: {
+            kind: "agent",
+            provider: "codex",
+            onBehalfOfMembershipId: "membership-1",
+          },
+          payload: {
+            changes: {
+              statusId: { before: "status-1", after: "status-2" },
+              assignee: {
+                before: null,
+                after: { kind: "member", membershipId: "membership-2" },
+              },
+              triage: { before: false, after: true },
+              labelIds: { before: ["label-1"], after: ["label-1", "label-2"] },
+            },
+            baseVersion: 3,
+          },
+          operationId: "operation-1",
+          createdAt: JAN_2,
+        }),
+        decoded("issueAuditEvent", {
+          id: "audit-future",
+          issueId: "issue-1",
+          kind: "future_kind",
+          actor: { kind: "member", membershipId: "membership-1" },
+          payload: {},
+          operationId: null,
+          createdAt: JAN_2 + 1,
+        }),
+      ),
+    );
+    const projected = issueDetailProjectionFromReplica(
+      syncedIssueDetailById(readModel, IssueId.make("issue-1")),
+    );
+
+    expect(projected.events).toEqual([
+      {
+        id: "audit-imported",
+        issueId: "issue-1",
+        actor: { kind: "system", source: "automation" },
+        kind: "field_changed",
+        field: "title",
+        before: "Before",
+        after: "After",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "audit-cloud:legacy-field:0",
+        issueId: "issue-1",
+        actor: { kind: "agent", provider: "codex" },
+        kind: "field_changed",
+        field: "status",
+        before: "status-1",
+        after: "status-2",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        id: "audit-cloud:legacy-field:1",
+        issueId: "issue-1",
+        actor: { kind: "agent", provider: "codex" },
+        kind: "field_changed",
+        field: "assignee",
+        before: null,
+        after: "member:membership-2",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        id: "audit-cloud:legacy-field:2",
+        issueId: "issue-1",
+        actor: { kind: "agent", provider: "codex" },
+        kind: "field_changed",
+        field: "triage",
+        before: "no",
+        after: "yes",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        id: "audit-cloud:legacy-field:3",
+        issueId: "issue-1",
+        actor: { kind: "agent", provider: "codex" },
+        kind: "field_changed",
+        field: "labels",
+        before: "label-1",
+        after: "label-1, label-2",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("returns the shared null/empty projection while an issue has not replicated yet", () => {
+    const first = issueDetailProjectionFromReplica(null);
+    const second = issueDetailProjectionFromReplica(null);
+    expect(first).toBe(second);
+    expect(first).toEqual({ detail: null, comments: [], events: [], threadLinks: [] });
+  });
+});
+
+describe("selectReplicaRoutedIssueRead", () => {
+  it("uses the RPC view without a replica route", () => {
+    const legacy = { detail: "legacy", isPending: true };
+    expect(
+      selectReplicaRoutedIssueRead(null, { detail: "replica", isPending: false }, legacy),
+    ).toBe(legacy);
+  });
+
+  it("keeps a replica-routed absent issue null instead of falling through to RPC", () => {
+    const replicaView = { detail: null, isPending: false, error: null };
+    expect(
+      selectReplicaRoutedIssueRead<{
+        readonly detail: string | null;
+        readonly isPending: boolean;
+        readonly error: null;
+      }>(CompanyId.make("company-1"), replicaView, {
+        detail: "stale RPC detail",
+        isPending: false,
+        error: null,
+      }),
+    ).toBe(replicaView);
   });
 });
