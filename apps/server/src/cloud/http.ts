@@ -29,6 +29,7 @@ import {
   RelayLinkProofRequest,
   RelayManagedEndpointOrigin,
   RelayOkResponse,
+  type RelayValidatedConnectGrantIdentity,
 } from "@spiritdevs/contracts/relay";
 import { withRelayClientTracing } from "@spiritdevs/shared/relayTracing";
 import {
@@ -54,6 +55,7 @@ import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -83,6 +85,7 @@ import {
   setCliDesiredCloudLink,
 } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
+import { authorizeConnectGrantFromLocalReplica } from "./connectGrantAuthorization.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
 
@@ -360,6 +363,10 @@ interface CloudHttpDependencies {
   readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
   readonly cliTokenManager: CliTokenManager.CloudCliTokenManager["Service"];
   readonly httpClient: HttpClient.HttpClient;
+  readonly authorizeConnectGrant: (input: {
+    readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) => Effect.Effect<boolean, never, SqlClient.SqlClient>;
 }
 
 const cloudHttpDependencies = Effect.gen(function* () {
@@ -370,8 +377,33 @@ const cloudHttpDependencies = Effect.gen(function* () {
     environmentAuth: yield* EnvironmentAuth.EnvironmentAuth,
     cliTokenManager: yield* CliTokenManager.CloudCliTokenManager,
     httpClient: yield* HttpClient.HttpClient,
+    authorizeConnectGrant: authorizeConnectGrantFromLocalReplica,
   } satisfies CloudHttpDependencies;
 });
+
+export function requireCloudMintConnectGrantAuthorization<R>(
+  dependencies: {
+    readonly authorizeConnectGrant: (input: {
+      readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+      readonly connectGrant: RelayValidatedConnectGrantIdentity;
+    }) => Effect.Effect<boolean, never, R>;
+  },
+  proof: RelayCloudMintCredentialProofPayload,
+  environmentId: RelayCloudMintCredentialProofPayload["environmentId"],
+): Effect.Effect<void, EnvironmentHttpUnauthorizedError, R> {
+  return Effect.gen(function* () {
+    if (proof.connectGrant === undefined) return;
+    const authorized = yield* dependencies.authorizeConnectGrant({
+      environmentId,
+      connectGrant: proof.connectGrant,
+    });
+    if (!authorized) {
+      return yield* new EnvironmentHttpUnauthorizedError({
+        message: "Invalid cloud mint request.",
+      });
+    }
+  });
+}
 
 const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function* (
   dependencies: CloudHttpDependencies,
@@ -998,6 +1030,8 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       });
     }
     const proof = proofOption.value;
+
+    yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
 
     const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
     const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
