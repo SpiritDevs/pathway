@@ -52,6 +52,7 @@ import {
   ChevronRightIcon,
   ChevronUpIcon,
   CircleAlertIcon,
+  CircleDotIcon,
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
@@ -106,6 +107,7 @@ import {
   extractTrailingElementContexts,
   type ParsedElementContextEntry,
 } from "~/lib/elementContext";
+import { extractTrailingIssueContexts, type IssueContextSelection } from "~/lib/issueContext";
 import {
   extractTrailingPreviewAnnotation,
   type ParsedPreviewAnnotation,
@@ -1131,7 +1133,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userImages = row.message.attachments ?? [];
-  const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
+  const issueContextState = extractTrailingIssueContexts(row.message.text);
+  const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
   const terminalContexts = displayedUserMessage.contexts;
   const previewAnnotations: ParsedPreviewAnnotation[] = [];
   let visibleText = displayedUserMessage.visibleText;
@@ -1215,6 +1218,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             image={previewImages[index] ?? null}
           />
         ))}
+        {issueContextState.contexts.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Issues in this message">
+            {issueContextState.contexts.map((context) => (
+              <UserMessageIssueContextChip key={context.id} context={context} />
+            ))}
+          </div>
+        ) : null}
         {elementContexts.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {elementContexts.map((context) => (
@@ -2169,6 +2179,28 @@ const UserMessageElementContextChip = memo(function UserMessageElementContextChi
       />
       <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap leading-tight">
         {tooltipText}
+      </TooltipPopup>
+    </Tooltip>
+  );
+});
+
+const UserMessageIssueContextChip = memo(function UserMessageIssueContextChip(props: {
+  context: IssueContextSelection;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="inline-flex max-w-72 items-center gap-1 rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-xs text-foreground/85">
+            <CircleDotIcon className="size-3 shrink-0" aria-hidden />
+            <span className="truncate">
+              {props.context.key} {props.context.title}
+            </span>
+          </span>
+        }
+      />
+      <TooltipPopup side="top" className="max-w-96 whitespace-normal leading-tight">
+        {props.context.key} — {props.context.title}
       </TooltipPopup>
     </Tooltip>
   );

@@ -17,6 +17,7 @@ import { deriveProviderInstanceEntries } from "~/providerInstances";
 
 import {
   buildIssueStartWorkPrompt,
+  buildIssuesTalkContexts,
   buildIssuesTalkPrompt,
   buildIssueTalkPrompt,
   issueTalkHostProjectId,
@@ -313,20 +314,30 @@ describe("buildIssueTalkPrompt", () => {
 });
 
 describe("buildIssuesTalkPrompt", () => {
-  it("links every selected issue and makes the discussion explicitly non-implementing", () => {
-    const prompt = buildIssuesTalkPrompt(
-      [
-        issue(),
-        issue({ id: IssueId.make("i2"), key: "PAT-18", title: "Retries hide auth failures" }),
-      ],
-      "http://localhost:5733",
-    );
+  const selected = [
+    issue(),
+    issue({ id: IssueId.make("i2"), key: "PAT-18", title: "Retries hide auth failures" }),
+  ];
 
-    expect(prompt).toContain("# Talk through 2 selected issues");
-    expect(prompt).toContain("[PAT-12 — Login test is flaky]");
-    expect(prompt).toContain("issues?issue=PAT-12");
-    expect(prompt).toContain("[PAT-18 — Retries hide auth failures]");
-    expect(prompt).toContain("issues?issue=PAT-18");
+  it("keeps compact references visible while materializing non-implementing agent context", () => {
+    expect(buildIssuesTalkContexts(selected, "http://localhost:5733")).toEqual([
+      {
+        id: "i1",
+        key: "PAT-12",
+        title: "Login test is flaky",
+        url: "http://localhost:5733/issues?issue=PAT-12",
+      },
+      {
+        id: "i2",
+        key: "PAT-18",
+        title: "Retries hide auth failures",
+        url: "http://localhost:5733/issues?issue=PAT-18",
+      },
+    ]);
+
+    const prompt = buildIssuesTalkPrompt(selected, "http://localhost:5733");
+    expect(prompt).toContain('<issue id="i1" key="PAT-12" title="Login test is flaky"');
+    expect(prompt).toContain('<issue id="i2" key="PAT-18" title="Retries hide auth failures"');
     expect(prompt).toContain("reading each issue with Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("link this thread to each one with `issues_link_thread`");
     expect(prompt).toContain("Use each issue's own project as its context");

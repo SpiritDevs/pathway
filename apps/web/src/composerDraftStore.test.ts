@@ -616,6 +616,53 @@ describe("composerDraftStore element contexts", () => {
   });
 });
 
+describe("composerDraftStore issue contexts", () => {
+  const threadId = ThreadId.make("thread-issues");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+  const contexts = [
+    {
+      id: "issue-1",
+      key: "ISS-26",
+      title: "Forward navigation doesn't re-enable",
+      url: "pathway://app/issues?issue=ISS-26",
+    },
+    {
+      id: "issue-2",
+      key: "ISS-27",
+      title: "The issue modal needs more room",
+      url: "pathway://app/issues?issue=ISS-27",
+    },
+  ];
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists compact references and removes their agent context with the chip", () => {
+    const store = useComposerDraftStore.getState();
+    store.setIssueContexts(threadRef, [...contexts, contexts[0]!]);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.issueContexts).toEqual(contexts);
+
+    store.removeIssueContext(threadRef, "issue-1");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.issueContexts).toEqual([contexts[1]]);
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+      };
+    };
+    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadKey?: Record<string, { issueContexts?: Array<Record<string, unknown>> }>;
+    };
+    expect(
+      persisted.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.issueContexts,
+    ).toEqual([contexts[1]]);
+
+    store.clearComposerContent(threadRef);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+});
+
 describe("composerDraftStore review comments", () => {
   const threadId = ThreadId.make("thread-review-comment");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);

@@ -84,7 +84,7 @@ import {
 } from "./issueContextMenu.logic";
 import { issueAssigneeOptions } from "./issueDetail.logic";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
-import { buildIssuesTalkPrompt, issueTalkHostProjectId } from "./issueStartWork.logic";
+import { buildIssuesTalkContexts, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
@@ -553,7 +553,10 @@ function IssuesListView({
         if (opened === null) throw new Error("The issue discussion draft could not be created.");
         useComposerDraftStore
           .getState()
-          .setPrompt(opened.draftId, buildIssuesTalkPrompt(issues, window.location.origin));
+          .setIssueContexts(
+            opened.draftId,
+            buildIssuesTalkContexts(issues, window.location.origin),
+          );
         const title =
           issues.length === 1
             ? (issues[0]?.key ?? "Issue discussion")

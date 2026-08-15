@@ -17,8 +17,10 @@ and the whole list stays fast at thousands of rows.
 - Move the cursor with `j` / `k` or the arrow keys, and press `Enter` to open the highlighted issue.
 - Click a property on a row — status, priority, assignee, labels — to change it without opening
   anything.
-- Shift-click to select a range. A bar appears with bulk **Status**, **Priority**, **Labels**, and
-  **Delete** for everything selected. `Escape` clears the selection.
+- Shift-click to select a range. A bar appears with bulk **Status**, **Priority**, **Labels**,
+  **Investigate**, **Ask AI**, and **Delete** for everything selected. **Ask AI** opens a draft with
+  one compact badge per issue, leaving the prompt clear for your question while the agent receives
+  the selected issue context. `Escape` clears the selection.
 
 The **Board** shows one column per status. Drag within a column to reorder; drag across a column to
 set the status and the position in one move.

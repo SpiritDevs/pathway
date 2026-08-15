@@ -20,6 +20,7 @@ import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import {
   useIssue,
+  useIssueLabels,
   useIssueStatuses,
   useIssuesStoreStatus,
   useRestoreIssue,
@@ -40,6 +41,7 @@ import {
 } from "../WorkspaceBreadcrumb";
 import { IssueDetailSheet } from "./IssueDetailSheet";
 import { IssueSlackSourceChip } from "./IssueSlackSourceChip";
+import { NewIssueDialog } from "./NewIssueDialog";
 import { TriageAcceptDialog } from "./TriageAcceptDialog";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import {
@@ -140,6 +142,7 @@ export function IssuesTriageView({
 }) {
   const triageIssues = useTriageIssues();
   const statuses = useIssueStatuses();
+  const labels = useIssueLabels();
   const projects = useProjects();
   const storeStatus = useIssuesStoreStatus();
   const channelNames = useSlackChannelNames();
@@ -149,6 +152,7 @@ export function IssuesTriageView({
   const [selection, setSelection] = useState<IssuesSelection>(EMPTY_ISSUES_SELECTION);
   const [acceptIssues, setAcceptIssues] = useState<ReadonlyArray<Issue>>([]);
   const [acceptOpen, setAcceptOpen] = useState(false);
+  const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [startWorkRequest, setStartWorkRequest] = useState<{
     readonly issueKey: string;
     readonly provider: ProviderDriverKind;
@@ -234,6 +238,10 @@ export function IssuesTriageView({
     });
     if (action === null) return;
     event.preventDefault();
+    if (action._tag === "new") {
+      setNewIssueOpen(true);
+      return;
+    }
     if (action._tag === "clear") {
       setSelection(EMPTY_ISSUES_SELECTION);
       return;
@@ -445,6 +453,16 @@ export function IssuesTriageView({
           ) : null}
         </div>
       </div>
+
+      <NewIssueDialog
+        defaultProjectId={null}
+        defaultStatusId={statuses[0]?.id ?? null}
+        labels={labels}
+        onOpenChange={setNewIssueOpen}
+        open={newIssueOpen}
+        projects={projects}
+        statuses={statuses}
+      />
 
       <TriageAcceptDialog
         issues={acceptIssues}
