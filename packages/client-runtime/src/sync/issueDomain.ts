@@ -455,7 +455,7 @@ export function issueEntityCodec(entityKind: SyncEntityKind): SyncCodec<IssueSyn
 }
 
 /**
- * Everything one replica holds: the issue domain's twelve tables plus the company domain's seven.
+ * Everything one replica holds: the issue domain's twelve tables plus the company domain's eight.
  *
  * They share an engine rather than getting one each because a replica has exactly one checkpoint
  * and one outbox per company — a second engine would fight the first over both. So the replicated

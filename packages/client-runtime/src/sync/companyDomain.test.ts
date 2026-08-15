@@ -38,6 +38,8 @@ const OTHER_MEMBERSHIP_ID = "0191f0a0-0000-7000-8000-0000000000m2";
 const TEAM_ID = "0191f0a0-0000-7000-8000-0000000000t1";
 const ROLE_ID = "0191f0a0-0000-7000-8000-0000000000r1";
 const ASSIGNMENT_ID = "0191f0a0-0000-7000-8000-0000000000a1";
+const ENVIRONMENT_REGISTRATION_ID = "0191f0a0-0000-7000-8000-0000000000e1";
+const ENVIRONMENT_ID = "environment-1";
 
 /**
  * One representative payload per kind, exactly as Convex would append it: no `companyId`, no
@@ -113,6 +115,27 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
     scope: { kind: "team", teamId: TEAM_ID },
     createdAt: 1_000,
   },
+  environmentRegistration: {
+    id: ENVIRONMENT_REGISTRATION_ID,
+    environmentId: ENVIRONMENT_ID,
+    publicKeyThumbprint: "thumbprint",
+    descriptor: {
+      environmentId: ENVIRONMENT_ID,
+      label: "Build machine",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "2026.8.0",
+      capabilities: { repositoryIdentity: true },
+    },
+    relayLinkState: "linked",
+    managedEndpointAvailable: true,
+    lastSeenAt: 2_000,
+    serviceRoleIds: [ROLE_ID],
+    teamIds: [TEAM_ID],
+    state: "active",
+    registeredByMembershipId: MEMBERSHIP_ID,
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +148,7 @@ describe("company entity kinds", () => {
       [
         "company",
         "companySettings",
+        "environmentRegistration",
         "membership",
         "role",
         "roleAssignment",
@@ -249,7 +273,7 @@ describe("the widened adapter", () => {
         isCompanySyncEntityKind(kind) || ISSUE_SYNC_ENTITY_KINDS.includes(kind as never);
       expect(adapter.entityCodec(kind) === null ? "none" : "codec").toBe(known ? "codec" : "none");
     }
-    // Cloud projects and environment tables are neither domain's yet; they still quarantine.
+    // Cloud projects and the remaining environment tables are neither domain's yet.
     expect(adapter.entityCodec("cloudProject")).toBeNull();
   });
 

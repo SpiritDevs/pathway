@@ -55,6 +55,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { publishCompanyRegistryReplica } from "./companyRegistryReplica";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
 import {
   classifyConvexSyncTransportError,
@@ -354,6 +355,11 @@ export interface CloudSyncEnginesOptions {
    * a client that has given up on authenticating.
    */
   readonly connect: Effect.Effect<CloudSyncConnection, never, Scope.Scope>;
+  /** Publishes each engine's existing replica view for catalog discovery. */
+  readonly publishCompanyRegistryReplica?: (
+    companyId: CompanyId,
+    replica: { readonly view: ReadonlyMap<string, unknown> } | null,
+  ) => Effect.Effect<void>;
   /** Overridable so a test does not have to wait out the real backoff. */
   readonly restartDelay?: Duration.Input;
 }
@@ -412,6 +418,13 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
           now: () => clock.currentTimeMillisUnsafe(),
         }),
       });
+      const publishReplica = options.publishCompanyRegistryReplica;
+      if (publishReplica !== undefined) {
+        yield* SubscriptionRef.changes(engine.state).pipe(
+          Stream.runForEach((state) => publishReplica(company.companyId, state)),
+          Effect.forkChild,
+        );
+      }
       yield* engine.run;
       const { lastError } = yield* SubscriptionRef.get(engine.state);
       return {
@@ -481,6 +494,9 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
     ) {
       const scope = yield* Scope.make();
       yield* superviseCompany(company).pipe(
+        Effect.ensuring(
+          options.publishCompanyRegistryReplica?.(company.companyId, null) ?? Effect.void,
+        ),
         Effect.provideService(SyncTransport, connection.transport),
         Effect.forkIn(scope),
       );
@@ -631,6 +647,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
     clientId,
     election,
     connect,
+    publishCompanyRegistryReplica,
     ...(options.restartDelay === undefined ? {} : { restartDelay: options.restartDelay }),
   }).pipe(Effect.provideService(SyncStore, store.service));
 

@@ -8,7 +8,7 @@
  * change feed, so a member list, a team picker, and a permission-greyed toolbar all render with no
  * connection.
  *
- * That makes the domain deliberately small. It declares the seven entity shapes the feed delivers
+ * That makes the domain deliberately small. It declares the eight entity shapes the feed delivers
  * and the codecs that decode them, and it stops there:
  *
  * - **No `apply`.** There are no company operations to apply. The adapter in
@@ -30,6 +30,7 @@
 import {
   SyncCompanyPayload,
   SyncCompanySettingsPayload,
+  SyncEnvironmentRegistrationPayload,
   SyncMembershipPayload,
   SyncRoleAssignmentPayload,
   SyncRolePayload,
@@ -58,6 +59,7 @@ export const COMPANY_SYNC_ENTITY_KINDS = [
   "teamMembership",
   "role",
   "roleAssignment",
+  "environmentRegistration",
 ] as const satisfies ReadonlyArray<SyncEntityKind>;
 export type CompanySyncEntityKind = (typeof COMPANY_SYNC_ENTITY_KINDS)[number];
 
@@ -124,6 +126,13 @@ export const RoleAssignmentEntity = Schema.Struct({
 });
 export type RoleAssignmentEntity = typeof RoleAssignmentEntity.Type;
 
+/** Discovery metadata only; registration changes remain online-only. */
+export const EnvironmentRegistrationEntity = Schema.Struct({
+  entityKind: Schema.Literal("environmentRegistration"),
+  ...SyncEnvironmentRegistrationPayload.fields,
+});
+export type EnvironmentRegistrationEntity = typeof EnvironmentRegistrationEntity.Type;
+
 /** One replicated company-domain row, tagged with the kind that selected its shape. */
 export const CompanySyncEntity = Schema.Union([
   CompanyEntity,
@@ -133,6 +142,7 @@ export const CompanySyncEntity = Schema.Union([
   TeamMembershipEntity,
   RoleEntity,
   RoleAssignmentEntity,
+  EnvironmentRegistrationEntity,
 ]);
 export type CompanySyncEntity = typeof CompanySyncEntity.Type;
 
@@ -184,6 +194,10 @@ export const COMPANY_ENTITY_CODECS: Record<CompanySyncEntityKind, SyncCodec<Comp
   teamMembership: taggedEntityCodec("teamMembership", SyncTeamMembershipPayload),
   role: taggedEntityCodec("role", SyncRolePayload),
   roleAssignment: taggedEntityCodec("roleAssignment", SyncRoleAssignmentPayload),
+  environmentRegistration: taggedEntityCodec(
+    "environmentRegistration",
+    SyncEnvironmentRegistrationPayload,
+  ),
 };
 
 /** Codec for one entity kind, or `null` for a kind this domain does not replicate. */

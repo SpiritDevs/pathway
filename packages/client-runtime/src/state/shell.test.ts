@@ -15,6 +15,7 @@ const OTHER_ENVIRONMENT_ID = EnvironmentId.make("environment-2");
 
 function environmentEntry(environmentId: EnvironmentId, label: string) {
   return {
+    source: "local" as const,
     target: new PrimaryConnectionTarget({
       environmentId,
       label,

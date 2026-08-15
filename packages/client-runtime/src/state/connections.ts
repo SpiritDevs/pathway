@@ -6,7 +6,10 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
+import {
+  mergeEffectiveConnectionCatalog,
+  type EffectiveConnectionCatalogEntry,
+} from "../connection/effectiveCatalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
@@ -17,7 +20,7 @@ import {
 
 export interface EnvironmentCatalogState {
   readonly isReady: boolean;
-  readonly entries: ReadonlyMap<EnvironmentIdType, ConnectionCatalogEntry>;
+  readonly entries: ReadonlyMap<EnvironmentIdType, EffectiveConnectionCatalogEntry>;
 }
 
 export const EMPTY_ENVIRONMENT_CATALOG_STATE: EnvironmentCatalogState = Object.freeze({
@@ -37,7 +40,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
           SubscriptionRef.changes(registry.entries).pipe(
             Stream.map((entries) => ({
               isReady: true,
-              entries,
+              entries: mergeEffectiveConnectionCatalog({ localEntries: entries, replica: null }),
             })),
           ),
         ),

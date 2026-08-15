@@ -39,6 +39,12 @@ export type ConnectionProfile = typeof ConnectionProfile.Type;
 export interface ConnectionCatalogEntry {
   readonly target: ConnectionTarget;
   readonly profile: Option.Option<ConnectionProfile>;
+  /** Optional reachability observation supplied by a catalog source, never connection config. */
+  readonly freshness?: ConnectionCatalogFreshness;
+}
+
+export interface ConnectionCatalogFreshness {
+  readonly lastSeenAt: number | null;
 }
 
 export class BearerConnectionCredential extends Schema.TaggedClass<BearerConnectionCredential>()(

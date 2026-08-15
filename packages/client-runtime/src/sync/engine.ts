@@ -233,8 +233,9 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   const checkpoint = stored.checkpoint;
   // A checkpoint written by another schema version is not readable. A checkpoint from the old
   // bootstrap generation is readable but incomplete: generation 1 predates seven company-domain
-  // kinds whose historical rows have no feed event. Both cases force one full seed. The outbox is
-  // decoded independently below and survives unchanged.
+  // kinds, and generation 2 predates environment registrations. Their historical rows have no
+  // feed event. Both cases force one full seed. The outbox is decoded independently below and
+  // survives unchanged.
   const usableCheckpoint =
     checkpoint !== null &&
     checkpoint.schemaVersion === SYNC_DOCUMENT_SCHEMA_VERSION &&

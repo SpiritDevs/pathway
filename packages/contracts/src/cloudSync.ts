@@ -31,6 +31,9 @@ import {
   EnvironmentCommandKind,
   EnvironmentCommandResult,
   EnvironmentCommandState,
+  EnvironmentRegistrationId,
+  EnvironmentRegistrationState,
+  EnvironmentRelayLinkState,
   CloudProjectId,
 } from "./cloudProject.ts";
 import {
@@ -76,6 +79,7 @@ import {
   IssueViewConfig,
 } from "./issues.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import * as Schema from "effect/Schema";
 
 // ---------------------------------------------------------------------------
@@ -283,14 +287,15 @@ export type SyncChangeEnvelope = typeof SyncChangeEnvelope.Type;
 // ---------------------------------------------------------------------------
 
 /**
- * What the feed carries for the seven company-administration kinds.
+ * What the feed carries for the eight company-domain kinds the client replica decodes.
  *
  * Company, membership, team, and role administration is online-only — none of it has an operation
  * kind and none of it ever enters an outbox — but the records still ride the change feed so a
  * client can render a member list, a team picker, and a permission-greyed toolbar with no
- * connection. They are a permission-filtered read cache: `sync/visibility.ts` gates each kind on
- * the same switch its admin screen uses, and the confirmed row always wins locally because there
- * is no optimistic company state to merge with.
+ * connection. Environment registration is likewise an online-only discovery record. They are a
+ * permission-filtered read cache: `sync/visibility.ts` gates each kind on the same switch its admin
+ * screen uses, and the confirmed row always wins locally because there is no optimistic company
+ * state to merge with.
  *
  * Four conventions, all shared with the issue-domain payloads in
  * `client-runtime/src/sync/issueDomain.ts`:
@@ -464,6 +469,30 @@ export const SyncRoleAssignmentPayload = Schema.Struct({
   createdAt: CloudTimestamp,
 });
 export type SyncRoleAssignmentPayload = typeof SyncRoleAssignmentPayload.Type;
+
+/**
+ * One company environment registration as bootstrap and the incremental feed carry it.
+ *
+ * `companyId` is omitted because the replica is company-scoped. The descriptor contains the
+ * environment id as well; the top-level field mirrors the canonical registration and lets catalog
+ * extraction avoid coupling identity to presentation metadata.
+ */
+export const SyncEnvironmentRegistrationPayload = Schema.Struct({
+  id: EnvironmentRegistrationId,
+  environmentId: EnvironmentId,
+  publicKeyThumbprint: TrimmedNonEmptyString,
+  descriptor: ExecutionEnvironmentDescriptor,
+  relayLinkState: EnvironmentRelayLinkState,
+  managedEndpointAvailable: Schema.Boolean,
+  lastSeenAt: Schema.NullOr(CloudTimestamp),
+  serviceRoleIds: Schema.Array(RoleId),
+  teamIds: Schema.Array(TeamId),
+  state: EnvironmentRegistrationState,
+  registeredByMembershipId: Schema.NullOr(MembershipId),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncEnvironmentRegistrationPayload = typeof SyncEnvironmentRegistrationPayload.Type;
 
 /**
  * One durable remote-control command as carried by bootstrap and the incremental feed.
