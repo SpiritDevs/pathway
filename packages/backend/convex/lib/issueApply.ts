@@ -73,6 +73,7 @@ import {
   companySettingsDomainId,
   encodeCompany,
   encodeCompanySettings,
+  encodeCloudProject,
   encodeEnvironmentBinding,
   encodeEnvironmentCommand,
   encodeEnvironmentRegistration,
@@ -189,7 +190,7 @@ async function membershipDomainId(
 // and the row `version` (which rides the envelope) stay server-side. `deletedAt` is omitted
 // because an upsert is by construction live and a tombstone carries no payload at all.
 
-function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
+export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -221,7 +222,7 @@ function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
   };
 }
 
-function encodeIssueStatus(company: Doc<"companies">, doc: Doc<"issueStatuses">): unknown {
+export function encodeIssueStatus(company: Doc<"companies">, doc: Doc<"issueStatuses">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -238,7 +239,7 @@ function encodeIssueStatus(company: Doc<"companies">, doc: Doc<"issueStatuses">)
   };
 }
 
-function encodeIssueLabel(company: Doc<"companies">, doc: Doc<"issueLabels">): unknown {
+export function encodeIssueLabel(company: Doc<"companies">, doc: Doc<"issueLabels">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -250,7 +251,10 @@ function encodeIssueLabel(company: Doc<"companies">, doc: Doc<"issueLabels">): u
   };
 }
 
-function encodeIssueMilestone(company: Doc<"companies">, doc: Doc<"issueMilestones">): unknown {
+export function encodeIssueMilestone(
+  company: Doc<"companies">,
+  doc: Doc<"issueMilestones">,
+): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -265,7 +269,7 @@ function encodeIssueMilestone(company: Doc<"companies">, doc: Doc<"issueMileston
   };
 }
 
-function encodeIssueCycle(company: Doc<"companies">, doc: Doc<"issueCycles">): unknown {
+export function encodeIssueCycle(company: Doc<"companies">, doc: Doc<"issueCycles">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -279,7 +283,7 @@ function encodeIssueCycle(company: Doc<"companies">, doc: Doc<"issueCycles">): u
   };
 }
 
-function encodeIssueTodo(company: Doc<"companies">, doc: Doc<"issueTodos">): unknown {
+export function encodeIssueTodo(company: Doc<"companies">, doc: Doc<"issueTodos">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -292,7 +296,10 @@ function encodeIssueTodo(company: Doc<"companies">, doc: Doc<"issueTodos">): unk
   };
 }
 
-function encodeIssueRelation(company: Doc<"companies">, doc: Doc<"issueRelations">): unknown {
+export function encodeIssueRelation(
+  company: Doc<"companies">,
+  doc: Doc<"issueRelations">,
+): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -303,7 +310,7 @@ function encodeIssueRelation(company: Doc<"companies">, doc: Doc<"issueRelations
   };
 }
 
-function encodeIssueComment(company: Doc<"companies">, doc: Doc<"issueComments">): unknown {
+export function encodeIssueComment(company: Doc<"companies">, doc: Doc<"issueComments">): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -317,7 +324,7 @@ function encodeIssueComment(company: Doc<"companies">, doc: Doc<"issueComments">
   };
 }
 
-async function encodeIssueAttachment(
+export async function encodeIssueAttachment(
   ctx: QueryCtx,
   company: Doc<"companies">,
   doc: Doc<"issueAttachments">,
@@ -338,7 +345,7 @@ async function encodeIssueAttachment(
   };
 }
 
-async function encodeIssueView(
+export async function encodeIssueView(
   ctx: QueryCtx,
   company: Doc<"companies">,
   doc: Doc<"issueViews">,
@@ -357,7 +364,10 @@ async function encodeIssueView(
   };
 }
 
-function encodeIssueAuditEvent(company: Doc<"companies">, doc: Doc<"issueAuditEvents">): unknown {
+export function encodeIssueAuditEvent(
+  company: Doc<"companies">,
+  doc: Doc<"issueAuditEvents">,
+): unknown {
   return {
     id: doc.id,
     companyId: company.id,
@@ -370,7 +380,7 @@ function encodeIssueAuditEvent(company: Doc<"companies">, doc: Doc<"issueAuditEv
   };
 }
 
-async function encodeIssueThreadLink(
+export async function encodeIssueThreadLink(
   ctx: QueryCtx,
   company: Doc<"companies">,
   doc: Doc<"issueThreadLinks">,
@@ -3049,6 +3059,7 @@ type CompanyBootstrapTable =
   | "teamMemberships"
   | "roles"
   | "roleAssignments"
+  | "cloudProjects"
   | "environmentRegistrations"
   | "environmentBindings"
   | "environmentCommands";
@@ -3288,6 +3299,11 @@ export async function readBootstrapRows(
         await pageOf(ctx, "roleAssignments", company._id, afterId, limit),
         (row) => encodeRoleAssignment(ctx, row),
       );
+    case "cloudProject":
+      return liftCompanyRows(
+        await pageOf(ctx, "cloudProjects", company._id, afterId, limit),
+        (row) => encodeCloudProject(row),
+      );
     case "environmentRegistration": {
       const rows = await pageOf(ctx, "environmentRegistrations", company._id, afterId, limit);
       const lifted: BootstrapRow[] = [];
@@ -3305,11 +3321,22 @@ export async function readBootstrapRows(
       }
       return lifted;
     }
-    case "environmentBinding":
-      return liftCompanyRows(
-        await pageOf(ctx, "environmentBindings", company._id, afterId, limit),
-        (row) => encodeEnvironmentBinding(ctx, row),
-      );
+    case "environmentBinding": {
+      const rows = await pageOf(ctx, "environmentBindings", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const pending = row.status === "pending";
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted: pending,
+          teamIds: [],
+          ownerMembershipId: null,
+          payload: pending ? null : await encodeEnvironmentBinding(ctx, row),
+        });
+      }
+      return lifted;
+    }
     case "environmentCommand":
       // Terminal outcomes are history, not tombstones: a bootstrap must preserve the answer to a
       // command even when its execution can no longer change.

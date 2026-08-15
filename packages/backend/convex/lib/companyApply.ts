@@ -51,6 +51,7 @@ export type CompanyEntityKind = Extract<
   | "teamMembership"
   | "role"
   | "roleAssignment"
+  | "cloudProject"
   | "environmentRegistration"
   | "environmentBinding"
   | "environmentCommand"
@@ -65,9 +66,22 @@ export type CompanyVersionedTable =
   | "teamMemberships"
   | "roles"
   | "roleAssignments"
+  | "cloudProjects"
   | "environmentRegistrations"
   | "environmentBindings"
-  | "environmentCommands";
+  | "environmentCommands"
+  | "issues"
+  | "issueStatuses"
+  | "issueLabels"
+  | "issueMilestones"
+  | "issueCycles"
+  | "issueTodos"
+  | "issueRelations"
+  | "issueComments"
+  | "issueAttachments"
+  | "issueViews"
+  | "issueAuditEvents"
+  | "issueThreadLinks";
 
 /**
  * The `version` a company row reads as. Optional in storage so the columns could be added to live
@@ -238,6 +252,21 @@ export function encodeTeam(doc: Doc<"teams">): unknown {
   };
 }
 
+/** Cloud-project payload shared by import feed writes and bootstrap. */
+export function encodeCloudProject(doc: Doc<"cloudProjects">): unknown {
+  return {
+    id: doc.id,
+    name: doc.name,
+    description: doc.description,
+    teamIds: doc.teamIds,
+    defaultWorkflowOwner: doc.defaultWorkflowOwner,
+    preferredBindingId: doc.preferredBindingId,
+    archivedAt: doc.archivedAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
 export async function encodeTeamMembership(
   ctx: QueryCtx,
   doc: Doc<"teamMemberships">,
@@ -379,7 +408,8 @@ export async function encodeEnvironmentCommand(
  * permitted reader is entitled to see anyway.
  */
 export interface CompanyChange {
-  readonly entityKind: CompanyEntityKind;
+  /** Company-domain kinds in ordinary mutations; issue kinds are also accepted by import. */
+  readonly entityKind: SyncEntityKind;
   readonly entityId: string;
   readonly changeKind: SyncChangeKind;
   /**

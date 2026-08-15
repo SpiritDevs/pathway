@@ -41,6 +41,7 @@ const COMPANY_DOMAIN_WALK = [
   "environmentRegistration",
   "environmentBinding",
   "environmentCommand",
+  "cloudProject",
 ] as const;
 
 describe("BOOTSTRAP_ENTITY_ORDER", () => {
@@ -62,11 +63,9 @@ describe("BOOTSTRAP_ENTITY_ORDER", () => {
     ]);
   });
 
-  it("leaves the kinds no mutation seeds out of the walk", () => {
-    // Seeding a kind nothing appends to the feed hands clients rows the drain can never update.
-    // Project records are still server-query-only.
+  it("includes cloud projects once their import mutation appends them to the feed", () => {
     const walked = new Set<string>(BOOTSTRAP_ENTITY_ORDER);
-    expect(walked.has("cloudProject")).toBe(false);
+    expect(walked.has("cloudProject")).toBe(true);
   });
 });
 

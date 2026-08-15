@@ -66,8 +66,11 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   // cursors from the previous deployment may already have walked every kind above.
   "environmentRegistration",
   "environmentBinding",
-  // Commands joined after the registry and must stay last for the same persisted-cursor reason.
+  // Commands joined after the registry and remain after it for the same persisted-cursor reason.
   "environmentCommand",
+  // Cloud projects joined with the dedicated issue-import surface. Append after every pre-existing
+  // kind so a persisted cursor that had completed the old walk cannot silently skip a table.
+  "cloudProject",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

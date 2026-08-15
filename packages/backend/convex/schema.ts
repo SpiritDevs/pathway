@@ -102,6 +102,23 @@ const issuePriority = v.union(
   v.literal("low"),
 );
 
+/** Durable import progress, one counter per accepted authoritative entity kind. */
+const issueImportProgress = v.object({
+  cloudProject: v.number(),
+  issue: v.number(),
+  issueStatus: v.number(),
+  issueLabel: v.number(),
+  issueMilestone: v.number(),
+  issueCycle: v.number(),
+  issueTodo: v.number(),
+  issueRelation: v.number(),
+  issueComment: v.number(),
+  issueAttachment: v.number(),
+  issueView: v.number(),
+  issueAuditEvent: v.number(),
+  issueThreadLink: v.number(),
+});
+
 const relayActivityPhase = v.union(
   v.literal("starting"),
   v.literal("running"),
@@ -383,6 +400,8 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     deletedAt: v.union(v.number(), v.null()),
+    /** Feed version; optional so the import surface can join an existing deployment safely. */
+    version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"]),
@@ -458,6 +477,8 @@ export default defineSchema({
     localProjectId: v.string(),
     localWorkspaceRoot: v.string(),
     status: v.union(
+      /** Import-only state. Pending bindings do not enter the feed until completion activates them. */
+      v.literal("pending"),
       v.literal("active"),
       v.literal("stale"),
       v.literal("missing"),
@@ -798,12 +819,63 @@ export default defineSchema({
     .index("by_company_and_client", ["companyId", "clientId"]),
 
   // ---------------------------------------------------------------------------
+  // Empty-company issue imports
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Resumable cutover owned by one active environment registration. Partial rows intentionally
+   * survive abandonment: a later slice owns cleanup/restart policy for a now-non-empty company.
+   */
+  issueImportRuns: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    sourceEnvironmentId: v.string(),
+    sourceRegistrationId: v.id("environmentRegistrations"),
+    createdByMembershipId: v.id("memberships"),
+    importingMembershipId: v.id("memberships"),
+    selectedIssueKeyPrefix: v.string(),
+    mode: v.literal("empty-company"),
+    state: v.union(
+      v.literal("created"),
+      v.literal("applying"),
+      v.literal("completed"),
+      v.literal("abandoned"),
+      v.literal("failed"),
+    ),
+    progress: issueImportProgress,
+    trackerApplied: v.boolean(),
+    trackerNextIssueNumber: v.union(v.number(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.union(v.number(), v.null()),
+    abandonedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_source_and_domain_id", ["companyId", "sourceEnvironmentId", "id"])
+    .index("by_company_and_state", ["companyId", "state"]),
+
+  /** Permanent provenance/dedupe ledger for rows accepted by an import run. */
+  issueImportEntities: defineTable({
+    companyId: v.id("companies"),
+    runId: v.id("issueImportRuns"),
+    entityKind: v.string(),
+    entityId: domainId,
+    appliedAt: v.number(),
+  })
+    .index("by_run", ["runId"])
+    .index("by_run_kind_and_entity", ["runId", "entityKind", "entityId"])
+    .index("by_company_kind_and_entity", ["companyId", "entityKind", "entityId"]),
+
+  // ---------------------------------------------------------------------------
   // Issue domain
   // ---------------------------------------------------------------------------
 
   issues: defineTable({
     id: domainId,
     companyId: v.id("companies"),
+    /** Import provenance used only to distinguish a run's rows during tracker-prefix activation. */
+    issueImportRunId: v.optional(v.id("issueImportRuns")),
     key: v.string(),
     keyNumber: v.number(),
     title: v.string(),
@@ -848,6 +920,8 @@ export default defineSchema({
     version: v.number(),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_import_run", ["companyId", "issueImportRunId"])
+    .index("by_company_import_run_and_key_number", ["companyId", "issueImportRunId", "keyNumber"])
     .index("by_company_and_key", ["companyId", "key"])
     .index("by_company_and_status", ["companyId", "statusId"])
     .index("by_company_and_project", ["companyId", "projectId"])
