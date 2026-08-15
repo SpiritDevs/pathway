@@ -939,7 +939,7 @@ for (const failurePoint of ["worktree", "setup"] as const) {
   );
 }
 
-it.effect("deduplicates retried launch side effects in-process", () =>
+it.effect("deduplicates direct and deferred launch attempts with one command id", () =>
   Effect.gen(function* () {
     const setupEntered = yield* Deferred.make<void>();
     const allowSetup = yield* Deferred.make<void>();

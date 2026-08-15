@@ -253,3 +253,23 @@ idempotent; unattached uploads are garbage-collected.
 The existing tracker layout and server seams are mapped in [issue-tracker.md](./issue-tracker.md).
 Cross-environment command records reuse this bounded protocol but do not carry thread content; see
 [0008](./decisions/0008-cross-environment-agent-control.md).
+
+## Remote orchestration dispatch
+
+`delegate_task` remains local when `targetEnvironmentId` is absent. An explicit remote request may
+also carry the target's local `targetProjectId`, the shared `cloudProjectId`, and a caller-supplied
+single-use `connectGrantToken`. The server cannot mint that grant: `connectGrants.issue` accepts a
+signed-in member actor, while the server's relay exchange produces an environment service actor.
+
+The direct start-thread path calls the target's ordinary `orchestration.launchThread` RPC. Its
+`commandId` is the environment-command id. `ThreadLaunchService` persists command receipts under
+that id, so a launch that committed before its reply was lost and a later durable claimant using
+the same id resolve to one thread and one set of launch side effects. The Convex fallback also uses
+that value as `environmentCommands.issue.id`; identical resends are no-ops and conflicting reuse is
+rejected by canonical argument comparison.
+
+At present, `environmentCommands.issue` also accepts only a member actor. `apps/server` therefore
+reports `member-cloud-authorization` as missing after direct delivery fails instead of presenting
+its environment service token to a mutation that must reject it. Enabling production deferred
+issuance requires a Convex authorization decision for environment actors acting on behalf of the
+originating member; the routing and target idempotency seams do not require another change.

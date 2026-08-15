@@ -2,12 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  EnvironmentCommandId,
   NodeId,
   ProviderInstanceId,
   ProviderDriverKind,
   RunId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
+  ProjectId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,10 +18,97 @@ import * as Ref from "effect/Ref";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 describe("OrchestratorMcpService", () => {
+  it.effect("routes explicit remote delegation without touching local task dispatch", () =>
+    Effect.gen(function* () {
+      const parentThreadId = ThreadId.make("thread:mcp-remote-parent");
+      const targetEnvironmentId = EnvironmentId.make("environment:mcp-remote-target");
+      const targetProjectId = ProjectId.make("project:mcp-remote-target");
+      const remoteCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const localCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const remoteProjection = {
+        thread: {
+          id: ThreadId.make("thread:mcp-remote-child"),
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+        },
+        runs: [],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const dependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService)({
+          dispatch: (command) =>
+            Ref.update(localCalls, (commands) => [...commands, command]).pipe(
+              Effect.as({} as never),
+            ),
+        }),
+        Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ScheduledTaskService)({}),
+        Layer.succeed(
+          RemoteDispatch,
+          RemoteDispatch.of({
+            dispatch: (input) =>
+              Ref.update(remoteCalls, (calls) => [...calls, input]).pipe(
+                Effect.as({
+                  delivery: "direct" as const,
+                  id: input.idempotencyId,
+                  result: { kind: "startThread" as const, threadId: remoteProjection.thread.id },
+                  projection: remoteProjection,
+                }),
+              ),
+          }),
+        ),
+      );
+      const scope: McpInvocationScope = {
+        environmentId: EnvironmentId.make("environment:mcp-remote-source"),
+        threadId: parentThreadId,
+        providerSessionId: "provider-session:mcp-remote",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerDriverKind: ProviderDriverKind.make("codex"),
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service.delegateTask(scope, {
+          task: "Run on the remote environment.",
+          targetEnvironmentId,
+          targetProjectId,
+          connectGrantToken: "single-use-grant",
+          clientRequestId: "remote-delegate-1",
+        });
+
+        assert.deepEqual(result, {
+          environmentCommandId: EnvironmentCommandId.make(
+            "command:mcp:provider-session%3Amcp-remote:delegate-task:remote-delegate-1",
+          ),
+          targetEnvironmentId,
+          delivery: "direct",
+          threadId: remoteProjection.thread.id,
+          status: "running",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        });
+        assert.equal((yield* Ref.get(remoteCalls)).length, 1);
+        assert.isEmpty(yield* Ref.get(localCalls));
+
+        const malformed = yield* service
+          .delegateTask(scope, {
+            task: "Do not silently run this locally.",
+            connectGrantToken: "grant-without-target",
+          })
+          .pipe(Effect.flip);
+        assert.equal(malformed.code, "invalid_request");
+        assert.include(malformed.message, "was not run locally");
+        assert.isEmpty(yield* Ref.get(localCalls));
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
+  );
+
   it.effect("retries terminal acknowledgement with a fresh command id", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-ack-parent");
