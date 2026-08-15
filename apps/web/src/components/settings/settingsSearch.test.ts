@@ -169,6 +169,18 @@ describe("SETTINGS_NAV_GROUPS", () => {
     ]);
   });
 
+  it("puts environment discovery and control in the Company group", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Company")?.paths).toEqual([
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/environments",
+    ]);
+    expect(searchSettings("company environments")[0]).toMatchObject({
+      id: "company-environments",
+      to: "/settings/environments",
+    });
+  });
+
   it("keeps Projects in the Workspace group with its own settings page", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Workspace")?.paths).toEqual([
       "/settings/general",

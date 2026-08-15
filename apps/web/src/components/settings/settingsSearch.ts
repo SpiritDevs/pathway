@@ -5,6 +5,7 @@ export type SettingsPath =
   | "/settings/projects"
   | "/settings/company-members"
   | "/settings/company-teams"
+  | "/settings/environments"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -39,6 +40,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/projects": "Projects",
   "/settings/company-members": "Members",
   "/settings/company-teams": "Teams & Roles",
+  "/settings/environments": "Environments",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -76,7 +78,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     label: "Company",
-    paths: ["/settings/company-members", "/settings/company-teams"],
+    paths: ["/settings/company-members", "/settings/company-teams", "/settings/environments"],
   },
   {
     label: "Agents",
@@ -131,6 +133,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "company-roles",
     title: "Company roles",
     to: "/settings/company-teams",
+  },
+  {
+    id: "company-environments",
+    title: "Company environments",
+    to: "/settings/environments",
   },
   {
     id: "color-scheme",

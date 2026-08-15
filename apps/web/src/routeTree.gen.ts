@@ -36,6 +36,7 @@ import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issu
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
 import { Route as SettingsIssuesEnrichmentRouteImport } from './routes/settings.issues-enrichment'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
+import { Route as SettingsEnvironmentsRouteImport } from './routes/settings.environments'
 import { Route as SettingsEmailRouteImport } from './routes/settings.email'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
@@ -191,6 +192,11 @@ const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   path: '/general',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsEnvironmentsRoute = SettingsEnvironmentsRouteImport.update({
+  id: '/environments',
+  path: '/environments',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsEmailRoute = SettingsEmailRouteImport.update({
   id: '/email',
   path: '/email',
@@ -312,6 +318,7 @@ export interface FileRoutesByFullPath {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -358,6 +365,7 @@ export interface FileRoutesByTo {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -406,6 +414,7 @@ export interface FileRoutesById {
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/email': typeof SettingsEmailRoute
+  '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/issues-enrichment': typeof SettingsIssuesEnrichmentRoute
   '/settings/issues-import': typeof SettingsIssuesImportRoute
@@ -454,6 +463,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -500,6 +510,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -547,6 +558,7 @@ export interface FileRouteTypes {
     | '/settings/connections'
     | '/settings/diagnostics'
     | '/settings/email'
+    | '/settings/environments'
     | '/settings/general'
     | '/settings/issues-enrichment'
     | '/settings/issues-import'
@@ -780,6 +792,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsGeneralRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/environments': {
+      id: '/settings/environments'
+      path: '/environments'
+      fullPath: '/settings/environments'
+      preLoaderRoute: typeof SettingsEnvironmentsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/email': {
       id: '/settings/email'
       path: '/email'
@@ -937,6 +956,7 @@ interface SettingsRouteChildren {
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsEmailRoute: typeof SettingsEmailRoute
+  SettingsEnvironmentsRoute: typeof SettingsEnvironmentsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIssuesEnrichmentRoute: typeof SettingsIssuesEnrichmentRoute
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
@@ -961,6 +981,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsEmailRoute: SettingsEmailRoute,
+  SettingsEnvironmentsRoute: SettingsEnvironmentsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIssuesEnrichmentRoute: SettingsIssuesEnrichmentRoute,
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,

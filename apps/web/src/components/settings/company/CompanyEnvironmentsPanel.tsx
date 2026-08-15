@@ -1,0 +1,730 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId } from "@spiritdevs/contracts";
+import { ThreadId } from "@spiritdevs/contracts";
+import {
+  environmentCommandPermission,
+  type EnvironmentCommandKind,
+} from "@spiritdevs/contracts/cloudProject";
+import {
+  CheckIcon,
+  CircleStopIcon,
+  CopyIcon,
+  KeyRoundIcon,
+  MessageSquareIcon,
+  MonitorIcon,
+  PowerIcon,
+  RefreshCwIcon,
+  SendIcon,
+  ServerIcon,
+  Trash2Icon,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import type {
+  EnvironmentCommandRecord,
+  IssuedConnectGrant,
+} from "../../../cloud/environmentControl";
+import { environmentCatalog } from "../../../connection/catalog";
+import { writeTextToClipboard } from "../../../hooks/useCopyToClipboard";
+import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
+import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
+import { Textarea } from "../../ui/textarea";
+import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
+import { permissionGate } from "./companySettings.logic";
+import {
+  CompanySectionCard,
+  CompanySettingsEmptyState,
+  PermissionTooltip,
+} from "./CompanySettingsShared";
+import {
+  deriveEnvironmentRows,
+  deriveRecentEnvironmentCommands,
+  environmentCommandSummary,
+  environmentRegistrationsFromReplicaValues,
+  type CompanyEnvironmentRow,
+} from "./environmentSettings.logic";
+import { useCompanySettings } from "./useCompanySettings";
+import { useEnvironmentControl } from "./useEnvironmentControl";
+
+const COMMAND_KINDS: ReadonlyArray<{
+  readonly kind: EnvironmentCommandKind;
+  readonly label: string;
+}> = [
+  { kind: "startThread", label: "Start thread" },
+  { kind: "sendMessage", label: "Send message" },
+  { kind: "interrupt", label: "Interrupt" },
+  { kind: "statusQuery", label: "Check status" },
+];
+
+function relativeTimestamp(timestamp: number | null): string {
+  return timestamp === null
+    ? "Never"
+    : formatRelativeTimeLabel(new Date(timestamp).toISOString()) || "Unknown";
+}
+
+function registrationStateBadge(row: CompanyEnvironmentRow) {
+  return row.registration.state === "active" ? (
+    <Badge variant="success">Active</Badge>
+  ) : (
+    <Badge variant="secondary">Revoked</Badge>
+  );
+}
+
+function relayStateBadge(state: CompanyEnvironmentRow["registration"]["relayLinkState"]) {
+  if (state === "linked") return <Badge variant="success">Relay linked</Badge>;
+  if (state === "degraded") return <Badge variant="warning">Relay degraded</Badge>;
+  if (state === "revoked") return <Badge variant="secondary">Relay revoked</Badge>;
+  return <Badge variant="outline">Relay unlinked</Badge>;
+}
+
+function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
+  if (state === "succeeded") return <Badge variant="success">Succeeded</Badge>;
+  if (state === "failed") return <Badge variant="error">Failed</Badge>;
+  if (state === "pending") return <Badge variant="warning">Pending</Badge>;
+  if (state === "claimed") return <Badge variant="info">Claimed</Badge>;
+  return <Badge variant="secondary">{state === "canceled" ? "Canceled" : "Expired"}</Badge>;
+}
+
+function EnvironmentList({
+  rows,
+  selectedEnvironmentId,
+  onSelect,
+}: {
+  readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly onSelect: (environmentId: EnvironmentId) => void;
+}) {
+  return (
+    <CompanySectionCard>
+      {rows.length === 0 ? (
+        <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+          No environments are registered with this company.
+        </div>
+      ) : (
+        rows.map((row) => (
+          <button
+            key={row.registration.id}
+            type="button"
+            className="flex w-full flex-col gap-3 border-b px-4 py-4 text-left last:border-b-0 hover:bg-muted/30 sm:flex-row sm:items-start"
+            aria-pressed={selectedEnvironmentId === row.environmentId}
+            onClick={() => onSelect(row.environmentId)}
+          >
+            <div
+              className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${
+                selectedEnvironmentId === row.environmentId
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {row.isOwnEnvironment ? (
+                <MonitorIcon className="size-4" />
+              ) : (
+                <ServerIcon className="size-4" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="truncate text-sm font-medium">{row.label}</span>
+                {row.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
+                {registrationStateBadge(row)}
+                {relayStateBadge(row.registration.relayLinkState)}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>
+                  {row.registration.descriptor.platform.os}/
+                  {row.registration.descriptor.platform.arch} · server{" "}
+                  {row.registration.descriptor.serverVersion}
+                </span>
+                <span>Last seen {relativeTimestamp(row.registration.lastSeenAt)}</span>
+                <span>
+                  {row.registration.managedEndpointAvailable
+                    ? "Managed endpoint available"
+                    : "No managed endpoint"}
+                </span>
+                <span>
+                  {row.isInCatalog
+                    ? row.catalogSource === "local"
+                      ? "Present in local catalog"
+                      : "Discovered in company catalog"
+                    : "Not present in connection catalog"}
+                </span>
+              </div>
+              {row.teamNames.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {row.teamNames.map((teamName) => (
+                    <Badge key={teamName} variant="outline">
+                      {teamName}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </button>
+        ))
+      )}
+    </CompanySectionCard>
+  );
+}
+
+function GrantReveal({
+  grant,
+  onDismiss,
+  onError,
+}: {
+  readonly grant: IssuedConnectGrant;
+  readonly onDismiss: () => void;
+  readonly onError: (message: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const expiryIso = new Date(grant.expiresAt).toISOString();
+
+  return (
+    <div className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+      <div className="space-y-1">
+        <p className="text-xs font-medium">One-time connect grant</p>
+        <p className="text-[11px] text-muted-foreground">
+          Expires {formatRelativeTimeUntilLabel(expiryIso)} ·{" "}
+          {new Date(grant.expiresAt).toLocaleString()}
+        </p>
+      </div>
+      <code className="block max-h-24 overflow-auto break-all rounded-md bg-background p-2 text-[11px]">
+        {grant.token}
+      </code>
+      <div className="flex items-center gap-2">
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => {
+            void writeTextToClipboard(grant.token, "connect grant token").then(
+              () => setCopied(true),
+              (error) =>
+                onError(error instanceof Error ? error.message : "Could not copy the grant token."),
+            );
+          }}
+        >
+          {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          {copied ? "Copied" : "Copy token"}
+        </Button>
+        <Button size="xs" variant="ghost" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RemoteCommandForm({
+  environment,
+  issuePending,
+  actionBlocked,
+  controlAvailable,
+  dispatchGate,
+  controlGate,
+  readGate,
+  onIssue,
+}: {
+  readonly environment: CompanyEnvironmentRow;
+  readonly issuePending: boolean;
+  readonly actionBlocked: boolean;
+  readonly controlAvailable: boolean;
+  readonly dispatchGate: { readonly enabled: boolean; readonly tooltip: string | null };
+  readonly controlGate: { readonly enabled: boolean; readonly tooltip: string | null };
+  readonly readGate: { readonly enabled: boolean; readonly tooltip: string | null };
+  readonly onIssue: (input: {
+    readonly kind: EnvironmentCommandKind;
+    readonly prompt: string;
+    readonly threadId: string;
+    readonly message: string;
+  }) => Promise<boolean>;
+}) {
+  const [kind, setKind] = useState<EnvironmentCommandKind>("startThread");
+  const [prompt, setPrompt] = useState("");
+  const [threadId, setThreadId] = useState("");
+  const [message, setMessage] = useState("");
+  const needsThread = kind !== "startThread";
+  const valid =
+    kind === "startThread"
+      ? prompt.trim().length > 0
+      : threadId.trim().length > 0 && (kind !== "sendMessage" || message.trim().length > 0);
+  const kindGate =
+    environmentCommandPermission(kind) === "environments.read" ? readGate : controlGate;
+  const enabled = controlAvailable && dispatchGate.enabled && kindGate.enabled;
+  const tooltip = dispatchGate.tooltip ?? kindGate.tooltip;
+
+  return (
+    <div className="space-y-3 rounded-lg border p-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-medium">Durable remote command</p>
+          <p className="text-xs text-muted-foreground">
+            Commands remain pending while {environment.label} is offline and expire after 24 hours.
+          </p>
+        </div>
+        <Select
+          value={kind}
+          onValueChange={(value) => {
+            if (value !== null) setKind(value as EnvironmentCommandKind);
+          }}
+        >
+          <SelectTrigger size="sm" className="w-full sm:w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {COMMAND_KINDS.map((option) => (
+              <SelectItem key={option.kind} value={option.kind}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </div>
+
+      {kind === "startThread" ? (
+        <Textarea
+          value={prompt}
+          rows={3}
+          placeholder="What should the remote agent do?"
+          onChange={(event) => setPrompt(event.currentTarget.value)}
+        />
+      ) : (
+        <Input
+          value={threadId}
+          placeholder="Thread ID"
+          onChange={(event) => setThreadId(event.currentTarget.value)}
+        />
+      )}
+      {kind === "sendMessage" ? (
+        <Textarea
+          value={message}
+          rows={3}
+          placeholder="Message to send"
+          onChange={(event) => setMessage(event.currentTarget.value)}
+        />
+      ) : null}
+
+      <PermissionTooltip tooltip={tooltip}>
+        <Button
+          size="sm"
+          disabled={!enabled || !valid || actionBlocked}
+          onClick={() => {
+            void onIssue({ kind, prompt, threadId, message }).then((issued) => {
+              if (!issued) return;
+              if (kind === "startThread") setPrompt("");
+              if (kind === "sendMessage") setMessage("");
+            });
+          }}
+        >
+          {kind === "interrupt" ? (
+            <CircleStopIcon className="size-3.5" />
+          ) : kind === "sendMessage" ? (
+            <MessageSquareIcon className="size-3.5" />
+          ) : (
+            <SendIcon className="size-3.5" />
+          )}
+          {issuePending ? "Issuing…" : COMMAND_KINDS.find((option) => option.kind === kind)?.label}
+        </Button>
+      </PermissionTooltip>
+      {needsThread ? (
+        <p className="text-[11px] text-muted-foreground">
+          This command targets the thread ID owned by the remote environment.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CommandHistory({
+  commands,
+  loading,
+  error,
+  pendingAction,
+  cancelEnabled,
+  cancelTooltip,
+  onRefresh,
+  onCancel,
+}: {
+  readonly commands: ReadonlyArray<EnvironmentCommandRecord>;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly pendingAction: string | null;
+  readonly cancelEnabled: boolean;
+  readonly cancelTooltip: string | null;
+  readonly onRefresh: () => void;
+  readonly onCancel: (command: EnvironmentCommandRecord) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">Recent commands</p>
+          <p className="text-xs text-muted-foreground">
+            Live updates from the company control plane.
+          </p>
+        </div>
+        <Button size="xs" variant="outline" disabled={loading} onClick={onRefresh}>
+          <RefreshCwIcon className="size-3" /> Refresh
+        </Button>
+      </div>
+      {error ? (
+        <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      ) : null}
+      <div className="overflow-hidden rounded-lg border">
+        {commands.length === 0 ? (
+          <div className="px-4 py-8 text-center text-xs text-muted-foreground">
+            No commands have been issued to this environment.
+          </div>
+        ) : (
+          commands.map((command) => (
+            <div
+              key={command.id}
+              className="flex flex-col gap-2 border-b px-3 py-3 last:border-b-0 sm:flex-row sm:items-start"
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium">{command.kind}</span>
+                  {commandStateBadge(command.state)}
+                  <span className="text-[11px] text-muted-foreground">
+                    Issued {relativeTimestamp(command.createdAt)} · Last status{" "}
+                    {relativeTimestamp(command.updatedAt)}
+                  </span>
+                </div>
+                <p
+                  className={`break-words text-xs ${command.error ? "text-destructive" : "text-muted-foreground"}`}
+                >
+                  {environmentCommandSummary(command)}
+                </p>
+              </div>
+              {command.state === "pending" ? (
+                <PermissionTooltip tooltip={cancelTooltip}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={!cancelEnabled || pendingAction !== null}
+                    onClick={() => onCancel(command)}
+                  >
+                    {pendingAction === `cancel:${command.id}` ? "Canceling…" : "Cancel"}
+                  </Button>
+                </PermissionTooltip>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function CompanyEnvironmentsPanel() {
+  const settings = useCompanySettings();
+  const control = useEnvironmentControl();
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const registrations = useMemo(
+    () => environmentRegistrationsFromReplicaValues(settings.replica?.view.values() ?? []),
+    [settings.replica],
+  );
+  const rows = useMemo(
+    () =>
+      deriveEnvironmentRows({
+        registrations,
+        catalogEntries: catalog.entries,
+        teams: settings.directory.teams,
+        ownEnvironmentId,
+      }),
+    [catalog.entries, ownEnvironmentId, registrations, settings.directory.teams],
+  );
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
+  const [commands, setCommands] = useState<ReadonlyArray<EnvironmentCommandRecord>>([]);
+  const [commandLoadError, setCommandLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [loadingCommands, setLoadingCommands] = useState(false);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [grant, setGrant] = useState<IssuedConnectGrant | null>(null);
+
+  useEffect(() => {
+    if (
+      selectedEnvironmentId !== null &&
+      rows.some((row) => row.environmentId === selectedEnvironmentId)
+    ) {
+      return;
+    }
+    setSelectedEnvironmentId(rows[0]?.environmentId ?? null);
+  }, [rows, selectedEnvironmentId]);
+
+  useEffect(() => {
+    setGrant(null);
+    setActionError(null);
+  }, [selectedEnvironmentId]);
+
+  useEffect(() => {
+    setCommands([]);
+    setCommandLoadError(null);
+    if (control === null || settings.companyId === null) return;
+    return control.subscribeCommands(
+      settings.companyId,
+      (next) => {
+        setCommands(next);
+        setCommandLoadError(null);
+      },
+      (error) => setCommandLoadError(error.message),
+    );
+  }, [control, settings.companyId]);
+
+  const refreshCommands = useCallback(async () => {
+    if (control === null || settings.companyId === null) return;
+    setLoadingCommands(true);
+    try {
+      setCommands(await control.listCommands(settings.companyId));
+      setCommandLoadError(null);
+    } catch (error) {
+      setCommandLoadError(error instanceof Error ? error.message : "Could not load commands.");
+    } finally {
+      setLoadingCommands(false);
+    }
+  }, [control, settings.companyId]);
+
+  const selected = rows.find((row) => row.environmentId === selectedEnvironmentId) ?? null;
+  const recentCommands =
+    selectedEnvironmentId === null
+      ? []
+      : deriveRecentEnvironmentCommands(commands, selectedEnvironmentId);
+  const readGate = permissionGate(settings.permissions, "environments.read");
+  const dispatchGate = permissionGate(settings.permissions, "remoteAgents.dispatch");
+  const controlGate = permissionGate(settings.permissions, "remoteAgents.control");
+  const manageGate = permissionGate(settings.permissions, "environments.manage");
+  const cancelEnabled = dispatchGate.enabled && control !== null;
+
+  const runAction = async (key: string, action: () => Promise<void>): Promise<boolean> => {
+    if (pendingAction !== null) return false;
+    setPendingAction(key);
+    setActionError(null);
+    try {
+      await action();
+      return true;
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "The environment action failed.");
+      return false;
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
+  if (settings.isAuthLoaded && !settings.isSignedIn) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Sign in to manage company environments"
+          description="Environment discovery and remote control are available after you sign in."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.activeCompany === null || settings.companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="No active company"
+          description="Choose a company from the company switcher to discover its environments."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.replica === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Company data is syncing"
+          description="Environment settings will appear when this company's replica is ready."
+        />
+      </SettingsPageContainer>
+    );
+  }
+
+  const companyId = settings.companyId;
+
+  return (
+    <SettingsPageContainer>
+      <SettingsSection
+        id="company-environments"
+        title="Environments"
+        icon={<ServerIcon className="size-4" />}
+      >
+        <EnvironmentList
+          rows={rows}
+          selectedEnvironmentId={selectedEnvironmentId}
+          onSelect={setSelectedEnvironmentId}
+        />
+      </SettingsSection>
+
+      {selected ? (
+        <SettingsSection title={selected.label} icon={<PowerIcon className="size-4" />}>
+          <CompanySectionCard>
+            <div className="space-y-5 p-4">
+              {selected.isOwnEnvironment ? (
+                <div className="rounded-lg border border-info/20 bg-info/5 px-3 py-3 text-xs text-muted-foreground">
+                  This is the current device's environment. Remote commands, connect grants, and
+                  deactivation are suppressed here.
+                </div>
+              ) : selected.registration.state !== "active" ? (
+                <div className="rounded-lg border px-3 py-3 text-xs text-muted-foreground">
+                  This registration is revoked and cannot accept remote actions.
+                </div>
+              ) : (
+                <>
+                  <RemoteCommandForm
+                    key={selected.environmentId}
+                    environment={selected}
+                    issuePending={pendingAction === "issue"}
+                    actionBlocked={pendingAction !== null}
+                    controlAvailable={control !== null}
+                    dispatchGate={dispatchGate}
+                    controlGate={controlGate}
+                    readGate={readGate}
+                    onIssue={async ({ kind, prompt, threadId, message }) => {
+                      if (control === null) return false;
+                      return runAction("issue", async () => {
+                        const targetEnvironmentId = selected.environmentId;
+                        if (kind === "startThread") {
+                          await control.issueCommand({
+                            companyId,
+                            targetEnvironmentId,
+                            cloudProjectId: null,
+                            kind,
+                            args: { kind, prompt: prompt.trim(), modelSelection: null },
+                          });
+                        } else if (kind === "sendMessage") {
+                          await control.issueCommand({
+                            companyId,
+                            targetEnvironmentId,
+                            cloudProjectId: null,
+                            kind,
+                            args: {
+                              kind,
+                              threadId: ThreadId.make(threadId.trim()),
+                              message: message.trim(),
+                            },
+                          });
+                        } else {
+                          await control.issueCommand({
+                            companyId,
+                            targetEnvironmentId,
+                            cloudProjectId: null,
+                            kind,
+                            args: { kind, threadId: ThreadId.make(threadId.trim()) },
+                          });
+                        }
+                      });
+                    }}
+                  />
+
+                  <div className="space-y-3 rounded-lg border p-3">
+                    <div>
+                      <p className="text-sm font-medium">Direct connection grant</p>
+                      <p className="text-xs text-muted-foreground">
+                        Mint a short-lived, single-use token for direct remote agent control.
+                      </p>
+                    </div>
+                    {grant ? (
+                      <GrantReveal
+                        grant={grant}
+                        onDismiss={() => setGrant(null)}
+                        onError={setActionError}
+                      />
+                    ) : (
+                      <PermissionTooltip tooltip={controlGate.tooltip}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            !controlGate.enabled || control === null || pendingAction !== null
+                          }
+                          onClick={() => {
+                            if (control === null) return;
+                            void runAction("grant", async () => {
+                              const issued = await control.issueConnectGrant({
+                                companyId,
+                                environmentId: selected.environmentId,
+                                permission: "remoteAgents.control",
+                              });
+                              setGrant(issued);
+                            });
+                          }}
+                        >
+                          <KeyRoundIcon className="size-3.5" />
+                          {pendingAction === "grant" ? "Minting…" : "Mint connect grant"}
+                        </Button>
+                      </PermissionTooltip>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-3 rounded-lg border border-destructive/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Deactivate environment</p>
+                      <p className="text-xs text-muted-foreground">
+                        Revokes this company's registration and removes it from discovery.
+                      </p>
+                    </div>
+                    <PermissionTooltip tooltip={manageGate.tooltip}>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={!manageGate.enabled || control === null || pendingAction !== null}
+                        onClick={() => {
+                          if (
+                            control === null ||
+                            !window.confirm(
+                              `Deactivate ${selected.label}? It will no longer be discoverable for this company.`,
+                            )
+                          ) {
+                            return;
+                          }
+                          void runAction("deactivate", () =>
+                            control.deactivateEnvironment({
+                              companyId,
+                              environmentId: selected.environmentId,
+                            }),
+                          );
+                        }}
+                      >
+                        <Trash2Icon className="size-3.5" />
+                        {pendingAction === "deactivate" ? "Deactivating…" : "Deactivate"}
+                      </Button>
+                    </PermissionTooltip>
+                  </div>
+                </>
+              )}
+
+              {actionError ? (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  {actionError}
+                </div>
+              ) : null}
+
+              <CommandHistory
+                commands={recentCommands}
+                loading={loadingCommands}
+                error={readGate.enabled ? commandLoadError : readGate.tooltip}
+                pendingAction={pendingAction}
+                cancelEnabled={cancelEnabled && !selected.isOwnEnvironment}
+                cancelTooltip={dispatchGate.tooltip}
+                onRefresh={() => void refreshCommands()}
+                onCancel={(command) => {
+                  if (control === null) return;
+                  void runAction(`cancel:${command.id}`, () =>
+                    control.cancelCommand({ companyId, commandId: command.id }),
+                  );
+                }}
+              />
+            </div>
+          </CompanySectionCard>
+        </SettingsSection>
+      ) : null}
+    </SettingsPageContainer>
+  );
+}
