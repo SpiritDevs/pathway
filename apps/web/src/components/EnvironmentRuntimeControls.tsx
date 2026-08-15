@@ -103,7 +103,7 @@ function TerminalRow({
   );
 }
 
-export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeControls({
+export const DevelopmentEnvironmentControls = memo(function DevelopmentEnvironmentControls({
   threadRef,
   enabled,
   displayMode = "card",
@@ -113,20 +113,8 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
   displayMode?: "card" | "panel";
 }) {
   const [serversOpen, setServersOpen] = useState(false);
-  const [terminalsOpen, setTerminalsOpen] = useState(false);
   const [stoppingServerKey, setStoppingServerKey] = useState<string | null>(null);
   const servers = useDiscoveredPorts(threadRef.environmentId, enabled);
-  const knownTerminalSessions = useKnownTerminalSessions({
-    environmentId: threadRef.environmentId,
-    threadId: threadRef.threadId,
-  });
-  const activeTerminalSessions = useMemo(
-    () => selectActiveTerminalSessions(knownTerminalSessions),
-    [knownTerminalSessions],
-  );
-  const rightPanelState = useRightPanelStore((state) =>
-    selectThreadRightPanelState(state.byThreadKey, threadRef),
-  );
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const stopDiscoveredServer = useAtomCommand(previewEnvironment.stopDiscoveredServer, {
     reportFailure: false,
@@ -191,6 +179,78 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
     [stopDiscoveredServer, threadRef.environmentId],
   );
 
+  if (servers.length === 0) return null;
+
+  return (
+    <section
+      aria-label="Local servers"
+      className={cn(
+        "border-t",
+        displayMode === "panel" ? "border-border/65" : "border-border/70 py-2",
+      )}
+    >
+      {displayMode === "panel" ? (
+        <div className="px-3.5 pb-1 pt-3">
+          <p className="text-[11px] font-medium text-muted-foreground">Development environments</p>
+        </div>
+      ) : (
+        <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">
+          Development environments
+        </p>
+      )}
+      <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
+        <RuntimeDisclosure
+          icon={
+            <RadioTower
+              className={cn(
+                "size-4 shrink-0",
+                displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+                displayMode === "panel" && "-translate-x-2",
+              )}
+              aria-hidden="true"
+            />
+          }
+          label="Local servers"
+          count={servers.length}
+          displayMode={displayMode}
+          open={serversOpen}
+          onOpenChange={setServersOpen}
+        >
+          {servers.map((server) => (
+            <DevelopmentServerRow
+              key={`${server.host}:${server.port}`}
+              server={server}
+              onOpen={handleOpenServer}
+              onCopy={handleCopyServer}
+              onStop={handleStopServer}
+              stopping={stoppingServerKey === `${server.host}:${server.port}`}
+            />
+          ))}
+        </RuntimeDisclosure>
+      </div>
+    </section>
+  );
+});
+
+export const TerminalRuntimeControls = memo(function TerminalRuntimeControls({
+  threadRef,
+  displayMode = "card",
+}: {
+  threadRef: ScopedThreadRef;
+  displayMode?: "card" | "panel";
+}) {
+  const [terminalsOpen, setTerminalsOpen] = useState(false);
+  const knownTerminalSessions = useKnownTerminalSessions({
+    environmentId: threadRef.environmentId,
+    threadId: threadRef.threadId,
+  });
+  const activeTerminalSessions = useMemo(
+    () => selectActiveTerminalSessions(knownTerminalSessions),
+    [knownTerminalSessions],
+  );
+  const rightPanelState = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, threadRef),
+  );
   const handleOpenTerminal = useCallback(
     (terminalId: string) => {
       const panelSurface = rightPanelState.surfaces.find(
@@ -209,105 +269,70 @@ export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeContro
     [rightPanelState.surfaces, threadRef],
   );
 
-  if (servers.length === 0 && activeTerminalSessions.length === 0) return null;
+  if (activeTerminalSessions.length === 0) return null;
 
   return (
-    <>
-      {servers.length > 0 ? (
-        <section
-          aria-label="Local servers"
-          className={cn(
-            "border-t",
-            displayMode === "panel" ? "border-border/65" : "border-border/70 py-2",
-          )}
+    <section
+      aria-label="Running terminals"
+      className={cn(
+        "border-t",
+        displayMode === "panel" ? "border-border/65" : "border-border/70 py-2",
+      )}
+    >
+      {displayMode === "panel" ? (
+        <div className="px-3.5 pb-1 pt-3">
+          <p className="text-[11px] font-medium text-muted-foreground">Terminals</p>
+        </div>
+      ) : (
+        <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Terminals</p>
+      )}
+      <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
+        <RuntimeDisclosure
+          icon={
+            <TerminalSquare
+              className={cn(
+                "size-4 shrink-0",
+                displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+              )}
+              aria-hidden="true"
+            />
+          }
+          label="Running terminals"
+          count={activeTerminalSessions.length}
+          displayMode={displayMode}
+          open={terminalsOpen}
+          onOpenChange={setTerminalsOpen}
         >
-          {displayMode === "panel" ? (
-            <div className="px-3.5 pb-1 pt-3">
-              <p className="text-[11px] font-medium text-muted-foreground">
-                Development environments
-              </p>
-            </div>
-          ) : (
-            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">
-              Development environments
-            </p>
-          )}
-          <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
-            <RuntimeDisclosure
-              icon={
-                <RadioTower
-                  className={cn(
-                    "size-4 shrink-0",
-                    displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
-                    displayMode === "panel" && "-translate-x-2",
-                  )}
-                  aria-hidden="true"
-                />
-              }
-              label="Local servers"
-              count={servers.length}
-              displayMode={displayMode}
-              open={serversOpen}
-              onOpenChange={setServersOpen}
-            >
-              {servers.map((server) => (
-                <DevelopmentServerRow
-                  key={`${server.host}:${server.port}`}
-                  server={server}
-                  onOpen={handleOpenServer}
-                  onCopy={handleCopyServer}
-                  onStop={handleStopServer}
-                  stopping={stoppingServerKey === `${server.host}:${server.port}`}
-                />
-              ))}
-            </RuntimeDisclosure>
-          </div>
-        </section>
-      ) : null}
+          {activeTerminalSessions.map((session) => (
+            <TerminalRow
+              key={session.target.terminalId}
+              session={session}
+              onOpen={handleOpenTerminal}
+            />
+          ))}
+        </RuntimeDisclosure>
+      </div>
+    </section>
+  );
+});
 
-      {activeTerminalSessions.length > 0 ? (
-        <section
-          aria-label="Running terminals"
-          className={cn(
-            "border-t",
-            displayMode === "panel" ? "border-border/65" : "border-border/70 py-2",
-          )}
-        >
-          {displayMode === "panel" ? (
-            <div className="px-3.5 pb-1 pt-3">
-              <p className="text-[11px] font-medium text-muted-foreground">Terminals</p>
-            </div>
-          ) : (
-            <p className="px-2 pb-1 text-xs font-medium text-muted-foreground">Terminals</p>
-          )}
-          <div className={displayMode === "panel" ? "px-2 pb-2.5" : undefined}>
-            <RuntimeDisclosure
-              icon={
-                <TerminalSquare
-                  className={cn(
-                    "size-4 shrink-0",
-                    displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
-                  )}
-                  aria-hidden="true"
-                />
-              }
-              label="Running terminals"
-              count={activeTerminalSessions.length}
-              displayMode={displayMode}
-              open={terminalsOpen}
-              onOpenChange={setTerminalsOpen}
-            >
-              {activeTerminalSessions.map((session) => (
-                <TerminalRow
-                  key={session.target.terminalId}
-                  session={session}
-                  onOpen={handleOpenTerminal}
-                />
-              ))}
-            </RuntimeDisclosure>
-          </div>
-        </section>
-      ) : null}
+export const EnvironmentRuntimeControls = memo(function EnvironmentRuntimeControls({
+  threadRef,
+  enabled,
+  displayMode = "card",
+}: {
+  threadRef: ScopedThreadRef;
+  enabled: boolean;
+  displayMode?: "card" | "panel";
+}) {
+  return (
+    <>
+      <DevelopmentEnvironmentControls
+        threadRef={threadRef}
+        enabled={enabled}
+        displayMode={displayMode}
+      />
+      <TerminalRuntimeControls threadRef={threadRef} displayMode={displayMode} />
     </>
   );
 });

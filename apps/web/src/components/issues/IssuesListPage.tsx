@@ -7,6 +7,17 @@
  *
  * @module components/issues/IssuesListPage
  */
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -70,7 +81,7 @@ import { PROVIDER_CLIENT_DEFINITIONS } from "../settings/providerDriverMeta";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
-import { IssueGroupHeader, IssueListRow } from "./IssueListRow";
+import { DraggableIssueListRow, IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
 import { IssuesAssistantPanel, type IssuesAssistantTab } from "./IssuesAssistantPanel";
@@ -123,6 +134,15 @@ import {
   type IssuesSearchPatch,
   type IssuesSelection,
 } from "./issuesList.logic";
+import {
+  findIssuesListIssue,
+  isIssuesListSortable,
+  issuesListDropEdge,
+  issuesListRowDragId,
+  parseIssuesListDragId,
+  resolveIssuesListDrop,
+  type IssuesListDrop,
+} from "./issuesListDnd.logic";
 
 const TABS: ReadonlyArray<{ readonly value: IssuesTab; readonly label: string }> = [
   { value: "active", label: "Active" },
@@ -215,8 +235,12 @@ function IssuesListView({
   const [assistantDraftPending, setAssistantDraftPending] = useState(false);
   /** Set by a column's `+`, which is the only path that names a status the filter did not. */
   const [newIssueStatusId, setNewIssueStatusId] = useState<IssueStatusId | null>(null);
+  const [activeListIssueId, setActiveListIssueId] = useState<IssueId | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const scrollToActiveRef = useRef(false);
+  const listDragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const issuesPreviewThreadRef = useMemo(
@@ -304,6 +328,17 @@ function IssuesListView({
     () => (viewMode === "board" ? issuesBoardColumns(view) : EMPTY_ISSUES_BOARD_COLUMNS),
     [view, viewMode],
   );
+  const listSortable = viewMode === "list" && isIssuesListSortable(view);
+  const listExtraData = useMemo(
+    () => ({ selectionIds: selection.ids, sortable: listSortable }),
+    [listSortable, selection.ids],
+  );
+  const listDragItems = useMemo(
+    () => rows.flatMap((row) => (row.kind === "issue" ? [issuesListRowDragId(row.issue.id)] : [])),
+    [rows],
+  );
+  const activeListIssue =
+    activeListIssueId === null ? null : findIssuesListIssue(view, activeListIssueId);
   const ids = useMemo(() => issueIdsInRows(rows), [rows]);
   const filterActive = isIssuesListFilterActive(filter);
   const setFilter = (next: IssuesListFilter) => onSearch(issuesFilterSearchPatch(next));
@@ -726,9 +761,9 @@ function IssuesListView({
     setAssistantPanelOpen(true);
   };
 
-  // One write for both halves of a kanban drag: the contract carries `statusId` alongside the key
-  // so a card never renders in the new column with the old neighbours, or the other way round.
-  const moveBoardCard = (drop: IssuesBoardDrop) => {
+  // One write for both halves of a manual-order drag: the contract carries `statusId` alongside
+  // the key so a row never renders in the new group with the old neighbours, or the other way round.
+  const moveIssueByDrop = (drop: IssuesBoardDrop | IssuesListDrop) => {
     write("Failed to move the issue", () =>
       setIssueSortOrder({
         issueId: drop.issueId,
@@ -736,6 +771,29 @@ function IssuesListView({
         ...(drop.statusId === null ? {} : { statusId: drop.statusId }),
       }),
     );
+  };
+
+  const handleListDragStart = (event: DragStartEvent) => {
+    const active = parseIssuesListDragId(String(event.active.id));
+    setActiveListIssueId(active !== null && active.kind === "row" ? active.issueId : null);
+  };
+
+  const handleListDragEnd = (event: DragEndEvent) => {
+    setActiveListIssueId(null);
+    const over = event.over;
+    if (over === null) return;
+    const translated = event.active.rect.current.translated ?? null;
+    const drop = resolveIssuesListDrop({
+      view,
+      activeId: String(event.active.id),
+      overId: String(over.id),
+      edge: issuesListDropEdge({
+        activeCenterY: translated === null ? null : translated.top + translated.height / 2,
+        overTop: over.rect.top,
+        overHeight: over.rect.height,
+      }),
+    });
+    if (drop !== null) moveIssueByDrop(drop);
   };
 
   // ── Right-click menu ─────────────────────────────────────────────────
@@ -850,9 +908,9 @@ function IssuesListView({
 
   const renderItem = ({ item }: { item: IssuesListRowModel }) =>
     item.kind === "header" ? (
-      <IssueGroupHeader onToggle={toggleGroup} row={item} />
+      <IssueGroupHeader onToggle={toggleGroup} row={item} sortable={listSortable} />
     ) : (
-      <IssueListRow
+      <DraggableIssueListRow
         active={selection.activeId === item.issue.id}
         childRollup={childRollups.get(item.issue.id) ?? null}
         investigating={investigatingIssueIds.has(item.issue.id)}
@@ -877,6 +935,7 @@ function IssuesListView({
         selected={selection.ids.has(item.issue.id)}
         status={statusById.get(item.issue.statusId) ?? null}
         statuses={statuses}
+        sortable={listSortable}
         today={today}
       />
     );
@@ -1064,7 +1123,7 @@ function IssuesListView({
               investigatingIssueIds={investigatingIssueIds}
               labelsById={labelsById}
               onContextMenuIssue={handleCardContextMenu}
-              onMove={moveBoardCard}
+              onMove={moveIssueByDrop}
               onNewIssue={openNewIssue}
               onOpenIssue={openIssue}
               // The order the columns were actually built in, which is the only order a drag can
@@ -1073,18 +1132,60 @@ function IssuesListView({
               today={today}
             />
           ) : (
-            <LegendList<IssuesListRowModel>
-              aria-label="Issues"
-              className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
-              data={rows}
-              estimatedItemSize={ESTIMATED_ROW_HEIGHT}
-              extraData={selection.ids}
-              getItemType={getItemType}
-              keyExtractor={keyExtractor}
-              ref={listRef}
-              renderItem={renderItem}
-              role="listbox"
-            />
+            <DndContext
+              collisionDetection={closestCenter}
+              onDragCancel={() => setActiveListIssueId(null)}
+              onDragEnd={handleListDragEnd}
+              onDragStart={handleListDragStart}
+              sensors={listDragSensors}
+            >
+              <SortableContext items={listDragItems} strategy={verticalListSortingStrategy}>
+                <LegendList<IssuesListRowModel>
+                  aria-label="Issues"
+                  className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
+                  data={rows}
+                  estimatedItemSize={ESTIMATED_ROW_HEIGHT}
+                  extraData={listExtraData}
+                  getItemType={getItemType}
+                  keyExtractor={keyExtractor}
+                  ref={listRef}
+                  renderItem={renderItem}
+                  role="listbox"
+                />
+              </SortableContext>
+              <DragOverlay dropAnimation={null}>
+                {activeListIssue === null ? null : (
+                  <IssueListRow
+                    active={false}
+                    childRollup={childRollups.get(activeListIssue.id) ?? null}
+                    dragging
+                    investigating={investigatingIssueIds.has(activeListIssue.id)}
+                    issue={activeListIssue}
+                    labels={labels}
+                    labelsById={labelsById}
+                    onOpen={() => {}}
+                    onPriority={() => {}}
+                    onRowClick={() => {}}
+                    onStatus={() => {}}
+                    onToggleLabel={() => {}}
+                    parentTitle={
+                      activeListIssue.parentId === null
+                        ? null
+                        : (store.issuesById.get(activeListIssue.parentId)?.title ?? null)
+                    }
+                    projectTitle={
+                      activeListIssue.projectId === null
+                        ? null
+                        : (projectTitles.get(activeListIssue.projectId) ?? null)
+                    }
+                    selected={false}
+                    status={statusById.get(activeListIssue.statusId) ?? null}
+                    statuses={statuses}
+                    today={today}
+                  />
+                )}
+              </DragOverlay>
+            </DndContext>
           )}
 
           {bulkSelectionActive && selectedIssues.length > 0 ? (

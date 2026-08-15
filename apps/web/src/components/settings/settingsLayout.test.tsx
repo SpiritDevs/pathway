@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  rememberSettingsReturnScrollPosition,
   scrollToSettingsTarget,
   SettingsRow,
   SettingsSearchTargetProvider,
@@ -96,5 +97,22 @@ describe("settings search targets", () => {
     });
 
     expect(scrollToSettingsTarget("archive")).toBe(false);
+  });
+});
+
+describe("settings return scroll", () => {
+  it("remembers the current settings scroller position for a subpage round trip", () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("document", {
+      querySelector: vi.fn(() => ({ scrollTop: 643.5 })),
+    });
+    vi.stubGlobal("sessionStorage", { setItem });
+
+    rememberSettingsReturnScrollPosition("/settings/appearance");
+
+    expect(setItem).toHaveBeenCalledWith(
+      "pathway:settings-return-scroll:/settings/appearance",
+      "643.5",
+    );
   });
 });

@@ -142,6 +142,7 @@ import {
 } from "./SettingsPanels.logic";
 import {
   PolicyTooltip,
+  rememberSettingsReturnScrollPosition,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -1130,6 +1131,27 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep composer context visible in active threads"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Action palette"
+          description="Choose which action-palette areas are active and arrange their order."
+          control={
+            <Button
+              render={
+                <Link
+                  to="/settings/appearance/action-palette"
+                  resetScroll={false}
+                  onClick={() => rememberSettingsReturnScrollPosition("/settings/appearance")}
+                />
+              }
+              size="sm"
+              variant="outline"
+            >
+              Configure
+              <ChevronRightIcon aria-hidden className="size-4" />
+            </Button>
           }
         />
       </SettingsSection>

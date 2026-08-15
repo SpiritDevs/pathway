@@ -3,6 +3,25 @@
 Open the thread details menu in a thread header to see workspace actions and live resources for
 that thread's environment.
 
+## Choose and arrange action areas
+
+Open **Settings → Appearance**, then select **Action palette** to choose which areas appear and the
+order they use. Active areas are listed first; inactive areas are listed below them. Turn an active
+area off to move it to the end of **Inactive**, or turn an inactive area on to move it to the end of
+**Active**.
+
+Drag a card by its handle to reorder it within its list. For keyboard reordering, focus the handle
+and use the up and down arrow keys. The **Reset** action restores the default visibility and
+ordering. Changes apply to both the inline thread-details panel and its popover presentation.
+
+Select **Reset** to restore Pathway's default visibility and ordering. An enabled area can still be
+absent when it has nothing relevant to show: for example, **Development environments** appears only
+while Pathway has discovered a local server in the configured port range.
+
+These preferences apply to every project and connected environment opened in the web or desktop
+client. Pathway Mobile does not currently expose the multi-area thread action palette, so this
+setting has no mobile surface to change.
+
 When a thread is related to any issues, an **Issues** section sits directly above **Version
 Control** and lists each of them with its key, title, status, priority, and due date. Select an
 issue row to open its full detail sheet.

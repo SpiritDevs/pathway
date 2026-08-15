@@ -93,7 +93,8 @@ status, project, and priority in one action.
   headers and counts, `j`/`k` navigation, inline property popovers on the row, shift-click range
   select, bulk actions on the selection.
 - **Kanban** — columns are statuses, nothing else. Dragging within a column reorders; dragging
-  across sets status and position in one write. Grouping in the list view is a read concern and can
+  across sets status and position in one write. The grouped list uses the same gesture and atomic
+  write while status-grouped in manual order. Grouping in the list view is a read concern and can
   vary; ordering is one column.
 - **Detail** — opens in `RightPanelSheet` at `/issues?issue=PAT-221`, keeping the list visible for
   triage. No separate full-page layout.

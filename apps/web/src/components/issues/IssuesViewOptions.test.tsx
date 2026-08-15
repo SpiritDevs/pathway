@@ -44,7 +44,7 @@ describe("IssuesViewOptions", () => {
 
   it("explains where manual order comes from", () => {
     expect(textContent(renderOptions("list"))).toContain(
-      "Manual order follows the card positions set by dragging in board view.",
+      "Drag rows to reorder them or move them between statuses.",
     );
     expect(textContent(renderOptions("board"))).toContain(
       "Drag cards to reorder them or move them between statuses.",

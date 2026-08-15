@@ -50,9 +50,11 @@ import { T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
+  settingsSectionPathForSearchPath,
   SETTINGS_NAV_GROUPS,
   SETTINGS_SECTION_LABELS,
   type SettingsPath,
+  type SettingsSearchPath,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -79,8 +81,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/diagnostics": ActivityIcon,
 };
 
-function SettingsSectionIcon({ to }: { to: SettingsPath }) {
-  const Icon = SETTINGS_SECTION_ICONS[to];
+function SettingsSectionIcon({ to }: { to: SettingsSearchPath }) {
+  const Icon = SETTINGS_SECTION_ICONS[settingsSectionPathForSearchPath(to)];
   return <Icon className="mt-0.5 size-3.5 shrink-0 text-sidebar-muted-foreground/60" />;
 }
 
@@ -284,7 +286,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                         {item.title}
                       </span>
                       <span className="block truncate text-[11px] text-sidebar-muted-foreground/75">
-                        {SETTINGS_SECTION_LABELS[item.to]}
+                        {SETTINGS_SECTION_LABELS[settingsSectionPathForSearchPath(item.to)]}
                       </span>
                     </span>
                   </SidebarMenuButton>

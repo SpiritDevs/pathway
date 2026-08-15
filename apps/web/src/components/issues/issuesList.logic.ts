@@ -625,7 +625,7 @@ export const EMPTY_ISSUES_VIEW: IssuesView = {
 };
 
 /**
- * The manual key is written by a drag inside a status column, so it only orders a list grouped by
+ * The manual key is written by a drag inside a status group, so it only orders a list grouped by
  * status. Anywhere else it would render an order nobody can see the rule of, so priority stands in.
  */
 export function effectiveIssueSortMode(
@@ -638,11 +638,11 @@ export function effectiveIssueSortMode(
 /**
  * Why the order on screen is not the order that was asked for, or why the board's drag is off.
  *
- * The two cases are converses of each other. In the list, manual order needs a status grouping to
- * mean anything, so it stands aside. On the board the grouping is always status, so manual order
- * always applies — but the *drag that writes it* is only honest while manual is what orders the
- * column: under any other mode the slot the card was dropped into is not a slot in the stored
- * order, so the write would land somewhere nobody pointed at.
+ * The two cases are converses of each other. In the list, manual order and row dragging need a
+ * status grouping to mean anything, so they stand aside. On the board the grouping is always
+ * status, so manual order always applies — but the *drag that writes it* is only honest while
+ * manual is what orders the column: under any other mode the slot the card was dropped into is not
+ * a slot in the stored order, so the write would land somewhere nobody pointed at.
  */
 export function issueSortModeHint(
   sortMode: IssueViewSortMode,

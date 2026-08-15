@@ -3,7 +3,7 @@
  *
  * Columns are statuses in position order and nothing else. The board renders the *filtered* set,
  * so the chip bar and the tab mean the same thing here as they do in the list; only the layout and
- * the one gesture the list does not have — drag to restatus — are new.
+ * the card layout are new. Both layouts can write the same manual position and status move.
  *
  * Every column is a plain `overflow-y` scroller rather than a `LegendList`. `@dnd-kit` resolves a
  * drop by measuring the rect of every registered droppable, and a virtualized column unmounts the

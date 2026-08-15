@@ -7,7 +7,9 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -21,6 +23,24 @@ interface SettingsSearchTargetContextValue {
 }
 
 const noop = () => undefined;
+const SETTINGS_RETURN_SCROLL_PREFIX = "pathway:settings-return-scroll:";
+
+export function rememberSettingsReturnScrollPosition(pathname: string): void {
+  const container = document.querySelector<HTMLElement>(".settings-page-scroll-fade");
+  if (!container) return;
+  sessionStorage.setItem(
+    `${SETTINGS_RETURN_SCROLL_PREFIX}${pathname}`,
+    String(container.scrollTop),
+  );
+}
+
+function readSettingsReturnScrollPosition(pathname: string): number | null {
+  const key = `${SETTINGS_RETURN_SCROLL_PREFIX}${pathname}`;
+  const raw = sessionStorage.getItem(key);
+  if (raw === null) return null;
+  const scrollTop = Number(raw);
+  return Number.isFinite(scrollTop) && scrollTop >= 0 ? scrollTop : null;
+}
 const SettingsSearchTargetContext = createContext<SettingsSearchTargetContextValue>({
   targetId: null,
   onTargetHandled: noop,
@@ -242,15 +262,37 @@ export function SettingsPageContainer({
   className?: string;
 }) {
   const navigate = useNavigate();
-  const hash = useLocation({ select: (location) => location.hash });
+  const { hash, pathname } = useLocation({
+    select: (location) => ({ hash: location.hash, pathname: location.pathname }),
+  });
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const targetId = hash.replace(/^#/, "") || null;
   const clearTargetHash = useCallback(() => {
     void navigate({ hash: "", replace: true, resetScroll: false, hashScrollIntoView: false });
   }, [navigate]);
 
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (targetId !== null) return;
+    const scrollTop = readSettingsReturnScrollPosition(pathname);
+    if (scrollTop === null) return;
+    container.scrollTop = scrollTop;
+    const restoreTimer = window.setTimeout(() => {
+      container.scrollTop = scrollTop;
+      sessionStorage.removeItem(`${SETTINGS_RETURN_SCROLL_PREFIX}${pathname}`);
+    }, 0);
+    return () => {
+      window.clearTimeout(restoreTimer);
+    };
+  }, [pathname, targetId]);
+
   return (
     <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>
-      <div className="settings-page-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto px-4 pt-10 pb-7 sm:px-8 sm:pt-12 sm:pb-10">
+      <div
+        ref={scrollContainerRef}
+        className="settings-page-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto px-4 pt-10 pb-7 sm:px-8 sm:pt-12 sm:pb-10"
+      >
         <div className={cn("mx-auto flex w-full max-w-4xl flex-col gap-12", className)}>
           {children}
         </div>

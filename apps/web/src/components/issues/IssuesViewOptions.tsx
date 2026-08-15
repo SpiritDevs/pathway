@@ -47,14 +47,14 @@ export function IssuesViewOptions({
   onSortMode: (sortMode: IssueViewSortMode) => void;
 }) {
   const showGrouping = viewMode === "list";
-  // Manual order is the stored fractional key, which only a drag inside a status column writes.
+  // Manual order is the stored fractional key written by dragging inside a status group.
   const hint = issueSortModeHint(sortMode, grouping, viewMode);
   const help =
     hint ??
     (sortMode === "manual"
       ? viewMode === "board"
         ? "Drag cards to reorder them or move them between statuses."
-        : "Manual order follows the card positions set by dragging in board view."
+        : "Drag rows to reorder them or move them between statuses."
       : null);
 
   return (

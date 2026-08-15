@@ -34,6 +34,23 @@ describe("ClientSettings active-turn send mode", () => {
   });
 });
 
+describe("ClientSettings action palette", () => {
+  it("migrates existing settings to the registry defaults and accepts persisted order", () => {
+    expect(decodeClientSettings({}).actionPaletteSections).toEqual([]);
+    expect(
+      decodeClientSettingsPatch({
+        actionPaletteSections: [
+          { id: "usage", visible: false },
+          { id: "future-section", visible: true },
+        ],
+      }).actionPaletteSections,
+    ).toEqual([
+      { id: "usage", visible: false },
+      { id: "future-section", visible: true },
+    ]);
+  });
+});
+
 describe("ClientSettings development server ports", () => {
   it("defaults to the common development range and accepts a custom range", () => {
     expect(decodeClientSettings({}).developmentServerPortRange).toEqual(
