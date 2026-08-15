@@ -24,7 +24,7 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   OrchestrationV2ShellSnapshot,
@@ -313,6 +313,7 @@ const EnvironmentProjectMutationErrors = [
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlySet<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;

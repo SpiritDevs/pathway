@@ -9,6 +9,7 @@ import {
   type AuthClientSession,
   type AuthCreatePairingCredentialInput,
   type AuthEnvironmentScope,
+  type EnvironmentId,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
@@ -43,6 +44,7 @@ export interface IssuedPairingLink {
   readonly credential: string;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly label?: string;
   readonly createdAt: DateTime.Utc;
   readonly expiresAt: DateTime.Utc;
@@ -61,6 +63,7 @@ export interface IssuedBearerSession {
 export interface AuthenticatedSession {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly method: ServerAuthSessionMethod;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly proofKeyThumbprint?: string;
@@ -437,6 +440,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly label?: string;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
+      readonly initiatingEnvironmentId?: EnvironmentId;
       readonly proofKeyThumbprint?: string;
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
@@ -581,6 +585,9 @@ export const make = Effect.gen(function* () {
       Effect.map((session) => ({
         sessionId: session.sessionId,
         subject: session.subject,
+        ...(session.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: session.initiatingEnvironmentId }
+          : {}),
         method: session.method,
         scopes: session.scopes,
         ...(session.proofKeyThumbprint ? { proofKeyThumbprint: session.proofKeyThumbprint } : {}),
@@ -663,6 +670,9 @@ export const make = Effect.gen(function* () {
           .issue({
             method: "browser-session-cookie",
             subject: grant.subject,
+            ...(grant.initiatingEnvironmentId
+              ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
+              : {}),
             scopes: grant.scopes,
             client: {
               ...requestMetadata,
@@ -702,6 +712,9 @@ export const make = Effect.gen(function* () {
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
                 subject: grant.subject,
+                ...(grant.initiatingEnvironmentId
+                  ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
+                  : {}),
                 scopes: grantedScopes,
                 ...(input?.proofKeyThumbprint
                   ? {
@@ -774,6 +787,9 @@ export const make = Effect.gen(function* () {
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
+        ...(input?.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+          : {}),
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
         ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
@@ -784,6 +800,9 @@ export const make = Effect.gen(function* () {
         credential: issued.credential,
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
+        ...(input?.initiatingEnvironmentId
+          ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+          : {}),
         ...(issued.label ? { label: issued.label } : {}),
         createdAt: DateTime.toUtc(createdAt),
         expiresAt: DateTime.toUtc(issued.expiresAt),
@@ -948,6 +967,9 @@ export const make = Effect.gen(function* () {
             Effect.map((session) => ({
               sessionId: session.sessionId,
               subject: session.subject,
+              ...(session.initiatingEnvironmentId
+                ? { initiatingEnvironmentId: session.initiatingEnvironmentId }
+                : {}),
               method: session.method,
               scopes: session.scopes,
               ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),

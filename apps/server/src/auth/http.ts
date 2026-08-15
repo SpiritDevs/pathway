@@ -191,7 +191,9 @@ export const environmentAuthenticatedAuthLayer = Layer.effect(
             ...session,
             scopes: new Set(session.scopes),
           }),
-          session.subject === "cloud-connect" ? traceAuthenticatedRelayRequest : identity,
+          session.subject === "cloud-connect" || session.initiatingEnvironmentId !== undefined
+            ? traceAuthenticatedRelayRequest
+            : identity,
         );
       }).pipe(Effect.catchTag("EnvironmentAuthInvalidError", appendDpopChallengeOnUnauthorized));
   }),

@@ -22,6 +22,8 @@ import { requireCloudMintConnectGrantAuthorization } from "./http.ts";
 import {
   authorizeConnectGrantFromLocalReplica,
   isConnectGrantAuthorizedByReplica,
+  resolveConnectGrantActorFromLocalReplica,
+  resolveConnectGrantActorFromReplica,
 } from "./connectGrantAuthorization.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-connect-target");
@@ -73,6 +75,7 @@ function replica(
     readonly membershipState?: "active" | "locked" | "left";
     readonly permissions?: ReadonlyArray<string>;
     readonly bootstrapped?: boolean;
+    readonly includeMembership?: boolean;
   } = {},
 ): StoredSyncState {
   return {
@@ -97,17 +100,21 @@ function replica(
         createdAt: 1,
         updatedAt: 1,
       }),
-      entity("membership", MEMBERSHIP_ID, {
-        id: MEMBERSHIP_ID,
-        userId: "cloud-user-connect",
-        state: input.membershipState ?? "active",
-        displayNameSnapshot: "Connect User",
-        emailSnapshot: "connect@example.test",
-        invitedByMembershipId: null,
-        joinedAt: 1,
-        createdAt: 1,
-        updatedAt: 1,
-      }),
+      ...(input.includeMembership === false
+        ? []
+        : [
+            entity("membership", MEMBERSHIP_ID, {
+              id: MEMBERSHIP_ID,
+              userId: "cloud-user-connect",
+              state: input.membershipState ?? "active",
+              displayNameSnapshot: "Connect User",
+              emailSnapshot: "connect@example.test",
+              invitedByMembershipId: null,
+              joinedAt: 1,
+              createdAt: 1,
+              updatedAt: 1,
+            }),
+          ]),
       entity("role", ROLE_ID, {
         id: ROLE_ID,
         name: "Controller",
@@ -156,6 +163,23 @@ function expectAuthorizationRefused<R>(
 }
 
 describe("cloud mint connect-grant authorization", () => {
+  it("resolves the grant membership's user only after the replica authorizes it", () => {
+    expect(
+      resolveConnectGrantActorFromReplica({
+        environmentId: ENVIRONMENT_ID,
+        connectGrant: connectGrant(),
+        replica: replica(),
+      }),
+    ).toBe("cloud-user-connect");
+    expect(
+      resolveConnectGrantActorFromReplica({
+        environmentId: ENVIRONMENT_ID,
+        connectGrant: connectGrant(),
+        replica: replica({ includeMembership: false }),
+      }),
+    ).toBeNull();
+  });
+
   it.effect("accepts a grant when the replica has an active membership with the permission", () =>
     requireCloudMintConnectGrantAuthorization(
       authorizeAgainst(replica()),
@@ -214,13 +238,21 @@ describe("cloud mint connect-grant authorization", () => {
   );
 
   it.effect("refuses a grant when cloud sync is disabled", () =>
-    expectAuthorizationRefused(
-      requireCloudMintConnectGrantAuthorization(
-        { authorizeConnectGrant: authorizeConnectGrantFromLocalReplica },
-        proof(connectGrant()),
-        ENVIRONMENT_ID,
-      ),
-    ).pipe(
+    Effect.gen(function* () {
+      yield* expectAuthorizationRefused(
+        requireCloudMintConnectGrantAuthorization(
+          { authorizeConnectGrant: authorizeConnectGrantFromLocalReplica },
+          proof(connectGrant()),
+          ENVIRONMENT_ID,
+        ),
+      );
+      expect(
+        yield* resolveConnectGrantActorFromLocalReplica({
+          environmentId: ENVIRONMENT_ID,
+          connectGrant: connectGrant(),
+        }),
+      ).toBeNull();
+    }).pipe(
       Effect.provide(
         Layer.mergeAll(
           ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),

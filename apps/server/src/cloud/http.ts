@@ -85,7 +85,10 @@ import {
   setCliDesiredCloudLink,
 } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
-import { authorizeConnectGrantFromLocalReplica } from "./connectGrantAuthorization.ts";
+import {
+  authorizeConnectGrantFromLocalReplica,
+  resolveConnectGrantActorFromLocalReplica,
+} from "./connectGrantAuthorization.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
 
@@ -356,7 +359,7 @@ function hasBoundedCloudProofLifetime(input: {
 const decodeCloudHealthProof = Schema.decodeUnknownEffect(RelayCloudEnvironmentHealthProofPayload);
 const decodeCloudMintProof = Schema.decodeUnknownEffect(RelayCloudMintCredentialProofPayload);
 
-interface CloudHttpDependencies {
+export interface CloudHttpDependencies {
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly environment: ServerEnvironment.ServerEnvironment["Service"];
   readonly endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"];
@@ -367,6 +370,10 @@ interface CloudHttpDependencies {
     readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
     readonly connectGrant: RelayValidatedConnectGrantIdentity;
   }) => Effect.Effect<boolean, never, SqlClient.SqlClient>;
+  readonly resolveConnectGrantActor: (input: {
+    readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) => Effect.Effect<string | null, never, SqlClient.SqlClient>;
 }
 
 const cloudHttpDependencies = Effect.gen(function* () {
@@ -378,6 +385,7 @@ const cloudHttpDependencies = Effect.gen(function* () {
     cliTokenManager: yield* CliTokenManager.CloudCliTokenManager,
     httpClient: yield* HttpClient.HttpClient,
     authorizeConnectGrant: authorizeConnectGrantFromLocalReplica,
+    resolveConnectGrantActor: resolveConnectGrantActorFromLocalReplica,
   } satisfies CloudHttpDependencies;
 });
 
@@ -977,7 +985,7 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
   ),
 );
 
-const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")(
+export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")(
   function* (dependencies: CloudHttpDependencies, request: RelayCloudMintCredentialRequest) {
     const cloudMintPublicKey = yield* dependencies.secrets
       .get(CLOUD_MINT_PUBLIC_KEY)
@@ -1006,7 +1014,6 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
         ),
       );
     const environmentId = yield* dependencies.environment.getEnvironmentId;
-    const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
     const now = yield* DateTime.now;
     const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
     const proofOption = yield* verifyRelayJwt({
@@ -1020,7 +1027,6 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
     if (
       Option.isNone(proofOption) ||
       proofOption.value.environmentId !== environmentId ||
-      proofOption.value.sub !== linkedCloudUserId ||
       proofOption.value.cnf.jkt !== proofOption.value.clientProofKeyThumbprint ||
       !hasBoundedCloudProofLifetime({ ...proofOption.value, nowSeconds }) ||
       !hasExactScope({ scopes: proofOption.value.scope, expected: "environment:connect" })
@@ -1030,8 +1036,37 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
       });
     }
     const proof = proofOption.value;
-
-    yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
+    const sessionIdentity = yield* proof.initiatingEnvironmentId === undefined
+      ? Effect.gen(function* () {
+          const linkedCloudUserId = yield* readInstalledCloudUserId(dependencies.secrets);
+          if (proof.sub !== linkedCloudUserId) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
+          return { subject: "cloud-connect" } as const;
+        })
+      : Effect.gen(function* () {
+          if (proof.sub !== proof.initiatingEnvironmentId || proof.connectGrant === undefined) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          const actingUserId = yield* dependencies.resolveConnectGrantActor({
+            environmentId,
+            connectGrant: proof.connectGrant,
+          });
+          if (actingUserId === null) {
+            return yield* new EnvironmentHttpUnauthorizedError({
+              message: "Invalid cloud mint request.",
+            });
+          }
+          return {
+            subject: actingUserId,
+            initiatingEnvironmentId: proof.initiatingEnvironmentId,
+          } as const;
+        });
 
     const jtiSecretName = `${CLOUD_MINT_JTI_PREFIX}${proof.jti}`;
     const nonceSecretName = `${CLOUD_MINT_NONCE_PREFIX}${proof.nonce}`;
@@ -1049,7 +1084,7 @@ const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCredential")
     const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
     const issued = yield* dependencies.environmentAuth.createPairingLink({
       scopes: AuthStandardClientScopes,
-      subject: "cloud-connect",
+      ...sessionIdentity,
       ttl: Duration.minutes(2),
       label: "Pathway Connect connect",
       proofKeyThumbprint: proof.clientProofKeyThumbprint,

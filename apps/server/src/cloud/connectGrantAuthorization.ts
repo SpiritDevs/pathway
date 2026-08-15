@@ -10,6 +10,7 @@
  */
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import {
+  type CloudUserId,
   hasCompanyPermission,
   resolveEffectivePermissions,
   type CompanyRoleAssignmentGrant,
@@ -62,7 +63,20 @@ export function isConnectGrantAuthorizedByReplica(input: {
   readonly connectGrant: RelayValidatedConnectGrantIdentity;
   readonly replica: StoredSyncState;
 }): boolean {
-  if (input.connectGrant.environmentId !== input.environmentId) return false;
+  return resolveConnectGrantActorFromReplica(input) !== null;
+}
+
+/**
+ * Resolves the user whose authority a validated grant represents only after applying every
+ * target-side replica check. Returning the user from the membership row keeps the relay's service
+ * subject out of user-shaped authorization paths.
+ */
+export function resolveConnectGrantActorFromReplica(input: {
+  readonly environmentId: EnvironmentId;
+  readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  readonly replica: StoredSyncState;
+}): CloudUserId | null {
+  if (input.connectGrant.environmentId !== input.environmentId) return null;
 
   const checkpoint = input.replica.checkpoint;
   if (
@@ -70,7 +84,7 @@ export function isConnectGrantAuthorizedByReplica(input: {
     !checkpoint.bootstrapped ||
     checkpoint.bootstrapGeneration !== SYNC_BOOTSTRAP_GENERATION
   ) {
-    return false;
+    return null;
   }
 
   const companies = decodeRows(input.replica, "company", decodeCompany);
@@ -78,16 +92,16 @@ export function isConnectGrantAuthorizedByReplica(input: {
   const roles = decodeRows(input.replica, "role", decodeRole);
   const roleAssignments = decodeRows(input.replica, "roleAssignment", decodeRoleAssignment);
   if (companies === null || memberships === null || roles === null || roleAssignments === null) {
-    return false;
+    return null;
   }
 
   const membership = memberships.find(
     (candidate) => candidate.id === input.connectGrant.membershipId,
   );
-  if (membership?.state !== "active") return false;
+  if (membership?.state !== "active") return null;
 
   const company = companies.find((candidate) => candidate.id === checkpoint.companyId);
-  if (company === undefined || company.lifecycleState !== "active") return false;
+  if (company === undefined || company.lifecycleState !== "active") return null;
 
   const assigned = roleAssignments.filter(
     (assignment) => assignment.membershipId === membership.id,
@@ -109,7 +123,7 @@ export function isConnectGrantAuthorizedByReplica(input: {
     assignments: permissionAssignments,
   });
 
-  return hasCompanyPermission(effective, input.connectGrant.permission);
+  return hasCompanyPermission(effective, input.connectGrant.permission) ? membership.userId : null;
 }
 
 /**
@@ -128,7 +142,25 @@ export const authorizeConnectGrantFromLocalReplica = Effect.fn(
 
     const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
     const replica = yield* store.service.read(configured.settings.companyId);
-    return isConnectGrantAuthorizedByReplica({ ...input, replica });
+    return resolveConnectGrantActorFromReplica({ ...input, replica }) !== null;
   },
   Effect.catchCause(() => Effect.succeed(false)),
+);
+
+/** Resolves the grant's acting user from the same fail-closed replica authorization path. */
+export const resolveConnectGrantActorFromLocalReplica = Effect.fn(
+  "environment.cloud.resolveConnectGrantActor",
+)(
+  function* (input: {
+    readonly environmentId: EnvironmentId;
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) {
+    const configured = yield* resolveCloudSyncConfig;
+    if (configured._tag !== "Configured") return null;
+
+    const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
+    const replica = yield* store.service.read(configured.settings.companyId);
+    return resolveConnectGrantActorFromReplica({ ...input, replica });
+  },
+  Effect.catchCause(() => Effect.succeed(null)),
 );

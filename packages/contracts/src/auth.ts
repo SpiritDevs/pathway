@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
-import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /**
  * Declares the server's overall authentication posture.
@@ -231,6 +231,7 @@ export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 export const AuthClientSession = Schema.Struct({
   sessionId: AuthSessionId,
   subject: TrimmedNonEmptyString,
+  initiatingEnvironmentId: Schema.optionalKey(EnvironmentId),
   scopes: AuthEnvironmentScopes,
   method: ServerAuthSessionMethod,
   client: AuthClientMetadata,

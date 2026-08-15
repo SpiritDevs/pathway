@@ -36,6 +36,7 @@ describe("persistence error correlation", () => {
       yield* sessions.create({
         sessionId,
         subject,
+        initiatingEnvironmentId: null,
         scopes,
         method: "browser-session-cookie",
         client: {
@@ -71,6 +72,7 @@ describe("persistence error correlation", () => {
         sessions.create({
           sessionId,
           subject,
+          initiatingEnvironmentId: null,
           scopes,
           method: "browser-session-cookie",
           client: {
@@ -162,6 +164,7 @@ describe("persistence error correlation", () => {
           method: "one-time-token",
           scopes,
           subject,
+          initiatingEnvironmentId: null,
           label: null,
           proofKeyThumbprint: null,
           createdAt: issuedAt,
