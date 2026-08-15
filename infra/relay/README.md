@@ -28,6 +28,17 @@ The environment server and relay have separate credentials and trust boundaries.
 [Environment Authentication Profile](../../docs/internals/environment-auth.md) before changing token,
 credential, or authorization behavior.
 
+DPoP relay tokens have three client identities with separate allowlists: `t3-web` may request
+`environment:connect` and `environment:status`; `t3-mobile` additionally may request
+`mobile:registration`; and `t3-env` may request only `environment:connect`. The `t3-env` exchange
+authenticates an assertion signed by an active environment-link Ed25519 key and binds the resulting
+environment-subject token to the request's DPoP key. An environment-subject connect always requires
+a validated Convex connect grant and cannot target itself.
+
+Environment-initiated connects reuse a target's existing managed endpoint allocation. The allocation
+remains owned by, and counted against, the cloud user who provisioned the target link; the connect
+path cannot create an uncounted tunnel or use a target without a managed allocation.
+
 ## Code Map
 
 - [`alchemy.run.ts`](./alchemy.run.ts) defines the deployed Alchemy stack.

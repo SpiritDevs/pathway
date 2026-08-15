@@ -98,7 +98,8 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
-        userId: "user_123",
+        subjectId: "user_123",
+        subjectKind: "user",
         proofKeyThumbprint: "proof-key-thumbprint",
         jti: "access-token-1",
         issuedAtEpochSeconds: 100,
@@ -125,7 +126,8 @@ describe("RelayTokens", () => {
     Effect.gen(function* () {
       const relayTokens = yield* RelayTokens.RelayTokens;
       const token = yield* relayTokens.issueDpopAccessToken({
-        userId: "user_123",
+        subjectId: "user_123",
+        subjectKind: "user",
         proofKeyThumbprint: "web-proof-key-thumbprint",
         jti: "web-access-token-1",
         issuedAtEpochSeconds: 100,
@@ -141,6 +143,56 @@ describe("RelayTokens", () => {
         scope: ["environment:connect", "environment:status"],
         cnf: { jkt: "web-proof-key-thumbprint" },
       });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("issues environment-subject tokens with only environment connect authority", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      const token = yield* relayTokens.issueDpopAccessToken({
+        subjectId: "environment-1",
+        subjectKind: "environment",
+        proofKeyThumbprint: "environment-proof-key-thumbprint",
+        jti: "environment-access-token-1",
+        issuedAtEpochSeconds: 100,
+        expiresAtEpochSeconds: 200,
+        clientId: "t3-env",
+        scopes: ["environment:connect"],
+      });
+
+      expect(
+        yield* relayTokens.verifyDpopAccessToken({ token, nowEpochSeconds: 150 }),
+      ).toMatchObject({
+        sub: "environment-1",
+        subject_kind: "environment",
+        client_id: "t3-env",
+        scope: ["environment:connect"],
+        cnf: { jkt: "environment-proof-key-thumbprint" },
+      });
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-env",
+          scope: "environment:connect environment:status",
+        }),
+      ).toBeNull();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("keeps the web and mobile scope allowlists unchanged", () =>
+    Effect.gen(function* () {
+      const relayTokens = yield* RelayTokens.RelayTokens;
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-web",
+          scope: "environment:connect environment:status",
+        }),
+      ).toEqual(["environment:connect", "environment:status"]);
+      expect(
+        relayTokens.resolveDpopAccessTokenScopes({
+          clientId: "t3-mobile",
+          scope: "environment:connect environment:status mobile:registration",
+        }),
+      ).toEqual(["environment:connect", "environment:status", "mobile:registration"]);
     }).pipe(Effect.provide(layer)),
   );
 

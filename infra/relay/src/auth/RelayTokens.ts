@@ -5,12 +5,13 @@ import {
   RelayConvexControlPlaneTokenKind,
   RelayConvexServiceTokenClaims,
   RelayDpopAccessTokenScope,
+  type RelayDpopClientId,
+  RelayEnvironmentClientId,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
   RelayMobileClientId,
   RelayMobileRegistrationScope,
   RelayWebClientId,
-  type RelayPublicClientId,
   type RelayEnvironmentLinkChallengeRequest,
 } from "@spiritdevs/contracts/relay";
 import { encodeOAuthScope, parseAllowedOAuthScope } from "@spiritdevs/shared/oauthScope";
@@ -62,11 +63,13 @@ const RelayDpopAccessTokenClaims = Schema.Struct({
   jti: Schema.String,
   iat: Schema.Int,
   exp: Schema.Int,
-  client_id: Schema.Literals([RelayMobileClientId, RelayWebClientId]),
+  client_id: Schema.Literals([RelayMobileClientId, RelayWebClientId, RelayEnvironmentClientId]),
+  subject_kind: Schema.optional(Schema.Literals(["user", "environment"])),
   scope: Schema.String,
   cnf: Schema.Struct({ jkt: Schema.String }),
 });
 export type RelayDpopAccessTokenClaims = Omit<typeof RelayDpopAccessTokenClaims.Type, "scope"> & {
+  readonly subject_kind: "user" | "environment";
   readonly scope: ReadonlyArray<RelayDpopAccessTokenScope>;
 };
 
@@ -77,20 +80,18 @@ const decodeConvexControlPlaneTokenClaims = Schema.decodeUnknownEffect(
   RelayConvexControlPlaneTokenClaims,
 );
 
-const allowedScopesByClientId: Record<
-  RelayPublicClientId,
-  ReadonlySet<RelayDpopAccessTokenScope>
-> = {
+const allowedScopesByClientId: Record<RelayDpopClientId, ReadonlySet<RelayDpopAccessTokenScope>> = {
   [RelayMobileClientId]: new Set([
     RelayEnvironmentConnectScope,
     RelayEnvironmentStatusScope,
     RelayMobileRegistrationScope,
   ]),
   [RelayWebClientId]: new Set([RelayEnvironmentConnectScope, RelayEnvironmentStatusScope]),
+  [RelayEnvironmentClientId]: new Set([RelayEnvironmentConnectScope]),
 };
 
 function resolveDpopAccessTokenScopes(input: {
-  readonly clientId: RelayPublicClientId;
+  readonly clientId: RelayDpopClientId;
   readonly scope: string;
 }): ReadonlyArray<RelayDpopAccessTokenScope> | null {
   return parseAllowedOAuthScope({
@@ -117,12 +118,13 @@ export class RelayTokens extends Context.Service<
       readonly nowEpochSeconds: number;
     }) => Effect.Effect<LinkChallengeClaims | null>;
     readonly issueDpopAccessToken: (input: {
-      readonly userId: string;
+      readonly subjectId: string;
+      readonly subjectKind: "user" | "environment";
       readonly proofKeyThumbprint: string;
       readonly jti: string;
       readonly issuedAtEpochSeconds: number;
       readonly expiresAtEpochSeconds: number;
-      readonly clientId: RelayPublicClientId;
+      readonly clientId: RelayDpopClientId;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
     }) => Effect.Effect<string, RelayJwtError>;
     readonly verifyDpopAccessToken: (input: {
@@ -211,11 +213,12 @@ const make = Effect.gen(function* () {
       payload: {
         iss: issuer,
         aud: issuer,
-        sub: input.userId,
+        sub: input.subjectId,
         jti: input.jti,
         iat: input.issuedAtEpochSeconds,
         exp: input.expiresAtEpochSeconds,
         client_id: input.clientId,
+        subject_kind: input.subjectKind,
         scope: encodeOAuthScope(input.scopes),
         cnf: { jkt: input.proofKeyThumbprint },
       },
@@ -242,11 +245,19 @@ const make = Effect.gen(function* () {
       ),
       Effect.flatMap(decodeDpopAccessTokenClaims),
       Effect.map((claims): RelayDpopAccessTokenClaims | null => {
+        const subjectKind = claims.client_id === RelayEnvironmentClientId ? "environment" : "user";
+        if (
+          (claims.client_id === RelayEnvironmentClientId &&
+            claims.subject_kind !== "environment") ||
+          (claims.subject_kind !== undefined && claims.subject_kind !== subjectKind)
+        ) {
+          return null;
+        }
         const scopes = resolveDpopAccessTokenScopes({
           clientId: claims.client_id,
           scope: claims.scope,
         });
-        return scopes === null ? null : { ...claims, scope: scopes };
+        return scopes === null ? null : { ...claims, subject_kind: subjectKind, scope: scopes };
       }),
       Effect.orElseSucceed(() => null),
     ),

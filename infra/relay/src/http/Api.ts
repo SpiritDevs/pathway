@@ -21,6 +21,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import { encodeOAuthScope } from "@spiritdevs/shared/oauthScope";
 import { httpHeaderRedactionLayer } from "@spiritdevs/shared/httpObservability";
+import { EnvironmentId } from "@spiritdevs/contracts";
 
 import {
   RelayApi,
@@ -31,10 +32,13 @@ import {
   RelayAccessTokenType,
   RelayConvexAudience,
   RELAY_CONVEX_KEY_BINDING_TYP,
+  RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
   RelayConvexKeyBindingPayload,
   type RelayConvexServiceTokenRequest,
   RelayDpopClientAuth,
   RelayEnvironmentConnectScope,
+  RelayEnvironmentDpopAccessAssertionPayload,
+  type RelayEnvironmentDpopAccessTokenRequest,
   RelayEnvironmentStatusScope,
   RelayMobileRegistrationScope,
   RelayAuthInvalidError,
@@ -53,7 +57,7 @@ import {
   type RelayDpopAccessTokenScope,
   RelayInternalError,
 } from "@spiritdevs/contracts/relay";
-import { normalizeRelayIssuer, verifyRelayJwt } from "@spiritdevs/shared/relayJwt";
+import { decodeRelayJwt, normalizeRelayIssuer, verifyRelayJwt } from "@spiritdevs/shared/relayJwt";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
@@ -267,7 +271,7 @@ export const relayClientAuthLayer = Layer.effect(
         return yield* httpEffect.pipe(
           withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
-            userId: verified.sub,
+            subject: { _tag: "User", userId: verified.sub },
             token,
           }),
         );
@@ -333,10 +337,18 @@ export const relayDpopClientAuthLayer = Layer.effect(
           "relay.auth.mode": "dpop",
           "relay.auth.subject": verified.sub,
         });
+        const subject =
+          verified.subject_kind === "environment"
+            ? ({ _tag: "Environment", environmentId: EnvironmentId.make(verified.sub) } as const)
+            : ({ _tag: "User", userId: verified.sub } as const);
         return yield* httpEffect.pipe(
-          withSpanAttributes({ "user.id": verified.sub }),
+          withSpanAttributes(
+            subject._tag === "User"
+              ? { "user.id": subject.userId }
+              : { "relay.initiating_environment_id": subject.environmentId },
+          ),
           Effect.provideService(RelayClientPrincipal, {
-            userId: verified.sub,
+            subject,
             token,
             proofKeyThumbprint: verified.cnf.jkt,
             dpopScopes: verified.scope,
@@ -483,7 +495,7 @@ export const mobileApi = HttpApiBuilder.group(
         "registerDevice",
         Effect.fn("relay.api.mobile.registerDevice")(function* (args) {
           const { payload } = args;
-          const { userId, token } = yield* RelayClientPrincipal;
+          const { userId, token } = yield* requireUserClientPrincipal();
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -495,7 +507,7 @@ export const mobileApi = HttpApiBuilder.group(
         "registerLiveActivity",
         Effect.fn("relay.api.mobile.registerLiveActivity")(function* (args) {
           const { payload } = args;
-          const { userId, token } = yield* RelayClientPrincipal;
+          const { userId, token } = yield* requireUserClientPrincipal();
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -506,7 +518,7 @@ export const mobileApi = HttpApiBuilder.group(
       .handle(
         "getAgentActivitySnapshot",
         Effect.fn("relay.api.mobile.getAgentActivitySnapshot")(function* () {
-          const { userId, token } = yield* RelayClientPrincipal;
+          const { userId, token } = yield* requireUserClientPrincipal();
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -518,7 +530,7 @@ export const mobileApi = HttpApiBuilder.group(
         "unregisterDevice",
         Effect.fn("relay.api.mobile.unregisterDevice")(function* (args) {
           const { params } = args;
-          const { userId, token } = yield* RelayClientPrincipal;
+          const { userId, token } = yield* requireUserClientPrincipal();
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
@@ -544,7 +556,7 @@ export const clientApi = HttpApiBuilder.group(
       .handle(
         "listEnvironments",
         Effect.fn("relay.api.client.listEnvironments")(function* () {
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId } = yield* requireUserClientPrincipal();
           const environments = yield* links.listForUser({ userId });
           return { environments };
         }, mapRelayCommonApiErrors("not_authorized")),
@@ -552,7 +564,7 @@ export const clientApi = HttpApiBuilder.group(
       .handle(
         "listDevices",
         Effect.fn("relay.api.client.listDevices")(function* () {
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId } = yield* requireUserClientPrincipal();
           return { devices: yield* devices.listForUser({ userId }) };
         }, mapRelayCommonApiErrors("not_authorized")),
       )
@@ -562,7 +574,7 @@ export const clientApi = HttpApiBuilder.group(
           function* (args) {
             const { payload } = args;
             yield* appendRelayCredentialResponseHeaders;
-            const { userId } = yield* RelayClientPrincipal;
+            const { userId } = yield* requireUserClientPrincipal();
             const result = yield* linker.link({ userId, request: payload });
             return {
               ok: true,
@@ -637,7 +649,7 @@ export const clientApi = HttpApiBuilder.group(
         "createEnvironmentLinkChallenge",
         Effect.fn("relay.api.client.createEnvironmentLinkChallenge")(function* (args) {
           yield* appendRelayCredentialResponseHeaders;
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId } = yield* requireUserClientPrincipal();
           const now = yield* DateTime.now;
           const expiresAt = DateTime.add(now, { minutes: 5 });
           const jti = yield* crypto.randomUUIDv4.pipe(
@@ -659,7 +671,7 @@ export const clientApi = HttpApiBuilder.group(
         "unlinkEnvironment",
         Effect.fn("relay.api.client.unlinkEnvironment")(function* (args) {
           const { params } = args;
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId } = yield* requireUserClientPrincipal();
           const unlinked = yield* unlinkEnvironmentRecord({
             userId,
             environmentId: params.environmentId,
@@ -678,7 +690,7 @@ export const clientApi = HttpApiBuilder.group(
         "releaseEnvironmentTunnel",
         Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
           const { params } = args;
-          const { userId } = yield* RelayClientPrincipal;
+          const { userId } = yield* requireUserClientPrincipal();
           // ok mirrors whether the connector token is now dead: false means a
           // concurrent provision kept the recorded tunnel alive, so the caller
           // must not discard its runtime config.
@@ -695,6 +707,9 @@ export const clientApi = HttpApiBuilder.group(
 );
 
 const decodeConvexKeyBinding = Schema.decodeUnknownEffect(RelayConvexKeyBindingPayload);
+const decodeEnvironmentDpopAccessAssertion = Schema.decodeUnknownEffect(
+  RelayEnvironmentDpopAccessAssertionPayload,
+);
 
 /**
  * Exchanges a linked environment's credential plus a fresh DPoP proof for a
@@ -774,6 +789,103 @@ export const exchangeConvexServiceToken = Effect.fn("relay.token.exchange_convex
   },
 );
 
+/**
+ * Exchanges a linked environment's signed assertion plus a fresh DPoP proof
+ * for a relay access token whose only authority is initiating a peer connect.
+ * Active link keys are the trust root, so unlinking every record for a key
+ * immediately prevents another exchange.
+ */
+export const exchangeEnvironmentDpopAccessToken = Effect.fn(
+  "relay.token.exchange_environment_dpop_access_token",
+)(function* (payload: RelayEnvironmentDpopAccessTokenRequest) {
+  const config = yield* RelayConfiguration.RelayConfiguration;
+  const crypto = yield* Crypto.Crypto;
+  const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const relayTokens = yield* RelayTokens.RelayTokens;
+  const issuer = normalizeRelayIssuer(config.relayIssuer);
+  yield* Effect.annotateCurrentSpan({
+    "relay.auth.mode": "environment_assertion_token_exchange",
+    "relay.oauth.client_id": payload.client_id,
+    "relay.oauth.scopes": payload.scope,
+  });
+  if (payload.resource !== issuer) {
+    return yield* relayAuthInvalidError("invalid_bearer");
+  }
+
+  const candidate = yield* Effect.try({
+    try: () => decodeRelayJwt(payload.subject_token),
+    catch: () => undefined,
+  }).pipe(
+    Effect.flatMap((claims) => decodeEnvironmentDpopAccessAssertion(claims)),
+    Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
+  );
+  const activePublicKeys = yield* links
+    .listPublicKeysForEnvironment({ environmentId: candidate.environmentId })
+    .pipe(Effect.catch(() => relayInternalErrorResponse("persistence_failed")));
+  if (activePublicKeys.length === 0) {
+    return yield* relayAuthInvalidError("invalid_bearer");
+  }
+
+  const now = yield* DateTime.now;
+  let assertion: RelayEnvironmentDpopAccessAssertionPayload | undefined;
+  for (const publicKey of activePublicKeys) {
+    const verified = yield* verifyRelayJwt({
+      publicKey,
+      token: payload.subject_token,
+      typ: RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
+      issuer: `t3-env:${candidate.environmentId}`,
+      audience: issuer,
+      nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+    }).pipe(Effect.flatMap(decodeEnvironmentDpopAccessAssertion), Effect.option);
+    if (Option.isSome(verified)) {
+      assertion = verified.value;
+      break;
+    }
+  }
+  if (
+    assertion === undefined ||
+    assertion.sub !== assertion.environmentId ||
+    assertion.environmentId !== candidate.environmentId
+  ) {
+    return yield* relayAuthInvalidError("invalid_bearer");
+  }
+
+  const requestedScopes = relayTokens.resolveDpopAccessTokenScopes({
+    clientId: payload.client_id,
+    scope: payload.scope,
+  });
+  if (
+    requestedScopes === null ||
+    requestedScopes.length !== 1 ||
+    requestedScopes[0] !== RelayEnvironmentConnectScope
+  ) {
+    return yield* relayAuthInvalidError("invalid_bearer");
+  }
+  const proofKeyThumbprint = yield* requireDpopThumbprint(assertion.jkt);
+  const expiresAt = DateTime.addDuration(now, RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL);
+  const jti = yield* crypto.randomUUIDv4.pipe(
+    Effect.catch(() => relayInternalErrorResponse("internal_error")),
+  );
+  return {
+    access_token: yield* relayTokens
+      .issueDpopAccessToken({
+        subjectId: assertion.environmentId,
+        subjectKind: "environment",
+        proofKeyThumbprint,
+        jti,
+        issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+        expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+        clientId: payload.client_id,
+        scopes: requestedScopes,
+      })
+      .pipe(Effect.catch(() => relayInternalErrorResponse("internal_error"))),
+    issued_token_type: RelayAccessTokenType,
+    token_type: "DPoP" as const,
+    expires_in: Duration.toSeconds(RelayTokens.RELAY_DPOP_ACCESS_TOKEN_TTL),
+    scope: encodeOAuthScope(requestedScopes),
+  };
+});
+
 export const tokenApi = HttpApiBuilder.group(
   RelayApi,
   "token",
@@ -783,6 +895,7 @@ export const tokenApi = HttpApiBuilder.group(
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
     const relayTokens = yield* RelayTokens.RelayTokens;
     const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
     return handlers
       .handle(
         "exchangeDpopAccessToken",
@@ -819,7 +932,8 @@ export const tokenApi = HttpApiBuilder.group(
           return {
             access_token: yield* relayTokens
               .issueDpopAccessToken({
-                userId: verified.sub,
+                subjectId: verified.sub,
+                subjectKind: "user",
                 proofKeyThumbprint,
                 jti,
                 issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
@@ -847,14 +961,38 @@ export const tokenApi = HttpApiBuilder.group(
             Effect.provideService(Crypto.Crypto, crypto),
           );
         }, mapRelayCommonApiErrors("invalid_dpop")),
+      )
+      .handle(
+        "exchangeEnvironmentDpopAccessToken",
+        Effect.fn("relay.api.token.exchangeEnvironmentDpopAccessToken")(function* (args) {
+          yield* appendRelayCredentialResponseHeaders;
+          return yield* exchangeEnvironmentDpopAccessToken(args.payload).pipe(
+            Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs),
+            Effect.provideService(EnvironmentLinks.EnvironmentLinks, links),
+            Effect.provideService(RelayConfiguration.RelayConfiguration, config),
+            Effect.provideService(RelayTokens.RelayTokens, relayTokens),
+            Effect.provideService(Crypto.Crypto, crypto),
+          );
+        }, mapRelayCommonApiErrors("invalid_dpop")),
       );
   }),
 );
 
 export const validatePresentedConnectGrant = Effect.fn(
   "relay.api.dpopClient.validatePresentedConnectGrant",
-)(function* (input: { readonly connectGrant?: string; readonly environmentId: string }) {
-  if (input.connectGrant === undefined) return undefined;
+)(function* (input: {
+  readonly connectGrant?: string;
+  readonly environmentId: string;
+  readonly required?: boolean;
+}) {
+  if (input.connectGrant === undefined) {
+    if (input.required !== true) return undefined;
+    return yield* new EnvironmentConnector.EnvironmentConnectNotAuthorized({
+      environmentId: input.environmentId,
+      operation: "connect",
+      reason: "connect_grant_refused",
+    });
+  }
   const grants = yield* ConvexConnectGrants.ConvexConnectGrants;
   const identity = yield* grants.validateConnectGrant({
     grant: input.connectGrant,
@@ -870,6 +1008,48 @@ export const validatePresentedConnectGrant = Effect.fn(
   return identity;
 });
 
+export const authorizeEnvironmentConnectPrincipal = Effect.fn(
+  "relay.api.dpopClient.authorizeEnvironmentConnectPrincipal",
+)(function* (input: {
+  readonly subject: RelayClientPrincipal["Service"]["subject"];
+  readonly targetEnvironmentId: string;
+  readonly connectGrant?: string;
+}) {
+  if (input.subject._tag === "Environment") {
+    if (input.subject.environmentId === input.targetEnvironmentId) {
+      return yield* new EnvironmentConnector.EnvironmentConnectNotAuthorized({
+        environmentId: input.targetEnvironmentId,
+        operation: "connect",
+        reason: "self_connect_refused",
+      });
+    }
+    const connectGrant = yield* validatePresentedConnectGrant({
+      environmentId: input.targetEnvironmentId,
+      required: true,
+      ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
+    });
+    if (connectGrant === undefined) {
+      return yield* new EnvironmentConnector.EnvironmentConnectNotAuthorized({
+        environmentId: input.targetEnvironmentId,
+        operation: "connect",
+        reason: "connect_grant_refused",
+      });
+    }
+    return {
+      initiatingEnvironmentId: input.subject.environmentId,
+      connectGrant,
+    } as const;
+  }
+  const connectGrant = yield* validatePresentedConnectGrant({
+    environmentId: input.targetEnvironmentId,
+    ...(input.connectGrant ? { connectGrant: input.connectGrant } : {}),
+  });
+  return {
+    userId: input.subject.userId,
+    ...(connectGrant ? { connectGrant } : {}),
+  } as const;
+});
+
 export const dpopClientApi = HttpApiBuilder.group(
   RelayApi,
   "dpopClient",
@@ -883,7 +1063,8 @@ export const dpopClientApi = HttpApiBuilder.group(
           function* (args) {
             const { params, payload } = args;
             yield* appendRelayCredentialResponseHeaders;
-            const { userId, token } = yield* RelayClientPrincipal;
+            const principal = yield* RelayClientPrincipal;
+            const { token } = principal;
             const proofKeyThumbprint = yield* requireDpopPrincipalScope("environment:connect");
             const requestedThumbprint = resolveConnectClientKeyThumbprint(payload);
             if (!requestedThumbprint || requestedThumbprint !== proofKeyThumbprint) {
@@ -892,16 +1073,16 @@ export const dpopClientApi = HttpApiBuilder.group(
             const clientProofKeyThumbprint = yield* requireDpopThumbprint(proofKeyThumbprint, {
               expectedAccessToken: token,
             }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
-            const connectGrant = yield* validatePresentedConnectGrant({
-              environmentId: params.environmentId,
+            const connectIdentity = yield* authorizeEnvironmentConnectPrincipal({
+              subject: principal.subject,
+              targetEnvironmentId: params.environmentId,
               ...(payload.connectGrant ? { connectGrant: payload.connectGrant } : {}),
             });
             return yield* connector.connect({
-              userId,
+              ...connectIdentity,
               environmentId: params.environmentId,
               clientProofKeyThumbprint,
               ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
-              ...(connectGrant ? { connectGrant } : {}),
             });
           },
           mapRelayCommonApiErrors("invalid_dpop"),
@@ -937,7 +1118,7 @@ export const dpopClientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.dpopClient.getEnvironmentStatus")(
           function* (args) {
             const { params } = args;
-            const { userId, token } = yield* RelayClientPrincipal;
+            const { userId, token } = yield* requireUserClientPrincipal();
             const proofKeyThumbprint = yield* requireDpopPrincipalScope("environment:status");
             yield* requireDpopThumbprint(proofKeyThumbprint, {
               expectedAccessToken: token,
@@ -1353,6 +1534,16 @@ export function verifyRelayClientBearerToken(
     ),
   );
 }
+
+const requireUserClientPrincipal = Effect.fn("relay.api.require_user_client_principal")(
+  function* () {
+    const principal = yield* RelayClientPrincipal;
+    if (principal.subject._tag !== "User") {
+      return yield* new HttpApiError.Unauthorized({});
+    }
+    return { ...principal, userId: principal.subject.userId };
+  },
+);
 
 const requireDpopPrincipalScope = Effect.fn("relay.api.require_dpop_principal_scope")(function* (
   scope: RelayDpopAccessTokenScope,

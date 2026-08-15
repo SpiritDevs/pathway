@@ -724,6 +724,70 @@ describe("EnvironmentConnector", () => {
     }).pipe(Effect.provide(connectorTestLayer(execute)));
   });
 
+  it.effect(
+    "forwards the initiating environment and grant through an existing counted allocation",
+    () => {
+      let seenProof: RelayCloudMintCredentialProofPayload | undefined;
+      const allocationLookups: Array<{ readonly userId: string; readonly environmentId: string }> =
+        [];
+      const allocations = makeAllocations();
+      const links = makeLinks();
+      const execute = (request: HttpClientRequest.HttpClientRequest) =>
+        Effect.sync(() => {
+          const mintRequest = decodeMintRequestBody(requestBodyText(request));
+          seenProof = decodeRequestProof(mintRequest.proof);
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json(signMintResponse(mintRequest), { status: 200 }),
+          );
+        });
+
+      return Effect.gen(function* () {
+        const connector = yield* EnvironmentConnector.EnvironmentConnector;
+        yield* connector.connect({
+          initiatingEnvironmentId: "env-initiator" as never,
+          environmentId: "env-connector-test",
+          clientProofKeyThumbprint: "client-proof-key-thumbprint",
+          connectGrant: {
+            environmentId: "env-connector-test" as never,
+            membershipId: "membership-123" as never,
+            permission: "remoteAgents.control",
+          },
+        });
+
+        expect(allocationLookups).toEqual([
+          { userId: "link-owner-user", environmentId: "env-connector-test" },
+        ]);
+        expect(seenProof).toMatchObject({
+          sub: "env-initiator",
+          initiatingEnvironmentId: "env-initiator",
+          environmentId: "env-connector-test",
+          connectGrant: {
+            environmentId: "env-connector-test",
+            membershipId: "membership-123",
+            permission: "remoteAgents.control",
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          connectorTestLayer(execute, {
+            links: {
+              ...links,
+              listUsersForEnvironment: () => Effect.succeed(["link-owner-user"]),
+            },
+            allocations: {
+              ...allocations,
+              get: (input) =>
+                Effect.sync(() => {
+                  allocationLookups.push(input);
+                }).pipe(Effect.andThen(allocations.get(input))),
+            },
+          }),
+        ),
+      );
+    },
+  );
+
   it.effect("only accepts mint responses signed by the user's linked environment key", () => {
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.sync(() => {
