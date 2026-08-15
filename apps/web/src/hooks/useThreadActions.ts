@@ -5,6 +5,7 @@ import {
   scopedThreadKey,
 } from "@spiritdevs/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
+import { threadRuntimeIsActive } from "@spiritdevs/client-runtime/state/models";
 import {
   canSettle,
   canSnooze,
@@ -244,7 +245,7 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return AsyncResult.success(undefined);
       const { thread, threadRef } = resolved;
-      if (thread.runtime?.status === "running" && thread.runtime.activeRunId != null) {
+      if (threadRuntimeIsActive(thread.runtime)) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadArchiveBlockedError({
