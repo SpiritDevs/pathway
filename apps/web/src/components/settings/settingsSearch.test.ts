@@ -165,6 +165,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
+      "/settings/issues-migration",
       "/settings/issues-enrichment",
     ]);
   });

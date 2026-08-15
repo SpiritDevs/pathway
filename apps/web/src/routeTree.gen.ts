@@ -32,6 +32,7 @@ import { Route as SettingsProjectsRouteImport } from './routes/settings.projects
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
 import { Route as SettingsIssuesMilestonesRouteImport } from './routes/settings.issues-milestones'
+import { Route as SettingsIssuesMigrationRouteImport } from './routes/settings.issues-migration'
 import { Route as SettingsIssuesLabelsRouteImport } from './routes/settings.issues-labels'
 import { Route as SettingsIssuesIntakeRouteImport } from './routes/settings.issues-intake'
 import { Route as SettingsIssuesImportRouteImport } from './routes/settings.issues-import'
@@ -172,6 +173,11 @@ const SettingsIssuesMilestonesRoute =
     path: '/issues-milestones',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsIssuesMigrationRoute = SettingsIssuesMigrationRouteImport.update({
+  id: '/issues-migration',
+  path: '/issues-migration',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsIssuesLabelsRoute = SettingsIssuesLabelsRouteImport.update({
   id: '/issues-labels',
   path: '/issues-labels',
@@ -330,6 +336,7 @@ export interface FileRoutesByFullPath {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -378,6 +385,7 @@ export interface FileRoutesByTo {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -428,6 +436,7 @@ export interface FileRoutesById {
   '/settings/issues-import': typeof SettingsIssuesImportRoute
   '/settings/issues-intake': typeof SettingsIssuesIntakeRoute
   '/settings/issues-labels': typeof SettingsIssuesLabelsRoute
+  '/settings/issues-migration': typeof SettingsIssuesMigrationRoute
   '/settings/issues-milestones': typeof SettingsIssuesMilestonesRoute
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
@@ -478,6 +487,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -526,6 +536,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -575,6 +586,7 @@ export interface FileRouteTypes {
     | '/settings/issues-import'
     | '/settings/issues-intake'
     | '/settings/issues-labels'
+    | '/settings/issues-migration'
     | '/settings/issues-milestones'
     | '/settings/issues-statuses'
     | '/settings/keybindings'
@@ -774,6 +786,13 @@ declare module '@tanstack/react-router' {
       path: '/issues-milestones'
       fullPath: '/settings/issues-milestones'
       preLoaderRoute: typeof SettingsIssuesMilestonesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/issues-migration': {
+      id: '/settings/issues-migration'
+      path: '/issues-migration'
+      fullPath: '/settings/issues-migration'
+      preLoaderRoute: typeof SettingsIssuesMigrationRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/issues-labels': {
@@ -981,6 +1000,7 @@ interface SettingsRouteChildren {
   SettingsIssuesImportRoute: typeof SettingsIssuesImportRoute
   SettingsIssuesIntakeRoute: typeof SettingsIssuesIntakeRoute
   SettingsIssuesLabelsRoute: typeof SettingsIssuesLabelsRoute
+  SettingsIssuesMigrationRoute: typeof SettingsIssuesMigrationRoute
   SettingsIssuesMilestonesRoute: typeof SettingsIssuesMilestonesRoute
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
@@ -1007,6 +1027,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIssuesImportRoute: SettingsIssuesImportRoute,
   SettingsIssuesIntakeRoute: SettingsIssuesIntakeRoute,
   SettingsIssuesLabelsRoute: SettingsIssuesLabelsRoute,
+  SettingsIssuesMigrationRoute: SettingsIssuesMigrationRoute,
   SettingsIssuesMilestonesRoute: SettingsIssuesMilestonesRoute,
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,

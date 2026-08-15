@@ -103,6 +103,7 @@ import * as EmailTrigger from "./email/EmailTriggerService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import { makeIssueImportRpcHandlers } from "./cloud/issueImport/rpc.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -497,6 +498,9 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
       const issueTracker = yield* IssueTrackerService.IssueTrackerService;
+      const issueImportRpc = makeIssueImportRpcHandlers({
+        readSnapshot: issueTracker.readLocalIssueSnapshot,
+      });
       const emailCapture = yield* EmailCapture.EmailCaptureService;
       const emailTriggers = yield* EmailTrigger.EmailTriggerService;
       // The only actor stage 1 has. The service takes one so the stage 4 MCP toolkit can pass an
@@ -1510,6 +1514,14 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "cloud" },
           ),
+        [WS_METHODS.cloudIssueImportPreview]: (input) =>
+          observeRpcEffect(WS_METHODS.cloudIssueImportPreview, issueImportRpc.preview(input), {
+            "rpc.aggregate": "cloudIssueImport",
+          }),
+        [WS_METHODS.cloudIssueImportExecute]: (input) =>
+          observeRpcStream(WS_METHODS.cloudIssueImportExecute, issueImportRpc.execute(input), {
+            "rpc.aggregate": "cloudIssueImport",
+          }),
         [WS_METHODS.pullRequestsList]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsList, pullRequests.list(input), {
             "rpc.aggregate": "pull-requests",

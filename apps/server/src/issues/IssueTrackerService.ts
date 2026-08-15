@@ -206,6 +206,10 @@ import {
 } from "./csvImport.ts";
 import { milestoneHistory } from "./milestoneHistory.ts";
 import { issueSortOrderAfter } from "./sortOrder.ts";
+import {
+  readLocalIssueSnapshotFrom,
+  type LocalIssueSnapshot,
+} from "../cloud/issueImport/snapshot.ts";
 
 /** Seeded by migration 041. Only a tracker still wearing it adopts a prefix from an import. */
 const DEFAULT_ISSUE_KEY_PREFIX = "ISS";
@@ -350,6 +354,8 @@ export interface IssueIntakeCommentResult {
 }
 
 export interface IssueTrackerServiceShape {
+  /** Full durable source model used only by the explicit cloud migration preview/executor. */
+  readonly readLocalIssueSnapshot: Effect.Effect<LocalIssueSnapshot, IssueTrackerRepositoryError>;
   /**
    * Everything the list view needs. Reading it is also when an ended cycle gets carried over:
    * there is no scheduler here, so finalisation rides on the next read.
@@ -1186,6 +1192,23 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const changes = yield* PubSub.unbounded<IssuesStreamEvent>();
+  const localIssueSnapshot = readLocalIssueSnapshotFrom({
+    issuesRepository: issueRepository,
+    statusRepository,
+    labelRepository,
+    milestoneRepository,
+    cycleRepository,
+    todoRepository,
+    relationRepository,
+    commentRepository,
+    eventRepository,
+    threadLinkRepository,
+    viewRepository,
+    trackerConfigRepository: configRepository,
+    fileSystem,
+    path,
+    serverConfig,
+  });
 
   /**
    * Intake's health, held in memory rather than in a table.
@@ -4535,6 +4558,7 @@ export const make = Effect.gen(function* () {
   );
 
   return {
+    readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,
     getDetail,
     create,

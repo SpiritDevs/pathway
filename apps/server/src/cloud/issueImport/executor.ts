@@ -37,6 +37,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import type { IssueTrackerRepositoryError } from "../../persistence/Errors.ts";
 import { convexErrorCode, type ConvexServiceTokenProvider } from "../convexServiceToken.ts";
 import { type ConvexClientLike } from "../convexSyncTransport.ts";
 import {
@@ -51,7 +52,7 @@ import {
   type IssueImportRejectedRecord,
   type PlannedIssueAttachmentUpload,
 } from "./plan.ts";
-import { readLocalIssueSnapshot, type LocalIssueSnapshot } from "./snapshot.ts";
+import type { LocalIssueSnapshot } from "./snapshot.ts";
 
 export const ISSUE_IMPORT_MAX_ENTITIES_PER_BATCH = 25;
 export const ISSUE_IMPORT_MAX_BATCH_BYTES = 512 * 1024;
@@ -858,6 +859,7 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
     readonly selectedIssueKeyPrefix: IssueKeyPrefix;
     readonly memberStarter?: IssueImportMemberStarter;
     readonly runRecord?: ImportRun;
+    readonly readSnapshot: Effect.Effect<LocalIssueSnapshot, IssueTrackerRepositoryError>;
   }) {
     const config = yield* resolveCloudSyncConfig;
     if (config._tag !== "Configured") {
@@ -900,7 +902,7 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
     });
     const projects = yield* ProjectService.ProjectService;
     const [snapshot, projectSnapshot] = yield* Effect.all(
-      [readLocalIssueSnapshot(), projects.snapshot] as const,
+      [input.readSnapshot, projects.snapshot] as const,
       { concurrency: 2 },
     );
     return yield* runIssueImportExecutor({

@@ -103,6 +103,24 @@ export interface LocalIssueSnapshot {
   readonly trackerConfig: IssueTrackerConfig;
 }
 
+export interface LocalIssueSnapshotSource {
+  readonly issuesRepository: IssueRepository["Service"];
+  readonly statusRepository: IssueStatusRepository["Service"];
+  readonly labelRepository: IssueLabelRepository["Service"];
+  readonly milestoneRepository: IssueMilestoneRepository["Service"];
+  readonly cycleRepository: IssueCycleRepository["Service"];
+  readonly todoRepository: IssueTodoRepository["Service"];
+  readonly relationRepository: IssueRelationRepository["Service"];
+  readonly commentRepository: IssueCommentRepository["Service"];
+  readonly eventRepository: IssueEventRepository["Service"];
+  readonly threadLinkRepository: IssueThreadLinkRepository["Service"];
+  readonly viewRepository: IssueViewRepository["Service"];
+  readonly trackerConfigRepository: IssueTrackerConfigRepository["Service"];
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly serverConfig: ServerConfig["Service"];
+}
+
 const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   ".avif": "image/avif",
   ".bmp": "image/bmp",
@@ -121,23 +139,25 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 };
 
 /** Reads every durable local issue repository and stats referenced attachment files. */
-export const readLocalIssueSnapshot = Effect.fn("cloud.issue_import.read_local_snapshot")(
-  function* () {
-    const issuesRepository = yield* IssueRepository;
-    const statusRepository = yield* IssueStatusRepository;
-    const labelRepository = yield* IssueLabelRepository;
-    const milestoneRepository = yield* IssueMilestoneRepository;
-    const cycleRepository = yield* IssueCycleRepository;
-    const todoRepository = yield* IssueTodoRepository;
-    const relationRepository = yield* IssueRelationRepository;
-    const commentRepository = yield* IssueCommentRepository;
-    const eventRepository = yield* IssueEventRepository;
-    const threadLinkRepository = yield* IssueThreadLinkRepository;
-    const viewRepository = yield* IssueViewRepository;
-    const trackerConfigRepository = yield* IssueTrackerConfigRepository;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const serverConfig = yield* ServerConfig;
+export const readLocalIssueSnapshotFrom = Effect.fn("cloud.issue_import.read_local_snapshot_from")(
+  function* (source: LocalIssueSnapshotSource) {
+    const {
+      issuesRepository,
+      statusRepository,
+      labelRepository,
+      milestoneRepository,
+      cycleRepository,
+      todoRepository,
+      relationRepository,
+      commentRepository,
+      eventRepository,
+      threadLinkRepository,
+      viewRepository,
+      trackerConfigRepository,
+      fileSystem,
+      path,
+      serverConfig,
+    } = source;
 
     const base = yield* Effect.all(
       {
@@ -248,5 +268,27 @@ export const readLocalIssueSnapshot = Effect.fn("cloud.issue_import.read_local_s
       views: base.views,
       trackerConfig: base.trackerConfig,
     } satisfies LocalIssueSnapshot;
+  },
+);
+
+export const readLocalIssueSnapshot = Effect.fn("cloud.issue_import.read_local_snapshot")(
+  function* () {
+    return yield* readLocalIssueSnapshotFrom({
+      issuesRepository: yield* IssueRepository,
+      statusRepository: yield* IssueStatusRepository,
+      labelRepository: yield* IssueLabelRepository,
+      milestoneRepository: yield* IssueMilestoneRepository,
+      cycleRepository: yield* IssueCycleRepository,
+      todoRepository: yield* IssueTodoRepository,
+      relationRepository: yield* IssueRelationRepository,
+      commentRepository: yield* IssueCommentRepository,
+      eventRepository: yield* IssueEventRepository,
+      threadLinkRepository: yield* IssueThreadLinkRepository,
+      viewRepository: yield* IssueViewRepository,
+      trackerConfigRepository: yield* IssueTrackerConfigRepository,
+      fileSystem: yield* FileSystem.FileSystem,
+      path: yield* Path.Path,
+      serverConfig: yield* ServerConfig,
+    });
   },
 );

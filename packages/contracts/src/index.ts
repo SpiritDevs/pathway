@@ -27,6 +27,7 @@ export * from "./sourceControl.ts";
 export * from "./pullRequest.ts";
 export * from "./orchestration.ts";
 export * from "./issues.ts";
+export * from "./issueImport.ts";
 export * from "./email.ts";
 export * from "./orchestrationProject.ts";
 export * from "./orchestrationV2.ts";
