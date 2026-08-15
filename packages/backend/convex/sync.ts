@@ -56,7 +56,11 @@ import type { MutationCtx } from "./_generated/server.js";
 import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import type { CompanyVersionedTable } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
-import { actorRecord, requireCompanyActor, type CompanyActor } from "./lib/identity.ts";
+import {
+  requireCompanyActor,
+  syncOperationActorRecord,
+  type CompanyActor,
+} from "./lib/identity.ts";
 import {
   emptyBootstrapCache,
   feedRowOwnerBinding,
@@ -629,8 +633,12 @@ export const applyOperations = mutation({
     const assignment = assignVersions(headBefore, changeCount);
 
     let cursor = 0;
-    const feedActor = actorRecord(actor);
     for (const entry of applied) {
+      const feedActor = syncOperationActorRecord(
+        actor,
+        entry.operation.actor,
+        entry.operation.environmentId,
+      );
       const startIndex = cursor;
       for (const change of entry.changes) {
         const version = assignment.versions[cursor];
@@ -699,6 +707,11 @@ export const applyOperations = mutation({
     // Rejections are receipted too: the client's panel needs a durable reason, and a resend of a
     // rejected operation must not silently apply later.
     for (const entry of rejected) {
+      const feedActor = syncOperationActorRecord(
+        actor,
+        entry.operation.actor,
+        entry.operation.environmentId,
+      );
       receipts.push({
         operationId: entry.operation.operationId,
         status: "rejected",

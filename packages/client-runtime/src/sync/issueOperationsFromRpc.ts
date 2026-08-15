@@ -41,6 +41,7 @@ import type {
   IssueRelationDeleteInput,
   IssueRelationId,
   IssueSetSortOrderInput,
+  IssueSlackSource,
   IssueStatusCreateInput,
   IssueStatusDeleteInput,
   IssueStatusesReorderInput,
@@ -66,6 +67,7 @@ const entityId = (id: string) => SyncEntityId.make(id);
 export const issueCreateOperation = (
   input: IssueCreateInput,
   id: IssueId,
+  slackSource?: IssueSlackSource,
 ): IssueSyncOperationOf<"issue.create"> =>
   issueSyncOperation({
     kind: "issue.create",
@@ -83,6 +85,7 @@ export const issueCreateOperation = (
       ...(input.labelIds === undefined ? {} : { labelIds: input.labelIds }),
       ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
       ...(input.triage === undefined ? {} : { triage: input.triage }),
+      ...(slackSource === undefined ? {} : { slackSource }),
       // Intentionally keyless: Convex allocates the real key and the overlay renders Draft.
     },
   });
@@ -108,6 +111,11 @@ export const issueUpdateOperation = (
 
 export const issueDeleteOperation = (input: IssueRefInput): IssueSyncOperationOf<"issue.delete"> =>
   issueSyncOperation({ kind: "issue.delete", entityId: entityId(input.issueId), args: {} });
+
+export const issueTriageRejectOperation = (
+  input: IssueRefInput,
+): IssueSyncOperationOf<"issue.triageReject"> =>
+  issueSyncOperation({ kind: "issue.triageReject", entityId: entityId(input.issueId), args: {} });
 
 export const issueRestoreOperation = (
   input: IssueRefInput,
@@ -496,6 +504,6 @@ export const ISSUE_MUTATION_ROUTING_TABLE = {
   slackWatchCreate: { route: "legacy-always", reason: "environment Slack integration" },
   slackWatchUpdate: { route: "legacy-always", reason: "environment Slack integration" },
   slackWatchDelete: { route: "legacy-always", reason: "environment Slack integration" },
-  triageAccept: { route: "legacy-always", reason: "no matching sync protocol operation" },
-  triageReject: { route: "legacy-always", reason: "no matching sync protocol operation" },
+  triageAccept: { route: "sync", operations: ["issue.update"] },
+  triageReject: { route: "sync", operations: ["issue.triageReject"] },
 } as const satisfies Record<string, IssueMutationRoute>;

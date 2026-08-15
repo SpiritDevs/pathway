@@ -48,6 +48,7 @@ import {
   issueRelationDeleteOperation,
   issueRestoreOperation,
   issueSetSortOrderOperation,
+  issueTriageRejectOperation,
   issueStatusCreateOperation,
   issueStatusDeleteOperation,
   issueStatusesReorderOperation,
@@ -126,6 +127,28 @@ describe("issue RPC operation translation", () => {
       },
     });
     expect(operation.args).not.toHaveProperty("key");
+  });
+
+  it("carries server-authored Slack source metadata and maps triage rejection distinctly", () => {
+    const slackSource = {
+      issueId: ISSUE,
+      channelId: "C123",
+      messageTs: "1723459200.001900",
+      permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+      authorName: "Corey",
+    };
+    expect(
+      issueCreateOperation({ title: "Slack report", triage: true }, ISSUE, slackSource),
+    ).toEqual({
+      kind: "issue.create",
+      entityId: ISSUE,
+      args: { title: "Slack report", triage: true, slackSource },
+    });
+    expect(issueTriageRejectOperation({ issueId: ISSUE })).toEqual({
+      kind: "issue.triageReject",
+      entityId: ISSUE,
+      args: {},
+    });
   });
 
   it("maps issue updates, refs, sort order, and expands bulk updates one target at a time", () => {

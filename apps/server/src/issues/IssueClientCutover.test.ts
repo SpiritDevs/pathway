@@ -42,6 +42,8 @@ const CUT_OVER_MUTATIONS = [
   ISSUES_WS_METHODS.viewsReorder,
   ISSUES_WS_METHODS.linkThread,
   ISSUES_WS_METHODS.unlinkThread,
+  ISSUES_WS_METHODS.triageAccept,
+  ISSUES_WS_METHODS.triageReject,
 ] as const;
 
 const LEGACY_MUTATIONS = [
@@ -56,8 +58,6 @@ const LEGACY_MUTATIONS = [
   ISSUES_WS_METHODS.slackWatchCreate,
   ISSUES_WS_METHODS.slackWatchUpdate,
   ISSUES_WS_METHODS.slackWatchDelete,
-  ISSUES_WS_METHODS.triageAccept,
-  ISSUES_WS_METHODS.triageReject,
 ] as const;
 
 describe("IssueClientCutover", () => {
@@ -104,8 +104,6 @@ describe("IssueClientCutover", () => {
       ISSUES_WS_METHODS.startEnrichment,
       ISSUES_WS_METHODS.cancelEnrichment,
       ISSUES_WS_METHODS.getEnrichmentRuns,
-      ISSUES_WS_METHODS.triageAccept,
-      ISSUES_WS_METHODS.triageReject,
     ]) {
       assert.isTrue(issueRpcRequiresCurrentClient(method, {}), method);
     }

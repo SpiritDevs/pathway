@@ -521,6 +521,7 @@ const ISSUE_SYNC_OPERATION_ARGS = {
   "issue.create": SyncIssueCreateArgs,
   "issue.update": SyncIssuePatchArgs,
   "issue.delete": NoArgs,
+  "issue.triageReject": NoArgs,
   "issue.restore": NoArgs,
   "issue.setSortOrder": SyncIssueSetSortOrderArgs,
   "issue.setWorkflowOwner": SyncIssueSetWorkflowOwnerArgs,
@@ -765,17 +766,19 @@ const missing = (label: string): SyncApplyOutcome<IssueSyncEntity> =>
  * enforced at the one boundary an operation can enter through.
  */
 export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSyncAdapter {
-  const actor = options?.actor ?? null;
+  const defaultActor = options?.actor ?? null;
   const clock = options?.now ?? (() => ISSUE_SYNC_PENDING_TIMESTAMP);
-  const authoringMembershipId =
-    actor !== null && actor.kind === "member" ? MembershipId.make(actor.membershipId) : null;
 
   const apply = (input: {
     readonly current: CloudSyncEntity | null;
     readonly operation: IssueSyncOperation;
     readonly occurredAt?: number | undefined;
+    readonly actor?: SyncActor | undefined;
   }): SyncApplyOutcome<CloudSyncEntity> => {
     const { current, operation } = input;
+    const actor = input.actor ?? defaultActor;
+    const authoringMembershipId =
+      actor !== null && actor.kind === "member" ? MembershipId.make(actor.membershipId) : null;
     // The engine's enqueue-time stamp wins over the clock: this reducer runs on every overlay
     // recompute, and a fresh reading would move a pending row's timestamps under the user.
     const now = input.occurredAt ?? clock();
@@ -807,7 +810,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
           labelIds: [...(args.labelIds ?? [])],
           dueDate: args.dueDate ?? null,
           triage: args.triage ?? false,
-          slackSource: null,
+          slackSource: args.slackSource ?? null,
           teamIds: [...(args.teamIds ?? [])],
           // The server may instead take the cloud project's default owner; that arrives with the
           // accepted change.
@@ -847,6 +850,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
         });
       }
       case "issue.delete":
+      case "issue.triageReject":
         return deleted();
       case "issue.restore":
         // A tombstoned row is gone locally, payload included, so there is nothing to bring back

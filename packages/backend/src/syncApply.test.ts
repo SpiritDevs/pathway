@@ -445,6 +445,83 @@ describe("sync.applyOperations", () => {
     });
   });
 
+  it("accepts environment Slack intake attribution and retains triage rejection audit semantics", async () => {
+    const t = harness();
+    await seed(t);
+    await insertRegistration(t, {
+      environmentId: ENVIRONMENT_ONE,
+      state: "active",
+      permissions: ["issues.read", "issues.create", "issues.update", "issues.delete"],
+    });
+    const operation = makeEnvironmentOps(ENVIRONMENT_ONE, "s");
+    const slackActor = { kind: "system" as const, source: "slack" as const };
+    const slackSource = {
+      issueId: ISSUE_A,
+      channelId: "C123",
+      messageTs: "1723459200.001900",
+      permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+      authorName: "Corey",
+    };
+
+    const created = await asEnvironment(t, ENVIRONMENT_ONE).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [
+        {
+          ...operation("issue.create", ISSUE_A, {
+            title: "Slack report",
+            triage: true,
+            slackSource,
+          }),
+          actor: slackActor,
+        },
+      ],
+    });
+    expect(created.receipts[0]).toMatchObject({ status: "accepted" });
+
+    const rejected = await asEnvironment(t, ENVIRONMENT_ONE).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [{ ...operation("issue.triageReject", ISSUE_A, {}), actor: slackActor }],
+    });
+    expect(rejected.receipts[0]).toMatchObject({ status: "accepted" });
+
+    await t.run(async (ctx) => {
+      const issue = (await ctx.db.query("issues").collect()).find((row) => row.id === ISSUE_A);
+      expect(issue?.slackSource).toEqual(slackSource);
+      expect(issue?.deletedAt).not.toBeNull();
+      const events = (await ctx.db.query("issueAuditEvents").collect()).filter(
+        (event) => event.issueId === ISSUE_A,
+      );
+      expect(events.map((event) => event.kind)).toEqual(["created", "triage_rejected"]);
+      expect(events.map((event) => event.actor)).toEqual([slackActor, slackActor]);
+    });
+  });
+
+  it("refuses Slack source metadata asserted by a member client", async () => {
+    const t = harness();
+    await seed(t);
+    const op = makeOps(WRITER_MEMBERSHIP_ID);
+    const result = await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [
+        op("issue.create", ISSUE_A, {
+          title: "Forged Slack report",
+          triage: true,
+          slackSource: {
+            issueId: ISSUE_A,
+            channelId: "C123",
+            messageTs: "1723459200.001900",
+            permalink: null,
+            authorName: null,
+          },
+        }),
+      ],
+    });
+    expect(result.receipts[0]).toMatchObject({
+      status: "rejected",
+      code: "permission-denied",
+    });
+  });
+
   it("an unknown operation kind receipts unknown-operation without failing the batch", async () => {
     const t = harness();
     await seed(t);
@@ -1802,7 +1879,12 @@ async function insertRegistration(
   input: {
     readonly environmentId: string;
     readonly state: "active" | "revoked";
-    readonly permissions?: readonly ("issues.read" | "issues.update")[];
+    readonly permissions?: readonly (
+      | "issues.read"
+      | "issues.create"
+      | "issues.update"
+      | "issues.delete"
+    )[];
   },
 ) {
   await t.run(async (ctx) => {

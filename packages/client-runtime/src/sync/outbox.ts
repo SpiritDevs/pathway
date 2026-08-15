@@ -182,6 +182,7 @@ export function overlay<Entity, Operation>(input: {
       operation: entry.operation.operation,
       // The enqueue-time stamp, not a fresh clock read: this fold runs on every publish.
       occurredAt: entry.occurredAt,
+      actor: entry.envelope.actor,
     });
     switch (outcome._tag) {
       case "Applied":

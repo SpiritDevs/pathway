@@ -103,6 +103,30 @@ describe("SyncOperation", () => {
     expect(operation.kind).toBe("issue.create");
   });
 
+  it("decodes additive Slack intake metadata and the triage rejection verb", () => {
+    const operation = decodeOperation({
+      ...header,
+      environmentId: "environment-1",
+      actor: { kind: "system", source: "slack" },
+      kind: "issue.create",
+      args: {
+        title: "Slack report",
+        triage: true,
+        slackSource: {
+          issueId: header.entityId,
+          channelId: "C123",
+          messageTs: "1723459200.001900",
+          permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+          authorName: "Corey",
+        },
+      },
+    });
+    expect(operation.kind).toBe("issue.create");
+    expect(decodeOperation({ ...header, kind: "issue.triageReject", args: {} }).kind).toBe(
+      "issue.triageReject",
+    );
+  });
+
   it("decodes entity-only verbs with no arguments", () => {
     expect(decodeOperation({ ...header, kind: "issue.delete", args: {} }).kind).toBe(
       "issue.delete",

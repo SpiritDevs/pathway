@@ -43,6 +43,13 @@ describe("parseIssueCreateArgs", () => {
       labelIds: ["label-1", "label-2"],
       dueDate: "2026-08-14",
       triage: false,
+      slackSource: {
+        issueId: "issue-1",
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+        authorName: "Corey",
+      },
       sortOrder: "a5",
       teamIds: ["team-1"],
       workflowOwner: { kind: "team", teamId: "team-1" },
@@ -53,6 +60,7 @@ describe("parseIssueCreateArgs", () => {
       expect(result.args.key).toBe("PAT-42");
       expect(result.args.assignee).toEqual({ kind: "member", membershipId: "member-1" });
       expect(result.args.workflowOwner).toEqual({ kind: "team", teamId: "team-1" });
+      expect(result.args.slackSource?.channelId).toBe("C123");
     }
   });
 
@@ -78,6 +86,22 @@ describe("parseIssueCreateArgs", () => {
     expectRejected(parseIssueCreateArgs({ title: "T", priority: "asap" }), "args.priority");
     expectRejected(parseIssueCreateArgs({ title: "T", dueDate: "tomorrow" }), "args.dueDate");
     expectRejected(parseIssueCreateArgs({ title: "T", assignee: { kind: "robot" } }), "assignee");
+  });
+
+  it("refuses malformed Slack source metadata", () => {
+    expectRejected(
+      parseIssueCreateArgs({
+        title: "T",
+        slackSource: {
+          issueId: "issue-1",
+          channelId: "",
+          messageTs: "1723459200.001900",
+          permalink: null,
+          authorName: null,
+        },
+      }),
+      "args.slackSource.channelId",
+    );
   });
 });
 

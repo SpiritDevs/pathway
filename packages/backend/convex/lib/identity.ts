@@ -8,6 +8,7 @@
  * @module lib/identity
  */
 import type { UserIdentity } from "convex/server";
+import type { SyncActor } from "../../src/sync/protocol.ts";
 
 import {
   isRegisteredProofKey,
@@ -271,4 +272,26 @@ export function actorRecord(
   return actor.kind === "member"
     ? { kind: "member", membershipId: actor.membership.id }
     : { kind: "environment", environmentId: actor.registration.environmentId };
+}
+
+/**
+ * Audit attribution for one sync operation.
+ *
+ * A member can only be itself. An environment can deliberately name a system source when the
+ * envelope is bound to that same authenticated environment; permissions still come exclusively
+ * from the registration. Any other assertion is mapped back to the authenticated actor.
+ */
+export function syncOperationActorRecord(
+  actor: CompanyActor,
+  asserted: SyncActor,
+  environmentId: string | null,
+): SyncActor {
+  if (
+    actor.kind === "environment" &&
+    asserted.kind === "system" &&
+    environmentId === actor.registration.environmentId
+  ) {
+    return asserted;
+  }
+  return actorRecord(actor);
 }

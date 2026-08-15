@@ -78,6 +78,7 @@ const OTHER_ACTOR: SyncActor = {
   kind: "member",
   membershipId: MembershipId.make("membership-server"),
 };
+const SLACK_ACTOR: SyncActor = { kind: "system", source: "slack" };
 
 const ISSUE_ID = SyncEntityId.make("issue-1");
 const STATUS_ID = SyncEntityId.make("status-1");
@@ -348,6 +349,7 @@ const OPERATIONS: ReadonlyArray<IssueSyncOperation> = [
   issueSyncOperation({ kind: "issue.create", entityId: ISSUE_ID, args: { title: "New issue" } }),
   issueSyncOperation({ kind: "issue.update", entityId: ISSUE_ID, args: { title: "Edited" } }),
   issueSyncOperation({ kind: "issue.delete", entityId: ISSUE_ID, args: {} }),
+  issueSyncOperation({ kind: "issue.triageReject", entityId: ISSUE_ID, args: {} }),
   issueSyncOperation({ kind: "issue.restore", entityId: ISSUE_ID, args: {} }),
   issueSyncOperation({
     kind: "issue.setSortOrder",
@@ -573,7 +575,20 @@ const applyCases: ReadonlyArray<ApplyCase> = [
     operation: issueSyncOperation({
       kind: "issue.create",
       entityId: ISSUE_ID,
-      args: { title: "New issue", key: "PAT-9", teamIds: [TEAM_A], labelIds: [] },
+      args: {
+        title: "New issue",
+        key: "PAT-9",
+        teamIds: [TEAM_A],
+        labelIds: [],
+        triage: true,
+        slackSource: {
+          issueId: IssueId.make(ISSUE_ID),
+          channelId: "C1",
+          messageTs: "1723459200.001900",
+          permalink: null,
+          authorName: "Corey",
+        },
+      },
     }),
     check: (outcome) => {
       const issue = appliedOf(outcome, "issue");
@@ -585,6 +600,7 @@ const applyCases: ReadonlyArray<ApplyCase> = [
       expect(issue.priority).toBe("none");
       expect(issue.workflowOwner).toEqual({ kind: "company" });
       expect(issue.teamIds).toEqual([TEAM_A]);
+      expect(issue.slackSource?.messageTs).toBe("1723459200.001900");
       expect(issue.createdAt).toBe(1_000);
     },
   },
@@ -609,6 +625,12 @@ const applyCases: ReadonlyArray<ApplyCase> = [
     kind: "issue.delete",
     current: ISSUE,
     operation: issueSyncOperation({ kind: "issue.delete", entityId: ISSUE_ID, args: {} }),
+    check: (outcome) => expect(outcome._tag).toBe("Deleted"),
+  },
+  {
+    kind: "issue.triageReject",
+    current: ISSUE,
+    operation: issueSyncOperation({ kind: "issue.triageReject", entityId: ISSUE_ID, args: {} }),
     check: (outcome) => expect(outcome._tag).toBe("Deleted"),
   },
   {
@@ -1450,6 +1472,44 @@ describe("issue domain on the sync engine", () => {
         expect(settled.pending).toEqual([]);
         expect(settled.quarantined).toEqual([]);
         expect(settled.rejected).toEqual([]);
+      }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
+    }),
+  );
+
+  it.effect("uses a service actor override in the optimistic overlay", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+
+      yield* Effect.gen(function* () {
+        const engine = yield* openEngine("client-a");
+        yield* engine.enqueue({
+          operationId: SyncOperationId.make("operation-create"),
+          operation: issueSyncOperation({
+            kind: "issue.create",
+            entityId: ISSUE_ID,
+            args: { title: "Filed from Slack" },
+          }),
+          actor: SLACK_ACTOR,
+        });
+        yield* engine.enqueue({
+          operationId: SyncOperationId.make("operation-comment"),
+          operation: issueSyncOperation({
+            kind: "issueComment.create",
+            entityId: COMMENT_ID,
+            args: { issueId: IssueId.make(ISSUE_ID), body: "Slack reply" },
+          }),
+          actor: SLACK_ACTOR,
+        });
+
+        const optimistic = yield* SubscriptionRef.get(engine.state);
+        expect(
+          optimistic.view.get(
+            syncEntityKey({
+              entityKind: "issueComment",
+              entityId: COMMENT_ID,
+            }),
+          ),
+        ).toMatchObject({ author: SLACK_ACTOR });
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));
     }),
   );

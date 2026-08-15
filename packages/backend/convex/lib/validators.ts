@@ -53,8 +53,8 @@ export const syncOperationArg = v.object({
   clientId: v.string(),
   environmentId: v.union(v.string(), v.null()),
   /**
-   * Asserted by the caller for attribution only. Convex re-derives the authoritative actor from the
-   * token before anything is written, so a client cannot claim to be somebody else by sending it.
+   * Requested attribution. Convex maps ordinary claims back to the authenticated identity; only
+   * an environment-bound operation may deliberately name a system source.
    */
   actor: syncActorArg,
   localSequence: v.number(),

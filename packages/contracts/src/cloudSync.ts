@@ -72,6 +72,7 @@ import {
   IssueMilestoneId,
   IssuePriority,
   IssueRelationKind,
+  IssueSlackSource,
   IssueStatusCategory,
   IssueStatusId,
   IssueSystemActor,
@@ -536,6 +537,7 @@ export const SYNC_OPERATION_KINDS = [
   "issue.create",
   "issue.update",
   "issue.delete",
+  "issue.triageReject",
   "issue.restore",
   "issue.setSortOrder",
   "issue.setWorkflowOwner",
@@ -590,7 +592,10 @@ const SyncOperationHeader = Schema.Struct({
   clientId: SyncClientId,
   /** Set when a Pathway server authored the write, `null` for a browser or mobile client. */
   environmentId: Schema.NullOr(EnvironmentId),
-  /** Asserted by the caller for attribution only; Convex re-derives it from the token. */
+  /**
+   * Attribution requested by the caller. Convex maps ordinary claims back to the authenticated
+   * identity; an environment may deliberately name a system source for its own operation.
+   */
   actor: SyncActor,
   localSequence: LocalSequence,
   baseVersion: CompanyVersion,
@@ -673,6 +678,8 @@ export const SyncIssueCreateArgs = Schema.Struct({
   labelIds: Schema.optional(IssueLabelIdsArg),
   dueDate: Schema.optional(IssueDate),
   triage: Schema.optional(Schema.Boolean),
+  /** Server-authored Slack intake provenance. Ordinary clients leave this absent. */
+  slackSource: Schema.optional(IssueSlackSource),
   sortOrder: Schema.optional(SyncOrderKey),
   /** Empty or absent means company-wide; any listed team exposes the complete issue. */
   teamIds: Schema.optional(Schema.Array(TeamId)),
@@ -919,7 +926,7 @@ export type SyncIssueThreadLinkCreateArgs = typeof SyncIssueThreadLinkCreateArgs
 export const SyncOperation = Schema.Union([
   syncOperation("issue.create", SyncIssueCreateArgs),
   syncOperation("issue.update", SyncIssuePatchArgs),
-  syncOperations(["issue.delete", "issue.restore"], NoArgs),
+  syncOperations(["issue.delete", "issue.triageReject", "issue.restore"], NoArgs),
   syncOperation("issue.setSortOrder", SyncIssueSetSortOrderArgs),
   syncOperation("issue.setWorkflowOwner", SyncIssueSetWorkflowOwnerArgs),
   syncOperation("issue.setTeams", SyncIssueSetTeamsArgs),

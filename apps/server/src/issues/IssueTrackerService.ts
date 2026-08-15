@@ -170,6 +170,7 @@ import {
   issueRelationDeleteOperation,
   issueRestoreOperation,
   issueSetSortOrderOperation,
+  issueTriageRejectOperation,
   issueStatusCreateOperation,
   issueStatusDeleteOperation,
   issueStatusesReorderOperation,
@@ -190,7 +191,7 @@ import {
   type IssueSyncOperation,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import { SyncEntityId, SyncOperationId } from "@spiritdevs/contracts/cloudSync";
+import { SyncEntityId, SyncOperationId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -314,7 +315,7 @@ const CATEGORY_COLORS: Readonly<Record<IssueStatusCategory, string>> = {
 };
 
 /** Every write intake makes is the tracker acting on somebody's behalf, never a person. */
-const SLACK_ACTOR: IssueActor = { kind: "system", source: "slack" };
+const SLACK_ACTOR = { kind: "system", source: "slack" } as const satisfies IssueActor;
 
 /** A watch created without one: configured, watched, and filing nothing until it is switched on. */
 const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = {
@@ -382,11 +383,17 @@ export interface IssueIntakeCreateInput {
   readonly authorName?: string | null | undefined;
 }
 
-export interface IssueIntakeCreateResult {
-  readonly issue: Issue;
-  /** False when this message had already been filed, which an overlapping poll makes ordinary. */
-  readonly created: boolean;
-}
+export type IssueIntakeCreateResult =
+  | { readonly issue: Issue; readonly created: true }
+  | {
+      /**
+       * The issue this message became, or null when that issue has since been rejected or
+       * deleted. The filing decision stands either way: an overlapping poll re-seeing the
+       * message must not resurrect what a person already dismissed.
+       */
+      readonly issue: Issue | null;
+      readonly created: false;
+    };
 
 export interface IssueIntakeCommentInput {
   readonly channelId: SlackChannelId;
@@ -1347,6 +1354,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   type ReplicaOperationPlan = {
     readonly operation: IssueSyncOperation;
     readonly operationId?: SyncOperationId;
+    readonly actor?: SyncActor;
   };
 
   const syncWriteFailure = (message: string) =>
@@ -1374,7 +1382,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
       for (const plan of plans) {
         const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
         const receipt = yield* engine
-          .enqueue({ operationId, operation: plan.operation })
+          .enqueue({
+            operationId,
+            operation: plan.operation,
+            ...(plan.actor === undefined ? {} : { actor: plan.actor }),
+          })
           .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
         if (!receipt.accepted) {
           return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
@@ -2333,6 +2345,27 @@ export const makeIssueTrackerService = Effect.fn(function* (
           : Effect.succeed(record.value),
       ),
     );
+
+  /** Replica-owned issue data with the legacy row and labels composed for local executors. */
+  const requireRoutedIssue = (issueId: IssueId): Effect.Effect<Issue, IssueTrackerError> =>
+    routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) => {
+        const entity = readModel.issues.find((candidate) => candidate.id === issueId);
+        return entity === undefined
+          ? Effect.fail(notFound(issueId, `No issue with id ${issueId}.`))
+          : Effect.succeed(
+              issueCollectionProjectionFromReplica(readModel).issues.find(
+                (candidate) => candidate.id === issueId,
+              )!,
+            );
+      },
+      fromLegacy: requireIssueRecord(issueId).pipe(
+        Effect.flatMap((record) =>
+          labelsOf(issueId).pipe(Effect.map((labelIds) => ({ ...record, labelIds }))),
+        ),
+      ),
+    });
 
   const getLegacyDetail: IssueTrackerServiceShape["getDetail"] = Effect.fn(
     "IssueTrackerService.getLegacyDetail",
@@ -3792,10 +3825,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
       };
       // Read the row before its history: if a user title lands between the two reads, its event is
       // visible and closes the automatic-title path. Parallel reads could observe the inverse.
-      const record = yield* requireIssueRecord(input.issueId);
-      const events = yield* eventRepository
-        .listByIssue({ issueId: input.issueId })
-        .pipe(Effect.mapError(storage("Failed to read the issue change log")));
+      const record = yield* requireRoutedIssue(input.issueId);
+      const { events } = yield* getEvents({ issueId: input.issueId });
       const patch = issueEnrichmentAutomaticPatch({
         issue: record,
         result: input.result,
@@ -3847,7 +3878,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const startEnrichment: IssueTrackerServiceShape["startEnrichment"] = Effect.fn(
     "IssueTrackerService.startEnrichment",
   )(function* (input) {
-    const record = yield* requireIssueRecord(input.issueId);
+    const record = yield* requireRoutedIssue(input.issueId);
 
     // A second run is refused rather than queued: two investigations of the same tree answer the
     // same question and spend twice the tokens doing it.
@@ -3904,13 +3935,12 @@ export const makeIssueTrackerService = Effect.fn(function* (
       .pipe(Effect.mapError(storage("Failed to record the enrichment run")));
     yield* publish({ _tag: "EnrichmentRunChanged", run });
 
-    const labelIds = yield* labelsOf(record.id);
     const recorder = makeEnrichmentRecorder(run.id);
     // Detached from the request fiber: an investigation takes minutes, the button that asked for
     // it answers now, and the run must outlive the socket that started it. Anything escaping —
     // a failure or a defect — lands the run in `failed` rather than leaving it running forever.
     yield* Effect.forkDetach(
-      enrichmentEngine.start({ run, issue: { ...record, labelIds }, workspaceRoot, recorder }).pipe(
+      enrichmentEngine.start({ run, issue: record, workspaceRoot, recorder }).pipe(
         Effect.catchCause((cause) =>
           recorder.fail(`The enrichment run stopped unexpectedly: ${Cause.pretty(cause)}`),
         ),
@@ -3938,7 +3968,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const getEnrichmentRuns: IssueTrackerServiceShape["getEnrichmentRuns"] = Effect.fn(
     "IssueTrackerService.getEnrichmentRuns",
   )(function* (input) {
-    yield* requireIssueRecord(input.issueId);
+    yield* requireRoutedIssue(input.issueId);
     return { issueId: input.issueId, runs: yield* listEnrichmentRuns(input.issueId) };
   });
 
@@ -4329,8 +4359,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
         .pipe(Effect.mapError(storage("Failed to record the Slack message ledger"))),
     );
 
-  const intakeCreateIssue: IssueTrackerServiceShape["intakeCreateIssue"] = Effect.fn(
-    "IssueTrackerService.intakeCreateIssue",
+  const legacyIntakeCreateIssue: IssueTrackerServiceShape["intakeCreateIssue"] = Effect.fn(
+    "IssueTrackerService.legacyIntakeCreateIssue",
   )(function* (input) {
     // A poll window overlaps the last one by design — a cursor is a floor, not a fence — so the
     // ledger, not the cursor, is what stops a message from being filed twice.
@@ -4374,8 +4404,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
     return { issue, created: true };
   });
 
-  const intakeAddComment: IssueTrackerServiceShape["intakeAddComment"] = Effect.fn(
-    "IssueTrackerService.intakeAddComment",
+  const legacyIntakeAddComment: IssueTrackerServiceShape["intakeAddComment"] = Effect.fn(
+    "IssueTrackerService.legacyIntakeAddComment",
   )(function* (input) {
     const already = yield* readProcessedMessage(input.channelId, input.messageTs);
     if (Option.isSome(already)) return { comment: null };
@@ -4412,8 +4442,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   // ── Triage ───────────────────────────────────────────────────────────
 
-  const triageAccept: IssueTrackerServiceShape["triageAccept"] = Effect.fn(
-    "IssueTrackerService.triageAccept",
+  const legacyTriageAccept: IssueTrackerServiceShape["triageAccept"] = Effect.fn(
+    "IssueTrackerService.legacyTriageAccept",
   )(function* (input, actor) {
     const [statuses, labels, records, milestones, cycles] = yield* Effect.all([
       listStatuses(),
@@ -4484,8 +4514,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
     );
   });
 
-  const triageReject: IssueTrackerServiceShape["triageReject"] = Effect.fn(
-    "IssueTrackerService.triageReject",
+  const legacyTriageReject: IssueTrackerServiceShape["triageReject"] = Effect.fn(
+    "IssueTrackerService.legacyTriageReject",
   )(function* (input, actor) {
     const records = yield* listRecords();
     const record = yield* requireRecord(records, input.issueId);
@@ -4761,11 +4791,151 @@ export const makeIssueTrackerService = Effect.fn(function* (
     );
   const plans = (
     operations: ReadonlyArray<IssueSyncOperation>,
-  ): ReadonlyArray<ReplicaOperationPlan> => operations.map((operation) => ({ operation }));
+    actor?: SyncActor,
+  ): ReadonlyArray<ReplicaOperationPlan> =>
+    operations.map((operation) => ({
+      operation,
+      ...(actor === undefined ? {} : { actor }),
+    }));
+
+  const intakeCreateIssue: IssueTrackerServiceShape["intakeCreateIssue"] = (input) =>
+    Effect.flatMap(replicaReader.read, (readModel) => {
+      if (readModel === null) return legacyIntakeCreateIssue(input);
+      return Effect.gen(function* () {
+        const processed = yield* readProcessedMessage(input.channelId, input.messageTs);
+        if (Option.isSome(processed) && processed.value.issueId !== null) {
+          const existing = routedIssue(readModel, processed.value.issueId);
+          if (existing !== undefined) return { issue: existing, created: false };
+          // The replica keeps no row for a rejected or deleted issue, unlike the legacy store's
+          // soft deletes, so absence here means dismissed, not gone for good. Honoring the ledger
+          // is what stops an overlapping poll from refiling a triage item someone rejected.
+          return { issue: null, created: false };
+        }
+
+        const issueId = IssueId.make(yield* newId);
+        const slackSource: IssueSlackSource = {
+          issueId,
+          channelId: input.channelId,
+          messageTs: input.messageTs,
+          permalink: nullableTrimmed(input.permalink),
+          authorName: nullableTrimmed(input.authorName),
+        };
+        const createInput: IssueCreateInput = {
+          title: normalizeSlackTitle(input.title),
+          triage: true,
+          ...(input.description === undefined ? {} : { description: input.description }),
+          ...(input.projectId == null ? {} : { projectId: input.projectId }),
+          ...(input.cycleId == null ? {} : { cycleId: input.cycleId }),
+        };
+        const written = yield* enqueueReplicaOperations(
+          plans([issueCreateOperation(createInput, issueId, slackSource)], SLACK_ACTOR),
+        );
+        const issue = routedIssue(written.readModel, issueId);
+        if (issue === undefined) {
+          return yield* syncWriteFailure(
+            `Slack intake issue ${issueId} is absent from the optimistic replica`,
+          );
+        }
+        yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
+        return { issue, created: true };
+      });
+    });
+
+  const intakeAddComment: IssueTrackerServiceShape["intakeAddComment"] = (input) =>
+    Effect.flatMap(replicaReader.read, (readModel) => {
+      if (readModel === null) return legacyIntakeAddComment(input);
+      return Effect.gen(function* () {
+        const already = yield* readProcessedMessage(input.channelId, input.messageTs);
+        if (Option.isSome(already)) return { comment: null };
+
+        const parent = yield* readProcessedMessage(input.channelId, input.threadTs);
+        const issueId = Option.isSome(parent) ? parent.value.issueId : null;
+        if (issueId === null || routedIssue(readModel, issueId) === undefined) {
+          yield* recordProcessedMessage(input.channelId, input.messageTs, null);
+          return { comment: null };
+        }
+
+        const authorName = nullableTrimmed(input.authorName);
+        const body = authorName === null ? input.body : `**${authorName}:** ${input.body}`;
+        const attachmentIds = input.attachmentIds ?? [];
+        const commentId = IssueCommentId.make(yield* newId);
+        const written = yield* enqueueReplicaOperations(
+          plans(
+            [
+              issueCommentCreateOperation(
+                { issueId, body, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
+                commentId,
+              ),
+            ],
+            SLACK_ACTOR,
+          ),
+        );
+        const comment = routedDetail(written.readModel, issueId).comments.find(
+          (candidate) => candidate.id === commentId,
+        );
+        if (comment === undefined) {
+          return yield* syncWriteFailure(
+            `Slack intake comment ${commentId} is absent from the optimistic replica`,
+          );
+        }
+        yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
+        return { comment };
+      });
+    });
+
+  const triageAccept: IssueTrackerServiceShape["triageAccept"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = routedIssue(readModel, input.issueId);
+          if (current === undefined)
+            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+          if (!current.triage)
+            return yield* conflict(`${current.key} is not in triage.`, current.key);
+          const patch: IssuePatch = {
+            statusId: input.statusId,
+            triage: false,
+            ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+            ...(input.priority === undefined ? {} : { priority: input.priority }),
+            ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+          };
+          const written = yield* enqueueReplicaOperations(
+            plans([issueUpdateOperation({ issueId: input.issueId, patch })]),
+          );
+          const issue = routedIssue(written.readModel, input.issueId);
+          if (issue === undefined) {
+            return yield* syncWriteFailure(`accepted issue ${input.issueId} is absent`);
+          }
+          if (!input.runEnrichment) {
+            return { issue, enrichmentRun: null, enrichmentRefusal: null };
+          }
+          return yield* startEnrichment({ issueId: issue.id }).pipe(
+            Effect.map(({ run }) => ({ issue, enrichmentRun: run, enrichmentRefusal: null })),
+            Effect.catch((error) =>
+              Effect.succeed({ issue, enrichmentRun: null, enrichmentRefusal: error.message }),
+            ),
+          );
+        }),
+      legacyTriageAccept(input, actor),
+    );
+
+  const triageReject: IssueTrackerServiceShape["triageReject"] = (input, actor) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const current = routedIssue(readModel, input.issueId);
+          if (current === undefined)
+            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+          yield* enqueueReplicaOperations(plans([issueTriageRejectOperation(input)]));
+          const deletedAt = yield* nowIso;
+          return { issue: { ...current, updatedAt: deletedAt, deletedAt } };
+        }),
+      legacyTriageReject(input, actor),
+    );
 
   const create: IssueTrackerServiceShape["create"] = (input, actor) =>
     routeWrite(
-      (readModel) =>
+      (_readModel) =>
         Effect.gen(function* () {
           const issueId = IssueId.make(yield* newId);
           const written = yield* enqueueReplicaOperations(

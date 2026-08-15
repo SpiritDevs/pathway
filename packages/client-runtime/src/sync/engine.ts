@@ -142,6 +142,8 @@ export interface SyncEngine<Entity, Operation> {
     readonly operationId: SyncOperationId;
     readonly operation: Operation;
     readonly dependsOn?: ReadonlyArray<SyncOperationId>;
+    /** Service-authored attribution; authorization still comes from the transport identity. */
+    readonly actor?: SyncActor;
   }) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
   /** One full cycle: drain the feed, flush the outbox, drain again to confirm. */
   readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
@@ -167,8 +169,8 @@ export interface SyncEngineOptions<Entity, Operation> {
   readonly companyId: CompanyId;
   readonly clientId: SyncClientId;
   /**
-   * Attribution stamped on every operation. Convex re-derives the authoritative actor from the
-   * token, so this is what the audit trail shows, never what authorization trusts.
+   * Attribution stamped on every operation. Convex maps it through the authenticated identity, so
+   * it can describe an environment's system work but never grant authorization.
    */
   readonly actor: SyncActor;
   /** Set when a Pathway server authors the writes; `null` for a browser or mobile client. */
@@ -638,6 +640,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     readonly operationId: SyncOperationId;
     readonly operation: Operation;
     readonly dependsOn?: ReadonlyArray<SyncOperationId>;
+    readonly actor?: SyncActor;
   }) {
     const entries = yield* Ref.get(entriesRef);
     const rejections = yield* Ref.get(rejectedRef);
@@ -664,7 +667,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
       companyId,
       clientId,
       environmentId,
-      actor,
+      actor: input.actor ?? actor,
       localSequence,
       baseVersion: replica.cursor,
       entityId: target.entityId,

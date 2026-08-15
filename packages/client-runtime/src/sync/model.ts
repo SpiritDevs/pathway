@@ -57,8 +57,8 @@ export function sameSyncEntityKey(left: SyncEntityKey, right: SyncEntityKey): bo
 
 /**
  * One outbox row with its arguments decoded into the domain's operation type. A projection of
- * `SyncOperationEnvelope`: the fields Convex re-derives for itself (the asserted actor, the
- * authoring environment) stay on the envelope, which the outbox keeps alongside this.
+ * `SyncOperationEnvelope`: transport attribution and the authoring environment stay on the
+ * envelope, which the outbox keeps alongside this.
  */
 export interface SyncOperation<Operation> {
   readonly protocolVersion: number;

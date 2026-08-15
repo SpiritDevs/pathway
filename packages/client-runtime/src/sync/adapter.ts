@@ -11,6 +11,7 @@
  */
 import type {
   SyncEntityKind,
+  SyncActor,
   SyncOperationEnvelope,
   SyncOperationId,
   SyncOperationKind,
@@ -87,6 +88,8 @@ export interface SyncDomainAdapter<Entity, Operation> {
      * domain falls back to whatever it did before.
      */
     readonly occurredAt?: number | undefined;
+    /** Envelope attribution, allowing one service engine to author named system operations. */
+    readonly actor?: SyncActor | undefined;
   }) => SyncApplyOutcome<Entity>;
   /**
    * Optional hook for folding a confirmed change into the confirmed replica. The default is

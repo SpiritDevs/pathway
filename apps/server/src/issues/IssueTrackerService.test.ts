@@ -37,7 +37,6 @@ import {
   SYNC_PROTOCOL_VERSION,
   SyncClientId,
   SyncEntityId,
-  SyncOperationId,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
 import { assert, describe, it } from "@effect/vitest";
@@ -432,7 +431,7 @@ describe("IssueTrackerService", () => {
       const handle: CloudSyncIssueEngineHandle = {
         companyId: ROUTED_COMPANY_ID,
         environmentId: ROUTED_ENVIRONMENT_ID,
-        enqueue: ({ operationId, operation }) =>
+        enqueue: ({ operationId, operation, actor }) =>
           Effect.gen(function* () {
             const localSequence = LocalSequence.make(
               yield* Ref.updateAndGet(sequence, (n) => n + 1),
@@ -443,7 +442,10 @@ describe("IssueTrackerService", () => {
               companyId: ROUTED_COMPANY_ID,
               clientId: SyncClientId.make("server-routed-test"),
               environmentId: ROUTED_ENVIRONMENT_ID,
-              actor: { kind: "environment" as const, environmentId: ROUTED_ENVIRONMENT_ID },
+              actor: actor ?? {
+                kind: "environment" as const,
+                environmentId: ROUTED_ENVIRONMENT_ID,
+              },
               localSequence,
               baseVersion: CompanyVersion.make(1),
               kind: operation.kind,
@@ -505,6 +507,71 @@ describe("IssueTrackerService", () => {
       const local = yield* tracker.readLocalIssueSnapshot;
       assert.strictEqual(local.issues.length, 0);
       assert.strictEqual(local.comments.length, 0);
+
+      const intake = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        title: "Replica Slack intake",
+        permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+        authorName: "Corey",
+      });
+      if (!intake.created) throw new Error("intake should have filed an issue");
+      assert.isTrue(intake.issue.triage);
+      assert.strictEqual(intake.issue.slackSource?.channelId, "C123");
+      const duplicate = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        title: "Replica Slack intake",
+      });
+      assert.isFalse(duplicate.created);
+      assert.strictEqual(duplicate.issue?.id, intake.issue.id);
+
+      const accepted = yield* tracker.triageAccept(
+        {
+          issueId: intake.issue.id,
+          statusId: IssueStatusId.make("status-routed"),
+          runEnrichment: false,
+        },
+        AGENT,
+      );
+      assert.isFalse(accepted.issue.triage);
+
+      const rejectable = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459201.001901",
+        title: "Reject this Slack intake",
+      });
+      if (!rejectable.created) throw new Error("second intake should have filed an issue");
+      const rejected = yield* tracker.triageReject({ issueId: rejectable.issue.id }, AGENT);
+      assert.isNotNull(rejected.issue.deletedAt);
+
+      // An overlapping poll re-seeing the rejected message must not resurrect it: the ledger
+      // decision stands even though the replica keeps no row for the tombstoned issue.
+      const refused = yield* tracker.intakeCreateIssue({
+        channelId: "C123",
+        messageTs: "1723459201.001901",
+        title: "Reject this Slack intake",
+      });
+      assert.isFalse(refused.created);
+      assert.isNull(refused.issue);
+
+      const routedState = yield* Ref.get(stored);
+      const intakeCreates = routedState.outbox.filter(
+        (entry) =>
+          entry.envelope.kind === "issue.create" &&
+          (entry.envelope.args as { readonly slackSource?: unknown }).slackSource !== undefined,
+      );
+      assert.strictEqual(intakeCreates.length, 2);
+      assert.deepStrictEqual(
+        intakeCreates.map((entry) => entry.envelope.actor),
+        [
+          { kind: "system", source: "slack" },
+          { kind: "system", source: "slack" },
+        ],
+      );
+      assert.isTrue(
+        routedState.outbox.some((entry) => entry.envelope.kind === "issue.triageReject"),
+      );
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -2332,13 +2399,14 @@ describe("IssueTrackerService", () => {
         }),
       );
       yield* seedProject(PROJECT, "/tmp/pathway");
-      const { issue } = yield* tracker.intakeCreateIssue({
+      const { issue, created } = yield* tracker.intakeCreateIssue({
         channelId: "C1",
         messageTs: "1723459200.000100",
         title: "editor menu has no actions",
         description: "**Slack comment:**\n\neditor menu has no actions",
         projectId: PROJECT,
       });
+      if (!created) throw new Error("intake should have filed an issue");
 
       yield* tracker.startEnrichment({ issueId: issue.id });
       yield* Deferred.await(finished);
@@ -3128,7 +3196,7 @@ describe("IssueTrackerService", () => {
         authorName: "  Corey  ",
       });
 
-      assert.isTrue(filed.created);
+      if (!filed.created) throw new Error("intake should have filed an issue");
       // A triage item has no status presence: it is in no board and no count until it is accepted.
       assert.isTrue(filed.issue.triage);
       assert.strictEqual(filed.issue.projectId, PROJECT);
@@ -3149,7 +3217,7 @@ describe("IssueTrackerService", () => {
         title: "The deploy is stuck on staging",
       });
       assert.isFalse(again.created);
-      assert.strictEqual(again.issue.id, filed.issue.id);
+      assert.strictEqual(again.issue?.id, filed.issue.id);
       assert.strictEqual((yield* tracker.getSnapshot()).issues.length, 1);
 
       // The same ts in another channel is another message: Slack's ts is unique per channel only.
@@ -3177,6 +3245,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "The deploy is stuck",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const attached = yield* tracker.intakeAddComment({
         channelId: "C1",
@@ -3224,6 +3293,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "The deploy is stuck",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const accepted = yield* tracker.triageAccept(
         {
@@ -3330,6 +3400,7 @@ describe("IssueTrackerService", () => {
         messageTs: "1723459200.000100",
         title: "Somebody said hello",
       });
+      if (!filed.created) throw new Error("intake should have filed an issue");
 
       const rejected = yield* tracker.triageReject({ issueId: filed.issue.id }, ACTOR);
       assert.isNotNull(rejected.issue.deletedAt);

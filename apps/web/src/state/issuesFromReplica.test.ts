@@ -77,6 +77,7 @@ function issue(input: {
   readonly assignee?: unknown;
   readonly projectId?: string | null;
   readonly milestoneId?: string | null;
+  readonly slackSource?: unknown;
 }) {
   return decoded("issue", {
     title: `Issue ${input.id}`,
@@ -229,6 +230,13 @@ describe("issuesStoreFromReplica", () => {
           statusId: "",
           triage: true,
           assignee: { kind: "member", membershipId: "membership-1" },
+          slackSource: {
+            issueId: "issue-draft",
+            channelId: "C123",
+            messageTs: "1723459200.001900",
+            permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+            authorName: "Corey",
+          },
         }),
         issue({
           id: "issue-project",
@@ -264,7 +272,13 @@ describe("issuesStoreFromReplica", () => {
       sortOrder: "m",
       labelIds: [],
       dueDate: null,
-      slackSource: null,
+      slackSource: {
+        issueId: "issue-draft",
+        channelId: "C123",
+        messageTs: "1723459200.001900",
+        permalink: "https://example.slack.com/archives/C123/p1723459200001900",
+        authorName: "Corey",
+      },
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-02T00:00:00.000Z",
       deletedAt: null,

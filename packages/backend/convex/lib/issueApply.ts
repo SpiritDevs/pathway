@@ -84,9 +84,9 @@ import {
   encodeTeam,
   encodeTeamMembership,
 } from "./companyApply.ts";
-import { actorRecord, type CompanyActor } from "./identity.ts";
+import { syncOperationActorRecord, type CompanyActor } from "./identity.ts";
 
-type FeedActor = ReturnType<typeof actorRecord>;
+type FeedActor = ReturnType<typeof syncOperationActorRecord>;
 
 // ---------------------------------------------------------------------------
 // Outcome helpers
@@ -459,7 +459,7 @@ async function appendAuditEvent(
   operation: SyncOperationEnvelope,
   eventIndex: number,
   issue: { readonly id: string; readonly teamIds: readonly string[] },
-  kind: "created" | "field_changed" | "deleted" | "restored",
+  kind: "created" | "field_changed" | "deleted" | "restored" | "triage_rejected",
   payload: unknown,
   now: number,
 ): Promise<DomainChange> {
@@ -777,7 +777,7 @@ function handler(apply: EnvApply): DomainApply {
       ctx,
       actor,
       company: actor.company,
-      feedActor: actorRecord(actor),
+      feedActor: syncOperationActorRecord(actor, operation.actor, operation.environmentId),
       operation,
       now: Date.now(),
     });
@@ -795,6 +795,23 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   const existing = await byDomain(ctx, "issues", company._id, operation.entityId);
   if (existing !== null) {
     return rejected("invalid-arguments", `An issue ${operation.entityId} already exists.`);
+  }
+
+  if (args.slackSource !== undefined) {
+    if (
+      actor.kind !== "environment" ||
+      operation.actor.kind !== "system" ||
+      operation.actor.source !== "slack" ||
+      operation.environmentId !== actor.registration.environmentId
+    ) {
+      return rejected(
+        "permission-denied",
+        "Only an authenticated environment Slack intake service may set Slack source metadata.",
+      );
+    }
+    if (args.slackSource.issueId !== operation.entityId) {
+      return rejected("invalid-arguments", "The Slack source must name the issue being created.");
+    }
   }
 
   const teamIds = args.teamIds ?? [];
@@ -932,7 +949,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     labelIds: [...(args.labelIds ?? [])],
     dueDate: args.dueDate ?? null,
     triage,
-    slackSource: null,
+    slackSource: args.slackSource ?? null,
     teamIds: [...teamIds],
     workflowOwner: owner,
     workModelSelection: args.workModelSelection ?? null,
@@ -1084,6 +1101,33 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   return applied(
     tombstone("issue", issue.id, issue.teamIds, issue._id),
     await appendAuditEvent(ctx, company, feedActor, operation, 0, issue, "deleted", {}, now),
+  );
+};
+
+const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, operation, now }) => {
+  const parsed = decoded(parseNoArgs(operation.args));
+  if ("outcome" in parsed) return parsed.outcome;
+
+  const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
+  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
+  if (!can(actor, "issues.delete", issue.teamIds)) return denied("issues.delete");
+  if (issue.deletedAt !== null) return applied();
+  if (!issue.triage) return rejected("invalid-arguments", "Only a triage item can be rejected.");
+
+  await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  return applied(
+    tombstone("issue", issue.id, issue.teamIds, issue._id),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      0,
+      issue,
+      "triage_rejected",
+      {},
+      now,
+    ),
   );
 };
 
@@ -2948,6 +2992,7 @@ export const ISSUE_DOMAIN_APPLY: Partial<Record<SyncOperationKind, DomainApply>>
   "issue.create": handler(issueCreate),
   "issue.update": handler(issueUpdate),
   "issue.delete": handler(issueDelete),
+  "issue.triageReject": handler(issueTriageReject),
   "issue.restore": handler(issueRestore),
   "issue.setSortOrder": handler(issueSetSortOrder),
   "issue.setWorkflowOwner": handler(issueSetWorkflowOwner),

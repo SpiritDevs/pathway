@@ -47,6 +47,8 @@ const CUT_OVER_RPC_METHODS: ReadonlySet<IssueWsMethod> = new Set([
   ISSUES_WS_METHODS.viewsReorder,
   ISSUES_WS_METHODS.linkThread,
   ISSUES_WS_METHODS.unlinkThread,
+  ISSUES_WS_METHODS.triageAccept,
+  ISSUES_WS_METHODS.triageReject,
 ]);
 
 /** Current replica client calls that remain deliberately local until their domains sync. */
@@ -59,8 +61,6 @@ const CURRENT_CLIENT_ONLY_RPC_METHODS: ReadonlySet<IssueWsMethod> = new Set([
   ISSUES_WS_METHODS.startEnrichment,
   ISSUES_WS_METHODS.cancelEnrichment,
   ISSUES_WS_METHODS.getEnrichmentRuns,
-  ISSUES_WS_METHODS.triageAccept,
-  ISSUES_WS_METHODS.triageReject,
 ]);
 
 function owns(input: unknown, key: string): boolean {

@@ -70,6 +70,7 @@ import {
   type ThreadId,
 } from "@spiritdevs/contracts";
 import * as Data from "effect/Data";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
@@ -107,6 +108,7 @@ import {
   issueRelationDeleteOperation,
   issueRestoreOperation,
   issueSetSortOrderOperation,
+  issueTriageRejectOperation,
   issueStatusCreateOperation,
   issueStatusDeleteOperation,
   issueStatusesReorderOperation,
@@ -2246,6 +2248,75 @@ const syncWriteOptions = {
   concurrency: serialPerEnvironment,
 } as const;
 
+const syncedTriageAcceptCommand = routeIssueMutationCommand(legacyIssueCommands.triageAccept, {
+  ...syncWriteOptions,
+  plan: (input, registry) => {
+    const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
+    if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+    const issue: Issue = {
+      ...current,
+      statusId: input.statusId,
+      triage: false,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.priority === undefined ? {} : { priority: input.priority }),
+      ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+      updatedAt: new Date().toISOString(),
+    };
+    return {
+      operations: [
+        issueUpdateOperation({
+          issueId: input.issueId,
+          patch: {
+            statusId: input.statusId,
+            triage: false,
+            ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+            ...(input.priority === undefined ? {} : { priority: input.priority }),
+            ...(input.assignee === undefined ? {} : { assignee: input.assignee }),
+          },
+        }),
+      ],
+      result: () => ({ issue, enrichmentRun: null, enrichmentRefusal: null }),
+    };
+  },
+});
+
+const commandFailureMessage = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.squash(cause);
+  return typeof failure === "object" && failure !== null && "message" in failure
+    ? String((failure as { readonly message: unknown }).message)
+    : String(failure);
+};
+
+/**
+ * Replica triage is an ordinary issue update. The optional investigation remains an
+ * environment-local executor and starts only after the durable outbox enqueue has completed.
+ */
+const triageAcceptCommand: typeof syncedTriageAcceptCommand = {
+  label: syncedTriageAcceptCommand.label,
+  run: async (registry, target) => {
+    const replicaRouted = registry.get(activeCompanyReplicaRoutingAtom) !== null;
+    const accepted = await syncedTriageAcceptCommand.run(registry, target);
+    if (!replicaRouted || !target.input.runEnrichment || !AsyncResult.isSuccess(accepted)) {
+      return accepted;
+    }
+    const enrichment = await legacyIssueCommands.startEnrichment.run(registry, {
+      environmentId: target.environmentId,
+      input: { issueId: target.input.issueId },
+    });
+    return AsyncResult.isSuccess(enrichment)
+      ? AsyncResult.success({
+          ...accepted.value,
+          enrichmentRun: enrichment.value.run,
+          enrichmentRefusal: null,
+        })
+      : AsyncResult.success({
+          ...accepted.value,
+          enrichmentRun: null,
+          enrichmentRefusal: commandFailureMessage(enrichment.cause),
+        });
+  },
+};
+
 export const issueCommands = {
   create: routeIssueMutationCommand(legacyIssueCommands.create, {
     ...syncWriteOptions,
@@ -2556,8 +2627,21 @@ export const issueCommands = {
   slackWatchCreate: legacyIssueCommands.slackWatchCreate,
   slackWatchUpdate: legacyIssueCommands.slackWatchUpdate,
   slackWatchDelete: legacyIssueCommands.slackWatchDelete,
-  triageAccept: legacyIssueCommands.triageAccept,
-  triageReject: legacyIssueCommands.triageReject,
+  triageAccept: triageAcceptCommand,
+  triageReject: routeIssueMutationCommand(legacyIssueCommands.triageReject, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
+      if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+      const timestamp = new Date().toISOString();
+      return {
+        operations: [issueTriageRejectOperation(input)],
+        result: () => ({
+          issue: { ...current, updatedAt: timestamp, deletedAt: timestamp },
+        }),
+      };
+    },
+  }),
 } as const;
 
 type IssueCommandInput<C> =

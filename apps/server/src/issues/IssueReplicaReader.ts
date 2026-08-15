@@ -89,10 +89,9 @@ export function issueReadModelFromStoredReplica(
 
   if (stored.quarantined.length > 0) return null;
 
-  // One engine owns this store and stamps one actor on every envelope. Reading it from the durable
-  // row preserves environment attribution on optimistic comments instead of presenting them as
-  // the legacy anonymous human while they wait for confirmation.
-  const adapter = makeIssueSyncAdapter({ actor: stored.outbox[0]?.envelope.actor ?? null });
+  // Each outbox row carries its own actor: one environment engine may author ordinary service
+  // writes and named system writes such as Slack intake in the same queue.
+  const adapter = makeIssueSyncAdapter();
   const decoded = decodeConfirmedEntities({
     adapter,
     rows: stored.entities,

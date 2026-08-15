@@ -93,6 +93,7 @@ export const SYNC_OPERATION_KINDS = [
   "issue.create",
   "issue.update",
   "issue.delete",
+  "issue.triageReject",
   "issue.restore",
   "issue.setSortOrder",
   "issue.setWorkflowOwner",

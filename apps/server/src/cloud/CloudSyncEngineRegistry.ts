@@ -18,6 +18,7 @@ import type {
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { SyncOperationId } from "@spiritdevs/contracts/cloudSync";
+import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -36,6 +37,7 @@ export interface CloudSyncIssueEngineHandle {
     readonly operationId: SyncOperationId;
     readonly operation: IssueSyncOperation;
     readonly dependsOn?: ReadonlyArray<SyncOperationId>;
+    readonly actor?: SyncActor;
   }) => Effect.Effect<SyncEnqueueReceipt, SyncStoreError>;
   readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
   readonly operationDisposition: (

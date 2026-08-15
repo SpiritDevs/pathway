@@ -207,6 +207,30 @@ function workflowOwner(value: unknown, label: string): IssueWorkflowOwner {
   return { kind, teamId: domainId(field(source, "teamId"), `${label}.teamId`) };
 }
 
+/** Slack source metadata carried only by an environment-authored intake create. */
+export interface IssueSlackSource {
+  readonly issueId: string;
+  readonly channelId: string;
+  readonly messageTs: string;
+  readonly permalink: string | null;
+  readonly authorName: string | null;
+}
+
+function slackSource(value: unknown, label: string): IssueSlackSource {
+  const source = record(value, label);
+  return {
+    issueId: domainId(field(source, "issueId"), `${label}.issueId`),
+    channelId: trimmedNonEmpty(field(source, "channelId"), `${label}.channelId`, 256),
+    messageTs: trimmedNonEmpty(field(source, "messageTs"), `${label}.messageTs`, 256),
+    permalink: nullable(field(source, "permalink"), (inner) =>
+      trimmedNonEmpty(inner, `${label}.permalink`, 8_192),
+    ),
+    authorName: nullable(field(source, "authorName"), (inner) =>
+      trimmedNonEmpty(inner, `${label}.authorName`, 512),
+    ),
+  };
+}
+
 function issueColor(value: unknown, label: string): string {
   return patterned(value, ISSUE_COLOR_PATTERN, label, "a #rgb or #rrggbb color");
 }
@@ -316,6 +340,7 @@ export interface IssueCreateArgs {
   readonly labelIds?: readonly string[] | undefined;
   readonly dueDate?: string | undefined;
   readonly triage?: boolean | undefined;
+  readonly slackSource?: IssueSlackSource | undefined;
   readonly sortOrder?: string | undefined;
   readonly teamIds?: readonly string[] | undefined;
   readonly workflowOwner?: IssueWorkflowOwner | undefined;
@@ -332,6 +357,7 @@ export function parseIssueCreateArgs(value: unknown): ArgsResult<IssueCreateArgs
     const rawAssignee = field(source, "assignee");
     const rawLabelIds = field(source, "labelIds");
     const rawTriage = field(source, "triage");
+    const rawSlackSource = field(source, "slackSource");
     const rawTeamIds = field(source, "teamIds");
     const rawOwner = field(source, "workflowOwner");
     const rawSelection = field(source, "workModelSelection");
@@ -354,6 +380,8 @@ export function parseIssueCreateArgs(value: unknown): ArgsResult<IssueCreateArgs
       labelIds: rawLabelIds === undefined ? undefined : labelIds(rawLabelIds, "args.labelIds"),
       dueDate: optionalString("dueDate", issueDate),
       triage: rawTriage === undefined ? undefined : bool(rawTriage, "args.triage"),
+      slackSource:
+        rawSlackSource === undefined ? undefined : slackSource(rawSlackSource, "args.slackSource"),
       sortOrder: optionalString("sortOrder", (v, label) => trimmedNonEmpty(v, label, 256)),
       teamIds: rawTeamIds === undefined ? undefined : teamIds(rawTeamIds, "args.teamIds"),
       workflowOwner:
