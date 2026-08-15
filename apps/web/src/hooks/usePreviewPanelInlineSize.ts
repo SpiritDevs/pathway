@@ -9,12 +9,13 @@ export interface PreviewPanelInlineSize {
 
 const PREVIEW_PANEL_WIDTH_STORAGE_KEY = "pathway:preview-panel-width";
 const PREVIEW_PANEL_MIN_WIDTH = 360;
-/** Fraction of the viewport allowed, preserving the remaining space for chat. */
+/** Upper bound as a fraction of the viewport; only binds on wide screens. */
 const PREVIEW_PANEL_MAX_WIDTH_FRACTION = 0.7;
 const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
+const SIBLING_COLUMN_MIN_WIDTH = 360;
 
-export function usePreviewPanelInlineSize(): PreviewPanelInlineSize {
-  const maxWidth = useViewportClampedMaxWidth();
+export function usePreviewPanelInlineSize(containerWidth?: number): PreviewPanelInlineSize {
+  const maxWidth = useViewportClampedMaxWidth(containerWidth);
   return useResizableWidth({
     storageKey: PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     defaultWidth: PREVIEW_PANEL_DEFAULT_WIDTH,
@@ -25,7 +26,7 @@ export function usePreviewPanelInlineSize(): PreviewPanelInlineSize {
 }
 
 /** Keep the resizable panel's upper bound in sync with the current window. */
-function useViewportClampedMaxWidth(): number {
+function useViewportClampedMaxWidth(containerWidth?: number): number {
   const [vw, setVw] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -43,8 +44,11 @@ function useViewportClampedMaxWidth(): number {
       if (frame !== 0) window.cancelAnimationFrame(frame);
     };
   }, []);
-  return getPreviewPanelMaxWidth(vw);
+  return getPreviewPanelMaxWidth(vw, containerWidth);
 }
-export function getPreviewPanelMaxWidth(viewportWidth: number): number {
-  return Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
+export function getPreviewPanelMaxWidth(viewportWidth: number, containerWidth?: number): number {
+  const fractionCap = Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
+  const containerCap =
+    containerWidth === undefined ? Infinity : Math.floor(containerWidth) - SIBLING_COLUMN_MIN_WIDTH;
+  return Math.max(PREVIEW_PANEL_MIN_WIDTH, Math.min(fractionCap, containerCap));
 }
