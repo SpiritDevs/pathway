@@ -27,27 +27,34 @@ import {
   followStreamInEnvironment,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { pinOrderKeyBetween } from "@spiritdevs/client-runtime/state/thread-sort";
+import { defaultIssueSortOrder } from "@spiritdevs/client-runtime/sync";
+import { ISSUE_KEY_DRAFT_PLACEHOLDER } from "@spiritdevs/contracts/cloudSync";
 import {
   ISSUES_WS_METHODS,
+  IssueCommentId,
+  IssueCycleId,
+  IssueId,
+  IssueLabelId,
+  IssueMilestoneId,
+  IssueRelationId,
+  IssueStatusId,
+  IssueTodoId,
+  IssueViewId,
   issueCycleStatusOn,
   type EnvironmentId,
   type Issue,
   type IssueComment,
-  type IssueCommentId,
   type IssueCycle,
   type IssueDate,
   type IssueDetail,
   type IssueEnrichmentRun,
   type IssueEnrichmentRunId,
   type IssueEvent,
-  type IssueId,
   type IssueLabel,
   type IssueMilestone,
   type IssueMilestoneHistoryPoint,
-  type IssueMilestoneId,
   type IssueRelationDirection,
   type IssueRelationEdge,
-  type IssueRelationId,
   type IssueRelationKind,
   type IssueStatus,
   type IssueStatusCategory,
@@ -71,10 +78,47 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
-import { activeCompanyIdAtom } from "../cloud/activeCompany";
-import { companyRegistryReplicasAtom } from "../cloud/companyRegistryReplica";
+import { activeCompanyReplicaRoutingAtom } from "../cloud/activeCompany";
 import { syncedIssueDomainAtom } from "../cloud/issueDomainReadModel";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { randomUUID } from "../lib/utils";
+import {
+  issueBulkUpdateOperations,
+  issueCommentCreateOperation,
+  issueCommentDeleteOperation,
+  issueCommentUpdateOperation,
+  issueCreateOperation,
+  issueCycleCreateOperation,
+  issueCycleDeleteOperation,
+  issueCycleUpdateOperation,
+  issueDeleteOperation,
+  issueLabelCreateOperation,
+  issueLabelDeleteOperation,
+  issueLabelUpdateOperation,
+  issueMilestoneCreateOperation,
+  issueMilestoneDeleteOperation,
+  issueMilestonesReorderOperations,
+  issueMilestoneUpdateOperation,
+  issueRelationCreateOperation,
+  issueRelationDeleteOperation,
+  issueRestoreOperation,
+  issueSetSortOrderOperation,
+  issueStatusCreateOperation,
+  issueStatusDeleteOperation,
+  issueStatusesReorderOperation,
+  issueStatusUpdateOperation,
+  issueTodoCreateOperation,
+  issueTodoCreateSortOrder,
+  issueTodoDeleteOperation,
+  issueTodosReorderOperations,
+  issueTodoUpdateOperation,
+  issueUpdateOperation,
+  issueViewCreateOperation,
+  issueViewDeleteOperation,
+  issueViewsReorderOperations,
+  issueViewUpdateOperation,
+} from "./issueOperationsFromRpc";
+import { receiptMappedResult, routeIssueMutationCommand } from "./issueMutationRouting";
 import { issuesStoreFromReplica } from "./issuesFromReplica";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
@@ -681,8 +725,7 @@ export function selectIssuesStoreState(
 export const issuesStoreStateAtom = Atom.make((get): IssuesStoreState => {
   const view = get(issuesStreamViewAtom);
   const legacyState: IssuesStoreState = { store: view.state.store, status: view.status };
-  const activeCompanyId = get(activeCompanyIdAtom);
-  if (activeCompanyId === null || !get(companyRegistryReplicasAtom).has(activeCompanyId)) {
+  if (get(activeCompanyReplicaRoutingAtom) === null) {
     return selectIssuesStoreState(legacyState, null);
   }
   return selectIssuesStoreState(
@@ -1821,7 +1864,7 @@ const loggedWriteCommandOptions = {
   onSuccess: refreshIssueEvents,
 } as const;
 
-export const issueCommands = {
+const legacyIssueCommands = {
   create: createEnvironmentRpcCommand(connectionAtomRuntime, {
     label: "environment-data:issues:create",
     tag: ISSUES_WS_METHODS.create,
@@ -2095,6 +2138,325 @@ export const issueCommands = {
     tag: ISSUES_WS_METHODS.triageReject,
     ...loggedWriteCommandOptions,
   }),
+} as const;
+
+const syncWriteOptions = {
+  scheduler: issueCommandScheduler,
+  concurrency: serialPerEnvironment,
+} as const;
+
+export const issueCommands = {
+  create: routeIssueMutationCommand(legacyIssueCommands.create, {
+    ...syncWriteOptions,
+    plan: (input) => {
+      const id = IssueId.make(randomUUID());
+      const timestamp = new Date().toISOString();
+      const issue: Issue = {
+        id,
+        key: ISSUE_KEY_DRAFT_PLACEHOLDER as Issue["key"],
+        title: input.title,
+        description: input.description ?? "",
+        statusId: input.statusId ?? ("" as Issue["statusId"]),
+        priority: input.priority ?? "none",
+        assignee: input.assignee ?? null,
+        workModelSelection: null,
+        automationAssignment: null,
+        pullRequest: null,
+        projectId: input.projectId ?? null,
+        milestoneId: input.milestoneId ?? null,
+        cycleId: input.cycleId ?? null,
+        parentId: input.parentId ?? null,
+        sortOrder: defaultIssueSortOrder(0),
+        labelIds: [...(input.labelIds ?? [])],
+        dueDate: input.dueDate ?? null,
+        triage: input.triage ?? false,
+        slackSource: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        deletedAt: null,
+      };
+      return {
+        operations: [issueCreateOperation(input, id)],
+        result: () => ({ issue }),
+      };
+    },
+  }),
+  update: routeIssueMutationCommand(legacyIssueCommands.update, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "automationAssignment" in input.patch,
+    plan: (input) => ({
+      operations: [issueUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  delete: routeIssueMutationCommand(legacyIssueCommands.delete, {
+    ...syncWriteOptions,
+    plan: (input) => ({ operations: [issueDeleteOperation(input)], result: receiptMappedResult }),
+  }),
+  restore: routeIssueMutationCommand(legacyIssueCommands.restore, {
+    ...syncWriteOptions,
+    plan: (input) => ({ operations: [issueRestoreOperation(input)], result: receiptMappedResult }),
+  }),
+  bulkUpdate: routeIssueMutationCommand(legacyIssueCommands.bulkUpdate, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "automationAssignment" in input.patch,
+    plan: (input) => ({
+      operations: issueBulkUpdateOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  setSortOrder: routeIssueMutationCommand(legacyIssueCommands.setSortOrder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueSetSortOrderOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  createStatus: routeIssueMutationCommand(legacyIssueCommands.createStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusCreateOperation(input, IssueStatusId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  updateStatus: routeIssueMutationCommand(legacyIssueCommands.updateStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  deleteStatus: routeIssueMutationCommand(legacyIssueCommands.deleteStatus, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  reorderStatuses: routeIssueMutationCommand(legacyIssueCommands.reorderStatuses, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueStatusesReorderOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  createLabel: routeIssueMutationCommand(legacyIssueCommands.createLabel, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const id = IssueLabelId.make(randomUUID());
+      const label: IssueLabel = {
+        id,
+        name: input.name,
+        color: input.color,
+        createdAt: new Date().toISOString(),
+      };
+      const labels = [...registry.get(issuesStoreAtom).labels, label].sort(
+        (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+      );
+      return {
+        operations: [issueLabelCreateOperation(input, id)],
+        result: () => ({ label, labels }),
+      };
+    },
+  }),
+  updateLabel: routeIssueMutationCommand(legacyIssueCommands.updateLabel, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueLabelUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  deleteLabel: routeIssueMutationCommand(legacyIssueCommands.deleteLabel, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueLabelDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  setKeyPrefix: legacyIssueCommands.setKeyPrefix,
+  importCsv: legacyIssueCommands.importCsv,
+  milestoneCreate: routeIssueMutationCommand(legacyIssueCommands.milestoneCreate, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const id = IssueMilestoneId.make(randomUUID());
+      const timestamp = new Date().toISOString();
+      const milestone: IssueMilestone = {
+        id,
+        projectId: input.projectId,
+        name: input.name,
+        description: input.description ?? null,
+        startDate: input.startDate ?? null,
+        targetDate: input.targetDate ?? null,
+        position: input.position ?? Number.MAX_SAFE_INTEGER,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const milestones = [...registry.get(issuesStoreAtom).milestones, milestone].sort(
+        (left, right) =>
+          left.projectId.localeCompare(right.projectId) ||
+          left.position - right.position ||
+          left.id.localeCompare(right.id),
+      );
+      return {
+        operations: [issueMilestoneCreateOperation(input, id)],
+        result: () => ({ milestone, milestones }),
+      };
+    },
+  }),
+  milestoneUpdate: routeIssueMutationCommand(legacyIssueCommands.milestoneUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueMilestoneUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  milestoneDelete: routeIssueMutationCommand(legacyIssueCommands.milestoneDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueMilestoneDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  milestonesReorder: routeIssueMutationCommand(legacyIssueCommands.milestonesReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueMilestonesReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleCreate: routeIssueMutationCommand(legacyIssueCommands.cycleCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleCreateOperation(input, IssueCycleId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleUpdate: routeIssueMutationCommand(legacyIssueCommands.cycleUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  cycleDelete: routeIssueMutationCommand(legacyIssueCommands.cycleDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCycleDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todoCreate: routeIssueMutationCommand(legacyIssueCommands.todoCreate, {
+    ...syncWriteOptions,
+    plan: (input, registry) => {
+      const todos = registry
+        .get(syncedIssueDomainAtom)
+        .issueTodos.filter((todo) => todo.issueId === input.issueId);
+      const sortOrder = issueTodoCreateSortOrder(input.position, todos);
+      return {
+        operations: [issueTodoCreateOperation(input, IssueTodoId.make(randomUUID()), sortOrder)],
+        result: receiptMappedResult,
+      };
+    },
+  }),
+  todoUpdate: routeIssueMutationCommand(legacyIssueCommands.todoUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueTodoUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todoDelete: routeIssueMutationCommand(legacyIssueCommands.todoDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueTodoDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  todosReorder: routeIssueMutationCommand(legacyIssueCommands.todosReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueTodosReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  relationCreate: routeIssueMutationCommand(legacyIssueCommands.relationCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueRelationCreateOperation(input, IssueRelationId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  relationDelete: routeIssueMutationCommand(legacyIssueCommands.relationDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueRelationDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentCreate: routeIssueMutationCommand(legacyIssueCommands.commentCreate, {
+    ...syncWriteOptions,
+    useLegacy: (input) => "agentMention" in input,
+    plan: (input) => ({
+      operations: [issueCommentCreateOperation(input, IssueCommentId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentUpdate: routeIssueMutationCommand(legacyIssueCommands.commentUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCommentUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  commentDelete: routeIssueMutationCommand(legacyIssueCommands.commentDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueCommentDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  cancelCommentAgentRun: legacyIssueCommands.cancelCommentAgentRun,
+  retryCommentAgentRun: legacyIssueCommands.retryCommentAgentRun,
+  uploadCommentAttachment: legacyIssueCommands.uploadCommentAttachment,
+  viewCreate: routeIssueMutationCommand(legacyIssueCommands.viewCreate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewCreateOperation(input, IssueViewId.make(randomUUID()))],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewUpdate: routeIssueMutationCommand(legacyIssueCommands.viewUpdate, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewUpdateOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewDelete: routeIssueMutationCommand(legacyIssueCommands.viewDelete, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: [issueViewDeleteOperation(input)],
+      result: receiptMappedResult,
+    }),
+  }),
+  viewsReorder: routeIssueMutationCommand(legacyIssueCommands.viewsReorder, {
+    ...syncWriteOptions,
+    plan: (input) => ({
+      operations: issueViewsReorderOperations(input),
+      result: receiptMappedResult,
+    }),
+  }),
+  startEnrichment: legacyIssueCommands.startEnrichment,
+  cancelEnrichment: legacyIssueCommands.cancelEnrichment,
+  linkThread: legacyIssueCommands.linkThread,
+  unlinkThread: legacyIssueCommands.unlinkThread,
+  slackSetToken: legacyIssueCommands.slackSetToken,
+  slackListChannels: legacyIssueCommands.slackListChannels,
+  slackWatchCreate: legacyIssueCommands.slackWatchCreate,
+  slackWatchUpdate: legacyIssueCommands.slackWatchUpdate,
+  slackWatchDelete: legacyIssueCommands.slackWatchDelete,
+  triageAccept: legacyIssueCommands.triageAccept,
+  triageReject: legacyIssueCommands.triageReject,
 } as const;
 
 type IssueCommandInput<C> =

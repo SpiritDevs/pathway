@@ -41,7 +41,7 @@ import type { IssueId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
-import { activeCompanyIdAtom } from "./activeCompany";
+import { activeCompanyReplicaRoutingAtom } from "./activeCompany";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 
 const isCloudProject = Schema.is(CloudProjectSyncEntity);
@@ -220,7 +220,7 @@ export function syncedIssueDetailById(
 }
 
 const activeCompanyReplicaAtom = Atom.make((get): CompanyRegistryReplicaState | null => {
-  const companyId = get(activeCompanyIdAtom);
+  const companyId = get(activeCompanyReplicaRoutingAtom);
   return companyId === null ? null : (get(companyRegistryReplicasAtom).get(companyId) ?? null);
 }).pipe(Atom.withLabel("cloud-sync:active-company-replica"));
 

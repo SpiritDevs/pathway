@@ -180,6 +180,18 @@ export const activeCompanyIdAtom = Atom.writable(
   },
 ).pipe(Atom.withLabel("cloud-sync:active-company-id"));
 
+/**
+ * The single read/write cutover decision for issue-domain state.
+ *
+ * A company is replica-routed only after its engine has published a usable replica. Keeping the
+ * company id (rather than a boolean) lets mutation commands enqueue into that exact engine while
+ * the list projection reads from the same replica-presence signal.
+ */
+export const activeCompanyReplicaRoutingAtom = Atom.make((get): CompanyId | null => {
+  const companyId = get(activeCompanyIdAtom);
+  return companyId !== null && get(companyRegistryReplicasAtom).has(companyId) ? companyId : null;
+}).pipe(Atom.withLabel("cloud-sync:active-company-replica-routing"));
+
 export const activeCompanyAtom = Atom.make((get): ActiveCompanyRow | null => {
   const activeCompanyId = get(activeCompanyIdAtom);
   return get(companyListAtom).find((company) => company.id === activeCompanyId) ?? null;
