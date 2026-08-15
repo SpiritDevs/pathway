@@ -57,6 +57,8 @@ import { randomUUID } from "../lib/utils";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { publishCompanyRegistryReplica } from "./companyRegistryReplica";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
+import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
+import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
 import {
   classifyConvexSyncTransportError,
   convexFunctionName,
@@ -360,6 +362,11 @@ export interface CloudSyncEnginesOptions {
     companyId: CompanyId,
     replica: { readonly view: ReadonlyMap<string, unknown> } | null,
   ) => Effect.Effect<void>;
+  /** Publishes the compact health state alongside the replica view. */
+  readonly publishCompanySyncStatus?: (
+    companyId: CompanyId,
+    status: CompanySyncStatus | null,
+  ) => Effect.Effect<void>;
   /** Overridable so a test does not have to wait out the real backoff. */
   readonly restartDelay?: Duration.Input;
 }
@@ -419,9 +426,18 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
         }),
       });
       const publishReplica = options.publishCompanyRegistryReplica;
-      if (publishReplica !== undefined) {
+      const publishStatus = options.publishCompanySyncStatus;
+      if (publishReplica !== undefined || publishStatus !== undefined) {
         yield* SubscriptionRef.changes(engine.state).pipe(
-          Stream.runForEach((state) => publishReplica(company.companyId, state)),
+          Stream.runForEach((state) =>
+            Effect.all(
+              [
+                publishReplica?.(company.companyId, state),
+                publishStatus?.(company.companyId, deriveCompanySyncStatus(state)),
+              ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
+              { discard: true },
+            ),
+          ),
           Effect.forkChild,
         );
       }
@@ -493,10 +509,17 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       company: CloudSyncCompany,
     ) {
       const scope = yield* Scope.make();
-      yield* superviseCompany(company).pipe(
-        Effect.ensuring(
-          options.publishCompanyRegistryReplica?.(company.companyId, null) ?? Effect.void,
+      yield* Scope.addFinalizer(
+        scope,
+        Effect.all(
+          [
+            options.publishCompanyRegistryReplica?.(company.companyId, null),
+            options.publishCompanySyncStatus?.(company.companyId, null),
+          ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
+          { discard: true },
         ),
+      );
+      yield* superviseCompany(company).pipe(
         Effect.provideService(SyncTransport, connection.transport),
         Effect.forkIn(scope),
       );
@@ -626,6 +649,16 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   });
   yield* Effect.addFinalizer(() => store.close);
   const election = yield* makeWebLeaderElection({ scope: options.scope });
+  yield* Effect.addFinalizer(() => publishCloudSyncTabState(null));
+  yield* election.changes.pipe(
+    Stream.runForEach((isLeader) =>
+      publishCloudSyncTabState({
+        role: isLeader ? "leader" : "follower",
+        crossContext: election.crossContext,
+      }),
+    ),
+    Effect.forkScoped,
+  );
   const clientId = options.clientId ?? readCloudSyncClientId({ scope: options.scope });
 
   const connect = Effect.gen(function* () {
@@ -648,6 +681,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
     election,
     connect,
     publishCompanyRegistryReplica,
+    publishCompanySyncStatus,
     ...(options.restartDelay === undefined ? {} : { restartDelay: options.restartDelay }),
   }).pipe(Effect.provideService(SyncStore, store.service));
 

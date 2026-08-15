@@ -173,8 +173,13 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Company")?.paths).toEqual([
       "/settings/company-members",
       "/settings/company-teams",
+      "/settings/sync",
       "/settings/environments",
     ]);
+    expect(searchSettings("company sync status")[0]).toMatchObject({
+      id: "company-sync",
+      to: "/settings/sync",
+    });
     expect(searchSettings("company environments")[0]).toMatchObject({
       id: "company-environments",
       to: "/settings/environments",

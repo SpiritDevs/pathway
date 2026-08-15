@@ -6,6 +6,7 @@ import { cn, isMacPlatform } from "../../lib/utils";
 import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SyncStatusIndicator } from "./SyncStatusIndicator";
 
 const NOOP = () => {};
 
@@ -87,7 +88,10 @@ export function WorkspaceTopBar() {
       data-workspace-top-bar=""
     >
       <WorkspaceHistoryControls />
-      <T3ConnectProfileButton />
+      <div className="flex items-center gap-2">
+        <SyncStatusIndicator />
+        <T3ConnectProfileButton />
+      </div>
     </header>
   );
 }

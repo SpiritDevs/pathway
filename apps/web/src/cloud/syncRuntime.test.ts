@@ -318,6 +318,42 @@ const connectionTo = (
 ): CloudSyncConnection => ({ transport, companies: Stream.fromQueue(listings) });
 
 describe("runCloudSyncEngines", () => {
+  it.effect("publishes compact status and removes it with the company engine scope", () =>
+    Effect.gen(function* () {
+      const { transport } = yield* makeFeedTransport();
+      const store = yield* makeMemorySyncStore();
+      const election = yield* makeWebLeaderElection({
+        scope: "user_123",
+        locks: makeInProcessWebLockManager(),
+      });
+      const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+      const published = yield* Queue.unbounded<{
+        readonly companyId: CompanyId;
+        readonly phase: string | null;
+      }>();
+      const supervisor = yield* Effect.forkChild(
+        runCloudSyncEngines({
+          clientId: SyncClientId.make("client-1"),
+          election,
+          connect: Effect.succeed(connectionTo(transport, listings)),
+          publishCompanySyncStatus: (companyId, status) =>
+            Queue.offer(published, { companyId, phase: status?.phase ?? null }),
+        }).pipe(Effect.provideService(SyncStore, store.service)),
+        { startImmediately: true },
+      );
+
+      yield* Queue.offer(listings, cleanListing(company(COMPANY_A, "membership-a")));
+      expect(yield* Queue.take(published)).toEqual({
+        companyId: COMPANY_A,
+        phase: "bootstrapping",
+      });
+
+      yield* Queue.offer(listings, cleanListing());
+      expect(yield* Queue.take(published)).toEqual({ companyId: COMPANY_A, phase: null });
+      yield* Fiber.interrupt(supervisor);
+    }),
+  );
+
   it.effect("runs one engine per company and follows the membership listing", () =>
     Effect.gen(function* () {
       const { events, transport } = yield* makeFeedTransport();
