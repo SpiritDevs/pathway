@@ -816,9 +816,18 @@ importers:
 
   packages/backend:
     dependencies:
+      '@spiritdevs/client-runtime':
+        specifier: workspace:*
+        version: link:../client-runtime
+      '@spiritdevs/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       convex:
         specifier: ^1.16.0
         version: 1.43.0(@clerk/react@6.12.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(bufferutil@4.1.0)(react@19.2.6)(utf-8-validate@6.0.6)
+      effect:
+        specifier: 4.0.0-beta.103
+        version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
     devDependencies:
       '@types/node':
         specifier: 24.12.4

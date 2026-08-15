@@ -43,6 +43,10 @@
       "types": "./src/sync/issueOps.ts",
       "import": "./src/sync/issueOps.ts"
     },
+    "./sync/issueLegacyProjection": {
+      "types": "./src/sync/issueLegacyProjection.ts",
+      "import": "./src/sync/issueLegacyProjection.ts"
+    },
     "./sync/operations": {
       "types": "./src/sync/operations.ts",
       "import": "./src/sync/operations.ts"
@@ -63,7 +67,10 @@
     "test": "vp test run"
   },
   "dependencies": {
-    "convex": "^1.16.0"
+    "@spiritdevs/client-runtime": "workspace:*",
+    "@spiritdevs/contracts": "workspace:*",
+    "convex": "^1.16.0",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

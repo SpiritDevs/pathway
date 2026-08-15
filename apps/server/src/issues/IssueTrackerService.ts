@@ -144,6 +144,12 @@ import {
   type SlackWatchUpdateInput,
   type SlackWatchesResult,
 } from "@spiritdevs/contracts";
+import {
+  issueCollectionProjectionFromReplica,
+  issueDetailProjectionFromReplica,
+  issueThreadLinksFromReplica,
+} from "@spiritdevs/backend/sync/issueLegacyProjection";
+import { syncedIssueDetailById } from "@spiritdevs/client-runtime/sync";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -206,6 +212,7 @@ import {
 } from "./csvImport.ts";
 import { milestoneHistory } from "./milestoneHistory.ts";
 import { issueSortOrderAfter } from "./sortOrder.ts";
+import { makeIssueReplicaReader, routeReplicaIssueRead } from "./IssueReplicaReader.ts";
 import {
   readLocalIssueSnapshotFrom,
   type LocalIssueSnapshot,
@@ -1161,6 +1168,7 @@ function applyIssuePatch(input: {
 }
 
 export const make = Effect.gen(function* () {
+  const replicaReader = yield* makeIssueReplicaReader;
   const crypto = yield* Crypto.Crypto;
   const issueRepository = yield* IssueRepository;
   const statusRepository = yield* IssueStatusRepository;
@@ -1340,7 +1348,7 @@ export const make = Effect.gen(function* () {
       Effect.tap(() => slackEngine.notifyWatchesChanged),
     );
 
-  const readSnapshot = () =>
+  const readLegacySnapshot = () =>
     Effect.all([
       listIssues(),
       listStatuses(),
@@ -1368,7 +1376,19 @@ export const make = Effect.gen(function* () {
     );
 
   const getSnapshot: IssueTrackerServiceShape["getSnapshot"] = () =>
-    finalizeEndedCycles().pipe(Effect.andThen(readSnapshot()));
+    routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        Effect.all([listSlackWatches(), Ref.get(slackStatus), readConfig()]).pipe(
+          Effect.map(([slackWatches, status, config]) => ({
+            ...issueCollectionProjectionFromReplica(readModel),
+            slackWatches,
+            slackStatus: status,
+            config,
+          })),
+        ),
+      fromLegacy: finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot())),
+    });
 
   const appendChangeLog = (input: {
     readonly issueId: IssueId;
@@ -2159,8 +2179,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const getDetail: IssueTrackerServiceShape["getDetail"] = Effect.fn(
-    "IssueTrackerService.getDetail",
+  const getLegacyDetail: IssueTrackerServiceShape["getDetail"] = Effect.fn(
+    "IssueTrackerService.getLegacyDetail",
   )(function* (input) {
     yield* requireIssueRecord(input.issueId);
     const [todos, relations, comments] = yield* Effect.all([
@@ -2169,6 +2189,27 @@ export const make = Effect.gen(function* () {
       listComments(input.issueId),
     ]);
     return { todos, relations, comments };
+  });
+
+  const requireReplicaDetailProjection = Effect.fn(
+    "IssueTrackerService.requireReplicaDetailProjection",
+  )(function* (readModel: Parameters<typeof syncedIssueDetailById>[0], issueId: IssueId) {
+    const synced = syncedIssueDetailById(readModel, issueId);
+    if (synced === null) return yield* notFound(issueId, `No issue with id ${issueId}.`);
+    return issueDetailProjectionFromReplica(synced);
+  });
+
+  const getDetail: IssueTrackerServiceShape["getDetail"] = Effect.fn(
+    "IssueTrackerService.getDetail",
+  )(function* (input) {
+    return yield* routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        requireReplicaDetailProjection(readModel, input.issueId).pipe(
+          Effect.map((projection) => projection.detail!),
+        ),
+      fromLegacy: getLegacyDetail(input),
+    });
   });
 
   const publishMilestones = () =>
@@ -2995,8 +3036,17 @@ export const make = Effect.gen(function* () {
   const commentsList: IssueTrackerServiceShape["commentsList"] = Effect.fn(
     "IssueTrackerService.commentsList",
   )(function* (input) {
-    yield* requireIssueRecord(input.issueId);
-    return { issueId: input.issueId, comments: yield* listComments(input.issueId) };
+    return yield* routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        requireReplicaDetailProjection(readModel, input.issueId).pipe(
+          Effect.map((projection) => ({ issueId: input.issueId, comments: projection.comments })),
+        ),
+      fromLegacy: requireIssueRecord(input.issueId).pipe(
+        Effect.andThen(listComments(input.issueId)),
+        Effect.map((comments) => ({ issueId: input.issueId, comments })),
+      ),
+    });
   });
 
   /**
@@ -3490,16 +3540,24 @@ export const make = Effect.gen(function* () {
   const getEvents: IssueTrackerServiceShape["getEvents"] = Effect.fn(
     "IssueTrackerService.getEvents",
   )(function* (input) {
-    const record = yield* issueRepository
-      .getById({ issueId: input.issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue")));
-    if (Option.isNone(record)) {
-      return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
-    }
-    const events = yield* eventRepository
-      .listByIssue({ issueId: input.issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue change log")));
-    return { events };
+    return yield* routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        requireReplicaDetailProjection(readModel, input.issueId).pipe(
+          Effect.map((projection) => ({ events: projection.events })),
+        ),
+      fromLegacy: issueRepository.getById({ issueId: input.issueId }).pipe(
+        Effect.mapError(storage("Failed to read the issue")),
+        Effect.flatMap((record) =>
+          Option.isNone(record)
+            ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+            : eventRepository
+                .listByIssue({ issueId: input.issueId })
+                .pipe(Effect.mapError(storage("Failed to read the issue change log"))),
+        ),
+        Effect.map((events) => ({ events })),
+      ),
+    });
   });
 
   const listEnrichmentRuns = (issueId: IssueId) =>
@@ -3818,17 +3876,36 @@ export const make = Effect.gen(function* () {
   const getThreadLinks: IssueTrackerServiceShape["getThreadLinks"] = Effect.fn(
     "IssueTrackerService.getThreadLinks",
   )(function* (input) {
-    yield* requireIssueRecord(input.issueId);
-    return { issueId: input.issueId, links: yield* readThreadLinks(input.issueId) };
+    return yield* routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        requireReplicaDetailProjection(readModel, input.issueId).pipe(
+          Effect.map((projection) => ({ issueId: input.issueId, links: projection.threadLinks })),
+        ),
+      fromLegacy: requireIssueRecord(input.issueId).pipe(
+        Effect.andThen(readThreadLinks(input.issueId)),
+        Effect.map((links) => ({ issueId: input.issueId, links })),
+      ),
+    });
   });
 
   const getIssueLinksForThread: IssueTrackerServiceShape["getIssueLinksForThread"] = Effect.fn(
     "IssueTrackerService.getIssueLinksForThread",
   )(function* (input) {
-    const links = yield* threadLinkRepository
-      .listByThread(input)
-      .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
-    return { threadId: input.threadId, links };
+    return yield* routeReplicaIssueRead({
+      replica: replicaReader.read,
+      fromReplica: (readModel) =>
+        Effect.succeed({
+          threadId: input.threadId,
+          links: issueThreadLinksFromReplica(readModel.issueThreadLinks).filter(
+            (link) => link.threadId === input.threadId,
+          ),
+        }),
+      fromLegacy: threadLinkRepository.listByThread(input).pipe(
+        Effect.mapError(storage("Failed to read the thread's issue links")),
+        Effect.map((links) => ({ threadId: input.threadId, links })),
+      ),
+    });
   });
 
   const pullRequestEventValue = (pullRequest: IssuePullRequest) =>
@@ -4630,7 +4707,7 @@ export const make = Effect.gen(function* () {
           // reach this client, whereas a repeated upsert is a no-op. Opening the stream is also a
           // read of the tracker, so it carries any lazy cycle finalisation with it.
           const subscription = yield* PubSub.subscribe(changes);
-          const snapshot = yield* getSnapshot();
+          const snapshot = yield* finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot()));
           const threadLinks = yield* listThreadLinks();
           const threadLinksByIssue = new Map<IssueId, Array<IssueThreadLink>>();
           for (const link of threadLinks) {
