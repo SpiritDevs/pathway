@@ -55,6 +55,7 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { environmentCatalog } from "../connection/catalog";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useClientSettings } from "../hooks/useSettings";
@@ -595,6 +596,9 @@ function OpenCommandPaletteDialog(props: {
   const cloneRepository = useAtomCommand(sourceControlEnvironment.cloneRepository, {
     reportFailure: false,
   });
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, {
+    reportFailure: false,
+  });
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -639,6 +643,8 @@ function OpenCommandPaletteDialog(props: {
   const [addProjectEnvironmentId, setAddProjectEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  const [pendingAddProjectEnvironmentId, setPendingAddProjectEnvironmentId] =
+    useState<EnvironmentId | null>(null);
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
@@ -1093,6 +1099,7 @@ function OpenCommandPaletteDialog(props: {
 
   function popView(): void {
     browseNavigation.invalidate();
+    setPendingAddProjectEnvironmentId(null);
     setAddProjectCloneFlow(null);
     if (viewStack.length <= 1) {
       setAddProjectEnvironmentId(null);
@@ -1266,7 +1273,7 @@ function OpenCommandPaletteDialog(props: {
     [onQuickCreateProject, openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
   );
 
-  const startAddProjectSourceSelection = useCallback(
+  const openAddProjectSourceSelection = useCallback(
     (environmentId: EnvironmentId): void => {
       const environment = environments.find(
         (candidate) => candidate.environmentId === environmentId,
@@ -1302,22 +1309,64 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
+  const startAddProjectSourceSelection = useCallback(
+    async (environmentId: EnvironmentId): Promise<void> => {
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === environmentId,
+      );
+      if (!environment) {
+        return;
+      }
+      if (canCreateProjectInEnvironment(environment.connection.phase)) {
+        openAddProjectSourceSelection(environmentId);
+        return;
+      }
+
+      setPendingAddProjectEnvironmentId(environmentId);
+      const result = await retryEnvironment(environmentId);
+      if (result._tag === "Failure") {
+        setPendingAddProjectEnvironmentId(null);
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not connect environment",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      }
+    },
+    [environments, openAddProjectSourceSelection, retryEnvironment],
+  );
+
+  useEffect(() => {
+    if (pendingAddProjectEnvironmentId === null) {
+      return;
+    }
+    const environment = environments.find(
+      (candidate) => candidate.environmentId === pendingAddProjectEnvironmentId,
+    );
+    if (!canCreateProjectInEnvironment(environment?.connection.phase)) {
+      return;
+    }
+
+    setPendingAddProjectEnvironmentId(null);
+    openAddProjectSourceSelection(pendingAddProjectEnvironmentId);
+  }, [environments, openAddProjectSourceSelection, pendingAddProjectEnvironmentId]);
+
   const addProjectEnvironmentItems: CommandPaletteActionItem[] = addProjectEnvironmentOptions.map(
     (option) => ({
       kind: "action",
       value: `action:add-project:environment:${option.environmentId}`,
       searchTerms: [option.label, option.environmentId, option.isPrimary ? "this device" : ""],
       title: option.label,
-      description: option.isConnected
-        ? option.isPrimary
-          ? "This device"
-          : option.environmentId
-        : option.status,
-      disabled: !option.isConnected,
+      description: option.isConnected && option.isPrimary ? "This device" : option.status,
       icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
       keepOpen: true,
       run: async () => {
-        startAddProjectSourceSelection(option.environmentId);
+        await startAddProjectSourceSelection(option.environmentId);
       },
     }),
   );
@@ -1579,6 +1628,8 @@ function OpenCommandPaletteDialog(props: {
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
   const sourceSelectionViewValue =
     addProjectEnvironmentId === null ? null : `sources:${addProjectEnvironmentId}`;
+  const isAddProjectEnvironmentSelectionView =
+    currentView !== null && currentView.groups[0]?.value === "environments";
   const activeGroups =
     addProjectEnvironmentId !== null &&
     currentView !== null &&
@@ -1587,7 +1638,9 @@ function OpenCommandPaletteDialog(props: {
           addProjectEnvironmentId,
           buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
         )
-      : (currentView?.groups ?? rootGroups);
+      : isAddProjectEnvironmentSelectionView
+        ? addProjectEnvironmentGroups
+        : (currentView?.groups ?? rootGroups);
 
   const filteredGroups = filterCommandPaletteGroups({
     activeGroups,
