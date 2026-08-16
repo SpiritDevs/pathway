@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { canResizeNewIssueDialog } from "./newIssueDialog.logic";
+import { canResizeNewIssueDialog, resolveAvailableIssueProjectId } from "./newIssueDialog.logic";
 
 describe("new issue dialog sizing", () => {
   it("offers resizing when the compact dialog is shorter than the 90% viewport cap", () => {
@@ -13,5 +13,17 @@ describe("new issue dialog sizing", () => {
 
   it("ignores sub-pixel differences at the cap", () => {
     expect(canResizeNewIssueDialog({ dialogHeight: 899.5, viewportHeight: 1_000 })).toBe(false);
+  });
+});
+
+describe("new issue project selection", () => {
+  const projects = [{ id: "cloud-project" }];
+
+  it("keeps a project replicated by the active tracker", () => {
+    expect(resolveAvailableIssueProjectId("cloud-project", projects)).toBe("cloud-project");
+  });
+
+  it("drops an environment-local project that is absent from the cloud tracker", () => {
+    expect(resolveAvailableIssueProjectId("local-project", projects)).toBeNull();
   });
 });

@@ -17,11 +17,17 @@
  */
 import { useAuth } from "@clerk/react";
 import {
+  type CompanyRegistryReplicaState,
+  RelayConnectionRegistration,
+  RelayConnectionTarget,
+} from "@spiritdevs/client-runtime/connection";
+import {
   managedRelaySessionAtom,
   type ManagedRelaySession,
 } from "@spiritdevs/client-runtime/relay";
 import {
   CloudSyncCapability,
+  EnvironmentRegistrationEntity,
   makeIssueSyncAdapter,
   makeSyncEngine,
   makeWebLeaderElection,
@@ -32,8 +38,10 @@ import {
   type WebLeaderElection,
 } from "@spiritdevs/client-runtime/sync";
 import { makeIndexedDbSyncStore } from "@spiritdevs/client-runtime/sync/indexeddb";
+import { runAtomCommand } from "@spiritdevs/client-runtime/state/runtime";
 import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Cause from "effect/Cause";
@@ -51,11 +59,14 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
+import { environmentCatalog, localEnvironmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import {
+  companyRegistryReplicasAtom,
   publishCompanyRegistryMembershipId,
   publishCompanyRegistryReplica,
 } from "./companyRegistryReplica";
@@ -163,9 +174,26 @@ export function readCloudSyncClientId(options: ReadCloudSyncClientIdOptions): Sy
 
 /** The `companies.listMine` query, named the way Convex names a function (`module:export`). */
 export const COMPANIES_LIST_MINE_FUNCTION = "companies.listMine";
+/** Idempotently provisions a new account and repairs company bootstrap data from older releases. */
+export const COMPANIES_PROVISION_CURRENT_USER_FUNCTION = "companies.provisionCurrentUser";
 
 const companiesListMineReference = makeFunctionReference<"query", ConvexArgs, unknown>(
   convexFunctionName(COMPANIES_LIST_MINE_FUNCTION),
+);
+const companiesProvisionCurrentUserReference = makeFunctionReference<
+  "mutation",
+  ConvexArgs,
+  unknown
+>(convexFunctionName(COMPANIES_PROVISION_CURRENT_USER_FUNCTION));
+
+/** Runs before company discovery so every engine starts from a complete company bootstrap. */
+export const provisionCloudSyncCurrentUser = Effect.fn("web.cloudSync.provisionCurrentUser")(
+  function* (client: Pick<ConvexClientLike, "mutation">) {
+    return yield* Effect.tryPromise({
+      try: () => client.mutation(companiesProvisionCurrentUserReference, {}),
+      catch: classifyConvexSyncTransportError,
+    });
+  },
 );
 
 /**
@@ -363,7 +391,7 @@ export interface CloudSyncEnginesOptions {
    * refresh. Reclaiming leadership opens a fresh connection, which is also how a tab recovers from
    * a client that has given up on authenticating.
    */
-  readonly connect: Effect.Effect<CloudSyncConnection, never, Scope.Scope>;
+  readonly connect: Effect.Effect<CloudSyncConnection, SyncTransportError, Scope.Scope>;
   /** Publishes each engine's existing replica view for catalog discovery. */
   readonly publishCompanyRegistryReplica?: (
     companyId: CompanyId,
@@ -712,6 +740,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
       fetchToken: options.fetchToken,
       client,
     });
+    yield* provisionCloudSyncCurrentUser(client);
     return { transport, companies: cloudSyncCompaniesStream(client) } satisfies CloudSyncConnection;
   });
 
@@ -844,6 +873,74 @@ export function useCloudSyncRuntime(): void {
 }
 
 /**
+ * Installs company-discovered environments into the ordinary connection registry. From that point
+ * the existing relay resolver owns live shell and transcript streaming, just as it does for a
+ * manually added Pathway Connect environment.
+ */
+function useCompanyEnvironmentConnections(): void {
+  const replicas = useAppAtomValue(companyRegistryReplicasAtom);
+  const localCatalog = useAppAtomValue(localEnvironmentCatalog.catalogValueAtom);
+  const primaryEnvironmentId = useAppAtomValue(primaryEnvironmentIdAtom);
+  const installedEnvironmentIds = useRef(new Set<EnvironmentId>());
+
+  useEffect(() => {
+    const discovered = discoverCompanyEnvironmentConnections(replicas, primaryEnvironmentId);
+
+    for (const environmentId of installedEnvironmentIds.current) {
+      if (discovered.has(environmentId)) continue;
+      installedEnvironmentIds.current.delete(environmentId);
+      void runAtomCommand(appAtomRegistry, environmentCatalog.remove, environmentId, {
+        label: "company environment disconnect",
+        reportFailure: true,
+        reportDefect: true,
+      });
+    }
+
+    for (const [environmentId, label] of discovered) {
+      if (localCatalog.entries.has(environmentId)) continue;
+      installedEnvironmentIds.current.add(environmentId);
+      void runAtomCommand(
+        appAtomRegistry,
+        environmentCatalog.register,
+        new RelayConnectionRegistration({
+          target: new RelayConnectionTarget({ environmentId, label }),
+        }),
+        {
+          label: "company environment connect",
+          reportFailure: true,
+          reportDefect: true,
+        },
+      ).then((result) => {
+        if (result._tag === "Failure") installedEnvironmentIds.current.delete(environmentId);
+      });
+    }
+  }, [localCatalog.entries, primaryEnvironmentId, replicas]);
+}
+
+const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
+
+export function discoverCompanyEnvironmentConnections(
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  primaryEnvironmentId: EnvironmentId | null = null,
+): ReadonlyMap<EnvironmentId, string> {
+  const discovered = new Map<EnvironmentId, string>();
+  for (const replica of replicas.values()) {
+    for (const value of replica.view.values()) {
+      if (
+        isEnvironmentRegistration(value) &&
+        value.environmentId !== primaryEnvironmentId &&
+        value.state === "active" &&
+        value.relayLinkState === "linked" &&
+        value.managedEndpointAvailable
+      ) {
+        discovered.set(value.environmentId, value.descriptor.label);
+      }
+    }
+  }
+  return discovered;
+}
+
+/**
  * Mounts the runtime and supplies its token source. Belongs inside `ManagedRelayAuthProvider`,
  * which is itself inside `ClerkProvider` — this component calls `useAuth`, and reads the session
  * that provider publishes.
@@ -863,6 +960,7 @@ export function CloudSyncRuntime(): null {
   }, [getToken]);
 
   useCloudSyncRuntime();
+  useCompanyEnvironmentConnections();
 
   return null;
 }

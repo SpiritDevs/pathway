@@ -20,6 +20,9 @@ export const OFFLINE_ACCESS_MAX_DAYS = 90;
 export const COMPANY_NAME_MAX_CHARS = 120;
 export const ISSUE_KEY_PREFIX_MAX_CHARS = 8;
 
+/** A fresh tracker must have somewhere to place its first issue. */
+export { DEFAULT_ISSUE_STATUSES } from "@spiritdevs/contracts";
+
 export function clampOfflineAccessDays(days: number): number {
   if (!Number.isFinite(days)) return OFFLINE_ACCESS_DEFAULT_DAYS;
   const whole = Math.trunc(days);

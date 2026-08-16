@@ -1,5 +1,6 @@
 import {
   ISSUE_IMPORT_ENTITY_KINDS,
+  isPristineIssueImportTarget,
   IssueImportRpcError,
   type IssueImportExecuteResult,
   type IssueImportPreviewData,
@@ -33,7 +34,6 @@ import { planIssueImport, type IssueImportPlan } from "./plan.ts";
 import type { IssueTrackerRepositoryError } from "../../persistence/Errors.ts";
 import type { LocalIssueSnapshot } from "./snapshot.ts";
 
-const ISSUE_IMPORT_ENTITY_KIND_SET: ReadonlySet<string> = new Set(ISSUE_IMPORT_ENTITY_KINDS);
 const isIssueImportRpcError = Schema.is(IssueImportRpcError);
 const isIssueImportPreflightError = Schema.is(IssueImportPreflightError);
 const isIssueImportStartRequiredError = Schema.is(IssueImportStartRequiredError);
@@ -196,9 +196,7 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
         replica.checkpoint.bootstrapGeneration === SYNC_BOOTSTRAP_GENERATION &&
         replica.checkpoint.companyId === companyId;
       if (bootstrapReady) {
-        targetCompanyEmpty = !replica.entities.some((entity) =>
-          ISSUE_IMPORT_ENTITY_KIND_SET.has(entity.entityKind),
-        );
+        targetCompanyEmpty = isPristineIssueImportTarget(replica.entities);
       }
     }
 
@@ -243,7 +241,7 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
     if (targetCompanyEmpty === false)
       reasons.push({
         code: "target-company-not-empty",
-        message: "Empty-company import requires a target with no issue-domain rows.",
+        message: "Empty-company import requires a target with no issue data or workflow edits.",
       });
 
     return {

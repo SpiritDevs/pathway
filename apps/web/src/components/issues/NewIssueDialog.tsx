@@ -4,7 +4,12 @@
  *
  * @module components/issues/NewIssueDialog
  */
-import { ISSUE_COMMENT_ATTACHMENT_MAX_BYTES, ISSUE_MAX_PARENT_DEPTH } from "@spiritdevs/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import {
+  ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
+  ISSUE_MAX_PARENT_DEPTH,
+  ProjectId,
+} from "@spiritdevs/contracts";
 import type {
   ChatAttachmentId,
   Issue,
@@ -18,7 +23,6 @@ import type {
   IssuePriority,
   IssueStatus,
   IssueStatusId,
-  ProjectId,
 } from "@spiritdevs/contracts";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -50,6 +54,9 @@ import {
 
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
+import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
+import { useSyncedCloudProjects } from "~/cloud/issueDomainReadModel";
+import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import {
   useCreateIssue,
   useCreateIssueComment,
@@ -102,7 +109,7 @@ import {
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
-import { canResizeNewIssueDialog } from "./newIssueDialog.logic";
+import { canResizeNewIssueDialog, resolveAvailableIssueProjectId } from "./newIssueDialog.logic";
 
 const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
@@ -289,6 +296,25 @@ export function NewIssueDialog({
   const uploadAttachment = useUploadIssueCommentAttachment();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
+  const activeCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const syncedCloudProjects = useSyncedCloudProjects();
+  const environmentControl = useEnvironmentControl();
+  const availableProjects = useMemo(() => {
+    if (activeCompanyId === null) return projects;
+    const available = new Map<string, { readonly id: ProjectId; readonly title: string }>(
+      syncedCloudProjects
+        .filter((project) => project.archivedAt === null)
+        .map((project) => [project.id, { id: ProjectId.make(project.id), title: project.name }]),
+    );
+    for (const project of projects) {
+      if (!available.has(String(project.id))) available.set(String(project.id), project);
+    }
+    return [...available.values()];
+  }, [activeCompanyId, projects, syncedCloudProjects]);
+  const availableDefaultProjectId = resolveAvailableIssueProjectId(
+    defaultProjectId,
+    availableProjects,
+  );
   const titleRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -297,7 +323,7 @@ export function NewIssueDialog({
   const [statusId, setStatusId] = useState<IssueStatusId | null>(defaultStatusId);
   const [priority, setPriority] = useState<IssuePriority>("none");
   const [assignee, setAssignee] = useState<IssueAssignee | null>(null);
-  const [projectId, setProjectId] = useState<ProjectId | null>(defaultProjectId);
+  const [projectId, setProjectId] = useState<ProjectId | null>(availableDefaultProjectId);
   const [milestoneId, setMilestoneId] = useState<IssueMilestoneId | null>(defaultMilestoneId);
   const [cycleId, setCycleId] = useState<IssueCycleId | null>(defaultCycleId);
   const [parentId, setParentId] = useState<IssueId | null>(defaultParentId);
@@ -330,7 +356,7 @@ export function NewIssueDialog({
     setStatusId(defaultStatusId);
     setPriority("none");
     setAssignee(null);
-    setProjectId(defaultProjectId);
+    setProjectId(availableDefaultProjectId);
     setMilestoneId(defaultMilestoneId);
     setCycleId(defaultCycleId);
     setParentId(defaultParentId);
@@ -348,7 +374,7 @@ export function NewIssueDialog({
     defaultCycleId,
     defaultMilestoneId,
     defaultParentId,
-    defaultProjectId,
+    availableDefaultProjectId,
     defaultStatusId,
     open,
   ]);
@@ -390,7 +416,7 @@ export function NewIssueDialog({
   );
 
   const selectedStatus = statuses.find((status) => status.id === statusId) ?? null;
-  const selectedProject = projects.find((project) => project.id === projectId) ?? null;
+  const selectedProject = availableProjects.find((project) => project.id === projectId) ?? null;
   const selectedLabels = labels.filter((label) => labelIds.includes(label.id));
   const selectedMilestone = milestones.find((milestone) => milestone.id === milestoneId) ?? null;
   const selectedCycle = cycles.find((cycle) => cycle.id === cycleId) ?? null;
@@ -491,15 +517,52 @@ export function NewIssueDialog({
       setSubmitting(false);
       return;
     }
+    const submittedProjectId = resolveAvailableIssueProjectId(projectId, availableProjects);
+    if (
+      activeCompanyId !== null &&
+      submittedProjectId !== null &&
+      !syncedCloudProjects.some((project) => String(project.id) === String(submittedProjectId))
+    ) {
+      const localProject = projects.find(
+        (project) => String(project.id) === String(submittedProjectId),
+      );
+      if (localProject === undefined || environmentControl === null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Project is not available in the cloud",
+            description: "Sign in and register this environment before assigning its projects.",
+          }),
+        );
+        setSubmitting(false);
+        return;
+      }
+      try {
+        await environmentControl.ensureEnvironmentProject({
+          companyId: activeCompanyId,
+          project: localProject,
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to add the project to the company",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
     const input: IssueCreateInput = {
       title: trimmed,
       ...(description.length > 0 ? { description } : {}),
       ...(statusId === null ? {} : { statusId }),
       ...(priority === "none" ? {} : { priority }),
       ...(assignee === null ? {} : { assignee }),
-      ...(projectId === null ? {} : { projectId }),
+      ...(submittedProjectId === null ? {} : { projectId: submittedProjectId }),
       // A milestone belongs to a project, so it only travels with one.
-      ...(milestoneId === null || projectId === null ? {} : { milestoneId }),
+      ...(milestoneId === null || submittedProjectId === null ? {} : { milestoneId }),
       ...(cycleId === null ? {} : { cycleId }),
       ...(parentId === null ? {} : { parentId }),
       ...(labelIds.length > 0 ? { labelIds } : {}),
@@ -802,7 +865,7 @@ export function NewIssueDialog({
                     >
                       <span className="text-muted-foreground">No project</span>
                     </PickerOption>
-                    {projects.map((project) => (
+                    {availableProjects.map((project) => (
                       <PickerOption
                         key={project.id}
                         onSelect={() => {

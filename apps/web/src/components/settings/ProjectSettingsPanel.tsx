@@ -22,7 +22,7 @@ import type {
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@spiritdevs/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
-import { useCanGoBack, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { ChevronDownIcon, CopyIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -95,6 +95,10 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { useCompanySettings } from "./company/useCompanySettings";
+import { useEnvironmentControl } from "./company/useEnvironmentControl";
+import { environmentRegistrationsFromReplicaValues } from "./company/environmentSettings.logic";
+import { shouldReleaseDisconnectedCloudProject } from "./projectRemoval.logic";
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -157,6 +161,8 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
+  const companySettings = useCompanySettings();
+  const environmentControl = useEnvironmentControl();
   // Captured mail belongs to the machine the listener runs on, so the capture section follows this
   // group's checkout on the primary environment and hides for a group that has none.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -583,8 +589,42 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           () => undefined,
         );
         if (result._tag === "Failure") {
-          reportFailure(`Failed to remove "${member.title}"`, result);
-          return;
+          const localError = squashAtomCommandFailure(result);
+          const registrations = environmentRegistrationsFromReplicaValues(
+            companySettings.replica?.view.values() ?? [],
+          );
+          const canReleaseCloudBinding = shouldReleaseDisconnectedCloudProject({
+            errorMessage: localError instanceof Error ? localError.message : String(localError),
+            environmentId: member.environmentId,
+            registrations,
+          });
+          if (
+            !canReleaseCloudBinding ||
+            environmentControl === null ||
+            companySettings.companyId === null
+          ) {
+            reportFailure(`Failed to remove "${member.title}"`, result);
+            return;
+          }
+          try {
+            await environmentControl.releaseEnvironmentProject({
+              companyId: companySettings.companyId,
+              environmentId: member.environmentId,
+              localProjectId: member.id,
+            });
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: `Failed to remove "${member.title}"`,
+                description:
+                  error instanceof Error
+                    ? error.message
+                    : "The cloud project could not be removed.",
+              }),
+            );
+            return;
+          }
         }
         const projectRef = scopeProjectRef(member.environmentId, member.id);
         const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
@@ -601,6 +641,9 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     },
     [
       deleteProject,
+      companySettings.companyId,
+      companySettings.replica,
+      environmentControl,
       group.displayName,
       group.memberProjects.length,
       navigate,

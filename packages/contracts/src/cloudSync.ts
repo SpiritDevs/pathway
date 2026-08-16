@@ -21,11 +21,13 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { ChatAttachmentId } from "./chatAttachment.ts";
 import {
   EnvironmentBindingId,
+  EnvironmentBindingStatus,
   EnvironmentCommandArgs,
   EnvironmentCommandId,
   EnvironmentCommandKind,
@@ -35,6 +37,8 @@ import {
   EnvironmentRegistrationState,
   EnvironmentRelayLinkState,
   CloudProjectId,
+  AgentThreadId,
+  CloudAgentThreadShell,
 } from "./cloudProject.ts";
 import {
   CloudActor,
@@ -246,6 +250,7 @@ export const SYNC_ENTITY_KINDS = [
   "environmentRegistration",
   "environmentBinding",
   "environmentCommand",
+  "agentThread",
   "issue",
   "issueStatus",
   "issueLabel",
@@ -494,6 +499,33 @@ export const SyncEnvironmentRegistrationPayload = Schema.Struct({
   updatedAt: CloudTimestamp,
 });
 export type SyncEnvironmentRegistrationPayload = typeof SyncEnvironmentRegistrationPayload.Type;
+
+/** One machine-specific checkout binding as bootstrap and the incremental feed carry it. */
+export const SyncEnvironmentBindingPayload = Schema.Struct({
+  id: EnvironmentBindingId,
+  cloudProjectId: CloudProjectId,
+  environmentId: EnvironmentId,
+  localProjectId: ProjectId,
+  localWorkspaceRoot: TrimmedNonEmptyString,
+  status: EnvironmentBindingStatus,
+  lastSeenAt: Schema.NullOr(CloudTimestamp),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncEnvironmentBindingPayload = typeof SyncEnvironmentBindingPayload.Type;
+
+/**
+ * A cloud-safe Agent Thread shell. Message text and rich thread content remain environment-owned
+ * and are loaded through the environment relay when the thread is opened.
+ */
+export const SyncAgentThreadPayload = Schema.Struct({
+  id: AgentThreadId,
+  environmentId: EnvironmentId,
+  cloudProjectId: CloudProjectId,
+  shell: CloudAgentThreadShell,
+  updatedAt: CloudTimestamp,
+});
+export type SyncAgentThreadPayload = typeof SyncAgentThreadPayload.Type;
 
 /**
  * One durable remote-control command as carried by bootstrap and the incremental feed.

@@ -2343,7 +2343,7 @@ function ChatViewContent(props: ChatViewProps) {
     void handleReconnectActiveEnvironment(activeEnvironmentUnavailableState.environmentId);
   }, [activeEnvironmentUnavailableState, handleReconnectActiveEnvironment]);
   const openConnectionSettings = useCallback(() => {
-    void navigate({ to: "/settings/connections" });
+    void navigate({ to: "/settings/environments" });
   }, [navigate]);
   const handleDismissVersionMismatch = useCallback(() => {
     if (!versionMismatchDismissKey) return;
@@ -2414,9 +2414,9 @@ function ChatViewContent(props: ChatViewProps) {
               <Button
                 size="xs"
                 variant="outline"
-                onClick={() => void navigate({ to: "/settings/connections" })}
+                onClick={() => void navigate({ to: "/settings/environments" })}
               >
-                Connections
+                Environments
               </Button>
             </>
           ),

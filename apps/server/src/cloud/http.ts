@@ -5,6 +5,7 @@ import {
   AuthStandardClientScopes,
   EnvironmentCloudEndpointUnavailableError,
   EnvironmentCloudLinkStateResult,
+  EnvironmentCloudRegistrationInfo,
   EnvironmentCloudRelayConfigResult,
   EnvironmentHttpApi,
   EnvironmentHttpBadRequestError,
@@ -89,7 +90,10 @@ import {
   authorizeConnectGrantFromLocalReplica,
   resolveConnectGrantActorFromLocalReplica,
 } from "./connectGrantAuthorization.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  getOrCreateCloudSyncDpopKeyPairFromSecretStore,
+  getOrCreateEnvironmentKeyPairFromSecretStore,
+} from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
 
 const CLOUD_MINT_NONCE_PREFIX = "cloud-mint-nonce-";
@@ -824,6 +828,27 @@ const cloudLinkStateHandler = Effect.fn("environment.cloud.linkState")(
   ),
 );
 
+const cloudRegistrationInfoHandler = Effect.fn("environment.cloud.registrationInfo")(
+  function* (dependencies: CloudHttpDependencies) {
+    yield* requireEnvironmentScope(AuthRelayReadScope);
+    const [descriptor, linkState, proofKeys] = yield* Effect.all([
+      dependencies.environment.getDescriptor,
+      readCloudLinkState(dependencies),
+      getOrCreateCloudSyncDpopKeyPairFromSecretStore(dependencies.secrets),
+    ]);
+    return {
+      descriptor,
+      publicKeyThumbprint: proofKeys.thumbprint,
+      relayLinkState: linkState.linked ? "linked" : "unlinked",
+      managedEndpointAvailable: linkState.managedTunnelActive === true,
+    } satisfies EnvironmentCloudRegistrationInfo;
+  },
+  Effect.catchIf(
+    ServerSecretStore.isSecretStoreError,
+    failEnvironmentCloudInternalError("Could not read cloud sync registration identity."),
+  ),
+);
+
 const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
   function* (dependencies: CloudHttpDependencies) {
     yield* requireEnvironmentScope(AuthRelayWriteScope);
@@ -1144,6 +1169,7 @@ export const connectHttpApiLayer = HttpApiBuilder.group(
       .handle("linkProof", ({ payload }) => cloudLinkProofHandler(dependencies, payload))
       .handle("relayConfig", ({ payload }) => cloudRelayConfigHandler(dependencies, payload))
       .handle("linkState", () => cloudLinkStateHandler(dependencies))
+      .handle("registrationInfo", () => cloudRegistrationInfoHandler(dependencies))
       .handle("unlink", () => cloudUnlinkHandler(dependencies))
       .handle("preferences", ({ payload }) => cloudPreferencesHandler(dependencies, payload))
       .handle("health", ({ payload }) => cloudEnvironmentHealthHandler(dependencies, payload))

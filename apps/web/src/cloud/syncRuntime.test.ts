@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import { setManagedRelaySession, type ManagedRelaySession } from "@spiritdevs/client-runtime/relay";
 import {
   EMPTY_STORED_SYNC_STATE,
+  type EnvironmentRegistrationEntity,
   makeInProcessWebLockManager,
   makeMemorySyncStore,
   makeWebLeaderElection,
@@ -11,6 +13,7 @@ import {
   SyncTransport,
   SyncTransportError,
 } from "@spiritdevs/client-runtime/sync";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import {
   AuthorizationEpoch,
   CompanyVersion,
@@ -21,6 +24,7 @@ import {
   SyncOperationId,
   type SyncOperationEnvelope,
 } from "@spiritdevs/contracts/cloudSync";
+import { EnvironmentRegistrationId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -38,6 +42,8 @@ import {
   cloudSyncClientIdStorageKey,
   cloudSyncScope,
   decodeCloudSyncCompanies,
+  discoverCompanyEnvironmentConnections,
+  provisionCloudSyncCurrentUser,
   readCloudSyncClientId,
   reconcileCloudSyncEngines,
   runCloudSyncEngines,
@@ -50,6 +56,8 @@ import {
 
 const COMPANY_A = CompanyId.make("company-a");
 const COMPANY_B = CompanyId.make("company-b");
+const OWN_ENVIRONMENT_ID = EnvironmentId.make("environment-own");
+const REMOTE_ENVIRONMENT_ID = EnvironmentId.make("environment-remote");
 
 const company = (companyId: CompanyId, membershipId: string): CloudSyncCompany =>
   decodeCloudSyncCompanies([{ id: companyId, membershipId }]).companies[0]!;
@@ -95,6 +103,29 @@ const session = (accountId: string): ManagedRelaySession => ({
   readClerkToken: () => Effect.succeed(null),
 });
 
+const environmentRegistration = (environmentId: EnvironmentId): EnvironmentRegistrationEntity => ({
+  entityKind: "environmentRegistration",
+  id: EnvironmentRegistrationId.make(`registration-${environmentId}`),
+  environmentId,
+  publicKeyThumbprint: "thumbprint",
+  descriptor: {
+    environmentId,
+    label: environmentId === OWN_ENVIRONMENT_ID ? "This Mac" : "Build server",
+    platform: { os: "darwin", arch: "arm64" },
+    serverVersion: "2026.8.0",
+    capabilities: { repositoryIdentity: true },
+  },
+  relayLinkState: "linked",
+  managedEndpointAvailable: true,
+  lastSeenAt: 1_000,
+  serviceRoleIds: [],
+  teamIds: [],
+  state: "active",
+  registeredByMembershipId: null,
+  createdAt: 1_000,
+  updatedAt: 2_000,
+});
+
 const makeMemoryStorage = (initial: Record<string, string> = {}): CloudSyncClientIdStorage => {
   const entries = new Map(Object.entries(initial));
   return {
@@ -110,6 +141,21 @@ describe("cloudSyncScope", () => {
     expect(cloudSyncScope(session("user_123"))).toBe("user_123");
     expect(cloudSyncScope(null)).toBeNull();
     expect(cloudSyncScope(session("   "))).toBeNull();
+  });
+});
+
+describe("discoverCompanyEnvironmentConnections", () => {
+  it("never presents the current environment as a remote connection", () => {
+    const replica = {
+      view: new Map([
+        ["own", environmentRegistration(OWN_ENVIRONMENT_ID)],
+        ["remote", environmentRegistration(REMOTE_ENVIRONMENT_ID)],
+      ]),
+    } satisfies CompanyRegistryReplicaState;
+
+    expect(
+      discoverCompanyEnvironmentConnections(new Map([[COMPANY_A, replica]]), OWN_ENVIRONMENT_ID),
+    ).toEqual(new Map([[REMOTE_ENVIRONMENT_ID, "Build server"]]));
   });
 });
 
@@ -233,6 +279,24 @@ describe("decodeCloudSyncCompanies", () => {
       companies: [],
       decodedCleanly: false,
       droppedRows: 1,
+    });
+  });
+});
+
+describe("provisionCloudSyncCurrentUser", () => {
+  it.effect("repairs company bootstrap data before company discovery starts", () => {
+    let calls = 0;
+    return Effect.gen(function* () {
+      const result = yield* provisionCloudSyncCurrentUser({
+        mutation: async (_reference, args) => {
+          expect(args).toEqual({});
+          calls += 1;
+          return { id: "company-a" };
+        },
+      });
+
+      expect(result).toEqual({ id: "company-a" });
+      expect(calls).toBe(1);
     });
   });
 });

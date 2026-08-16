@@ -78,6 +78,7 @@ import {
   encodeEnvironmentBinding,
   encodeEnvironmentCommand,
   encodeEnvironmentRegistration,
+  encodeAgentThread,
   encodeMembership,
   encodeRole,
   encodeRoleAssignment,
@@ -3141,7 +3142,8 @@ type CompanyBootstrapTable =
   | "cloudProjects"
   | "environmentRegistrations"
   | "environmentBindings"
-  | "environmentCommands";
+  | "environmentCommands"
+  | "agentThreads";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3423,5 +3425,20 @@ export async function readBootstrapRows(
         await pageOf(ctx, "environmentCommands", company._id, afterId, limit),
         (row) => encodeEnvironmentCommand(ctx, row),
       );
+    case "agentThread": {
+      const rows = await pageOf(ctx, "agentThreads", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted: false,
+          teamIds: await cachedProjectTeams(ctx, company, cache, row.cloudProjectId),
+          ownerMembershipId: null,
+          payload: await encodeAgentThread(ctx, row),
+        });
+      }
+      return lifted;
+    }
   }
 }

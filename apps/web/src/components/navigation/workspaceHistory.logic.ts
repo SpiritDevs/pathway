@@ -38,7 +38,7 @@ const ROUTE_LABELS: Readonly<Record<string, string>> = {
   "/settings/appearance": "Appearance settings",
   "/settings/appearance/action-palette": "Action palette settings",
   "/settings/archived": "Archived threads",
-  "/settings/connections": "Connection settings",
+  "/settings/connections": "Environment settings",
   "/settings/diagnostics": "Diagnostics settings",
   "/settings/email": "Email settings",
   "/settings/general": "General settings",

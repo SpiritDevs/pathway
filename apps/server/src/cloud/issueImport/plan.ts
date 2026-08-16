@@ -978,9 +978,7 @@ export function planIssueImport(
     );
   }
 
-  const attachmentById = new Map(
-    snapshot.attachments.map((attachment) => [attachment.id, attachment]),
-  );
+  const uploadableAttachmentIds = new Set<string>();
   for (const attachment of snapshot.attachments) {
     const entity = attachmentSourceEntity(attachment, config);
     if (entity === null || attachment.filePath === null) {
@@ -992,6 +990,7 @@ export function planIssueImport(
       continue;
     }
     entities.push(entity);
+    uploadableAttachmentIds.add(attachment.id);
     attachmentUploads.push({ sourceEntity: entity, filePath: attachment.filePath });
   }
 
@@ -1006,32 +1005,24 @@ export function planIssueImport(
       });
       continue;
     }
+    const attachmentIds = comment.attachmentIds.filter((id) => uploadableAttachmentIds.has(id));
     const entity: IssueCommentEntity = {
       entityKind: "issueComment",
       id: comment.id,
       issueId: comment.issueId,
       body: comment.body,
       author: mapActor(comment.author, config.importingMembershipId),
-      attachmentIds: [...comment.attachmentIds],
+      attachmentIds,
       mentions: [...comment.mentions],
       createdAt,
       updatedAt,
     };
     entities.push(entity);
-    const missingAttachment = comment.attachmentIds.find((id) => {
-      const attachment = attachmentById.get(id);
-      return (
-        attachment === undefined || attachment.filePath === null || attachment.byteSize === null
-      );
-    });
-    if (!issueEntities.has(comment.issueId) || missingAttachment !== undefined) {
+    if (!issueEntities.has(comment.issueId)) {
       rejected.push({
         entityKind: "issueComment",
         entityId: comment.id,
-        reason:
-          missingAttachment === undefined
-            ? `Missing parent issue ${comment.issueId}.`
-            : `Attachment ${missingAttachment} cannot be uploaded before this comment.`,
+        reason: `Missing parent issue ${comment.issueId}.`,
       });
       continue;
     }
@@ -1045,7 +1036,7 @@ export function planIssueImport(
         args: {
           issueId: comment.issueId,
           body: comment.body,
-          attachmentIds: [...comment.attachmentIds],
+          attachmentIds,
         },
       }),
     );

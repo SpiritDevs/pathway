@@ -280,6 +280,26 @@ The existing tracker layout and server seams are mapped in [issue-tracker.md](./
 Cross-environment command records reuse this bounded protocol but do not carry thread content; see
 [0008](./decisions/0008-cross-environment-agent-control.md).
 
+### Agent Thread discovery
+
+Each linked Pathway environment publishes its active and archived Agent Thread shells to the
+company feed after proving that the shell's local project has an active environment binding. The
+feed row keys a thread by `${environmentId}:${threadId}` so identical environment-local thread ids
+cannot collide, and it carries both the owning environment and stable cloud project identity.
+Startup and periodic reconciliation repair missed upserts and deletes; unchanged shells are no-ops.
+
+The shell is deliberately redacted. It contains thread routing and list metadata, including title,
+provider/model, runtime and interaction modes, branch/worktree metadata, run and request status,
+timestamps, and item counts. `latestVisibleMessage` retains only its id, role, and update time.
+Message text, turn items, transcript history, diffs, approvals, attachments, and file contents never
+enter Convex.
+
+A client with a company replica installs each active linked environment in the ordinary connection
+registry. Until that relay session has a shell snapshot, the client renders the Convex project
+bindings and Agent Thread shells. Opening a thread uses the owning environment id and local project
+id, so the normal relay WebSocket becomes authoritative for thread detail and live message
+streaming. A revoked registration is removed from the auto-installed catalog again.
+
 ## Remote orchestration dispatch
 
 `delegate_task` remains local when `targetEnvironmentId` is absent. An explicit remote request may

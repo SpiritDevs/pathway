@@ -1,3 +1,4 @@
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 export const ISSUE_IMPORT_ENTITY_KINDS = [
@@ -16,6 +17,67 @@ export const ISSUE_IMPORT_ENTITY_KINDS = [
 ] as const;
 
 export const ISSUE_IMPORT_RESULT_KINDS = ["cloudProject", ...ISSUE_IMPORT_ENTITY_KINDS] as const;
+
+/**
+ * The workflow provisioned for a new cloud company. An empty-company import may replace exactly
+ * this seed: it is scaffolding, not user data. Keep the semantic fields here aligned with company
+ * provisioning; timestamps, company ids, and feed versions deliberately do not participate.
+ */
+export const DEFAULT_ISSUE_STATUSES = [
+  { id: "backlog", name: "Backlog", color: "#95a2b3", category: "backlog", position: 1 },
+  { id: "todo", name: "Todo", color: "#e2e2e2", category: "unstarted", position: 2 },
+  { id: "in-progress", name: "In Progress", color: "#f2c94c", category: "started", position: 3 },
+  { id: "in-review", name: "In Review", color: "#26b5ce", category: "started", position: 4 },
+  { id: "done", name: "Done", color: "#5e6ad2", category: "completed", position: 5 },
+  { id: "canceled", name: "Canceled", color: "#95a2b3", category: "canceled", position: 6 },
+] as const;
+
+function isDefaultIssueStatus(value: unknown): boolean {
+  if (!Predicate.isObject(value)) return false;
+  const expected = DEFAULT_ISSUE_STATUSES.find((status) => status.id === value["id"]);
+  return (
+    expected !== undefined &&
+    value["scope"] === "company" &&
+    value["teamId"] === null &&
+    value["baseStatusId"] === null &&
+    value["name"] === expected.name &&
+    value["color"] === expected.color &&
+    value["category"] === expected.category &&
+    value["position"] === expected.position &&
+    value["hidden"] === false &&
+    (value["deletedAt"] === undefined || value["deletedAt"] === null)
+  );
+}
+
+/** Whether rows are exactly the untouched workflow seed, in any order. */
+export function isDefaultIssueStatusSet(values: readonly unknown[]): boolean {
+  return (
+    values.length === DEFAULT_ISSUE_STATUSES.length &&
+    new Set(
+      values.flatMap((value) =>
+        Predicate.isObject(value) && typeof value["id"] === "string" ? [value["id"]] : [],
+      ),
+    ).size === DEFAULT_ISSUE_STATUSES.length &&
+    values.every(isDefaultIssueStatus)
+  );
+}
+
+/**
+ * Empty-company import eligibility for a confirmed replica. A truly empty issue domain and the
+ * untouched provisioned workflow are equivalent; any other issue-domain row is user data.
+ */
+export function isPristineIssueImportTarget(
+  entities: readonly { readonly entityKind: string; readonly payload: unknown }[],
+): boolean {
+  const issueEntities = entities.filter((entity) =>
+    (ISSUE_IMPORT_ENTITY_KINDS as readonly string[]).includes(entity.entityKind),
+  );
+  return (
+    issueEntities.length === 0 ||
+    (issueEntities.every((entity) => entity.entityKind === "issueStatus") &&
+      isDefaultIssueStatusSet(issueEntities.map((entity) => entity.payload)))
+  );
+}
 
 export const IssueImportEntityKind = Schema.Literals(ISSUE_IMPORT_ENTITY_KINDS);
 export type IssueImportEntityKind = typeof IssueImportEntityKind.Type;

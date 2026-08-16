@@ -14,6 +14,7 @@ import { v } from "convex/values";
 import {
   clampOfflineAccessDays,
   companyPurgeAfter,
+  DEFAULT_ISSUE_STATUSES,
   defaultIssueKeyPrefix,
   isCompanyPurgeDue,
   normalizeCompanyName,
@@ -36,6 +37,7 @@ import {
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
+import { encodeIssueStatus } from "./lib/issueApply.ts";
 import {
   actorRecord,
   currentUser,
@@ -107,6 +109,62 @@ async function isOwnerMembership(
     )
     .unique();
   return owner !== null;
+}
+
+async function insertDefaultIssueStatusChanges(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  now: number,
+): Promise<CompanyChange[]> {
+  const changes: CompanyChange[] = [];
+  for (const status of DEFAULT_ISSUE_STATUSES) {
+    const statusDocId = await ctx.db.insert("issueStatuses", {
+      ...status,
+      companyId: company._id,
+      scope: "company",
+      teamId: null,
+      baseStatusId: null,
+      hidden: false,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      version: 0,
+    });
+    const row = await ctx.db.get(statusDocId);
+    if (row === null)
+      throw backendError("entity-not-found", "The issue status insert did not persist.");
+    changes.push({
+      entityKind: "issueStatus",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: statusDocId,
+      payload: encodeIssueStatus(company, row),
+    });
+  }
+  return changes;
+}
+
+/** Repairs companies created before default workflow seeding shipped, without undoing user edits. */
+async function ensureDefaultIssueStatuses(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  membership: Doc<"memberships">,
+): Promise<Doc<"companies">> {
+  const existing = await ctx.db
+    .query("issueStatuses")
+    .withIndex("by_company_and_version", (q) => q.eq("companyId", company._id))
+    .first();
+  if (existing !== null) return company;
+
+  const changes = await insertDefaultIssueStatusChanges(ctx, company, Date.now());
+  await appendCompanyChanges(ctx, {
+    companyId: company._id,
+    actor: { kind: "member", membershipId: membership.id },
+    changes,
+  });
+  const repaired = await ctx.db.get(company._id);
+  if (repaired === null) throw backendError("entity-not-found", "Company is missing.");
+  return repaired;
 }
 
 /** The `companySummary` view of a company as seen through one of its memberships. */
@@ -263,6 +321,7 @@ async function createCompanyOwnedBy(
       payload: encodeRole(role),
     });
   }
+  changes.push(...(await insertDefaultIssueStatusChanges(ctx, company, now)));
 
   await appendCompanyChanges(ctx, {
     companyId: companyDocId,
@@ -398,11 +457,21 @@ export const provisionCurrentUser = mutation({
       const company = await ctx.db.get(membership.companyId);
       if (company === null || company.lifecycleState !== "active") continue;
       if (await isOwnerMembership(ctx, company._id, membership._id)) {
-        return await summarize(ctx, company, membership);
+        return await summarize(
+          ctx,
+          await ensureDefaultIssueStatuses(ctx, company, membership),
+          membership,
+        );
       }
       fallback ??= { company, membership };
     }
-    if (fallback !== null) return await summarize(ctx, fallback.company, fallback.membership);
+    if (fallback !== null) {
+      return await summarize(
+        ctx,
+        await ensureDefaultIssueStatuses(ctx, fallback.company, fallback.membership),
+        fallback.membership,
+      );
+    }
 
     const name = normalizeCompanyName(`${displayName}'s Company`);
     const created = await createCompanyOwnedBy(ctx, {

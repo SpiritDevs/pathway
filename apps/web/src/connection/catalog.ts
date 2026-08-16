@@ -12,7 +12,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { companyRegistryReplicasAtom } from "../cloud/companyRegistryReplica";
 import { connectionAtomRuntime } from "./runtime";
 
-const localEnvironmentCatalog = createEnvironmentCatalogAtoms(connectionAtomRuntime);
+export const localEnvironmentCatalog = createEnvironmentCatalogAtoms(connectionAtomRuntime);
 
 function effectiveCatalogState(
   local: EnvironmentCatalogState,

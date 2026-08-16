@@ -3,6 +3,7 @@
 import { convexTest } from "convex-test";
 import type { FunctionArgs } from "convex/server";
 import { describe, expect, it } from "vite-plus/test";
+import { DEFAULT_ISSUE_STATUSES } from "@spiritdevs/contracts";
 
 import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
@@ -304,8 +305,42 @@ describe("issue import", () => {
         version: 0,
       });
     });
-    await expect(start(other)).rejects.toThrow("zero issue-domain rows");
+    await expect(start(other)).rejects.toThrow("no issue data or workflow edits");
     expect(seeded.registrationOne).toBeTruthy();
+  });
+
+  it("replaces only the untouched provisioned workflow before importing source statuses", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await t.run(async (ctx) => {
+      for (const row of DEFAULT_ISSUE_STATUSES) {
+        await ctx.db.insert("issueStatuses", {
+          ...row,
+          companyId: seeded.companyDocId,
+          scope: "company",
+          teamId: null,
+          baseStatusId: null,
+          hidden: false,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+          deletedAt: null,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(start(t)).resolves.toMatchObject({ state: "created" });
+    await expect(apply(t, [status("todo")])).resolves.toMatchObject({
+      outcomes: [{ status: "applied" }],
+    });
+    const stored = await t.run(async (ctx) =>
+      ctx.db
+        .query("issueStatuses")
+        .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", seeded.companyDocId))
+        .collect(),
+    );
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ id: "todo", color: "#123456" });
   });
 
   it("scopes execution to the run's active source environment", async () => {

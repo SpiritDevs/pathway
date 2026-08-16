@@ -55,6 +55,7 @@ export type CompanyEntityKind = Extract<
   | "environmentRegistration"
   | "environmentBinding"
   | "environmentCommand"
+  | "agentThread"
 >;
 
 /** The company-domain tables whose rows carry a `version` column this writer stamps. */
@@ -70,6 +71,7 @@ export type CompanyVersionedTable =
   | "environmentRegistrations"
   | "environmentBindings"
   | "environmentCommands"
+  | "agentThreads"
   | "issues"
   | "issueStatuses"
   | "issueLabels"
@@ -392,6 +394,17 @@ export async function encodeEnvironmentCommand(
     result: doc.result,
     error: doc.error,
     createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+/** Cloud-safe Agent Thread metadata; `shell` contains no message text. */
+export async function encodeAgentThread(ctx: QueryCtx, doc: Doc<"agentThreads">) {
+  return {
+    id: doc.id,
+    environmentId: doc.environmentId,
+    cloudProjectId: await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
+    shell: doc.shell,
     updatedAt: doc.updatedAt,
   };
 }

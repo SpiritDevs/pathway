@@ -19,6 +19,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import * as Effect from "effect/Effect";
 
 import type {
   EnvironmentCommandRecord,
@@ -26,13 +27,17 @@ import type {
 } from "../../../cloud/environmentControl";
 import { environmentCatalog } from "../../../connection/catalog";
 import { writeTextToClipboard } from "../../../hooks/useCopyToClipboard";
+import { PrimaryEnvironmentHttpClient } from "../../../environments/primary/httpClient";
+import { runPrimaryHttp } from "../../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
+import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
+import { EnvironmentConnectionSettings } from "../ConnectionsSettings";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
 import { permissionGate } from "./companySettings.logic";
 import {
@@ -74,13 +79,6 @@ function registrationStateBadge(row: CompanyEnvironmentRow) {
   );
 }
 
-function relayStateBadge(state: CompanyEnvironmentRow["registration"]["relayLinkState"]) {
-  if (state === "linked") return <Badge variant="success">Relay linked</Badge>;
-  if (state === "degraded") return <Badge variant="warning">Relay degraded</Badge>;
-  if (state === "revoked") return <Badge variant="secondary">Relay revoked</Badge>;
-  return <Badge variant="outline">Relay unlinked</Badge>;
-}
-
 function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
   if (state === "succeeded") return <Badge variant="success">Succeeded</Badge>;
   if (state === "failed") return <Badge variant="error">Failed</Badge>;
@@ -92,10 +90,12 @@ function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
 function EnvironmentList({
   rows,
   selectedEnvironmentId,
+  ownManagedEndpointAvailable,
   onSelect,
 }: {
   readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
   readonly selectedEnvironmentId: EnvironmentId | null;
+  readonly ownManagedEndpointAvailable: boolean | null;
   readonly onSelect: (environmentId: EnvironmentId) => void;
 }) {
   return (
@@ -131,7 +131,6 @@ function EnvironmentList({
                 <span className="truncate text-sm font-medium">{row.label}</span>
                 {row.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
                 {registrationStateBadge(row)}
-                {relayStateBadge(row.registration.relayLinkState)}
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>
@@ -141,7 +140,11 @@ function EnvironmentList({
                 </span>
                 <span>Last seen {relativeTimestamp(row.registration.lastSeenAt)}</span>
                 <span>
-                  {row.registration.managedEndpointAvailable
+                  {(
+                    row.isOwnEnvironment && ownManagedEndpointAvailable !== null
+                      ? ownManagedEndpointAvailable
+                      : row.registration.managedEndpointAvailable
+                  )
                     ? "Managed endpoint available"
                     : "No managed endpoint"}
                 </span>
@@ -425,6 +428,10 @@ export function CompanyEnvironmentsPanel() {
   const control = useEnvironmentControl();
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const ownManagedEndpointAvailable = primaryCloudLinkState.data
+    ? (primaryCloudLinkState.data.managedTunnelActive ?? primaryCloudLinkState.data.linked)
+    : null;
   const registrations = useMemo(
     () => environmentRegistrationsFromReplicaValues(settings.replica?.view.values() ?? []),
     [settings.replica],
@@ -438,6 +445,10 @@ export function CompanyEnvironmentsPanel() {
         ownEnvironmentId,
       }),
     [catalog.entries, ownEnvironmentId, registrations, settings.directory.teams],
+  );
+  const registeredEnvironmentIds = useMemo(
+    () => new Set(rows.map((row) => row.environmentId)),
+    [rows],
   );
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
   const [commands, setCommands] = useState<ReadonlyArray<EnvironmentCommandRecord>>([]);
@@ -498,6 +509,23 @@ export function CompanyEnvironmentsPanel() {
   const dispatchGate = permissionGate(settings.permissions, "remoteAgents.dispatch");
   const controlGate = permissionGate(settings.permissions, "remoteAgents.control");
   const manageGate = permissionGate(settings.permissions, "environments.manage");
+  const ownRegistration =
+    ownEnvironmentId === null
+      ? null
+      : (registrations.find(
+          (registration) =>
+            registration.environmentId === ownEnvironmentId && registration.state === "active",
+        ) ?? null);
+  const serviceRole = [...settings.directory.roles]
+    .filter(
+      (role) =>
+        role.permissions.includes("company.read") &&
+        role.permissions.includes("projects.read") &&
+        role.permissions.includes("issues.read") &&
+        role.permissions.includes("workflow.manage") &&
+        role.permissions.includes("environments.read"),
+    )
+    .toSorted((left, right) => left.permissions.length - right.permissions.length)[0];
   const cancelEnabled = dispatchGate.enabled && control !== null;
 
   const runAction = async (key: string, action: () => Promise<void>): Promise<boolean> => {
@@ -518,6 +546,7 @@ export function CompanyEnvironmentsPanel() {
   if (settings.isAuthLoaded && !settings.isSignedIn) {
     return (
       <SettingsPageContainer>
+        <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
           title="Sign in to manage company environments"
           description="Environment discovery and remote control are available after you sign in."
@@ -528,6 +557,7 @@ export function CompanyEnvironmentsPanel() {
   if (settings.activeCompany === null || settings.companyId === null) {
     return (
       <SettingsPageContainer>
+        <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
           title="No active company"
           description="Choose a company from the company switcher to discover its environments."
@@ -538,6 +568,7 @@ export function CompanyEnvironmentsPanel() {
   if (settings.replica === null) {
     return (
       <SettingsPageContainer>
+        <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
           title="Company data is syncing"
           description="Environment settings will appear when this company's replica is ready."
@@ -550,28 +581,81 @@ export function CompanyEnvironmentsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection
-        id="company-environments"
-        title="Environments"
-        icon={<ServerIcon className="size-4" />}
-      >
-        <EnvironmentList
-          rows={rows}
-          selectedEnvironmentId={selectedEnvironmentId}
-          onSelect={setSelectedEnvironmentId}
-        />
-      </SettingsSection>
+      <EnvironmentConnectionSettings
+        excludeEnvironmentIds={registeredEnvironmentIds}
+        renderEnvironmentSection={({ addEnvironmentAction, savedEnvironmentRows }) => (
+          <SettingsSection
+            id="company-environments"
+            title="Environments"
+            icon={<ServerIcon className="size-4" />}
+            headerAction={addEnvironmentAction}
+          >
+            {ownEnvironmentId !== null && ownRegistration === null ? (
+              <CompanySectionCard>
+                <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Register this environment</p>
+                    <p className="text-xs text-muted-foreground">
+                      Authorize this Pathway server to replicate the company and run migrations.
+                    </p>
+                  </div>
+                  <PermissionTooltip tooltip={manageGate.tooltip}>
+                    <Button
+                      size="sm"
+                      disabled={
+                        !manageGate.enabled ||
+                        control === null ||
+                        serviceRole === undefined ||
+                        pendingAction !== null
+                      }
+                      onClick={() => {
+                        if (control === null || serviceRole === undefined) return;
+                        void runAction("register", async () => {
+                          const info = await runPrimaryHttp(
+                            PrimaryEnvironmentHttpClient.pipe(
+                              Effect.flatMap((client) =>
+                                client.connect.registrationInfo({ headers: {} }),
+                              ),
+                            ),
+                          );
+                          await control.registerEnvironment({
+                            companyId,
+                            info,
+                            serviceRoleIds: [serviceRole.id],
+                          });
+                        });
+                      }}
+                    >
+                      <KeyRoundIcon className="size-3.5" />
+                      {pendingAction === "register" ? "Registering…" : "Register environment"}
+                    </Button>
+                  </PermissionTooltip>
+                  {serviceRole === undefined ? (
+                    <p className="text-xs text-destructive">
+                      Create a role with company, project, issue, workflow, and environment access
+                      before registering this server.
+                    </p>
+                  ) : null}
+                  {actionError ? <p className="text-xs text-destructive">{actionError}</p> : null}
+                </div>
+              </CompanySectionCard>
+            ) : null}
+            <EnvironmentList
+              rows={rows}
+              selectedEnvironmentId={selectedEnvironmentId}
+              ownManagedEndpointAvailable={ownManagedEndpointAvailable}
+              onSelect={setSelectedEnvironmentId}
+            />
+            {savedEnvironmentRows}
+          </SettingsSection>
+        )}
+      />
 
-      {selected ? (
+      {selected && !selected.isOwnEnvironment ? (
         <SettingsSection title={selected.label} icon={<PowerIcon className="size-4" />}>
           <CompanySectionCard>
             <div className="space-y-5 p-4">
-              {selected.isOwnEnvironment ? (
-                <div className="rounded-lg border border-info/20 bg-info/5 px-3 py-3 text-xs text-muted-foreground">
-                  This is the current device's environment. Remote commands, connect grants, and
-                  deactivation are suppressed here.
-                </div>
-              ) : selected.registration.state !== "active" ? (
+              {selected.registration.state !== "active" ? (
                 <div className="rounded-lg border px-3 py-3 text-xs text-muted-foreground">
                   This registration is revoked and cannot accept remote actions.
                 </div>
@@ -711,7 +795,7 @@ export function CompanyEnvironmentsPanel() {
                 loading={loadingCommands}
                 error={readGate.enabled ? commandLoadError : readGate.tooltip}
                 pendingAction={pendingAction}
-                cancelEnabled={cancelEnabled && !selected.isOwnEnvironment}
+                cancelEnabled={cancelEnabled}
                 cancelTooltip={dispatchGate.tooltip}
                 onRefresh={() => void refreshCommands()}
                 onCancel={(command) => {

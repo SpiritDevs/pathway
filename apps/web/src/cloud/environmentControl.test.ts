@@ -1,6 +1,6 @@
-import type { EnvironmentId } from "@spiritdevs/contracts";
+import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { CompanyId } from "@spiritdevs/contracts/company";
-import { EnvironmentCommandId } from "@spiritdevs/contracts/cloudProject";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -72,6 +72,9 @@ describe("environment control function references", () => {
       cancelCommand: "environmentCommands:cancel",
       issueConnectGrant: "connectGrants:issue",
       deactivateEnvironment: "environments:deactivate",
+      registerEnvironment: "environments:register",
+      ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
+      releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
     });
   });
 
@@ -156,6 +159,109 @@ describe("environment control function references", () => {
         companyId: COMPANY_ID,
         environmentId: ENVIRONMENT_ID,
         permission: "remoteAgents.control",
+      },
+    });
+  });
+
+  it("registers the current environment with its durable proof identity and service role", async () => {
+    const fake = fakeClient();
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+    });
+    const descriptor = {
+      environmentId: ENVIRONMENT_ID,
+      label: "Corey's Mac",
+      platform: { os: "darwin" as const, arch: "arm64" as const },
+      serverVersion: "1.0.0",
+      capabilities: { repositoryIdentity: true },
+    };
+
+    await control.registerEnvironment({
+      companyId: COMPANY_ID,
+      info: {
+        descriptor,
+        publicKeyThumbprint: "proof-thumbprint",
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+      },
+      serviceRoleIds: ["manager-role"],
+    });
+
+    expect(fake.calls).toContainEqual({
+      kind: "mutation",
+      name: "environments:register",
+      args: {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        descriptor,
+        publicKeyThumbprint: "proof-thumbprint",
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+        serviceRoleIds: ["manager-role"],
+        teamIds: [],
+      },
+    });
+  });
+
+  it("registers an environment-local project before assigning a cloud issue to it", async () => {
+    const fake = fakeClient();
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+    });
+
+    await control.ensureEnvironmentProject({
+      companyId: COMPANY_ID,
+      project: {
+        id: ProjectId.make("project-a"),
+        environmentId: ENVIRONMENT_ID,
+        title: "Pathway",
+        workspaceRoot: "/workspace/pathway",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-17T00:00:00.000Z",
+        updatedAt: "2026-08-17T00:00:00.000Z",
+      } satisfies EnvironmentProject,
+    });
+
+    expect(fake.calls).toContainEqual({
+      kind: "mutation",
+      name: "cloudProjects:ensureEnvironmentProject",
+      args: {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: "project-a",
+        localWorkspaceRoot: "/workspace/pathway",
+        name: "Pathway",
+      },
+    });
+  });
+
+  it("releases a stale environment project binding without contacting that environment", async () => {
+    const fake = fakeClient();
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+    });
+
+    await control.releaseEnvironmentProject({
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "project-a",
+    });
+
+    expect(fake.calls).toContainEqual({
+      kind: "mutation",
+      name: "cloudProjects:releaseEnvironmentProject",
+      args: {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: "project-a",
       },
     });
   });

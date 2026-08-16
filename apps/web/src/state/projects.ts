@@ -6,6 +6,7 @@ import { WS_METHODS } from "@spiritdevs/contracts";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
+import { cloudEnvironmentProjectsAtom } from "../cloud/agentThreadReadModel";
 
 export const projectEnvironment = createProjectEnvironmentAtoms(connectionAtomRuntime);
 /**
@@ -22,4 +23,5 @@ export const projectContentSearch = createEnvironmentRpcQueryAtomFamily(connecti
 export const environmentProjects = createEnvironmentProjectAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
+  fallbackProjectsAtom: cloudEnvironmentProjectsAtom,
 });

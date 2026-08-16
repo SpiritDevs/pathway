@@ -1,0 +1,262 @@
+// @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
+/** Online administration for company-owned projects and their environment-local bindings. */
+import { v } from "convex/values";
+
+import type { Doc } from "./_generated/dataModel.js";
+import { mutation } from "./_generated/server.js";
+import {
+  appendCompanyChanges,
+  encodeCloudProject,
+  encodeEnvironmentBinding,
+} from "./lib/companyApply.ts";
+import { mintDomainId } from "./lib/domainIds.ts";
+import { backendError } from "./lib/errors.ts";
+import { actorRecord, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import { domainIdArg } from "./lib/validators.ts";
+
+function trimmed(value: string, label: string): string {
+  const result = value.trim();
+  if (result.length === 0) throw backendError("invalid-arguments", `${label} is required.`);
+  return result;
+}
+
+/**
+ * Makes one environment project available to the company issue tracker.
+ *
+ * The local project id is deliberately reused as the cloud id. That keeps issue associations
+ * stable on the originating environment, while the binding records the machine-specific root.
+ */
+export const ensureEnvironmentProject = mutation({
+  args: {
+    companyId: domainIdArg,
+    environmentId: v.string(),
+    localProjectId: v.string(),
+    localWorkspaceRoot: v.union(v.string(), v.null()),
+    name: v.string(),
+  },
+  returns: domainIdArg,
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "projects.manage");
+    const environmentId = trimmed(args.environmentId, "An environment id");
+    const localProjectId = trimmed(args.localProjectId, "A local project id");
+    const name = trimmed(args.name, "A project name");
+    const localWorkspaceRoot =
+      args.localWorkspaceRoot === null
+        ? null
+        : trimmed(args.localWorkspaceRoot, "A local workspace root");
+
+    const registration = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_company_and_environment", (q) =>
+        q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+      )
+      .unique();
+    if (registration === null || registration.state !== "active") {
+      throw backendError(
+        "environment-not-registered",
+        "Register this environment before assigning its projects.",
+      );
+    }
+
+    let project = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", localProjectId),
+      )
+      .unique();
+    const now = Date.now();
+    let projectChanged = false;
+    if (project === null) {
+      const projectDocId = await ctx.db.insert("cloudProjects", {
+        id: localProjectId,
+        companyId: actor.company._id,
+        name,
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+      project = await ctx.db.get(projectDocId);
+      if (project === null) throw backendError("entity-not-found", "The project insert vanished.");
+      projectChanged = true;
+    } else if (project.name !== name || project.archivedAt !== null || project.deletedAt !== null) {
+      await ctx.db.patch(project._id, {
+        name,
+        archivedAt: null,
+        deletedAt: null,
+        updatedAt: now,
+      });
+      project = await ctx.db.get(project._id);
+      if (project === null) throw backendError("entity-not-found", "The project vanished.");
+      projectChanged = true;
+    }
+
+    let binding: Doc<"environmentBindings"> | null =
+      (
+        await ctx.db
+          .query("environmentBindings")
+          .withIndex("by_company_and_environment", (q) =>
+            q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+          )
+          .collect()
+      ).find((row) => row.localProjectId === localProjectId) ?? null;
+    let bindingChanged = false;
+
+    if (binding !== null && binding.cloudProjectId !== project._id) {
+      throw backendError(
+        "foreign-id-conflict",
+        "This local project is already bound to another cloud project.",
+      );
+    }
+
+    if (binding === null && localWorkspaceRoot !== null) {
+      const bindingDocId = await ctx.db.insert("environmentBindings", {
+        id: mintDomainId(now),
+        companyId: actor.company._id,
+        cloudProjectId: project._id,
+        environmentId,
+        localProjectId,
+        localWorkspaceRoot,
+        status: "active",
+        lastSeenAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      binding = await ctx.db.get(bindingDocId);
+      if (binding === null) throw backendError("entity-not-found", "The project binding vanished.");
+      bindingChanged = true;
+      if (project.preferredBindingId === null) {
+        await ctx.db.patch(project._id, { preferredBindingId: binding.id, updatedAt: now });
+        project = await ctx.db.get(project._id);
+        if (project === null) throw backendError("entity-not-found", "The project vanished.");
+        projectChanged = true;
+      }
+    } else if (
+      binding !== null &&
+      (binding.localWorkspaceRoot !== localWorkspaceRoot ||
+        binding.status !== (localWorkspaceRoot === null ? "missing" : "active"))
+    ) {
+      await ctx.db.patch(binding._id, {
+        ...(localWorkspaceRoot === null ? {} : { localWorkspaceRoot }),
+        status: localWorkspaceRoot === null ? "missing" : "active",
+        lastSeenAt: now,
+        updatedAt: now,
+      });
+      binding = await ctx.db.get(binding._id);
+      if (binding === null) throw backendError("entity-not-found", "The project binding vanished.");
+      bindingChanged = true;
+    }
+
+    if (projectChanged || bindingChanged) {
+      await appendCompanyChanges(ctx, {
+        companyId: actor.company._id,
+        actor: actorRecord(actor),
+        changes: [
+          ...(projectChanged
+            ? [
+                {
+                  entityKind: "cloudProject" as const,
+                  entityId: project.id,
+                  changeKind: "upsert" as const,
+                  versionDocId: project._id,
+                  payload: encodeCloudProject(project),
+                },
+              ]
+            : []),
+          ...(!bindingChanged || binding === null
+            ? []
+            : [
+                {
+                  entityKind: "environmentBinding" as const,
+                  entityId: binding.id,
+                  changeKind: "upsert" as const,
+                  versionDocId: binding._id,
+                  payload: await encodeEnvironmentBinding(ctx, binding),
+                },
+              ]),
+        ],
+      });
+    }
+
+    return project.id;
+  },
+});
+
+/** Revokes this machine's binding when its local project is removed. */
+export const releaseEnvironmentProject = mutation({
+  args: {
+    companyId: domainIdArg,
+    environmentId: v.string(),
+    localProjectId: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "projects.manage");
+    const environmentId = trimmed(args.environmentId, "An environment id");
+    const localProjectId = trimmed(args.localProjectId, "A local project id");
+    const binding = (
+      await ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+        )
+        .collect()
+    ).find((row) => row.localProjectId === localProjectId);
+    if (binding === undefined || binding.status === "revoked") return null;
+
+    const now = Date.now();
+    await ctx.db.patch(binding._id, { status: "revoked", lastSeenAt: now, updatedAt: now });
+    const revoked = await ctx.db.get(binding._id);
+    if (revoked === null) throw backendError("entity-not-found", "The project binding vanished.");
+
+    const project = await ctx.db.get(binding.cloudProjectId);
+    let changedProject = project;
+    if (project !== null && project.preferredBindingId === binding.id) {
+      const replacement = (
+        await ctx.db
+          .query("environmentBindings")
+          .withIndex("by_company_and_project", (q) =>
+            q.eq("companyId", actor.company._id).eq("cloudProjectId", project._id),
+          )
+          .collect()
+      ).find((row) => row._id !== binding._id && row.status === "active");
+      await ctx.db.patch(project._id, {
+        preferredBindingId: replacement?.id ?? null,
+        updatedAt: now,
+      });
+      changedProject = await ctx.db.get(project._id);
+    }
+
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "environmentBinding",
+          entityId: revoked.id,
+          changeKind: "upsert",
+          versionDocId: revoked._id,
+          payload: await encodeEnvironmentBinding(ctx, revoked),
+        },
+        ...(changedProject === null || changedProject === project
+          ? []
+          : [
+              {
+                entityKind: "cloudProject" as const,
+                entityId: changedProject.id,
+                changeKind: "upsert" as const,
+                versionDocId: changedProject._id,
+                payload: encodeCloudProject(changedProject),
+              },
+            ]),
+      ],
+    });
+    return null;
+  },
+});

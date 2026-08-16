@@ -48,6 +48,7 @@ export const SYNC_ENTITY_KINDS = [
   "environmentRegistration",
   "environmentBinding",
   "environmentCommand",
+  "agentThread",
   "issue",
   "issueStatus",
   "issueLabel",

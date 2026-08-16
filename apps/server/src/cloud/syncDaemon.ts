@@ -86,7 +86,10 @@ import {
 } from "./convexServiceToken.ts";
 import { makeConvexSyncTransport } from "./convexSyncTransport.ts";
 import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  getOrCreateCloudSyncDpopKeyPairFromSecretStore,
+  getOrCreateEnvironmentKeyPairFromSecretStore,
+} from "./environmentKeys.ts";
 import { convexUrlConfig } from "./publicConfig.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 
@@ -475,17 +478,21 @@ export function isRetryableSyncStop(error: SyncTransportError | null): boolean {
 /**
  * The production transport: link-following service tokens plus a Convex client for the deployment.
  *
- * The DPoP key pair is generated per process rather than persisted. It is proof-of-possession for
- * tokens this process holds in memory, so it has no value beyond the process's own lifetime, and a
- * fresh pair means a restart cannot present a key an earlier run leaked.
+ * The DPoP key pair is the durable proof identity named by the company's environment registration.
+ * Access tokens remain short lived and in memory, while the proof key survives restarts in the
+ * same mode-0600 secret store as the environment link key.
  */
 const defaultCloudSyncTransport = (
   input: CloudSyncTransportInput,
 ): Effect.Effect<SyncTransport["Service"], never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
+    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(input.secrets).pipe(
+      Effect.orDie,
+    );
     const tokens = yield* makeCloudSyncTokenProvider({
       environmentId: input.environmentId,
       secrets: input.secrets,
+      dpopKeys,
     });
     return yield* makeConvexSyncTransport({ convexUrl: input.settings.convexUrl, tokens });
   });

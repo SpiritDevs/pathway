@@ -31,6 +31,8 @@ import {
   SyncCompanyPayload,
   SyncCompanySettingsPayload,
   SyncEnvironmentRegistrationPayload,
+  SyncEnvironmentBindingPayload,
+  SyncAgentThreadPayload,
   SyncMembershipPayload,
   SyncRoleAssignmentPayload,
   SyncRolePayload,
@@ -63,6 +65,8 @@ export const COMPANY_SYNC_ENTITY_KINDS = [
   "roleAssignment",
   "environmentRegistration",
   "cloudProject",
+  "environmentBinding",
+  "agentThread",
 ] as const satisfies ReadonlyArray<SyncEntityKind>;
 export type CompanySyncEntityKind = (typeof COMPANY_SYNC_ENTITY_KINDS)[number];
 
@@ -136,6 +140,20 @@ export const EnvironmentRegistrationEntity = Schema.Struct({
 });
 export type EnvironmentRegistrationEntity = typeof EnvironmentRegistrationEntity.Type;
 
+/** One environment-local checkout of a company project. */
+export const EnvironmentBindingEntity = Schema.Struct({
+  entityKind: Schema.Literal("environmentBinding"),
+  ...SyncEnvironmentBindingPayload.fields,
+});
+export type EnvironmentBindingEntity = typeof EnvironmentBindingEntity.Type;
+
+/** Cloud-safe thread shell used for discovery before its owning relay is connected. */
+export const AgentThreadEntity = Schema.Struct({
+  entityKind: Schema.Literal("agentThread"),
+  ...SyncAgentThreadPayload.fields,
+});
+export type AgentThreadEntity = typeof AgentThreadEntity.Type;
+
 /**
  * A company-owned project identity. Bindings may come and go independently; issues retain this
  * stable id. The wire omits `companyId`, `deletedAt`, and `version` like every other replica row.
@@ -167,7 +185,9 @@ export const CompanySyncEntity = Schema.Union([
   RoleEntity,
   RoleAssignmentEntity,
   EnvironmentRegistrationEntity,
+  EnvironmentBindingEntity,
   CloudProjectSyncEntity,
+  AgentThreadEntity,
 ]);
 export type CompanySyncEntity = typeof CompanySyncEntity.Type;
 
@@ -223,7 +243,9 @@ export const COMPANY_ENTITY_CODECS: Record<CompanySyncEntityKind, SyncCodec<Comp
     "environmentRegistration",
     SyncEnvironmentRegistrationPayload,
   ),
+  environmentBinding: taggedEntityCodec("environmentBinding", SyncEnvironmentBindingPayload),
   cloudProject: taggedEntityCodec("cloudProject", Schema.Struct(cloudProjectSyncEntityFields)),
+  agentThread: taggedEntityCodec("agentThread", SyncAgentThreadPayload),
 };
 
 /** Codec for one entity kind, or `null` for a kind this domain does not replicate. */

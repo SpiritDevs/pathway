@@ -16,10 +16,8 @@ export type SettingsPath =
   | "/settings/issues-milestones"
   | "/settings/issues-intake"
   | "/settings/issues-import"
-  | "/settings/issues-migration"
   | "/settings/issues-enrichment"
   | "/settings/email"
-  | "/settings/connections"
   | "/settings/archived"
   | "/settings/diagnostics";
 
@@ -59,10 +57,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-milestones": "Milestones",
   "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
-  "/settings/issues-migration": "Migration",
   "/settings/issues-enrichment": "Enrichment",
   "/settings/email": "Capture",
-  "/settings/connections": "Connections",
   "/settings/archived": "Archive",
   "/settings/diagnostics": "Diagnostics",
 };
@@ -112,7 +108,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
-      "/settings/issues-migration",
       "/settings/issues-enrichment",
     ],
   },
@@ -124,7 +119,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     label: "System",
-    paths: ["/settings/connections", "/settings/archived", "/settings/diagnostics"],
+    paths: ["/settings/archived", "/settings/diagnostics"],
   },
 ];
 
@@ -386,11 +381,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/issues-import",
   },
   {
-    id: "issue-cloud-migration",
-    title: "Cloud issue migration",
-    to: "/settings/issues-migration",
-  },
-  {
     id: "issue-intake",
     title: "Slack intake",
     to: "/settings/issues-intake",
@@ -472,9 +462,10 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/email",
   },
   {
-    id: "remote-environments",
-    title: "Remote environments",
-    to: "/settings/connections",
+    id: "add-environment",
+    title: "Add environment",
+    to: "/settings/environments",
+    targetId: "company-environments",
   },
   {
     id: "archive",

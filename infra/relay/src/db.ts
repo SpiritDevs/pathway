@@ -46,44 +46,54 @@ export class RelayConvexClient extends Context.Service<
     ) => Effect.Effect<FunctionReturnType<Mutation>, RelayConvexClientError>;
   }
 >()("pathway-relay/db/RelayConvexClient") {
-  /** A fresh client keeps token assignment local to one request under concurrency. */
+  /**
+   * The relay always calls Convex as the same control-plane principal. Reuse
+   * both the HTTP client and its short-lived token so one relay request does
+   * not repeatedly construct clients and sign identical identities.
+   */
   static readonly layer = <TokenError>(input: {
     readonly makeClient: () => RelayConvexClientLike;
     readonly getToken: Effect.Effect<string, TokenError>;
   }) =>
-    Layer.succeed(
+    Layer.effect(
       RelayConvexClient,
-      RelayConvexClient.of({
-        query: (query, args) =>
-          Effect.gen(function* () {
-            const client = input.makeClient();
-            client.setAuth(
-              yield* input.getToken.pipe(
-                Effect.mapError(
-                  (cause) => new RelayConvexClientError({ operation: "authenticate", cause }),
-                ),
-              ),
-            );
-            return yield* Effect.tryPromise({
-              try: () => client.query(query, args),
-              catch: (cause) => new RelayConvexClientError({ operation: "query", cause }),
-            });
-          }),
-        mutation: (mutation, args) =>
-          Effect.gen(function* () {
-            const client = input.makeClient();
-            client.setAuth(
-              yield* input.getToken.pipe(
-                Effect.mapError(
-                  (cause) => new RelayConvexClientError({ operation: "authenticate", cause }),
-                ),
-              ),
-            );
-            return yield* Effect.tryPromise({
-              try: () => client.mutation(mutation, args),
-              catch: (cause) => new RelayConvexClientError({ operation: "mutation", cause }),
-            });
-          }),
+      Effect.gen(function* () {
+        const client = input.makeClient();
+        const getToken = yield* Effect.cachedWithTTL(input.getToken, "1 minute");
+        let appliedToken: string | undefined;
+
+        const authenticate = getToken.pipe(
+          Effect.mapError(
+            (cause) => new RelayConvexClientError({ operation: "authenticate", cause }),
+          ),
+          Effect.tap((token) =>
+            Effect.sync(() => {
+              if (token !== appliedToken) {
+                client.setAuth(token);
+                appliedToken = token;
+              }
+            }),
+          ),
+        );
+
+        return RelayConvexClient.of({
+          query: (query, args) =>
+            Effect.gen(function* () {
+              yield* authenticate;
+              return yield* Effect.tryPromise({
+                try: () => client.query(query, args),
+                catch: (cause) => new RelayConvexClientError({ operation: "query", cause }),
+              });
+            }),
+          mutation: (mutation, args) =>
+            Effect.gen(function* () {
+              yield* authenticate;
+              return yield* Effect.tryPromise({
+                try: () => client.mutation(mutation, args),
+                catch: (cause) => new RelayConvexClientError({ operation: "mutation", cause }),
+              });
+            }),
+        });
       }),
     );
 }

@@ -8,10 +8,10 @@ version. If they do not match, Pathway shows a warning with the right update opt
 You may see the warning in either of these places:
 
 - above the message box in the current conversation
-- **Settings** → **Connections**, beside the affected connection
+- **Settings** → **Environments**, beside the affected connection
 
 Dismissing the conversation warning only hides that reminder for those two versions. It does not
-update the server, and the version difference remains visible in Connections.
+update the server, and the version difference remains visible in Environments.
 
 ## Before You Update
 
@@ -37,7 +37,7 @@ rollback support needed for later remote updates, including versions that change
 
 After selecting **Update**, the notice becomes a live status line: **Downloading…** while the new
 version is fetched and verified, then **Restarting…** while the server restarts into it. The same
-status appears in the conversation and in Connections, so navigating between them does not lose the
+status appears in the conversation and in Environments, so navigating between them does not lose the
 update. A failure remains visible with its error and an option to retry.
 
 **Copy update command** gives you `npx @spiritdevs/pathway@<client-version>`, which relaunches the server directly

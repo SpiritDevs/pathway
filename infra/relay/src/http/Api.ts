@@ -89,18 +89,6 @@ const relayCorsAllowedHeaders = [
 ] as const;
 const relayCorsExposedHeaders = ["traceparent", "www-authenticate"] as const;
 
-const relayCorsHeaders = {
-  "access-control-allow-origin": "*",
-  "access-control-expose-headers": relayCorsExposedHeaders.join(","),
-} as const;
-
-const relayCorsPreflightHeaders = {
-  ...relayCorsHeaders,
-  "access-control-allow-methods": relayCorsAllowedMethods.join(","),
-  "access-control-allow-headers": relayCorsAllowedHeaders.join(","),
-  "access-control-max-age": "86400",
-} as const;
-
 const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler(
   (_request, response) =>
     Effect.succeed(
@@ -134,22 +122,11 @@ const appendRelayTraceContextResponseHeader = Effect.gen(function* () {
 }).pipe(Effect.ignore);
 
 export const relayCors = HttpRouter.middleware(
-  Effect.fnUntraced(function* <E, R>(
-    httpEffect: Effect.Effect<
-      HttpServerResponse.HttpServerResponse,
-      E,
-      HttpServerRequest.HttpServerRequest | R
-    >,
-  ) {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    if (request.method === "OPTIONS") {
-      return HttpServerResponse.empty({
-        status: 204,
-        headers: relayCorsPreflightHeaders,
-      });
-    }
-    const response = yield* httpEffect;
-    return HttpServerResponse.setHeaders(response, relayCorsHeaders);
+  HttpMiddleware.cors({
+    allowedMethods: relayCorsAllowedMethods,
+    allowedHeaders: relayCorsAllowedHeaders,
+    exposedHeaders: relayCorsExposedHeaders,
+    maxAge: 86_400,
   }),
   { global: true },
 );

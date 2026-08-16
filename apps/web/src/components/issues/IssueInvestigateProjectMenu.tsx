@@ -31,10 +31,16 @@ export function IssueInvestigateProjectMenu({
   align?: "start" | "center" | "end";
   side?: "top" | "bottom";
 }) {
+  const directProjectId = directInvestigateProjectId(projects, currentProjectId);
   const trigger = (
-    <Button disabled={disabledReason !== null} size="xs" variant="outline">
+    <Button
+      disabled={disabledReason !== null}
+      onClick={directProjectId === null ? undefined : () => onSelect(directProjectId)}
+      size="xs"
+      variant="outline"
+    >
       {children}
-      <ChevronDownIcon className="size-3 opacity-70" />
+      {directProjectId === null ? <ChevronDownIcon className="size-3 opacity-70" /> : null}
     </Button>
   );
 
@@ -48,6 +54,8 @@ export function IssueInvestigateProjectMenu({
       </Tooltip>
     );
   }
+
+  if (directProjectId !== null) return trigger;
 
   return (
     <Menu>
@@ -74,4 +82,15 @@ export function IssueInvestigateProjectMenu({
       </MenuPopup>
     </Menu>
   );
+}
+
+/** A chooser is useful only when the click cannot resolve one eligible workspace by itself. */
+export function directInvestigateProjectId(
+  projects: ReadonlyArray<EnvironmentProject>,
+  currentProjectId: ProjectId | null,
+): ProjectId | null {
+  if (currentProjectId !== null && projects.some((project) => project.id === currentProjectId)) {
+    return currentProjectId;
+  }
+  return projects.length === 1 ? projects[0]!.id : null;
 }

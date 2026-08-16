@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as agentThreads from "../agentThreads.js";
+import type * as cloudProjects from "../cloudProjects.js";
 import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
 import type * as crons from "../crons.js";
@@ -34,6 +36,8 @@ import type * as teams from "../teams.js";
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agentThreads: typeof agentThreads;
+  cloudProjects: typeof cloudProjects;
   companies: typeof companies;
   connectGrants: typeof connectGrants;
   crons: typeof crons;

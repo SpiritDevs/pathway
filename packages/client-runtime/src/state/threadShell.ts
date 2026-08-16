@@ -34,12 +34,19 @@ export function createEnvironmentThreadShellAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
+  /** Cloud discovery fallback used only until the owning environment supplies a shell. */
+  readonly fallbackThreadsAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<OrchestrationV2ThreadShell>>;
 }) {
   const environmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationV2ThreadShell> =>
-        get(input.snapshotAtom(environmentId))?.threads ?? EMPTY_THREADS,
-    ).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
+    Atom.make((get): ReadonlyArray<OrchestrationV2ThreadShell> => {
+      const snapshot = get(input.snapshotAtom(environmentId));
+      if (snapshot !== null) return snapshot.threads;
+      return input.fallbackThreadsAtom === undefined
+        ? EMPTY_THREADS
+        : get(input.fallbackThreadsAtom(environmentId));
+    }).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
   );
 
   const environmentThreadIndexAtom = Atom.family((environmentId: EnvironmentId) =>

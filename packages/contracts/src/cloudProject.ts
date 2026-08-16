@@ -37,6 +37,10 @@ import {
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestrationSessionStatus } from "./orchestration.ts";
+import {
+  OrchestrationV2LatestVisibleMessageSummaryJson,
+  OrchestrationV2ThreadShellJson,
+} from "./orchestrationV2.ts";
 
 const makeCloudProjectEntityId = <Brand extends string>(brand: Brand) =>
   TrimmedNonEmptyString.pipe(Schema.brand(brand));
@@ -49,6 +53,8 @@ export const EnvironmentRegistrationId = makeCloudProjectEntityId("EnvironmentRe
 export type EnvironmentRegistrationId = typeof EnvironmentRegistrationId.Type;
 export const EnvironmentCommandId = makeCloudProjectEntityId("EnvironmentCommandId");
 export type EnvironmentCommandId = typeof EnvironmentCommandId.Type;
+export const AgentThreadId = makeCloudProjectEntityId("AgentThreadId");
+export type AgentThreadId = typeof AgentThreadId.Type;
 
 export const CLOUD_PROJECT_NAME_MAX_CHARS = 200;
 
@@ -140,6 +146,43 @@ export function selectEnvironmentBinding(input: {
   if (preferred !== undefined) return { _tag: "Selected", binding: preferred };
   return { _tag: "Ambiguous", bindings: eligible };
 }
+
+// ---------------------------------------------------------------------------
+// Agent thread discovery
+// ---------------------------------------------------------------------------
+
+const { latestVisibleMessage: _latestVisibleMessage, ...cloudAgentThreadShellFields } =
+  OrchestrationV2ThreadShellJson.fields;
+
+/**
+ * The durable thread index replicated through Convex.
+ *
+ * This deliberately mirrors the ordinary shell while removing message text. The owning
+ * environment remains authoritative for the transcript, diffs, files, approvals, and streaming
+ * output; a client opens those through that environment's relay connection.
+ */
+export const CloudAgentThreadShell = Schema.Struct({
+  ...cloudAgentThreadShellFields,
+  latestVisibleMessage: Schema.NullOr(
+    Schema.Struct({
+      id: OrchestrationV2LatestVisibleMessageSummaryJson.fields.id,
+      role: OrchestrationV2LatestVisibleMessageSummaryJson.fields.role,
+      updatedAt: OrchestrationV2LatestVisibleMessageSummaryJson.fields.updatedAt,
+    }),
+  ),
+});
+export type CloudAgentThreadShell = typeof CloudAgentThreadShell.Type;
+
+/** One environment-owned thread shell, mapped back to its company project identity. */
+export const AgentThread = Schema.Struct({
+  id: AgentThreadId,
+  companyId: CompanyId,
+  environmentId: EnvironmentId,
+  cloudProjectId: CloudProjectId,
+  shell: CloudAgentThreadShell,
+  updatedAt: CloudTimestamp,
+});
+export type AgentThread = typeof AgentThread.Type;
 
 // ---------------------------------------------------------------------------
 // Company environment registry

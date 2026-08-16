@@ -41,7 +41,7 @@ run a headless server from the CLI, or have the desktop app launch Pathway over 
 
 If you are already running the desktop app and want to make it reachable from other devices:
 
-1. Open **Settings** → **Connections**.
+1. Open **Settings** → **Environments**.
 2. Under **This environment**, toggle **Network access** on. This will restart the app and run the backend on all network interfaces.
 3. The settings panel will show the default reachable endpoint, with a `+N` control when more endpoints are available. Expand it to inspect alternatives such as loopback, LAN, private-network, or HTTPS endpoints.
 4. Use **Create Link** to generate a pairing link you can share with another device.
@@ -72,7 +72,7 @@ Depending on your Tailscale setup, this may include:
 
 The Tailscale HTTPS endpoint uses the clean MagicDNS URL, such as
 `https://machine.tailnet.ts.net/`, and is off until you opt in. Turn on **Enable Tailscale HTTPS**
-on the **Tailscale HTTPS** row in **Settings** → **Connections**. The desktop app restarts the
+on the **Tailscale HTTPS** row in **Settings** → **Environments**. The desktop app restarts the
 backend with the same server-side behavior as `pathway serve --tailscale-serve`, then the server asks
 Tailscale Serve to proxy HTTPS traffic to the local backend. Turn the same switch off to stop it.
 
@@ -126,8 +126,8 @@ the environment the project lives on. Every saved environment is offered, not on
 
 Use this when you want the desktop app to start or reuse Pathway on another machine over SSH.
 
-1. Open **Settings** → **Connections**.
-2. Under **Remote Environments**, choose **Add environment**.
+1. Open **Settings** → **Environments**.
+2. Beside **Environments**, choose **Add environment**.
 3. Select the SSH launch flow.
 4. Enter the SSH target, such as `user@example.com`.
 5. Confirm the launch. The desktop app probes the host, starts or reuses a remote Pathway server, opens a local port forward, and saves the environment.
@@ -170,7 +170,7 @@ If reconnecting after an app update fails, retry the SSH launch once. The launch
 ## Updating a Remote Server
 
 When the Pathway web or desktop app and a remote server use different versions, a warning appears in
-the conversation and in **Settings** → **Connections**. Follow the action shown there: Pathway may
+the conversation and in **Settings** → **Environments**. Follow the action shown there: Pathway may
 be able to update and reconnect the server for you, or it may ask you to update the desktop app or
 run a copied command on the server machine.
 

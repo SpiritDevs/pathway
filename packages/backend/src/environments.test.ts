@@ -15,6 +15,8 @@ process.env.PATHWAY_CLOUD_SYNC = "enabled";
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
+  "../convex/cloudProjects.ts": () => import("../convex/cloudProjects.ts"),
   "../convex/environments.ts": () => import("../convex/environments.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
@@ -39,7 +41,11 @@ const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") 
   label,
   platform: { os: "darwin" as const, arch: "arm64" as const },
   serverVersion: "1.2.3",
-  capabilities: { repositoryIdentity: true, connectionProbe: true },
+  capabilities: {
+    repositoryIdentity: true,
+    connectionProbe: true,
+    pushAutoSettlement: true,
+  },
 });
 
 function harness() {
@@ -135,6 +141,7 @@ async function seed(t: Harness) {
     await addMember("manager", MANAGER_MEMBERSHIP_ID, MANAGER_ROLE_ID, [
       "environments.read",
       "environments.manage",
+      "projects.manage",
     ]);
     await addMember("reader", READER_MEMBERSHIP_ID, READER_ROLE_ID, ["environments.read"]);
     await addMember("blind", BLIND_MEMBERSHIP_ID, BLIND_ROLE_ID, ["issues.read"]);
@@ -188,6 +195,80 @@ interface BootstrapPage {
 }
 
 describe("environment registry", () => {
+  it("makes a local environment project available to cloud issues exactly once", async () => {
+    const t = harness();
+    await seedRegistration(t);
+
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    };
+    expect(
+      await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args),
+    ).toBe(PROJECT_ID);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      const bindings = await ctx.db.query("environmentBindings").collect();
+      expect(bindings).toHaveLength(1);
+      expect(bindings[0]).toMatchObject({
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: PROJECT_ID,
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+      });
+    });
+    expect((await feedRows(t)).map((row) => row.entityKind)).toEqual([
+      "cloudProject",
+      "environmentBinding",
+    ]);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args);
+    expect(await feedRows(t)).toHaveLength(2);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      ...args,
+      localWorkspaceRoot: "/workspace/pathway-next",
+      name: "Pathway Next",
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({ name: "Pathway Next" });
+      expect(await ctx.db.query("environmentBindings").first()).toMatchObject({
+        localWorkspaceRoot: "/workspace/pathway-next",
+        status: "active",
+      });
+    });
+    expect((await feedRows(t)).slice(2).map((row) => row.entityKind)).toEqual([
+      "cloudProject",
+      "environmentBinding",
+    ]);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("environmentBindings").first()).toMatchObject({
+        status: "revoked",
+      });
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({
+        preferredBindingId: null,
+      });
+    });
+
+    const versionAfterRelease = (await feedRows(t)).length;
+    await asUser(t, "manager").mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+    expect(await feedRows(t)).toHaveLength(versionAfterRelease);
+  });
+
   it("publishes a registration to members with environments.read and withholds it without that grant", async () => {
     const t = harness();
     await seedRegistration(t);
@@ -489,5 +570,78 @@ describe("environment registry", () => {
       }),
     ).rejects.toThrow("not bound to the key");
     expect(await feedRows(t)).toHaveLength(0);
+  });
+
+  it("publishes redacted Agent Thread metadata once for an active project binding", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    const shell = {
+      id: "thread-one",
+      projectId: PROJECT_ID,
+      title: "Cloud-visible thread",
+      latestVisibleMessage: {
+        id: "message-one",
+        role: "assistant",
+        updatedAt: "2026-08-17T00:00:00.000Z",
+      },
+    };
+
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-one",
+      localProjectId: PROJECT_ID,
+      shell,
+    });
+    const feedCount = (await feedRows(t)).length;
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-one",
+      localProjectId: PROJECT_ID,
+      shell,
+    });
+
+    expect(await feedRows(t)).toHaveLength(feedCount);
+    const thread = await t.run(async (ctx) => await ctx.db.query("agentThreads").unique());
+    expect(thread).toMatchObject({
+      id: `${ENVIRONMENT_ID}:thread-one`,
+      environmentId: ENVIRONMENT_ID,
+      cloudProjectId: expect.anything(),
+      localProjectId: PROJECT_ID,
+      threadId: "thread-one",
+      shell,
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      entityId: `${ENVIRONMENT_ID}:thread-one`,
+      changeKind: "upsert",
+      payload: { shell },
+    });
+
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: PROJECT_ID,
+        shell: {
+          ...shell,
+          latestVisibleMessage: { ...shell.latestVisibleMessage, text: "secret transcript" },
+        },
+      }),
+    ).rejects.toThrow("may not contain message text");
   });
 });

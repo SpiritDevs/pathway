@@ -5,7 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { RelayConvexClient, RelayConvexClientError, type RelayConvexClientLike } from "./db.ts";
 
 describe("RelayConvexClient", () => {
-  it("mints and applies fresh auth on every operation", async () => {
+  it("reuses one authenticated client across operations", async () => {
     const appliedTokens: string[] = [];
     let createdClients = 0;
     let issuedTokens = 0;
@@ -35,8 +35,9 @@ describe("RelayConvexClient", () => {
       }).pipe(Effect.provide(layer)),
     );
 
-    expect(createdClients).toBe(2);
-    expect(appliedTokens).toEqual(["token-1", "token-2"]);
+    expect(createdClients).toBe(1);
+    expect(issuedTokens).toBe(1);
+    expect(appliedTokens).toEqual(["token-1"]);
   });
 
   it("maps transport failures to a tagged client error", async () => {

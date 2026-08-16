@@ -34,6 +34,7 @@ const READ_PERMISSION: Record<SyncEntityKind, PermissionKey> = {
   environmentRegistration: "environments.read",
   environmentBinding: "environments.read",
   environmentCommand: "environments.read",
+  agentThread: "projects.read",
   issue: "issues.read",
   issueStatus: "issues.read",
   issueLabel: "issues.read",

@@ -35,6 +35,14 @@ The relay and server use `PATHWAY_*`/unprefixed names because they run outside t
 bundle uses the `VITE_*` names. Repository release tooling maps the shared public configuration into
 the web names; do not put a server or provider secret in a `VITE_*` variable.
 
+Once the server is linked and its company environment registration is active, it automatically
+publishes every active local project to Convex. The company-owned cloud project carries the shared
+name; its environment binding carries this machine's environment id, local project id, and workspace
+root. Project creates and metadata changes publish immediately, startup and periodic reconciliation
+repair missed publications, and deleting a local project revokes only that machine's binding. The
+environment registration separately supplies the computer label, platform, capabilities, relay
+reachability, and managed endpoint used to control work on that machine.
+
 ### Development and production deployments
 
 The backend package owns the Convex project and exposes `dev`, `codegen`, `test`, and `typecheck`
@@ -266,7 +274,9 @@ explicit decision that preserving one legacy environment outweighs the operation
 The recovery surface is Settings → Issues → Migration. It previews local rows, projects, attachments,
 key-prefix conflicts, and preflight failures before execution. Starting a run requires a signed-in
 member with `company.manage`, an active source environment registration, and a target company with
-zero issue-domain rows. Only one `created` or `applying` run may exist for a company.
+no issue data or workflow edits. The untouched default workflow seeded during company creation is
+safe to replace and does not block import. Only one `created` or `applying` run may exist for a
+company.
 
 The Convex API is in `packages/backend/convex/issueImport.ts`:
 

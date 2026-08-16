@@ -15,6 +15,7 @@ build/
 release/
 release-mock/
 .pathway
+.pathway-backups/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report

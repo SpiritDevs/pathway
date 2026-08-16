@@ -33,6 +33,7 @@ import {
   RelayConvexServiceTokenResponse,
   RelayEnvironmentLinkChallengeResponse,
   RelayEnvironmentLinkResponse,
+  RelayListEnvironmentsResponse,
   RelayOkResponse,
   type RelayEnvironmentLinkProofPayload,
 } from "@spiritdevs/contracts/relay";
@@ -934,6 +935,17 @@ export const runConvexSyncSmoke = Effect.fn("cloud.convex_sync_smoke.run")(funct
     }
     const cliAccessToken = credential.value.accessToken;
     state.cliAccessToken = cliAccessToken;
+
+    yield* step(
+      "relay.listEnvironments",
+      HttpClientRequest.get(`${relayBaseUrl}/v1/environments`).pipe(
+        HttpClientRequest.bearerToken(cliAccessToken),
+        httpClient.execute,
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayListEnvironmentsResponse)),
+      ),
+      ({ environments }) => `${environments.length} linked environment(s) visible`,
+    );
 
     // (a2) Recover leftovers from prior runs that died before cleanup could
     // run (SIGKILL cannot fire Effect.ensuring). Each state file names an

@@ -218,7 +218,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                         {isReconnecting ? "Reconnecting..." : "Reconnect"}
                       </Button>
                       <Button size="xs" variant="ghost" onClick={props.onOpenConnectionSettings}>
-                        Connections
+                        Environments
                       </Button>
                     </div>
                   </div>

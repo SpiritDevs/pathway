@@ -26,6 +26,7 @@ import {
 } from "./auth.ts";
 import { AuthSessionId, EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { EnvironmentRelayLinkState } from "./cloudProject.ts";
 import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2ThreadDetailSnapshot,
@@ -366,6 +367,14 @@ export const EnvironmentCloudPreferencesRequest = Schema.Struct({
 });
 export type EnvironmentCloudPreferencesRequest = typeof EnvironmentCloudPreferencesRequest.Type;
 
+export const EnvironmentCloudRegistrationInfo = Schema.Struct({
+  descriptor: ExecutionEnvironmentDescriptor,
+  publicKeyThumbprint: TrimmedNonEmptyString,
+  relayLinkState: EnvironmentRelayLinkState,
+  managedEndpointAvailable: Schema.Boolean,
+});
+export type EnvironmentCloudRegistrationInfo = typeof EnvironmentCloudRegistrationInfo.Type;
+
 export const AuthPairingLinkRevokeResult = Schema.Struct({
   revoked: Schema.Boolean,
 });
@@ -538,6 +547,13 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     HttpApiEndpoint.get("linkState", "/api/connect/link-state", {
       headers: OptionalBearerHeaders,
       success: EnvironmentCloudLinkStateResult,
+      error: EnvironmentHttpCloudErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("registrationInfo", "/api/connect/registration-info", {
+      headers: OptionalBearerHeaders,
+      success: EnvironmentCloudRegistrationInfo,
       error: EnvironmentHttpCloudErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

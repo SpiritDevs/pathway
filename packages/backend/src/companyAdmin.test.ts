@@ -269,9 +269,9 @@ describe("companies.provisionCurrentUser", () => {
       {},
     );
     expect(summary).toMatchObject({ name: "user_new's Company", isOwner: true });
-    // Six rows precede nothing: settings, the founder's membership, three seeded roles, and the
-    // company last, so the head a client first reads already describes a complete company.
-    expect(summary.syncVersion).toBe(6);
+    // Settings, the founder's membership, three roles, six workflow statuses, and the company
+    // itself all land before provisioning returns. A fresh company must accept its first issue.
+    expect(summary.syncVersion).toBe(12);
     expect(summary.authorizationEpoch).toBe(1);
 
     const rows = await feedRows(t);
@@ -281,6 +281,12 @@ describe("companies.provisionCurrentUser", () => {
       "role",
       "role",
       "role",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
       "company",
     ]);
     // Every company record is company-wide, which is what forces a company-scoped read grant.
@@ -299,6 +305,14 @@ describe("companies.provisionCurrentUser", () => {
       expect(roles.map((role) => role.name).sort()).toEqual(["Admin", "Manager", "Member"]);
       // Seeded is provenance only; they stay ordinary editable roles.
       expect(roles.every((role) => role.seeded)).toBe(true);
+      const statuses = await ctx.db.query("issueStatuses").collect();
+      expect(
+        statuses
+          .slice()
+          .sort((left, right) => (left.position ?? 0) - (right.position ?? 0))
+          .map((status) => status.name),
+      ).toEqual(["Backlog", "Todo", "In Progress", "In Review", "Done", "Canceled"]);
+      expect(statuses.every((status) => status.scope === "company" && !status.hidden)).toBe(true);
       const settings = await ctx.db.query("companySettings").collect();
       expect(settings[0]?.offlineAccessDays).toBe(30);
       const owners = await ctx.db.query("companyOwners").collect();
@@ -318,6 +332,26 @@ describe("companies.provisionCurrentUser", () => {
     await t.run(async (ctx) => {
       expect(await ctx.db.query("companies").collect()).toHaveLength(1);
     });
+  });
+
+  it("repairs an existing company whose workflow predates default status seeding", async () => {
+    const t = harness();
+    await seed(t);
+
+    const summary = await asUser(t, "user_owner").mutation(api.companies.provisionCurrentUser, {});
+    expect(summary).toMatchObject({ id: COMPANY_ID, syncVersion: 6 });
+    expect((await feedRows(t)).map((row) => row.entityKind)).toEqual([
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+      "issueStatus",
+    ]);
+
+    const second = await asUser(t, "user_owner").mutation(api.companies.provisionCurrentUser, {});
+    expect(second).toEqual(summary);
+    expect(await feedRows(t)).toHaveLength(6);
   });
 
   it("refuses a caller Convex could not authenticate", async () => {
@@ -359,7 +393,7 @@ describe("companies.create", () => {
     expect((await companyState(t))?.syncVersion).toBe(0);
 
     const rows = await feedRows(t);
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(12);
     expect(rows.at(-1)).toMatchObject({ entityKind: "company", entityId: NEW_COMPANY_ID });
   });
 

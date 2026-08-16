@@ -14,6 +14,7 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
@@ -1232,32 +1233,30 @@ describe("relay request tracing", () => {
 describe("relay routing fallback", () => {
   it.effect("redirects the relay root to the API docs", () =>
     Effect.gen(function* () {
-      const request = HttpServerRequest.fromWeb(new Request("https://relay.test/"));
       const httpEffect = yield* HttpRouter.toHttpEffect(
         Layer.mergeAll(relayDocsRedirectRoute, relayNotFoundRoute, relayCors),
       );
-      const response = yield* httpEffect.pipe(
-        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      const response = yield* Effect.promise(() =>
+        HttpEffect.toWebHandler(httpEffect)(new Request("https://relay.test/")),
       );
 
       expect(response.status).toBe(302);
-      expect(response.headers.location).toBe("/docs");
-      expect(response.headers["access-control-allow-origin"]).toBe("*");
+      expect(response.headers.get("location")).toBe("/docs");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
     }).pipe(Effect.scoped),
   );
 
   it.effect("returns a CORS-compatible 404 response for unmatched paths", () =>
     Effect.gen(function* () {
-      const request = HttpServerRequest.fromWeb(
-        new Request("https://relay.test/v1/environmentsd", { method: "GET" }),
-      );
       const httpEffect = yield* HttpRouter.toHttpEffect(Layer.merge(relayNotFoundRoute, relayCors));
-      const response = yield* httpEffect.pipe(
-        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      const response = yield* Effect.promise(() =>
+        HttpEffect.toWebHandler(httpEffect)(
+          new Request("https://relay.test/v1/environmentsd", { method: "GET" }),
+        ),
       );
 
       expect(response.status).toBe(404);
-      expect(response.headers["access-control-allow-origin"]).toBe("*");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
     }).pipe(Effect.scoped),
   );
 });

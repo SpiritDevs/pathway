@@ -18,7 +18,7 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "network-access",
     title: "Network access",
-    to: "/settings/connections",
+    to: "/settings/environments",
   },
   {
     id: "providers",
@@ -169,7 +169,6 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-milestones",
       "/settings/issues-intake",
       "/settings/issues-import",
-      "/settings/issues-migration",
       "/settings/issues-enrichment",
     ]);
   });
@@ -188,6 +187,11 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(searchSettings("company environments")[0]).toMatchObject({
       id: "company-environments",
       to: "/settings/environments",
+    });
+    expect(searchSettings("add environment")[0]).toMatchObject({
+      id: "add-environment",
+      to: "/settings/environments",
+      targetId: "company-environments",
     });
   });
 

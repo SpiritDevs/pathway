@@ -117,6 +117,8 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
+import { cloudProjectPublisherLayer } from "./cloud/cloudProjectPublisher.ts";
+import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublisher.ts";
 import { cloudSyncEngineRegistryLayer } from "./cloud/CloudSyncEngineRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -822,6 +824,8 @@ export const makeServerLayer = Layer.unwrap(
       // the runtime chain because this is where the `SqlClient` behind every repository, the
       // secret store, the environment, and the HTTP client are all in scope at once.
       cloudSyncDaemonLayer(),
+      cloudProjectPublisherLayer(),
+      cloudAgentThreadPublisherLayer(),
       environmentCommandClaimantLayer(),
     );
 

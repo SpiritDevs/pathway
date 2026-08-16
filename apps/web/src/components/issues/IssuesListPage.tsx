@@ -81,6 +81,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
+import { directInvestigateProjectId } from "./IssueInvestigateProjectMenu";
 import { DraggableIssueListRow, IssueGroupHeader, IssueListRow } from "./IssueListRow";
 import { IssuesBoard } from "./IssuesBoard";
 import { IssuesBulkBar } from "./IssuesBulkBar";
@@ -818,27 +819,38 @@ function IssuesListView({
 
   const contextIssues = contextMenu?.issues ?? NO_CONTEXT_ISSUES;
   const contextIssue = contextIssues.length === 1 ? (contextIssues[0] ?? null) : null;
-  // Investigate needs a directory to read, so it is only offered for one issue at a time and only
-  // once that issue's project has one. The reason is the tooltip on the disabled item.
+  const contextInvestigateProjectId =
+    contextIssue === null
+      ? null
+      : directInvestigateProjectId(investigationProjects, contextIssue.projectId);
+  // Investigate needs a directory to read. A sole eligible project can be assigned automatically;
+  // otherwise the issue's current project must be one this environment can investigate.
   const investigateBlockReason = useMemo(() => {
     if (contextIssue === null) return null;
     const project =
-      contextIssue.projectId === null
+      contextInvestigateProjectId === null
         ? null
         : (projects.find(
             (candidate) =>
-              candidate.id === contextIssue.projectId &&
+              candidate.id === contextInvestigateProjectId &&
               candidate.environmentId === primaryEnvironmentId,
           ) ?? null);
     const block = issueInvestigateBlock({
       connected: storeStatus !== "disconnected",
       deleted: contextIssue.deletedAt !== null,
-      projectId: contextIssue.projectId,
+      projectId: contextInvestigateProjectId,
       workspaceRoot: project?.workspaceRoot,
       hasRunInFlight: investigatingIssueIds.has(contextIssue.id),
     });
     return block === null ? null : ISSUE_INVESTIGATE_BLOCK_REASONS[block];
-  }, [contextIssue, investigatingIssueIds, primaryEnvironmentId, projects, storeStatus]);
+  }, [
+    contextInvestigateProjectId,
+    contextIssue,
+    investigatingIssueIds,
+    primaryEnvironmentId,
+    projects,
+    storeStatus,
+  ]);
 
   const { copyToClipboard: copyIssueField } = useCopyToClipboard<IssueContextMenuCopyField>({
     target: "issue",
@@ -893,8 +905,22 @@ function IssuesListView({
 
   // The run reports into the sheet's investigation tab, so the sheet is what a press opens.
   const investigateContextIssue = (issue: Issue) => {
+    const projectId = directInvestigateProjectId(investigationProjects, issue.projectId);
+    if (projectId === null) return;
     openIssue(issue);
-    write("Failed to start the investigation", () => startEnrichment({ issueId: issue.id }));
+    void (async () => {
+      if (issue.projectId !== projectId) {
+        const assignmentFailed = reportIssueWriteFailure(
+          "Failed to assign the issue to the project",
+          await updateIssue({ issueId: issue.id, patch: { projectId } }),
+        );
+        if (assignmentFailed) return;
+      }
+      reportIssueWriteFailure(
+        "Failed to start the investigation",
+        await startEnrichment({ issueId: issue.id }),
+      );
+    })();
   };
 
   const openNewIssue = (statusId: IssueStatusId | null) => {

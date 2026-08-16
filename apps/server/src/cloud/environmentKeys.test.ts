@@ -7,7 +7,10 @@ import * as PlatformError from "effect/PlatformError";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  getOrCreateCloudSyncDpopKeyPairFromSecretStore,
+  getOrCreateEnvironmentKeyPairFromSecretStore,
+} from "./environmentKeys.ts";
 
 const makeServerSecretStoreLayer = () =>
   ServerSecretStore.layer.pipe(
@@ -86,5 +89,20 @@ it.layer(NodeServices.layer)("getOrCreateEnvironmentKeyPairFromSecretStore", (it
         publicKey: "winner-public",
       });
     }),
+  );
+});
+
+it.layer(NodeServices.layer)("getOrCreateCloudSyncDpopKeyPairFromSecretStore", (it) => {
+  it.effect("persists and reuses the registration proof identity", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+
+      const first = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secretStore);
+      const second = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secretStore);
+
+      assert.strictEqual(second.thumbprint, first.thumbprint);
+      assert.deepEqual(second.publicJwk, first.publicJwk);
+      assert.isTrue(Option.isSome(yield* secretStore.get("cloud-sync-dpop-key-pair")));
+    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
   );
 });

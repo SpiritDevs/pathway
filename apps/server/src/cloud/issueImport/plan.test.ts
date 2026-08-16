@@ -337,10 +337,18 @@ describe("planIssueImport", () => {
       ),
     );
     assert.ok(
-      plan.preview.rejected.some(
+      !plan.preview.rejected.some(
         (record) => record.entityKind === "issueComment" && record.entityId === COMMENT,
       ),
     );
+    const commentCreate = allOperations(plan).find(
+      (operation) => operation.operation.kind === "issueComment.create",
+    );
+    assert.deepEqual(commentCreate?.operation.args, {
+      issueId: ISSUE_A,
+      body: "Historical comment",
+      attachmentIds: [],
+    });
     assert.equal(plan.preview.attachments.count, 1);
   });
 

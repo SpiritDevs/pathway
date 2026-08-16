@@ -20,12 +20,19 @@ export function createEnvironmentProjectAtoms(input: {
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
+  /** Cloud discovery fallback used only until the owning environment supplies a shell. */
+  readonly fallbackProjectsAtom?: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<ReadonlyArray<OrchestrationProjectShell>>;
 }) {
   const environmentProjectsAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationProjectShell> =>
-        get(input.snapshotAtom(environmentId))?.projects ?? EMPTY_PROJECTS,
-    ).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
+    Atom.make((get): ReadonlyArray<OrchestrationProjectShell> => {
+      const snapshot = get(input.snapshotAtom(environmentId));
+      if (snapshot !== null) return snapshot.projects;
+      return input.fallbackProjectsAtom === undefined
+        ? EMPTY_PROJECTS
+        : get(input.fallbackProjectsAtom(environmentId));
+    }).pipe(Atom.withLabel(`environment-projects:${environmentId}`)),
   );
 
   const environmentProjectIndexAtom = Atom.family((environmentId: EnvironmentId) =>

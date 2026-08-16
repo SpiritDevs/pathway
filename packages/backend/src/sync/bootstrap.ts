@@ -71,6 +71,8 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   // Cloud projects joined with the dedicated issue-import surface. Append after every pre-existing
   // kind so a persisted cursor that had completed the old walk cannot silently skip a table.
   "cloudProject",
+  // Agent Thread metadata joined last. Transcript content is never stored in this table.
+  "agentThread",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

@@ -42,6 +42,7 @@ const CLOUD_PROJECT_ID = "0191f0a0-0000-7000-8000-0000000000p1";
 const ENVIRONMENT_BINDING_ID = "0191f0a0-0000-7000-8000-0000000000b1";
 const ENVIRONMENT_REGISTRATION_ID = "0191f0a0-0000-7000-8000-0000000000e1";
 const ENVIRONMENT_ID = "environment-1";
+const THREAD_ID = "0191f0a0-0000-7000-8000-0000000000d1";
 
 /**
  * One representative payload per kind, exactly as Convex would append it: no `companyId`, no
@@ -138,6 +139,17 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
     createdAt: 1_000,
     updatedAt: 2_000,
   },
+  environmentBinding: {
+    id: ENVIRONMENT_BINDING_ID,
+    cloudProjectId: CLOUD_PROJECT_ID,
+    environmentId: ENVIRONMENT_ID,
+    localProjectId: CLOUD_PROJECT_ID,
+    localWorkspaceRoot: "/workspace/pathway",
+    status: "active",
+    lastSeenAt: 2_000,
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  },
   cloudProject: {
     id: CLOUD_PROJECT_ID,
     name: "Pathway",
@@ -147,6 +159,48 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
     preferredBindingId: ENVIRONMENT_BINDING_ID,
     archivedAt: null,
     createdAt: 1_000,
+    updatedAt: 2_000,
+  },
+  agentThread: {
+    id: `${ENVIRONMENT_ID}:${THREAD_ID}`,
+    environmentId: ENVIRONMENT_ID,
+    cloudProjectId: CLOUD_PROJECT_ID,
+    shell: {
+      createdBy: "user",
+      creationSource: "web",
+      id: THREAD_ID,
+      projectId: CLOUD_PROJECT_ID,
+      title: "Remote thread",
+      providerInstanceId: "codex",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: THREAD_ID,
+      },
+      forkedFrom: null,
+      activeProviderThreadId: null,
+      latestRunId: null,
+      activeRunId: null,
+      status: "idle",
+      pendingRuntimeRequest: null,
+      latestVisibleMessage: null,
+      latestUserMessageAt: null,
+      hasActionableProposedPlan: false,
+      pendingBackgroundTasks: [],
+      itemCount: 0,
+      visibleItemCount: 0,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      deletedAt: null,
+    },
     updatedAt: 2_000,
   },
 };
@@ -162,6 +216,8 @@ describe("company entity kinds", () => {
         "company",
         "companySettings",
         "cloudProject",
+        "agentThread",
+        "environmentBinding",
         "environmentRegistration",
         "membership",
         "role",

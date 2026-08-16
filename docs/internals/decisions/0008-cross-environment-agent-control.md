@@ -24,10 +24,15 @@ client of another environment, but execution remains wholly owned by the target 
 ### 1. Company environment registry and discovery
 
 Convex stores company environment registrations, descriptors, relay link state, managed-endpoint
-availability, project bindings, and last-seen metadata. A member needs `environments.read` to list
-and inspect registrations and `environments.manage` to administer them.
+availability, project bindings, last-seen metadata, and cloud-safe Agent Thread shells. A thread
+shell contains routing and presentation metadata (owning environment/project, title, provider,
+model, status, run state, timestamps, and counts), but removes message text. A member needs
+`environments.read` to list and inspect registrations and `environments.manage` to administer them.
 
-Clients merge company registry entries into their existing device-local connection catalog.
+Clients merge company registry entries into their existing device-local connection catalog and use
+the replicated Agent Thread shells as a discovery fallback. Selecting a thread or starting work in
+a bound project connects to the binding's environment; once connected, that environment's live
+shell and thread-detail streams replace the cloud fallback.
 Connecting still uses the existing relay brokering and Cloudflare tunnel data plane described in
 [remote.md](../remote.md); the relay Worker remains a credential and endpoint broker rather than an
 application-data proxy.
@@ -72,9 +77,11 @@ execution remains the default, and same-project scoping is evaluated within the 
 Direct control carries live thread streaming and steering when a peer path exists. Convex command
 dispatch remains the fallback when it does not.
 
-Thread content never flows through the relay Worker or the Convex change feed. The direct WebSocket
-or existing Connect tunnel carries live content; Convex carries discovery, authorization, durable
-dispatch, status, and bounded results only.
+Thread content never enters the Convex change feed. The direct WebSocket over the existing Connect
+tunnel carries the authoritative transcript, streaming output, diffs, approvals, and file context;
+Convex carries the redacted thread index, discovery, authorization, durable dispatch, status, and
+bounded results only. The relay Worker continues to broker credentials and endpoints rather than
+storing application data.
 
 ## Consequences
 

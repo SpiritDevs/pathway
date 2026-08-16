@@ -547,6 +547,24 @@ export default defineSchema({
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
 
+  /** Durable Agent Thread metadata. `shell` omits message text and other rich thread content. */
+  agentThreads: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    environmentId: v.string(),
+    cloudProjectId: v.id("cloudProjects"),
+    localProjectId: v.string(),
+    threadId: v.string(),
+    shell: v.any(),
+    updatedAt: v.number(),
+    version: v.optional(v.number()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_company_and_environment_and_thread", ["companyId", "environmentId", "threadId"])
+    .index("by_company_and_project", ["companyId", "cloudProjectId"]),
+
   // ---------------------------------------------------------------------------
   // Relay control-plane persistence
   // ---------------------------------------------------------------------------

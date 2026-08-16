@@ -1,4 +1,5 @@
-import type { EnvironmentId } from "@spiritdevs/contracts";
+import type { EnvironmentCloudRegistrationInfo, EnvironmentId } from "@spiritdevs/contracts";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type { CompanyId, CompanyPermission } from "@spiritdevs/contracts/company";
 import {
   EnvironmentCommandId,
@@ -7,7 +8,7 @@ import {
   type EnvironmentCommandKind,
   type EnvironmentCommandState,
 } from "@spiritdevs/contracts/cloudProject";
-import { ConvexClient } from "convex/browser";
+import { ConvexClient, ConvexHttpClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 
@@ -100,6 +101,37 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     { readonly companyId: CompanyId; readonly environmentId: EnvironmentId },
     null
   >("environments:deactivate"),
+  registerEnvironment: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly environmentId: EnvironmentId;
+      readonly publicKeyThumbprint: string;
+      readonly descriptor: EnvironmentCloudRegistrationInfo["descriptor"];
+      readonly relayLinkState: EnvironmentCloudRegistrationInfo["relayLinkState"];
+      readonly managedEndpointAvailable: boolean;
+      readonly serviceRoleIds: ReadonlyArray<string>;
+      readonly teamIds: ReadonlyArray<string>;
+    },
+    null
+  >("environments:register"),
+  ensureEnvironmentProject: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly environmentId: EnvironmentId;
+      readonly localProjectId: string;
+      readonly localWorkspaceRoot: string | null;
+      readonly name: string;
+    },
+    string
+  >("cloudProjects:ensureEnvironmentProject"),
+  releaseEnvironmentProject: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly environmentId: EnvironmentId;
+      readonly localProjectId: string;
+    },
+    null
+  >("cloudProjects:releaseEnvironmentProject"),
 } as const;
 
 const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -169,6 +201,20 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     readonly environmentId: EnvironmentId;
   }) => Promise<void>;
+  readonly registerEnvironment: (args: {
+    readonly companyId: CompanyId;
+    readonly info: EnvironmentCloudRegistrationInfo;
+    readonly serviceRoleIds: ReadonlyArray<string>;
+  }) => Promise<void>;
+  readonly ensureEnvironmentProject: (args: {
+    readonly companyId: CompanyId;
+    readonly project: EnvironmentProject;
+  }) => Promise<void>;
+  readonly releaseEnvironmentProject: (args: {
+    readonly companyId: CompanyId;
+    readonly environmentId: EnvironmentId;
+    readonly localProjectId: string;
+  }) => Promise<void>;
   readonly close: () => Promise<void>;
 }
 
@@ -193,6 +239,27 @@ export function makeEnvironmentControlClient(options: {
     call<A>(() => client.query(reference, args));
   const mutation = (reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     call<null>(() => client.mutation(reference, args)).then(() => undefined);
+  const registrationMutation =
+    options.client === undefined
+      ? async (args: ConvexArgs) => {
+          const token = await options.fetchToken({ forceRefreshToken: false });
+          if (!token) {
+            throw new EnvironmentControlError({
+              code: "not-authenticated",
+              message: FRIENDLY_ERROR_MESSAGES["not-authenticated"]!,
+            });
+          }
+          const http = new ConvexHttpClient(options.convexUrl);
+          http.setAuth(token);
+          await call<null>(() =>
+            http.mutation(
+              ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment as FunctionReference<"mutation">,
+              args,
+            ),
+          );
+        }
+      : (args: ConvexArgs) =>
+          mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args);
   const action = <A>(reference: FunctionReference<"action">, args: ConvexArgs) =>
     call<A>(() => client.action(reference, args));
 
@@ -223,6 +290,27 @@ export function makeEnvironmentControlClient(options: {
       action(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.issueConnectGrant, args),
     deactivateEnvironment: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deactivateEnvironment, args),
+    registerEnvironment: ({ companyId, info, serviceRoleIds }) =>
+      registrationMutation({
+        companyId,
+        environmentId: info.descriptor.environmentId,
+        publicKeyThumbprint: info.publicKeyThumbprint,
+        descriptor: info.descriptor,
+        relayLinkState: info.relayLinkState,
+        managedEndpointAvailable: info.managedEndpointAvailable,
+        serviceRoleIds,
+        teamIds: [],
+      }),
+    ensureEnvironmentProject: ({ companyId, project }) =>
+      mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject, {
+        companyId,
+        environmentId: project.environmentId,
+        localProjectId: project.id,
+        localWorkspaceRoot: project.workspaceRoot,
+        name: project.title,
+      }),
+    releaseEnvironmentProject: (args) =>
+      mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

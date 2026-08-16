@@ -14,6 +14,7 @@
  * @module issueImport
  */
 import { v, type Infer } from "convex/values";
+import { isDefaultIssueStatusSet } from "@spiritdevs/contracts";
 
 import { normalizeIssueKeyPrefix } from "../src/companies.ts";
 import { measureSerializedBytes } from "../src/sync/changeFeed.ts";
@@ -558,15 +559,24 @@ async function runResult(ctx: QueryCtx, run: Doc<"issueImportRuns">) {
   };
 }
 
-async function companyHasIssueRows(ctx: QueryCtx, companyId: Id<"companies">): Promise<boolean> {
+async function replaceableDefaultStatuses(
+  ctx: QueryCtx,
+  companyId: Id<"companies">,
+): Promise<readonly Doc<"issueStatuses">[] | null> {
   for (const table of ISSUE_TABLES) {
+    if (table === "issueStatuses") continue;
     const row = await ctx.db
       .query(table as unknown as "issues")
       .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", companyId))
       .first();
-    if (row !== null) return true;
+    if (row !== null) return null;
   }
-  return false;
+  const statuses = await ctx.db
+    .query("issueStatuses")
+    .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", companyId))
+    .collect();
+  if (statuses.length === 0) return [];
+  return isDefaultIssueStatusSet(statuses) ? statuses : null;
 }
 
 async function provenance(
@@ -1285,11 +1295,26 @@ export const start = mutation({
           `Import ${live.id} is already live for this company.`,
         );
     }
-    if (await companyHasIssueRows(ctx, actor.company._id))
+    const defaultStatuses = await replaceableDefaultStatuses(ctx, actor.company._id);
+    if (defaultStatuses === null)
       throw backendError(
         "company-not-empty",
-        "Empty-company import requires zero issue-domain rows.",
+        "Empty-company import requires no issue data or workflow edits.",
       );
+    if (defaultStatuses.length > 0) {
+      for (const status of defaultStatuses) await ctx.db.delete(status._id);
+      await appendCompanyChanges(ctx, {
+        companyId: actor.company._id,
+        actor: { kind: "member", membershipId: actor.membership.id },
+        changes: defaultStatuses.map((status) => ({
+          entityKind: "issueStatus" as const,
+          entityId: status.id,
+          changeKind: "tombstone" as const,
+          versionDocId: null,
+          payload: null,
+        })),
+      });
+    }
     const now = Date.now();
     const id = await ctx.db.insert("issueImportRuns", {
       id: args.id,
