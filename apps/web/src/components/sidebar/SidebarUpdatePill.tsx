@@ -125,7 +125,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
       let confirmed = false;
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state, navigator.platform),
+          getDesktopUpdateInstallConfirmationMessage(state),
         );
       } catch (error) {
         setIsActionPending(false);
