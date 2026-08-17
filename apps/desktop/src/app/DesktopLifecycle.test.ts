@@ -33,7 +33,6 @@ describe("DesktopLifecycle", () => {
         isDefaultProtocolClient: () => Effect.succeed(false),
         setAsDefaultProtocolClient: () => Effect.succeed(true),
         setDesktopName: () => Effect.void,
-        setDockIcon: () => Effect.void,
         appendCommandLineSwitch: () => Effect.void,
         removeCommandLineSwitch: () => Effect.void,
         onBeforeQuitForUpdate: (listener) =>

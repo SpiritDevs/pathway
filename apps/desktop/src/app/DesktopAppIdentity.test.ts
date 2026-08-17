@@ -3,14 +3,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 
 import type * as Electron from "electron";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
-import * as DesktopAssets from "./DesktopAssets.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
@@ -32,7 +30,6 @@ type TestEnvironmentInput = Partial<DesktopEnvironment.MakeDesktopEnvironmentInp
 
 interface ElectronAppCalls {
   readonly setAboutPanelOptions: Array<Electron.AboutPanelOptionsOptions>;
-  readonly setDockIcon: string[];
   readonly setName: string[];
 }
 
@@ -58,25 +55,11 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
     isDefaultProtocolClient: () => Effect.succeed(false),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
-    setDockIcon: (iconPath) =>
-      Effect.sync(() => {
-        calls.setDockIcon.push(iconPath);
-      }),
     appendCommandLineSwitch: () => Effect.void,
     onBeforeQuitForUpdate: () => Effect.void,
     removeCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,
   } satisfies ElectronApp.ElectronApp["Service"]);
-
-const makeAssetsLayer = (png: Option.Option<string>) =>
-  Layer.succeed(DesktopAssets.DesktopAssets, {
-    iconPaths: Effect.succeed({
-      ico: Option.none(),
-      icns: Option.none(),
-      png,
-    }),
-    resolveResourcePath: () => Effect.succeed(Option.none()),
-  } satisfies DesktopAssets.DesktopAssets["Service"]);
 
 const makeEnvironmentLayer = (overrides: TestEnvironmentInput = {}) => {
   const { env, ...environmentOverrides } = overrides;
@@ -110,12 +93,10 @@ const withIdentity = <A, E, R>(
     readonly legacyPathExists?: boolean;
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
-    readonly pngIconPath?: Option.Option<string>;
   } = {},
 ) => {
   const calls: ElectronAppCalls = input.calls ?? {
     setAboutPanelOptions: [],
-    setDockIcon: [],
     setName: [],
   };
 
@@ -134,7 +115,6 @@ const withIdentity = <A, E, R>(
               Effect.succeed(input.packageJson ?? '{"pathwayCommitHash":"abcdef1234567890"}'),
           }),
         ),
-        Layer.provideMerge(makeAssetsLayer(input.pngIconPath ?? Option.none())),
         Layer.provideMerge(makeElectronAppLayer(calls)),
         Layer.provideMerge(makeEnvironmentLayer(input.environment)),
       ),
@@ -185,7 +165,6 @@ describe("DesktopAppIdentity", () => {
   it.effect("configures app identity from the environment commit override", () => {
     const calls: ElectronAppCalls = {
       setAboutPanelOptions: [],
-      setDockIcon: [],
       setName: [],
     };
 
@@ -198,7 +177,6 @@ describe("DesktopAppIdentity", () => {
         assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Pathway (Alpha)");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
       }),
       {
         calls,
@@ -207,7 +185,6 @@ describe("DesktopAppIdentity", () => {
             PATHWAY_COMMIT_HASH: "0123456789abcdef",
           },
         },
-        pngIconPath: Option.some("/icon.png"),
       },
     );
   });

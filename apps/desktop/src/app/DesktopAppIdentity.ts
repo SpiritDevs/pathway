@@ -7,7 +7,6 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import * as DesktopAssets from "./DesktopAssets.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
@@ -67,7 +66,6 @@ export const resolveUserDataPath = Effect.gen(function* () {
 }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
 
 export const make = Effect.gen(function* () {
-  const assets = yield* DesktopAssets.DesktopAssets;
   const electronApp = yield* ElectronApp.ElectronApp;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -134,14 +132,6 @@ export const make = Effect.gen(function* () {
 
     if (environment.platform === "linux") {
       yield* electronApp.setDesktopName(environment.linuxDesktopEntryName);
-    }
-
-    if (environment.platform === "darwin") {
-      const iconPaths = yield* assets.iconPaths;
-      yield* Option.match(iconPaths.png, {
-        onNone: () => Effect.void,
-        onSome: electronApp.setDockIcon,
-      });
     }
   }).pipe(Effect.withSpan("desktop.appIdentity.configure"));
 

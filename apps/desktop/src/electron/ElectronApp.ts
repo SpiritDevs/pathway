@@ -64,7 +64,6 @@ export class ElectronApp extends Context.Service<
       args?: readonly string[],
     ) => Effect.Effect<boolean>;
     readonly setDesktopName: (desktopName: string) => Effect.Effect<void>;
-    readonly setDockIcon: (iconPath: string) => Effect.Effect<void>;
     readonly appendCommandLineSwitch: (switchName: string, value?: string) => Effect.Effect<void>;
     readonly onBeforeQuitForUpdate: (
       listener: () => void,
@@ -169,10 +168,6 @@ export const make = ElectronApp.of({
         setDesktopName?: (desktopName: string) => void;
       };
       linuxApp.setDesktopName?.(desktopName);
-    }),
-  setDockIcon: (iconPath) =>
-    Effect.sync(() => {
-      Electron.app.dock?.setIcon(iconPath);
     }),
   appendCommandLineSwitch: (switchName, value) =>
     Effect.sync(() => {
