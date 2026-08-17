@@ -1659,7 +1659,7 @@ describe("MessagesTimeline", () => {
   it("renders Pathway MCP dynamic tools with the product logo and pretty name", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const item = {
-      id: "tool-t3-thread-read",
+      id: "tool-pathway-thread-read",
       threadId: "thread-source",
       runId: null,
       nodeId: null,
@@ -1674,7 +1674,7 @@ describe("MessagesTimeline", () => {
       completedAt: null,
       updatedAt: {},
       type: "dynamic_tool",
-      toolName: "mcp__pathway__t3_thread_read",
+      toolName: "mcp__pathway__pathway_thread_read",
       input: { threadId: "thread-child" },
       output: { messages: [] },
     } as const;
@@ -1716,7 +1716,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-tool-logo="pathway"');
     expect(markup).toContain('src="/apple-touch-icon.png"');
     expect(markup).toContain("Read a Pathway thread");
-    expect(markup).not.toContain("mcp__pathway__t3_thread_read");
+    expect(markup).not.toContain("mcp__pathway__pathway_thread_read");
   });
 
   it("formats changed file paths from the workspace root", async () => {
@@ -1736,16 +1736,16 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               itemType: "file_change",
               toolLifecycleStatus: "completed",
-              changedFiles: ["C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts"],
+              changedFiles: ["C:/Users/mike/dev-stuff/pathway/apps/web/src/session-logic.ts"],
             },
           },
         ]}
-        workspaceRoot="C:/Users/mike/dev-stuff/t3code"
+        workspaceRoot="C:/Users/mike/dev-stuff/pathway"
       />,
     );
 
-    expect(markup).toContain("t3code/apps/web/src/session-logic.ts");
-    expect(markup).not.toContain("C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts");
+    expect(markup).toContain("pathway/apps/web/src/session-logic.ts");
+    expect(markup).not.toContain("C:/Users/mike/dev-stuff/pathway/apps/web/src/session-logic.ts");
   });
 
   it("renders review comment contexts as structured cards instead of raw tags", () => {

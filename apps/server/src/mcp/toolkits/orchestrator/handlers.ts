@@ -59,7 +59,7 @@ const handlers = {
       const service = yield* OrchestratorMcpService;
       return yield* service.createThreads(scope, input);
     }),
-  t3_thread_start: (input) =>
+  pathway_thread_start: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
@@ -79,31 +79,31 @@ const handlers = {
       });
       return result.threads[0]!;
     }),
-  t3_thread_list: (input) =>
+  pathway_thread_list: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
       return yield* service.listThreads(scope, input);
     }),
-  t3_thread_read: (input) =>
+  pathway_thread_read: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
       return yield* service.readThread(scope, input);
     }),
-  t3_thread_send: (input) =>
+  pathway_thread_send: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
       return yield* service.sendToThread(scope, input);
     }),
-  t3_thread_wait: (input) =>
+  pathway_thread_wait: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;
       return yield* service.waitForThread(scope, input);
     }),
-  t3_thread_interrupt: (input) =>
+  pathway_thread_interrupt: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* OrchestratorMcpService;

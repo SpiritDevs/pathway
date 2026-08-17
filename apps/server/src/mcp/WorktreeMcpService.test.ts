@@ -398,7 +398,7 @@ const runStatus = (harness: ReturnType<typeof makeHarness>) =>
     return yield* service.status(harness.scope);
   }).pipe(Effect.provide(harness.layer));
 
-describe("t3_worktree_handoff", () => {
+describe("pathway_worktree_handoff", () => {
   it.effect("creates a worktree from the current branch and re-points the thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -556,23 +556,23 @@ describe("t3_worktree_handoff", () => {
   it.effect("fetches the selected remote when the base ref is remote-qualified", () => {
     const harness = makeHarness({
       primaryRemoteName: "github",
-      remoteNameForRef: "t3code-github",
+      remoteNameForRef: "pathway-github",
     });
     return Effect.gen(function* () {
       yield* runHandoff(harness, {
         branch: "feature/from-upstream",
-        baseRef: "t3code-github/main",
+        baseRef: "pathway-github/main",
         startFromOrigin: true,
       });
 
       expect(harness.fetchRemote).toHaveBeenCalledWith({
         cwd: workspaceRoot,
-        remoteName: "t3code-github",
+        remoteName: "pathway-github",
       });
       expect(harness.resolveRemoteTrackingCommit).toHaveBeenCalledWith({
         cwd: workspaceRoot,
-        refName: "t3code-github/main",
-        fallbackRemoteName: "t3code-github",
+        refName: "pathway-github/main",
+        fallbackRemoteName: "pathway-github",
       });
     });
   });
@@ -1010,7 +1010,7 @@ describe("t3_worktree_handoff", () => {
   });
 });
 
-describe("t3_worktree_status", () => {
+describe("pathway_worktree_status", () => {
   it.effect("reports an unattached thread", () => {
     const harness = makeHarness({ newWorktreesStartFromOrigin: true });
     return Effect.gen(function* () {

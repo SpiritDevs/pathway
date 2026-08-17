@@ -13,22 +13,26 @@ export type MobileAuthGateState =
   | "auth"
   | "onboarding"
   | "authenticated";
+export type WorkspaceValidationState = "checking" | "valid" | "unavailable";
 
 export function resolveMobileAuthGateState({
   hasClerkConfig,
   isLoaded,
   isSignedIn,
   onboardingComplete,
+  workspaceValidation,
 }: {
   readonly hasClerkConfig: boolean;
   readonly isLoaded: boolean;
   readonly isSignedIn: boolean | undefined;
   /** `undefined` while the Clerk user object is still loading. */
   readonly onboardingComplete: boolean | undefined;
+  readonly workspaceValidation: WorkspaceValidationState;
 }): MobileAuthGateState {
   if (!hasClerkConfig) return "misconfigured";
   if (!isLoaded) return "loading";
   if (!isSignedIn) return "auth";
   if (onboardingComplete === undefined) return "loading";
-  return onboardingComplete ? "authenticated" : "onboarding";
+  if (!onboardingComplete) return "onboarding";
+  return workspaceValidation === "checking" ? "loading" : "authenticated";
 }

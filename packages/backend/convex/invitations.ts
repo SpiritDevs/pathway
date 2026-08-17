@@ -35,7 +35,6 @@ import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, internalMutation, mutation, query } from "./_generated/server.js";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import {
   appendCompanyChanges,
   encodeMembership,
@@ -46,7 +45,11 @@ import {
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
-import { requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  requireCompanyActor,
+  requireOrganizationWorkspace,
+  requirePermission,
+} from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
 /**
@@ -209,7 +212,6 @@ export const list = query({
   args: { companyId: domainIdArg },
   returns: v.array(invitationSummary),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "members.read");
     const invitations = await ctx.db
@@ -249,7 +251,6 @@ export const create = action({
   },
   returns: v.object({ id: domainIdArg, expiresAt: v.number() }),
   handler: async (ctx, args): Promise<{ id: string; expiresAt: number }> => {
-    requireCloudSyncEnabled();
     const email = normalizeEmail(args.email);
     if (email.length === 0) {
       throw backendError("invalid-arguments", "An invitation needs an email address.");
@@ -312,6 +313,7 @@ export const record = internalMutation({
   }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "members.invite");
     if (args.roleIds.length > 0) requirePermission(actor, "roles.manage");
     if (args.teamIds.length > 0) requirePermission(actor, "teams.manage");
@@ -470,6 +472,7 @@ export const reissue = internalMutation({
   }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "members.invite");
 
     const invitation = await requireInvitation(ctx, actor.company._id, args.invitationId);
@@ -519,7 +522,6 @@ export const resend = action({
   args: { companyId: domainIdArg, invitationId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args): Promise<null> => {
-    requireCloudSyncEnabled();
     const token = generateInvitationToken();
     const tokenHash = await hashInvitationToken(token);
     const expiresAt = invitationExpiresAt(Date.now());
@@ -550,8 +552,8 @@ export const revoke = mutation({
   args: { companyId: domainIdArg, invitationId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "members.invite");
 
     const invitation = await requireInvitation(ctx, actor.company._id, args.invitationId);
@@ -584,7 +586,6 @@ export const accept = action({
   args: { token: v.string() },
   returns: v.object({ companyId: domainIdArg }),
   handler: async (ctx, args): Promise<{ companyId: string }> => {
-    requireCloudSyncEnabled();
     const identity = await ctx.auth.getUserIdentity();
     if (identity === null) {
       throw backendError("not-authenticated", "Accepting an invitation requires signing in.");
@@ -655,6 +656,12 @@ export const consume = internalMutation({
       throw backendError(
         "company-unavailable",
         "This company is scheduled for deletion and cannot be joined.",
+      );
+    }
+    if ((company.workspaceKind ?? "organization") !== "organization") {
+      throw backendError(
+        "organization-required",
+        "Upgrade this personal workspace to an organization to accept invitations.",
       );
     }
 

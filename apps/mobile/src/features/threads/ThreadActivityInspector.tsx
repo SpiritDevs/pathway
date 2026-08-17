@@ -45,7 +45,7 @@ export function ThreadActivityInspector(props: {
       <View className="flex-row flex-wrap gap-x-4 gap-y-2 rounded-lg border border-neutral-300/50 bg-black/[0.025] p-2.5 dark:border-white/[0.1] dark:bg-white/[0.025]">
         {model.fields.map((field) => (
           <View key={`${field.label}:${field.value}`} className="min-w-[42%] flex-1 gap-0.5">
-            <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+            <Text className="font-pathway-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
               {field.label}
             </Text>
             <Text selectable className="text-2xs leading-4 text-foreground">
@@ -57,7 +57,7 @@ export function ThreadActivityInspector(props: {
 
       {model.blocks.map((block) => (
         <View key={`${block.label}:${block.value}`} className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+          <Text className="font-pathway-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
             {block.label}
           </Text>
           <ScrollView
@@ -80,7 +80,7 @@ export function ThreadActivityInspector(props: {
 
       {model.fileLinks.length > 0 ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+          <Text className="font-pathway-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
             Files
           </Text>
           {model.fileLinks.map((link) => {
@@ -125,7 +125,7 @@ export function ThreadActivityInspector(props: {
 
       {model.webLinks.length > 0 ? (
         <View className="gap-1">
-          <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+          <Text className="font-pathway-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
             Sources
           </Text>
           {model.webLinks.map((link) => (
@@ -174,14 +174,14 @@ export function ThreadActivityInspector(props: {
             tintColor={props.iconColor}
             type="monochrome"
           />
-          <Text className="font-t3-medium text-xs text-foreground">
+          <Text className="font-pathway-medium text-xs text-foreground">
             {rollingBack ? "Rolling back…" : "Roll back to checkpoint"}
           </Text>
         </Pressable>
       ) : null}
 
       <View className="gap-1 border-t border-neutral-300/50 pt-2 dark:border-white/[0.1]">
-        <Text className="font-t3-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
+        <Text className="font-pathway-medium text-3xs uppercase tracking-wide text-foreground-muted opacity-60">
           Structured details
         </Text>
         <ScrollView

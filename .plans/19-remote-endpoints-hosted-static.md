@@ -74,7 +74,7 @@ type AdvertisedEndpointProvider =
   | "tailscale-ip"
   | "tailscale-magicdns"
   | "manual"
-  | "t3-tunnel";
+  | "pathway-tunnel";
 
 type AdvertisedEndpointVisibility = "local" | "private-network" | "tailnet" | "public";
 
@@ -318,7 +318,7 @@ Not part of the current implementation, but the endpoint abstraction should make
 
 Future tunnel provider responsibilities:
 
-- create endpoint with `provider: "t3-tunnel"`
+- create endpoint with `provider: "pathway-tunnel"`
 - surface tunnel status
 - provide stable HTTPS URL
 - use existing backend pairing/session auth

@@ -14,65 +14,68 @@ import type * as AcpSchema from "effect-acp/schema";
 
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 
-const requestLogPath = process.env.T3_ACP_REQUEST_LOG_PATH;
-const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
-const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
+const requestLogPath = process.env.Pathway_ACP_REQUEST_LOG_PATH;
+const exitLogPath = process.env.Pathway_ACP_EXIT_LOG_PATH;
+const emitToolCalls = process.env.Pathway_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
-  process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
-const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
-const emitPostSettleMonitorFlow = process.env.T3_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
+  process.env.Pathway_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
+const emitGenericToolPlaceholders = process.env.Pathway_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
+const emitPostSettleMonitorFlow = process.env.Pathway_ACP_EMIT_POST_SETTLE_MONITOR_FLOW === "1";
 const emitInTurnTaskOutputThenLateDuplicate =
-  process.env.T3_ACP_EMIT_IN_TURN_TASKOUTPUT_THEN_LATE_DUPLICATE === "1";
-const injectedReportTriggerPath = process.env.T3_ACP_INJECTED_REPORT_TRIGGER_PATH;
-const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
-const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
-const emitUrlElicitation = process.env.T3_ACP_EMIT_URL_ELICITATION === "1";
-const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
-const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
-const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
-const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
-const hangAfterPermission = process.env.T3_ACP_HANG_AFTER_PERMISSION === "1";
-const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
-const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
+  process.env.Pathway_ACP_EMIT_IN_TURN_TASKOUTPUT_THEN_LATE_DUPLICATE === "1";
+const injectedReportTriggerPath = process.env.Pathway_ACP_INJECTED_REPORT_TRIGGER_PATH;
+const emitAskQuestion = process.env.Pathway_ACP_EMIT_ASK_QUESTION === "1";
+const emitElicitation = process.env.Pathway_ACP_EMIT_ELICITATION === "1";
+const emitUrlElicitation = process.env.Pathway_ACP_EMIT_URL_ELICITATION === "1";
+const emitXAiAskUserQuestion = process.env.Pathway_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
+const emitXAiPromptCompleteThenHang =
+  process.env.Pathway_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
+const emitForeignSessionUpdates = process.env.Pathway_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
+const hangPromptForever = process.env.Pathway_ACP_HANG_PROMPT_FOREVER === "1";
+const hangAfterPermission = process.env.Pathway_ACP_HANG_AFTER_PERMISSION === "1";
+const hangFirstPromptForever = process.env.Pathway_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
+const emitLateUpdateAfterCancel = process.env.Pathway_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
 const emitTaskBackgroundedAfterCancel =
-  process.env.T3_ACP_EMIT_TASK_BACKGROUNDED_AFTER_CANCEL === "1";
-const residualCallbackResponseLogPath = process.env.T3_ACP_RESIDUAL_CALLBACK_RESPONSE_LOG_PATH;
-const residualCallbackTriggerPath = process.env.T3_ACP_RESIDUAL_CALLBACK_TRIGGER_PATH;
-const exitAfterResidualCallbacks = process.env.T3_ACP_EXIT_AFTER_RESIDUAL_CALLBACKS === "1";
-const emitRunningCommandThenHang = process.env.T3_ACP_EMIT_RUNNING_COMMAND_THEN_HANG === "1";
+  process.env.Pathway_ACP_EMIT_TASK_BACKGROUNDED_AFTER_CANCEL === "1";
+const residualCallbackResponseLogPath = process.env.Pathway_ACP_RESIDUAL_CALLBACK_RESPONSE_LOG_PATH;
+const residualCallbackTriggerPath = process.env.Pathway_ACP_RESIDUAL_CALLBACK_TRIGGER_PATH;
+const exitAfterResidualCallbacks = process.env.Pathway_ACP_EXIT_AFTER_RESIDUAL_CALLBACKS === "1";
+const emitRunningCommandThenHang = process.env.Pathway_ACP_EMIT_RUNNING_COMMAND_THEN_HANG === "1";
 const emitRunningCommandThenHangOnFirstPrompt =
-  process.env.T3_ACP_EMIT_RUNNING_COMMAND_THEN_HANG_FIRST_PROMPT === "1";
-const emitEmptySuccessfulBash = process.env.T3_ACP_EMIT_EMPTY_SUCCESSFUL_BASH === "1";
+  process.env.Pathway_ACP_EMIT_RUNNING_COMMAND_THEN_HANG_FIRST_PROMPT === "1";
+const emitEmptySuccessfulBash = process.env.Pathway_ACP_EMIT_EMPTY_SUCCESSFUL_BASH === "1";
 const emitEmptySuccessfulBashThenHang =
-  process.env.T3_ACP_EMIT_EMPTY_SUCCESSFUL_BASH_THEN_HANG === "1";
-const exitOnCancel = process.env.T3_ACP_EXIT_ON_CANCEL === "1";
-const runningCommandIgnoresTerm = process.env.T3_ACP_RUNNING_COMMAND_IGNORE_TERM === "1";
-const runningCommandPidPath = process.env.T3_ACP_RUNNING_COMMAND_PID_PATH;
-const runningCommandSeparateSession = process.env.T3_ACP_RUNNING_COMMAND_SEPARATE_SESSION === "1";
-const exitAfterRunningCommandLaunch = process.env.T3_ACP_EXIT_AFTER_RUNNING_COMMAND_LAUNCH === "1";
+  process.env.Pathway_ACP_EMIT_EMPTY_SUCCESSFUL_BASH_THEN_HANG === "1";
+const exitOnCancel = process.env.Pathway_ACP_EXIT_ON_CANCEL === "1";
+const runningCommandIgnoresTerm = process.env.Pathway_ACP_RUNNING_COMMAND_IGNORE_TERM === "1";
+const runningCommandPidPath = process.env.Pathway_ACP_RUNNING_COMMAND_PID_PATH;
+const runningCommandSeparateSession =
+  process.env.Pathway_ACP_RUNNING_COMMAND_SEPARATE_SESSION === "1";
+const exitAfterRunningCommandLaunch =
+  process.env.Pathway_ACP_EXIT_AFTER_RUNNING_COMMAND_LAUNCH === "1";
 const omitXAiPromptCompleteStopReason =
-  process.env.T3_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
-const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
-const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
-const hangLoadSessionAfterReplay = process.env.T3_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
-const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
-const loadSessionDelayMs = Number(process.env.T3_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
+  process.env.Pathway_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
+const failLoadSession = process.env.Pathway_ACP_FAIL_LOAD_SESSION === "1";
+const emitLoadReplay = process.env.Pathway_ACP_EMIT_LOAD_REPLAY === "1";
+const hangLoadSessionAfterReplay = process.env.Pathway_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
+const delayLoadSessionAfterReplay = process.env.Pathway_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
+const loadSessionDelayMs = Number(process.env.Pathway_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
 const emitStaleXAiPromptCompleteBeforeSecondHang =
-  process.env.T3_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
+  process.env.Pathway_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
 const emitOverlappingXAiPromptCompleteOutOfOrder =
-  process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
-const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
-const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
-const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
-const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
-const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
-const supportsSessionLifecycle = process.env.T3_ACP_SESSION_LIFECYCLE === "1";
-const advertisedAuthMethodId = process.env.T3_ACP_AUTH_METHOD_ID?.trim();
-const requiresAuthentication = process.env.T3_ACP_REQUIRE_AUTH === "1";
+  process.env.Pathway_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
+const failPrompt = process.env.Pathway_ACP_FAIL_PROMPT === "1";
+const failSetConfigOption = process.env.Pathway_ACP_FAIL_SET_CONFIG_OPTION === "1";
+const exitOnSetConfigOption = process.env.Pathway_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
+const promptResponseText = process.env.Pathway_ACP_PROMPT_RESPONSE_TEXT;
+const promptDelayMs = Number(process.env.Pathway_ACP_PROMPT_DELAY_MS ?? "0");
+const supportsSessionLifecycle = process.env.Pathway_ACP_SESSION_LIFECYCLE === "1";
+const advertisedAuthMethodId = process.env.Pathway_ACP_AUTH_METHOD_ID?.trim();
+const requiresAuthentication = process.env.Pathway_ACP_REQUIRE_AUTH === "1";
 const permissionOptionIds = {
-  allowOnce: process.env.T3_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
-  allowAlways: process.env.T3_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
-  rejectOnce: process.env.T3_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
+  allowOnce: process.env.Pathway_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
+  allowAlways: process.env.Pathway_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
+  rejectOnce: process.env.Pathway_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
 };
 const sessionId = "mock-session-1";
 
@@ -1045,7 +1048,7 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawOutput: {
               exitCode: 0,
-              stdout: '{ "name": "t3" }',
+              stdout: '{ "name": "pathway" }',
               stderr: "",
             },
           },

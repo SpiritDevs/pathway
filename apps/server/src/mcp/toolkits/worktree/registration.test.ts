@@ -32,7 +32,7 @@ const StubServicesLive = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
   Layer.mock(VcsStatusBroadcaster)({}),
-  ServerConfig.layerTest(process.cwd(), { prefix: "t3-worktree-mcp-test-" }),
+  ServerConfig.layerTest(process.cwd(), { prefix: "pathway-worktree-mcp-test-" }),
   PreviewAutomationBroker.layer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -74,16 +74,16 @@ it.effect("lists worktree tools through the v2 client", () =>
       );
       const tools = (yield* Effect.promise(() => client.listTools())).tools;
       const toolNames = tools.map(({ name }) => name);
-      expect(toolNames).toContain("t3_worktree_handoff");
-      expect(toolNames).toContain("t3_worktree_status");
+      expect(toolNames).toContain("pathway_worktree_handoff");
+      expect(toolNames).toContain("pathway_worktree_status");
       expect(toolNames).toContain("preview_status");
       expect(toolNames).toContain("delegate_task");
 
-      const handoff = tools.find(({ name }) => name === "t3_worktree_handoff");
+      const handoff = tools.find(({ name }) => name === "pathway_worktree_handoff");
       expect(handoff?.annotations?.readOnlyHint).toBe(false);
       expect(handoff?.annotations?.destructiveHint).toBe(true);
       expect(handoff?.annotations?.openWorldHint).toBe(true);
-      const status = tools.find(({ name }) => name === "t3_worktree_status");
+      const status = tools.find(({ name }) => name === "pathway_worktree_status");
       expect(status?.annotations?.readOnlyHint).toBe(true);
       expect(status?.annotations?.destructiveHint).toBe(false);
 

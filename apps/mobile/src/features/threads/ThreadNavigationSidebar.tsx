@@ -1018,7 +1018,7 @@ function ThreadNavigationSidebarPane(
               className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
               style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
-              <Text className="text-xs font-t3-medium text-foreground-muted">
+              <Text className="text-xs font-pathway-medium text-foreground-muted">
                 Show more ({item.hiddenCount} settled hidden)
               </Text>
             </Pressable>
@@ -1360,7 +1360,10 @@ function ThreadNavigationSidebarPane(
             onPress={props.onOpenEnvironmentSettings}
             size="pageTitle"
             brand={
-              <Text className="flex-1 text-[34px] font-t3-bold text-foreground" numberOfLines={1}>
+              <Text
+                className="flex-1 text-[34px] font-pathway-bold text-foreground"
+                numberOfLines={1}
+              >
                 Threads
               </Text>
             }

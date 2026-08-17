@@ -1,24 +1,20 @@
 /**
  * The Pathway server's cloud-sync daemon: one long-lived {@link makeSyncEngine} for one company,
  * assembled out of the pieces the earlier phases landed and forked as a background root.
- *
- * Every part of cloud sync ships dark. This module is the single place where the parts are joined
+ * This module is the single place where the parts are joined
  * — the server's SQLite replica (`./syncSqliteExecutor.ts`), the Convex transport over a
  * relay-minted service token (`./convexSyncTransport.ts`), and the issue domain adapter — and it is
- * also the single place that decides whether any of it runs at all. All four gates must hold:
+ * also the single place that decides whether its required configuration is available:
  *
- * 1. `PATHWAY_CLOUD_SYNC=enabled`, the same flag the Convex deployment reads
- *    (`packages/backend/convex/lib/capability.ts`). One flag on both ends means a client can never
- *    be live against a deployment that would refuse it.
- * 2. `PATHWAY_CLOUD_SYNC_COMPANY_ID` names the company to replicate. Interim: nothing in the
+ * 1. `PATHWAY_CLOUD_SYNC_COMPANY_ID` names the company to replicate. Interim: nothing in the
  *    environment's link state carries a company today (the relay link is keyed by environment, and
  *    `RelayManagedEndpointRuntimeConfig` has no company field), so the company is configuration
  *    rather than something derived. When link state grows a company this gate moves there.
- * 3. `PATHWAY_CONVEX_URL` (or the build-time value) resolves to a deployment origin.
- * 4. The environment is linked: a relay URL, an environment credential, and the environment's link
+ * 2. `PATHWAY_CONVEX_URL` (or the build-time value) resolves to a deployment origin.
+ * 3. The environment is linked: a relay URL, an environment credential, and the environment's link
  *    key pair are all in the secret store.
  *
- * The first three are *configuration*: they are fixed for the life of the process, so they are read
+ * The first two are *configuration*: they are fixed for the life of the process, so they are read
  * once, at layer build. The fourth is *state* — the secret store is rewritten while the server runs
  * — so it is never snapshotted:
  *
@@ -38,11 +34,8 @@
  *   the engine stopped off its published state and only restarts for reasons another run could
  *   change (see {@link isRetryableSyncStop}).
  *
- * A gate that does not hold is not an error. The layer logs one line and yields nothing, so a
- * server without the flag boots exactly as it did before — no tables created, no sockets opened,
- * no fibers forked. The one thing that is *not* silent is a refusal after the operator opted in:
- * `PATHWAY_CLOUD_SYNC=enabled` plus a later gate that says no is logged at warning, because
- * somebody asked for this feature by name and needs to be told why they did not get it.
+ * Missing required configuration is logged and yields no daemon. There is no feature flag: cloud
+ * sync is part of every configured online Pathway environment.
  *
  * @module cloud/syncDaemon
  */
@@ -50,7 +43,6 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import {
-  CloudSyncCapability,
   makeIssueSyncAdapter,
   makeSqliteSyncStore,
   makeSyncEngine,
@@ -97,13 +89,8 @@ import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 // Gates
 // --------------------------------------------------------------------------
 
-/** Same variable and same accepted value as the Convex deployment's capability gate. */
-export const CLOUD_SYNC_CAPABILITY_ENV = "PATHWAY_CLOUD_SYNC";
-export const CLOUD_SYNC_CAPABILITY_ENABLED_VALUE = "enabled";
 /** Interim: the company to replicate is configuration until the link state carries one. */
 export const CLOUD_SYNC_COMPANY_ID_ENV = "PATHWAY_CLOUD_SYNC_COMPANY_ID";
-
-const CLOUD_SYNC_ENABLED = { enabled: true } as const;
 
 /**
  * How long a stopped engine waits before resubscribing.
@@ -152,11 +139,6 @@ export const DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS = 24;
  */
 export const DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS = 3;
 
-const capabilityConfig = Config.string(CLOUD_SYNC_CAPABILITY_ENV).pipe(
-  Config.withDefault(""),
-  Config.map((value) => value.trim() === CLOUD_SYNC_CAPABILITY_ENABLED_VALUE),
-);
-
 const companyIdConfig = Config.string(CLOUD_SYNC_COMPANY_ID_ENV).pipe(
   Config.withDefault(""),
   Config.map((value) => value.trim()),
@@ -188,7 +170,6 @@ export interface CloudSyncLink {
  * expected state of every server that has not opted in.
  */
 export type CloudSyncDaemonDisabledReason =
-  | "capability-disabled"
   | "company-not-configured"
   | "convex-url-unavailable"
   | "environment-not-linked";
@@ -196,11 +177,6 @@ export type CloudSyncDaemonDisabledReason =
 export interface CloudSyncDaemonDisabled {
   readonly _tag: "Disabled";
   readonly reason: CloudSyncDaemonDisabledReason;
-  /**
-   * True once `PATHWAY_CLOUD_SYNC=enabled`. Everything downstream of that flag was asked for by
-   * name, so its refusal is reported at warning rather than debug.
-   */
-  readonly optedIn: boolean;
   /** What the gate actually objected to, when the reason alone cannot say — a rejected URL. */
   readonly detail?: string;
 }
@@ -216,12 +192,10 @@ export type CloudSyncConfigResolution =
 
 const disabled = (
   reason: CloudSyncDaemonDisabledReason,
-  optedIn: boolean,
   detail?: string,
 ): CloudSyncDaemonDisabled => ({
   _tag: "Disabled",
   reason,
-  optedIn,
   ...(detail ? { detail } : {}),
 });
 
@@ -234,18 +208,15 @@ const disabled = (
  */
 export const resolveCloudSyncConfig: Effect.Effect<CloudSyncConfigResolution> = Effect.gen(
   function* () {
-    const enabled = yield* capabilityConfig.pipe(Effect.orElseSucceed(() => false));
-    if (!enabled) return disabled("capability-disabled", false);
-
     const companyId = yield* companyIdConfig.pipe(Effect.orElseSucceed(() => ""));
-    if (companyId.length === 0) return disabled("company-not-configured", true);
+    if (companyId.length === 0) return disabled("company-not-configured");
 
     const convexUrl = yield* convexUrlConfig.pipe(
       Effect.map((url) => ({ url, detail: undefined as string | undefined })),
       Effect.catch((error) => Effect.succeed({ url: undefined, detail: error.message })),
     );
     if (convexUrl.url === undefined) {
-      return disabled("convex-url-unavailable", true, convexUrl.detail);
+      return disabled("convex-url-unavailable", convexUrl.detail);
     }
 
     return {
@@ -306,7 +277,7 @@ export const resolveCloudSyncDaemon: Effect.Effect<
 
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const link = yield* readCloudSyncLink(secrets);
-  if (link === null) return disabled("environment-not-linked", true);
+  if (link === null) return disabled("environment-not-linked");
 
   return { _tag: "Enabled", settings: config.settings };
 });
@@ -525,16 +496,10 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
 ) {
   const config = yield* resolveCloudSyncConfig;
   if (config._tag === "Disabled") {
-    // An operator who set the flag asked for this by name; a server that never opted in has
-    // nothing to hear about.
-    if (config.optedIn) {
-      yield* Effect.logWarning("Cloud sync is enabled but a gate refused it; cloud sync is off", {
-        reason: config.reason,
-        ...(config.detail === undefined ? {} : { detail: config.detail }),
-      });
-    } else {
-      yield* Effect.logDebug("Cloud sync daemon not started", { reason: config.reason });
-    }
+    yield* Effect.logWarning("Cloud sync could not start", {
+      reason: config.reason,
+      ...(config.detail === undefined ? {} : { detail: config.detail }),
+    });
     return null;
   }
   const settings = config.settings;
@@ -723,7 +688,6 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
               cause,
             }),
       ),
-      Effect.provideService(CloudSyncCapability, CLOUD_SYNC_ENABLED),
     ),
   );
 });

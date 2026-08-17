@@ -26,8 +26,8 @@ vi.mock("../ui/menu", () => ({
   MenuPopup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock("../clerk/T3ConnectSidebarSignIn", () => ({
-  T3ConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
+vi.mock("../clerk/PathwayConnectSidebarSignIn", () => ({
+  PathwayConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
 }));
 
 import { WorkspaceTopBar } from "./WorkspaceTopBar";

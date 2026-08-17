@@ -5,7 +5,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
-import { useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { relayEnvironmentDiscovery } from "../state/relay";
@@ -16,11 +16,86 @@ import {
   updatePrimaryEnvironmentPreferences as updatePrimaryEnvironmentPreferencesAtom,
 } from "./linkEnvironmentAtoms";
 import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
-import { resolveRelayClerkTokenOptions } from "./publicConfig";
+import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "./publicConfig";
 
 export interface CloudLinkDesiredState {
   readonly managedTunnel: boolean;
   readonly publish: boolean;
+}
+
+export const ALWAYS_ON_CLOUD_LINK_STATE = {
+  managedTunnel: true,
+  publish: true,
+} as const satisfies CloudLinkDesiredState;
+
+export const AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS = 5;
+
+export interface AlwaysOnCloudLinkStatus {
+  readonly phase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly error: string | null;
+  readonly nextRetryAt: number | null;
+  readonly manualRetryRequestId: number;
+}
+
+const alwaysOnCloudLinkListeners = new Set<() => void>();
+let alwaysOnCloudLinkStatus: AlwaysOnCloudLinkStatus = {
+  phase: "idle",
+  attempt: 0,
+  maxAttempts: AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
+  error: null,
+  nextRetryAt: null,
+  manualRetryRequestId: 0,
+};
+
+function publishAlwaysOnCloudLinkStatus(
+  update: Omit<AlwaysOnCloudLinkStatus, "manualRetryRequestId" | "maxAttempts">,
+): void {
+  alwaysOnCloudLinkStatus = {
+    ...update,
+    maxAttempts: AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
+    manualRetryRequestId: alwaysOnCloudLinkStatus.manualRetryRequestId,
+  };
+  for (const listener of alwaysOnCloudLinkListeners) listener();
+}
+
+function subscribeAlwaysOnCloudLinkStatus(listener: () => void): () => void {
+  alwaysOnCloudLinkListeners.add(listener);
+  return () => alwaysOnCloudLinkListeners.delete(listener);
+}
+
+function readAlwaysOnCloudLinkStatus(): AlwaysOnCloudLinkStatus {
+  return alwaysOnCloudLinkStatus;
+}
+
+export function requestAlwaysOnCloudLinkRetry(): void {
+  if (alwaysOnCloudLinkStatus.phase !== "exhausted") return;
+  alwaysOnCloudLinkStatus = {
+    ...alwaysOnCloudLinkStatus,
+    phase: "connecting",
+    attempt: 1,
+    error: null,
+    nextRetryAt: null,
+    manualRetryRequestId: alwaysOnCloudLinkStatus.manualRetryRequestId + 1,
+  };
+  for (const listener of alwaysOnCloudLinkListeners) listener();
+}
+
+export function useAlwaysOnCloudLinkStatus(): AlwaysOnCloudLinkStatus {
+  return useSyncExternalStore(
+    subscribeAlwaysOnCloudLinkStatus,
+    readAlwaysOnCloudLinkStatus,
+    readAlwaysOnCloudLinkStatus,
+  );
+}
+
+export function isAlwaysOnCloudLinkState(input: {
+  readonly linked: boolean;
+  readonly managedTunnelActive: boolean;
+  readonly publishAgentActivity: boolean;
+}): boolean {
+  return input.linked && input.managedTunnelActive && input.publishAgentActivity;
 }
 
 /**
@@ -32,7 +107,7 @@ export interface CloudLinkDesiredState {
  * preference. Re-linking only happens when the managed-tunnel mode actually
  * changes, so flipping publish alone is cheap.
  */
-export function useCloudLinkController() {
+export function useCloudLinkController(options: { readonly reportFailures?: boolean } = {}) {
   const { getToken, isSignedIn } = useAuth();
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
@@ -49,26 +124,35 @@ export function useCloudLinkController() {
   );
   const primaryCloudLinkState = usePrimaryCloudLinkState();
   const [operationError, setOperationError] = useState<string | null>(null);
+  const reportFailures = options.reportFailures ?? true;
 
-  const reportUpdateFailure = (cause: unknown) => {
+  const reportUpdateFailure = (cause: unknown): string => {
     const message =
       cause instanceof Error ? cause.message : "Could not update Pathway Connect access.";
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not update Pathway Connect", { message, traceId, cause });
-    setOperationError(traceId ? `${message} Trace ID: ${traceId}` : message);
-    toastManager.add({
-      type: "error",
-      title: "Could not update Pathway Connect",
-      description: message,
-      data: traceId
-        ? {
-            secondaryActionProps: {
-              children: "Copy trace ID",
-              onClick: () => void navigator.clipboard?.writeText(traceId),
-            },
-          }
-        : undefined,
+    const renderedMessage = traceId ? `${message} Trace ID: ${traceId}` : message;
+    console.error("[pathway-connect] Could not update Pathway Connect", {
+      message,
+      traceId,
+      cause,
     });
+    setOperationError(renderedMessage);
+    if (reportFailures) {
+      toastManager.add({
+        type: "error",
+        title: "Could not update Pathway Connect",
+        description: message,
+        data: traceId
+          ? {
+              secondaryActionProps: {
+                children: "Copy trace ID",
+                onClick: () => void navigator.clipboard?.writeText(traceId),
+              },
+            }
+          : undefined,
+      });
+    }
+    return renderedMessage;
   };
 
   // Older environment servers predate the managedTunnelActive field; for them a
@@ -78,12 +162,16 @@ export function useCloudLinkController() {
   const publishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
   const linked = primaryCloudLinkState.data?.linked ?? false;
 
-  const reconcileCloudState = async (desired: CloudLinkDesiredState): Promise<boolean> => {
+  const reconcileCloudState = async (
+    desired: CloudLinkDesiredState,
+  ): Promise<{ readonly completed: boolean; readonly error: string | null }> => {
     setOperationError(null);
     const target = primaryCloudLinkState.target;
     if (!target) {
-      reportUpdateFailure(new Error("Local environment is not ready yet."));
-      return false;
+      return {
+        completed: false,
+        error: reportUpdateFailure(new Error("Local environment is not ready yet.")),
+      };
     }
     const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
     const wantsLink = desired.managedTunnel || desired.publish;
@@ -100,21 +188,25 @@ export function useCloudLinkController() {
         clerkToken: tokenResult._tag === "Success" ? (tokenResult.value ?? null) : null,
       });
       if (unlinkResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(unlinkResult)) {
-          reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
-        }
+        const error = isAtomCommandInterrupted(unlinkResult)
+          ? "Pathway Connect attempt was interrupted."
+          : reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
         primaryCloudLinkState.refresh();
-        return false;
+        return { completed: false, error };
       }
     } else {
       if (tokenResult._tag === "Failure") {
-        reportUpdateFailure(squashAtomCommandFailure(tokenResult));
-        return false;
+        return {
+          completed: false,
+          error: reportUpdateFailure(squashAtomCommandFailure(tokenResult)),
+        };
       }
       const clerkToken = tokenResult.value;
       if (!clerkToken) {
-        reportUpdateFailure(new Error("Sign in to Pathway Connect before enabling this."));
-        return false;
+        return {
+          completed: false,
+          error: reportUpdateFailure(new Error("Sign in to Pathway Connect before enabling this.")),
+        };
       }
       if (!linked || managedTunnelActive !== desired.managedTunnel) {
         const linkResult = await linkPrimaryEnvironment({
@@ -123,11 +215,11 @@ export function useCloudLinkController() {
           mode: desired.managedTunnel ? "managed" : "publish_only",
         });
         if (linkResult._tag === "Failure") {
-          if (!isAtomCommandInterrupted(linkResult)) {
-            reportUpdateFailure(squashAtomCommandFailure(linkResult));
-          }
+          const error = isAtomCommandInterrupted(linkResult)
+            ? "Pathway Connect attempt was interrupted."
+            : reportUpdateFailure(squashAtomCommandFailure(linkResult));
           primaryCloudLinkState.refresh();
-          return false;
+          return { completed: false, error };
         }
       }
       const prefResult = await updatePrimaryEnvironmentPreferences({
@@ -135,21 +227,23 @@ export function useCloudLinkController() {
         publishAgentActivity: desired.publish,
       });
       if (prefResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(prefResult)) {
-          reportUpdateFailure(squashAtomCommandFailure(prefResult));
-        }
+        const error = isAtomCommandInterrupted(prefResult)
+          ? "Pathway Connect attempt was interrupted."
+          : reportUpdateFailure(squashAtomCommandFailure(prefResult));
         primaryCloudLinkState.refresh();
-        return false;
+        return { completed: false, error };
       }
     }
 
     primaryCloudLinkState.refresh();
     const refreshResult = await refreshRelayEnvironments();
     if (refreshResult._tag === "Failure" && !isAtomCommandInterrupted(refreshResult)) {
-      reportUpdateFailure(squashAtomCommandFailure(refreshResult));
-      return false;
+      return {
+        completed: false,
+        error: reportUpdateFailure(squashAtomCommandFailure(refreshResult)),
+      };
     }
-    return true;
+    return { completed: true, error: null };
   };
 
   return {
@@ -161,4 +255,132 @@ export function useCloudLinkController() {
     operationError,
     reconcileCloudState,
   };
+}
+
+const AUTOMATIC_LINK_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000] as const;
+
+export function automaticCloudRetryDelayMs(attempt: number): number {
+  const delay =
+    AUTOMATIC_LINK_RETRY_DELAYS_MS[
+      Math.min(Math.max(0, attempt), AUTOMATIC_LINK_RETRY_DELAYS_MS.length - 1)
+    ];
+  return delay ?? AUTOMATIC_LINK_RETRY_DELAYS_MS[0];
+}
+
+export function shouldScheduleAutomaticCloudRetry(
+  attemptsCompleted: number,
+  attemptsAllowed = AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
+): boolean {
+  return attemptsCompleted < attemptsAllowed;
+}
+
+/**
+ * Keeps the signed-in primary environment linked with Pathway Connect. This is a runtime
+ * invariant rather than a preference: transient relay failures retry without requiring the user
+ * to find a settings toggle, and a relink or preference drift is repaired on the next state read.
+ */
+export function useAlwaysOnCloudLink(): void {
+  const controller = useCloudLinkController({ reportFailures: false });
+  const cloudConfigured = hasCloudPublicConfig();
+  const reconcileCloudState = useEffectEvent(controller.reconcileCloudState);
+  const retryStatus = useAlwaysOnCloudLinkStatus();
+  const lastHandledManualRetry = useRef(retryStatus.manualRetryRequestId);
+
+  const target = controller.linkState.target;
+  const isSatisfied = isAlwaysOnCloudLinkState({
+    linked: controller.linked,
+    managedTunnelActive: controller.managedTunnelActive,
+    publishAgentActivity: controller.publishAgentActivity,
+  });
+
+  const eligible =
+    controller.isSignedIn &&
+    cloudConfigured &&
+    target !== null &&
+    controller.linkState.data !== null;
+
+  useEffect(() => {
+    if (!eligible || target === null) {
+      publishAlwaysOnCloudLinkStatus({
+        phase: "idle",
+        attempt: 0,
+        error: null,
+        nextRetryAt: null,
+      });
+      return;
+    }
+
+    if (isSatisfied) {
+      publishAlwaysOnCloudLinkStatus({
+        phase: "connected",
+        attempt: 0,
+        error: null,
+        nextRetryAt: null,
+      });
+      lastHandledManualRetry.current = retryStatus.manualRetryRequestId;
+      return;
+    }
+
+    const isManualRetry = retryStatus.manualRetryRequestId !== lastHandledManualRetry.current;
+    if (isManualRetry) {
+      lastHandledManualRetry.current = retryStatus.manualRetryRequestId;
+    }
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attemptsCompleted = 0;
+    const attemptsAllowed = isManualRetry ? 1 : AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS;
+
+    const reconcile = async () => {
+      const attempt = attemptsCompleted + 1;
+      publishAlwaysOnCloudLinkStatus({
+        phase: "connecting",
+        attempt,
+        error: attemptsCompleted === 0 ? null : alwaysOnCloudLinkStatus.error,
+        nextRetryAt: null,
+      });
+      const result = await reconcileCloudState(ALWAYS_ON_CLOUD_LINK_STATE);
+      if (cancelled) return;
+      attemptsCompleted = attempt;
+      if (result.completed) {
+        publishAlwaysOnCloudLinkStatus({
+          phase: "connected",
+          attempt: 0,
+          error: null,
+          nextRetryAt: null,
+        });
+        return;
+      }
+      if (!shouldScheduleAutomaticCloudRetry(attemptsCompleted, attemptsAllowed)) {
+        publishAlwaysOnCloudLinkStatus({
+          phase: "exhausted",
+          attempt: attemptsCompleted,
+          error: result.error,
+          nextRetryAt: null,
+        });
+        return;
+      }
+      const delay = automaticCloudRetryDelayMs(attemptsCompleted - 1);
+      publishAlwaysOnCloudLinkStatus({
+        phase: "waiting",
+        attempt: attemptsCompleted,
+        error: result.error,
+        nextRetryAt: Date.now() + delay,
+      });
+      retryTimer = setTimeout(() => void reconcile(), delay);
+    };
+
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [
+    cloudConfigured,
+    controller.isSignedIn,
+    eligible,
+    isSatisfied,
+    retryStatus.manualRetryRequestId,
+    target?.environmentId,
+  ]);
 }

@@ -98,7 +98,7 @@ it.effect("launches an installed editor with platform-safe arguments", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-editors-" });
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "pathway-editors-" });
     yield* fileSystem.writeFileString(path.join(binDir, "code.CMD"), "@echo off\r\n");
 
     let spawned: ChildProcess.StandardCommand | undefined;
@@ -136,7 +136,7 @@ it.effect("discovers editors through the service API", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-editors-" });
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "pathway-editors-" });
     yield* fileSystem.writeFileString(path.join(binDir, "code.CMD"), "@echo off\r\n");
     yield* fileSystem.writeFileString(path.join(binDir, "explorer.CMD"), "@echo off\r\n");
 
@@ -206,7 +206,7 @@ it.effect("memoizes editor discovery and refreshes after the cache window", () =
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              PATH: "C:\\t3-editor-discovery-cache-test",
+              PATH: "C:\\pathway-editor-discovery-cache-test",
               PATHEXT: ".COM;.EXE;.BAT;.CMD",
             },
           }),
@@ -271,7 +271,7 @@ it.effect("rescans after an interrupted discovery instead of caching the interru
         ConfigProvider.layer(
           ConfigProvider.fromEnv({
             env: {
-              PATH: "C:\\t3-editor-discovery-interrupt-test",
+              PATH: "C:\\pathway-editor-discovery-interrupt-test",
               PATHEXT: ".COM;.EXE;.BAT;.CMD",
             },
           }),

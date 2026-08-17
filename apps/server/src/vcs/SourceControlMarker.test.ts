@@ -28,12 +28,16 @@ describe("sourceControlMarkerFromGitResult", () => {
       sourceControlMarkerFromGitResult(
         result({
           action: "commit_push_pr",
-          pr: { status: "created", number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+          pr: {
+            status: "created",
+            number: 47,
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
+          },
         }),
       ),
     ).toEqual({
       committed: true,
-      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
   });
 
@@ -42,12 +46,16 @@ describe("sourceControlMarkerFromGitResult", () => {
       sourceControlMarkerFromGitResult(
         result({
           push: { status: "skipped_not_requested" },
-          pr: { status: "created", number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+          pr: {
+            status: "created",
+            number: 47,
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
+          },
         }),
       ),
     ).toEqual({
       committed: true,
-      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
   });
 
@@ -61,7 +69,7 @@ describe("sourceControlMarkerFromGitResult", () => {
           pr: {
             status: "opened_existing",
             number: 47,
-            url: "https://github.com/t3dotgg/pathway/pull/47",
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
           },
         }),
       ),

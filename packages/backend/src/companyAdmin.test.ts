@@ -23,7 +23,6 @@ import schema from "../convex/schema.ts";
 import { COMPANY_DELETION_RECOVERY_MS, OFFLINE_ACCESS_MAX_DAYS } from "./companies.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -49,6 +48,7 @@ const TEAM_ID = "0198c0de-dddd-7ddd-8ddd-000000000001";
 const COMPANY_PAYLOAD_KEYS = [
   "id",
   "name",
+  "workspaceKind",
   "issueKeyPrefix",
   "lifecycleState",
   "deletionScheduledAt",
@@ -261,6 +261,18 @@ async function companyState(t: Harness) {
 // ---------------------------------------------------------------------------
 
 describe("companies.provisionCurrentUser", () => {
+  it("lets background repair report a missing workspace without silently creating one", async () => {
+    const t = harness();
+
+    await expect(
+      asUser(t, "user_legacy").mutation(api.companies.repairCurrentUserWorkspace, {}),
+    ).resolves.toBeNull();
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("users").collect()).toEqual([]);
+      expect(await ctx.db.query("companies").collect()).toEqual([]);
+    });
+  });
+
   it("bootstraps a whole company in one transaction and appends every row to its own feed", async () => {
     const t = harness();
 
@@ -268,7 +280,11 @@ describe("companies.provisionCurrentUser", () => {
       api.companies.provisionCurrentUser,
       {},
     );
-    expect(summary).toMatchObject({ name: "user_new's Company", isOwner: true });
+    expect(summary).toMatchObject({
+      name: "user_new's Workspace",
+      workspaceKind: "personal",
+      isOwner: true,
+    });
     // Settings, the founder's membership, three roles, six workflow statuses, and the company
     // itself all land before provisioning returns. A fresh company must accept its first issue.
     expect(summary.syncVersion).toBe(12);
@@ -334,13 +350,73 @@ describe("companies.provisionCurrentUser", () => {
     });
   });
 
+  it("uses an explicit onboarding kind and name, then upgrades the same workspace in place", async () => {
+    const t = harness();
+    const personal = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "personal",
+      workspaceName: "Ada's Space",
+    });
+    expect(personal).toMatchObject({
+      name: "Ada's Space",
+      workspaceKind: "personal",
+      isOwner: true,
+    });
+
+    const organization = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "organization",
+      workspaceName: "Analytical Engines",
+    });
+    expect(organization).toMatchObject({
+      id: personal.id,
+      membershipId: personal.membershipId,
+      name: "Analytical Engines",
+      workspaceKind: "organization",
+    });
+    expect(organization.syncVersion).toBe(personal.syncVersion + 1);
+
+    const retry = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "organization",
+      workspaceName: "A retry must not rename an established organization",
+    });
+    expect(retry).toEqual(organization);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("companies").collect()).toHaveLength(1);
+    });
+  });
+
+  it("treats a legacy missing kind as organization and never downgrades it to personal", async () => {
+    const t = harness();
+    await seed(t);
+
+    const personal = await asUser(t, "user_owner").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "personal",
+      workspaceName: "Private Space",
+    });
+    expect(personal).toMatchObject({ workspaceKind: "personal", name: "Private Space" });
+    expect(personal.id).not.toBe(COMPANY_ID);
+
+    await t.run(async (ctx) => {
+      const legacy = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      expect(legacy?.workspaceKind).toBeUndefined();
+      expect(legacy?.name).toBe("Admin Test Co");
+    });
+  });
+
   it("repairs an existing company whose workflow predates default status seeding", async () => {
     const t = harness();
     await seed(t);
 
     const summary = await asUser(t, "user_owner").mutation(api.companies.provisionCurrentUser, {});
-    expect(summary).toMatchObject({ id: COMPANY_ID, syncVersion: 6 });
+    expect(summary).toMatchObject({
+      id: COMPANY_ID,
+      workspaceKind: "organization",
+      syncVersion: 7,
+    });
     expect((await feedRows(t)).map((row) => row.entityKind)).toEqual([
+      "company",
       "issueStatus",
       "issueStatus",
       "issueStatus",
@@ -351,7 +427,7 @@ describe("companies.provisionCurrentUser", () => {
 
     const second = await asUser(t, "user_owner").mutation(api.companies.provisionCurrentUser, {});
     expect(second).toEqual(summary);
-    expect(await feedRows(t)).toHaveLength(6);
+    expect(await feedRows(t)).toHaveLength(7);
   });
 
   it("refuses a caller Convex could not authenticate", async () => {
@@ -385,6 +461,7 @@ describe("companies.create", () => {
     expect(summary).toMatchObject({
       id: NEW_COMPANY_ID,
       name: "Second Co",
+      workspaceKind: "organization",
       // Normalized on the way in: the prefix is the permanent human half of every issue key.
       issueKeyPrefix: "SEC",
       isOwner: true,
@@ -433,6 +510,101 @@ describe("companies.create", () => {
       asUser(t, "user_owner").mutation(api.companies.create, { id: COMPANY_ID, name: "Clash Co" }),
     ).rejects.toThrow(`Company ${COMPANY_ID} already exists.`);
     expect(await feedRows(t)).toHaveLength(0);
+  });
+});
+
+describe("companies.upgradeToOrganization", () => {
+  it("upgrades a personal workspace once, keeps its identity, and applies the organization name", async () => {
+    const t = harness();
+    const personal = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "personal",
+    });
+    const before = await feedRows(t);
+
+    const upgraded = await asUser(t, "user_new").mutation(api.companies.upgradeToOrganization, {
+      companyId: personal.id,
+      name: "  New Organization  ",
+    });
+    expect(upgraded).toMatchObject({
+      id: personal.id,
+      membershipId: personal.membershipId,
+      workspaceKind: "organization",
+      name: "New Organization",
+    });
+    expect(upgraded.syncVersion).toBe(personal.syncVersion + 1);
+    expect((await feedRows(t)).slice(before.length)).toHaveLength(1);
+
+    const retry = await asUser(t, "user_new").mutation(api.companies.upgradeToOrganization, {
+      companyId: personal.id,
+      name: "Ignored retry name",
+    });
+    expect(retry).toEqual(upgraded);
+    expect((await feedRows(t)).slice(before.length)).toHaveLength(1);
+  });
+
+  it("requires company management permission and a non-blank name", async () => {
+    const t = harness();
+    await seed(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company !== null) await ctx.db.patch(company._id, { workspaceKind: "personal" });
+    });
+
+    await expect(
+      asUser(t, "user_reader").mutation(api.companies.upgradeToOrganization, {
+        companyId: COMPANY_ID,
+        name: "Readers Cannot Upgrade",
+      }),
+    ).rejects.toThrow("Missing permission company.manage.");
+    await expect(
+      asUser(t, "user_admin").mutation(api.companies.upgradeToOrganization, {
+        companyId: COMPANY_ID,
+        name: "   ",
+      }),
+    ).rejects.toThrow("A workspace needs a name.");
+  });
+
+  it("is the one-way door for ownership and membership administration", async () => {
+    const t = harness();
+    await seed(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company !== null) await ctx.db.patch(company._id, { workspaceKind: "personal" });
+    });
+
+    await expect(
+      asUser(t, "user_owner").mutation(api.companies.addOwner, {
+        companyId: COMPANY_ID,
+        membershipId: ADMIN_MEMBERSHIP_ID,
+      }),
+    ).rejects.toThrow("Upgrade this personal workspace to an organization");
+    await expect(
+      asUser(t, "user_admin").mutation(api.memberships.setState, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        state: "locked",
+      }),
+    ).rejects.toThrow("Upgrade this personal workspace to an organization");
+
+    await asUser(t, "user_owner").mutation(api.companies.upgradeToOrganization, {
+      companyId: COMPANY_ID,
+      name: "Upgraded Co",
+    });
+    await asUser(t, "user_owner").mutation(api.companies.addOwner, {
+      companyId: COMPANY_ID,
+      membershipId: ADMIN_MEMBERSHIP_ID,
+    });
+    await asUser(t, "user_admin").mutation(api.memberships.setState, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      state: "locked",
+    });
   });
 });
 

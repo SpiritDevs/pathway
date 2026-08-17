@@ -116,7 +116,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-override-",
+        prefix: "pathway-acp-registry-override-",
       });
       const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
       const resolved = yield* resolver.resolve(
@@ -165,7 +165,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-install-",
+        prefix: "pathway-acp-registry-install-",
       });
       const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
       const first = yield* resolver.resolve(settings(), "/workspace");
@@ -204,7 +204,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-cache-",
+        prefix: "pathway-acp-registry-cache-",
       });
       const registryDirectory = `${cacheDir}/acp-registry`;
       yield* fileSystem.makeDirectory(registryDirectory, { recursive: true });
@@ -241,7 +241,7 @@ describe("AcpRegistrySupport", () => {
     return Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-acp-registry-invalid-",
+        prefix: "pathway-acp-registry-invalid-",
       });
       const resolver = yield* makeAcpRegistryResolver({ cacheDir, registryUrl });
       const error = yield* resolver.resolve(settings(), "/workspace").pipe(Effect.flip);

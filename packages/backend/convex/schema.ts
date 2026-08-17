@@ -182,6 +182,8 @@ export default defineSchema({
   companies: defineTable({
     id: domainId,
     name: v.string(),
+    /** Optional only while rows written before workspace kinds shipped are upgraded lazily. */
+    workspaceKind: v.optional(v.union(v.literal("personal"), v.literal("organization"))),
     issueKeyPrefix: v.string(),
     /** Next issue number to hand out; leases move it forward and never move it back. */
     nextIssueNumber: v.number(),

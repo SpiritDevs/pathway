@@ -115,7 +115,7 @@ describe("terminatePosixOwnedProcessTree", () => {
     ).toHaveLength(2);
   });
 
-  it.live("sweeps empty t3-acp sibling leases owned by dead pids only", () =>
+  it.live("sweeps empty pathway-acp sibling leases owned by dead pids only", () =>
     Effect.sync(() => {
       const scratchRoot = NodePath.join(process.cwd(), "tmp");
       NodeFS.mkdirSync(scratchRoot, { recursive: true });
@@ -133,10 +133,10 @@ describe("terminatePosixOwnedProcessTree", () => {
       const deadPid = 2_147_483_646;
       // Synthetic live foreign pid (not this process, still reported alive by the probe).
       const liveForeignPid = 2_147_483_645;
-      const staleEmpty = writeSibling(`t3-acp-${deadPid}-aaaa`, "0");
-      const currentPidSibling = writeSibling(`t3-acp-${process.pid}-bbbb`, "0");
-      const liveForeignSibling = writeSibling(`t3-acp-${liveForeignPid}-cccc`, "0");
-      const stalePopulated = writeSibling(`t3-acp-${deadPid}-dddd`, "1");
+      const staleEmpty = writeSibling(`pathway-acp-${deadPid}-aaaa`, "0");
+      const currentPidSibling = writeSibling(`pathway-acp-${process.pid}-bbbb`, "0");
+      const liveForeignSibling = writeSibling(`pathway-acp-${liveForeignPid}-cccc`, "0");
+      const stalePopulated = writeSibling(`pathway-acp-${deadPid}-dddd`, "1");
       const unrelated = writeSibling("other-lease", "0");
       const isProcessAlive = (pid: number) => pid === process.pid || pid === liveForeignPid;
       try {
@@ -154,7 +154,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         expect(NodeFS.existsSync(stalePopulated)).toBe(true);
         expect(NodeFS.existsSync(unrelated)).toBe(true);
         // Missing populated state must not remove a sibling.
-        writeSibling(`t3-acp-${deadPid}-eeee`, null);
+        writeSibling(`pathway-acp-${deadPid}-eeee`, null);
         sweepStaleLinuxCgroupSiblings(parent, {
           isProcessAlive,
           readPopulated: (path) => populatedByPath.get(path),
@@ -163,7 +163,7 @@ describe("terminatePosixOwnedProcessTree", () => {
             NodeFS.rmdirSync(path);
           },
         });
-        expect(NodeFS.existsSync(NodePath.join(parent, `t3-acp-${deadPid}-eeee`))).toBe(true);
+        expect(NodeFS.existsSync(NodePath.join(parent, `pathway-acp-${deadPid}-eeee`))).toBe(true);
         expect(NodeFS.existsSync(currentPidSibling)).toBe(true);
       } finally {
         NodeFS.rmSync(parent, { recursive: true, force: true });
@@ -211,7 +211,7 @@ describe("terminatePosixOwnedProcessTree", () => {
         "fs.writeFileSync(process.argv[1], JSON.stringify({",
         "  args: process.argv.slice(2),",
         "  electron: process.env.ELECTRON_RUN_AS_NODE,",
-        "  wrapper: process.env.T3_ACP_CGROUP_WRAPPER,",
+        "  wrapper: process.env.Pathway_ACP_CGROUP_WRAPPER,",
         "}));",
       ].join("\n");
       const wrapped = wrapCommandForLinuxCgroup(lease, linkedNode, [
@@ -228,7 +228,7 @@ describe("terminatePosixOwnedProcessTree", () => {
           env: {
             ...process.env,
             ELECTRON_RUN_AS_NODE: "1",
-            T3_ACP_CGROUP_WRAPPER: "1",
+            Pathway_ACP_CGROUP_WRAPPER: "1",
           },
         });
         expect(result.status, result.stderr).toBe(0);
@@ -285,7 +285,7 @@ describe("terminatePosixOwnedProcessTree", () => {
       ]);
       const provider = NodeChildProcess.spawn(wrapped.command, wrapped.args, {
         detached: true,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", T3_ACP_CGROUP_WRAPPER: "1" },
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", Pathway_ACP_CGROUP_WRAPPER: "1" },
         stdio: "ignore",
       });
       provider.unref();
@@ -359,8 +359,8 @@ describe("terminatePosixOwnedProcessTree", () => {
       const lease: AcpLinuxCgroupLease = {
         contains: () => false,
         exists: () => exists,
-        path: "/test/t3-acp-repopulation",
-        relativePath: "/test/t3-acp-repopulation",
+        path: "/test/pathway-acp-repopulation",
+        relativePath: "/test/pathway-acp-repopulation",
         kill: () => {
           killCalls += 1;
           populated = false;
@@ -400,8 +400,8 @@ describe("terminatePosixOwnedProcessTree", () => {
       const lease: AcpLinuxCgroupLease = {
         contains: () => false,
         exists: () => true,
-        path: "/test/t3-acp-busy",
-        relativePath: "/test/t3-acp-busy",
+        path: "/test/pathway-acp-busy",
+        relativePath: "/test/pathway-acp-busy",
         kill: () => undefined,
         populated: () => false,
         remove: () => {
@@ -410,7 +410,7 @@ describe("terminatePosixOwnedProcessTree", () => {
       };
 
       const error = yield* Effect.flip(terminateLinuxCgroupLease(lease));
-      expect(error.detail).toBe("Failed to remove ACP cgroup /test/t3-acp-busy");
+      expect(error.detail).toBe("Failed to remove ACP cgroup /test/pathway-acp-busy");
       expect(error.cause).toBe(removeError);
     }),
   );
@@ -428,8 +428,8 @@ describe("terminatePosixOwnedProcessTree", () => {
     const lease: AcpLinuxCgroupLease = {
       contains: () => true,
       exists: () => true,
-      path: "/test/t3-acp-root",
-      relativePath: "/test/t3-acp-root",
+      path: "/test/pathway-acp-root",
+      relativePath: "/test/pathway-acp-root",
       kill: () => undefined,
       populated: () => true,
       remove: () => undefined,

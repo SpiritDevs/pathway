@@ -34,7 +34,7 @@ import { layer as mcpSessionRegistryTestLayer } from "../mcp/McpSessionRegistry.
 import { CURSOR_MODEL_SELECTION, SUBAGENT_PROMPT } from "./testkit/fixtures/shared.ts";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-cursor-v2-live-",
+  prefix: "pathway-cursor-v2-live-",
 });
 
 const vcsDriverRegistryLayer = VcsDriverRegistry.layer.pipe(
@@ -97,7 +97,7 @@ const waitForIdle = Effect.fn("CursorOrchestratorV2Live.waitForIdle")(function* 
   return yield* Effect.die(new Error(`Timed out waiting for Cursor thread ${threadId}.`));
 });
 
-describe.runIf(process.env.T3_CURSOR_LIVE_ORCHESTRATOR === "1")(
+describe.runIf(process.env.Pathway_CURSOR_LIVE_ORCHESTRATOR === "1")(
   "Cursor V2 live orchestrator",
   () => {
     it.live(

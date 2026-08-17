@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { SyncSettingsPanel } from "../components/settings/company/SyncSettingsPanel";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/settings/sync")({
-  component: SyncSettingsPanel,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/diagnostics", hash: "company-sync", replace: true });
+  },
 });

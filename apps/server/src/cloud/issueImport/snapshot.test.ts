@@ -83,7 +83,9 @@ const TestLayer = Layer.mergeAll(
   IssueThreadLinkRepositoryLive,
 ).pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issue-import-test-" })),
+  Layer.provideMerge(
+    ServerConfig.layerTest(process.cwd(), { prefix: "pathway-issue-import-test-" }),
+  ),
   Layer.provideMerge(NodeServices.layer),
 );
 

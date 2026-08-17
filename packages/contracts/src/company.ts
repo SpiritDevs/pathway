@@ -40,6 +40,15 @@ const makeCompanyEntityId = <Brand extends string>(brand: Brand) =>
 
 export const CompanyId = makeCompanyEntityId("CompanyId");
 export type CompanyId = typeof CompanyId.Type;
+
+/**
+ * The collaboration shape of a workspace. Both kinds have the full product surface; an
+ * organization additionally exposes membership, invitation, team, and role administration.
+ */
+export const WORKSPACE_KINDS = ["personal", "organization"] as const;
+export const WorkspaceKind = Schema.Literals(WORKSPACE_KINDS);
+export type WorkspaceKind = typeof WorkspaceKind.Type;
+
 export const MembershipId = makeCompanyEntityId("MembershipId");
 export type MembershipId = typeof MembershipId.Type;
 export const TeamId = makeCompanyEntityId("TeamId");

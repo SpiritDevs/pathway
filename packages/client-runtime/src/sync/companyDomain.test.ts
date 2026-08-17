@@ -55,6 +55,7 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
   company: {
     id: COMPANY_ID,
     name: "Spirit Devs",
+    workspaceKind: "organization",
     issueKeyPrefix: "PAT",
     lifecycleState: "active",
     deletionScheduledAt: null,

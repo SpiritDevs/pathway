@@ -250,6 +250,19 @@ export function requirePermission(actor: CompanyActor, permission: PermissionKey
   throw backendError("permission-denied", `Missing permission ${permission}.`);
 }
 
+/**
+ * Collaboration administration is the capability unlocked by converting a personal workspace to
+ * an organization. Legacy rows have no kind and remain organizations for backward compatibility.
+ * This guard intentionally does not affect reads, provisioning, or environment authorization.
+ */
+export function requireOrganizationWorkspace(actor: CompanyActor): void {
+  if ((actor.company.workspaceKind ?? "organization") === "organization") return;
+  throw backendError(
+    "organization-required",
+    "Upgrade this personal workspace to an organization to manage members, teams, and roles.",
+  );
+}
+
 /** Record-level variant: any team the record is attached to may grant the permission. */
 export function requireRecordPermission(
   actor: CompanyActor,

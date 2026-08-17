@@ -209,7 +209,7 @@ describe("orchestration V2 contracts", () => {
       commandId: "command-source-control-1",
       threadId: "thread-1",
       committed: true,
-      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
     const item = decodeOrchestrationV2TurnItemJson({
       id: "turn-item-source-control-1",
@@ -228,7 +228,7 @@ describe("orchestration V2 contracts", () => {
       updatedAt: "2026-04-20T00:00:00.000Z",
       type: "source_control",
       committed: true,
-      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
 
     expect(command.type).toBe("thread.source-control.record");

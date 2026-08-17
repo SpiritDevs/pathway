@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { CompanyMembersPanel } from "../components/settings/company/CompanyMembersPanel";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/settings/company-members")({
-  component: CompanyMembersPanel,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/members-teams", hash: "company-members", replace: true });
+  },
 });

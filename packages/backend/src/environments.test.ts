@@ -10,7 +10,6 @@ import schema from "../convex/schema.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -77,12 +76,13 @@ function asEnvironment(t: Harness, thumbprint = THUMBPRINT) {
   });
 }
 
-async function seed(t: Harness) {
+async function seed(t: Harness, workspaceKind?: "personal" | "organization") {
   return await t.run(async (ctx) => {
     const now = 1_700_000_000_000;
     const companyDocId = await ctx.db.insert("companies", {
       id: COMPANY_ID,
       name: "Registry Test Co",
+      ...(workspaceKind === undefined ? {} : { workspaceKind }),
       issueKeyPrefix: "REG",
       nextIssueNumber: 1,
       lifecycleState: "active",
@@ -464,6 +464,29 @@ describe("environment registry", () => {
         .unique();
       expect(company).toMatchObject({ updatedAt: 1_700_000_000_000, syncVersion: 1 });
     });
+  });
+
+  it("keeps environment registration available to a personal workspace", async () => {
+    const t = harness();
+    await seed(t, "personal");
+
+    await asUser(t, "manager").mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: THUMBPRINT,
+      descriptor: descriptor(),
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+
+    await expect(
+      asUser(t, "manager").query(api.environments.list, { companyId: COMPANY_ID }),
+    ).resolves.toMatchObject([
+      {
+        environmentId: ENVIRONMENT_ID,
+        descriptor: { label: "Registry machine" },
+      },
+    ]);
   });
 
   it("does not append a change for last-seen-only heartbeats but does for descriptor updates", async () => {

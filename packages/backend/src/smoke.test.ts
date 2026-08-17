@@ -21,7 +21,6 @@ import {
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
 // The sync surface gates on the capability switch; the smoke functions deliberately do not.
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),

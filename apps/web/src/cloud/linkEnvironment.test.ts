@@ -2,6 +2,7 @@ import {
   type DesktopBridge,
   EnvironmentId,
   type RelayClientInstallProgressEvent,
+  type RelayClientStatus,
   WS_METHODS,
 } from "@spiritdevs/contracts";
 import { RelayWebClientId } from "@spiritdevs/contracts/relay";
@@ -43,18 +44,6 @@ const TARGET: CloudLinkTarget = {
   wsBaseUrl: "ws://127.0.0.1:3000",
 };
 
-const relayClientInstallDialog = vi.hoisted(() => ({
-  requestConfirmation: vi.fn(),
-  reportProgress: vi.fn(),
-  finish: vi.fn(),
-}));
-
-vi.mock("./relayClientInstallDialog", () => ({
-  requestRelayClientInstallConfirmation: relayClientInstallDialog.requestConfirmation,
-  reportRelayClientInstallProgress: relayClientInstallDialog.reportProgress,
-  finishRelayClientInstall: relayClientInstallDialog.finish,
-}));
-
 const createProof = vi.fn(() => Effect.succeed("dpop-proof"));
 const dpopSignerLayer = Layer.succeed(
   ManagedRelay.ManagedRelayDpopSigner,
@@ -76,7 +65,7 @@ function relayLayer() {
 }
 
 function registryLayer(options?: {
-  readonly status?: { readonly status: "available"; readonly version: string };
+  readonly status?: RelayClientStatus;
   readonly installEvents?: ReadonlyArray<RelayClientInstallProgressEvent>;
 }) {
   return Layer.effect(
@@ -84,7 +73,14 @@ function registryLayer(options?: {
     Effect.gen(function* () {
       const client = {
         [WS_METHODS.cloudGetRelayClientStatus]: () =>
-          Effect.succeed(options?.status ?? { status: "available", version: "2026.6.0" }),
+          Effect.succeed(
+            options?.status ?? {
+              status: "available",
+              executablePath: "/tmp/pathway-relay",
+              source: "managed",
+              version: "2026.6.0",
+            },
+          ),
         [WS_METHODS.cloudInstallRelayClient]: () =>
           Stream.fromIterable(options?.installEvents ?? []),
       } as unknown as RpcSession["client"];
@@ -143,7 +139,6 @@ function bodyText(body: BodyInit | null | undefined): string {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("VITE_PATHWAY_RELAY_URL", "https://relay.example.test");
-  relayClientInstallDialog.requestConfirmation.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -328,7 +323,6 @@ describe("web cloud link environment client", () => {
         }),
       );
 
-      expect(relayClientInstallDialog.requestConfirmation).not.toHaveBeenCalled();
       expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
         "http://127.0.0.1:3000/api/connect/link-proof",
       );
@@ -398,18 +392,30 @@ describe("web cloud link environment client", () => {
     Effect.gen(function* () {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ malformed: true })));
 
-      yield* withServices(
+      const error = yield* withServices(
         linkPrimaryEnvironmentToCloud({
           target: TARGET,
           clerkToken: "clerk-token",
         }),
         {
-          status: { status: "available", version: "2026.6.0" },
-          installEvents: [],
+          status: { status: "missing", version: "2026.6.0" },
+          installEvents: [
+            { type: "progress", stage: "downloading" },
+            {
+              type: "complete",
+              status: {
+                status: "available",
+                executablePath: "/tmp/pathway-relay",
+                source: "managed",
+                version: "2026.6.0",
+              },
+            },
+          ],
         },
       ).pipe(Effect.flip);
 
-      expect(relayClientInstallDialog.requestConfirmation).not.toHaveBeenCalled();
+      expect(error.message).toContain("environment-link-challenges failed");
+      expect(error.message).not.toContain("relay client install");
     }),
   );
 

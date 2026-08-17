@@ -92,13 +92,13 @@ describe("ssh tunnel scripts", () => {
   it("builds the remote Pathway runner with npx and npm fallbacks", () => {
     const script = buildRemotePathwayRunnerScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE });
 
-    assert.include(script, "T3_NODE_SCRIPT_PATH=''");
+    assert.include(script, "Pathway_NODE_SCRIPT_PATH=''");
     assert.include(script, 'exec pathway "$@"');
     assert.include(script, "exec npx --yes '@spiritdevs/pathway@latest' \"$@\"");
     assert.include(script, "exec npm exec --yes '@spiritdevs/pathway@latest' -- \"$@\"");
     assert.include(script, "could not install '@spiritdevs/pathway@latest'");
     assert.include(script, 'prepend_path_if_dir "$HOME/.local/bin"');
-    assert.include(script, `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
+    assert.include(script, `Pathway_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`);
     assert.include(script, "remote_node_satisfies_engine()");
     assert.include(script, "function satisfiesSemverRange");
     assert.include(script, "satisfiesSemverRange(rawVersion, range)");
@@ -111,31 +111,34 @@ describe("ssh tunnel scripts", () => {
     assert.include(script, 'prepend_path_if_dir "$HOME/.nodenv/shims"');
     assert.include(script, 'NVM_DIR="$HOME/.nvm"');
     assert.include(script, "nvm use --silent default");
-    assert.include(script, 'for T3_NODE_BIN in "$NVM_DIR"/versions/node/*/bin');
+    assert.include(script, 'for Pathway_NODE_BIN in "$NVM_DIR"/versions/node/*/bin');
     assert.notInclude(script, "ensure $NVM_DIR/nvm.sh is available");
   });
 
   it("does not hard-code a remote node engine range", () => {
     const script = buildRemotePathwayRunnerScript();
 
-    assert.include(script, "T3_NODE_ENGINE_RANGE=''");
+    assert.include(script, "Pathway_NODE_ENGINE_RANGE=''");
     assert.notInclude(script, TEST_NODE_ENGINE_RANGE);
   });
 
   it("shell-quotes package specs in the remote Pathway runner", () => {
     const script = buildRemotePathwayRunnerScript({
-      packageSpec: "@spiritdevs/pathway@nightly; touch /tmp/t3-owned",
+      packageSpec: "@spiritdevs/pathway@nightly; touch /tmp/pathway-owned",
     });
 
     assert.include(
       script,
-      "exec npx --yes '@spiritdevs/pathway@nightly; touch /tmp/t3-owned' \"$@\"",
+      "exec npx --yes '@spiritdevs/pathway@nightly; touch /tmp/pathway-owned' \"$@\"",
     );
     assert.include(
       script,
-      "exec npm exec --yes '@spiritdevs/pathway@nightly; touch /tmp/t3-owned' -- \"$@\"",
+      "exec npm exec --yes '@spiritdevs/pathway@nightly; touch /tmp/pathway-owned' -- \"$@\"",
     );
-    assert.notInclude(script, "exec npx --yes @spiritdevs/pathway@nightly; touch /tmp/t3-owned");
+    assert.notInclude(
+      script,
+      "exec npx --yes @spiritdevs/pathway@nightly; touch /tmp/pathway-owned",
+    );
   });
 
   it("builds the remote Pathway runner with a node script override", () => {
@@ -145,9 +148,9 @@ describe("ssh tunnel scripts", () => {
 
     assert.include(
       script,
-      "T3_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
+      "Pathway_NODE_SCRIPT_PATH='/Users/julius/Development/Work/codething-mvp/apps/server/dist/bin.mjs'",
     );
-    assert.include(script, 'exec node "$T3_NODE_SCRIPT_PATH" "$@"');
+    assert.include(script, 'exec node "$Pathway_NODE_SCRIPT_PATH" "$@"');
   });
 
   it("uses the remote Pathway runner for launch and pairing scripts", () => {
@@ -167,7 +170,7 @@ describe("ssh tunnel scripts", () => {
     assert.include(buildRemoteLaunchScript(), "if ! ensure_remote_node_path; then");
     assert.include(
       buildRemoteLaunchScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE }),
-      `T3_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`,
+      `Pathway_NODE_ENGINE_RANGE='${TEST_NODE_ENGINE_RANGE}'`,
     );
     assert.include(
       buildRemoteLaunchScript({ nodeEngineRange: TEST_NODE_ENGINE_RANGE }),

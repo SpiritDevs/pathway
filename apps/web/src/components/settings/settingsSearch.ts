@@ -3,9 +3,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/projects"
-  | "/settings/company-members"
-  | "/settings/company-teams"
-  | "/settings/sync"
+  | "/settings/members-teams"
   | "/settings/environments"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
@@ -44,9 +42,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/projects": "Projects",
-  "/settings/company-members": "Members",
-  "/settings/company-teams": "Teams & Roles",
-  "/settings/sync": "Sync",
+  "/settings/members-teams": "Members & Teams",
   "/settings/environments": "Environments",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
@@ -83,13 +79,8 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
-    label: "Company",
-    paths: [
-      "/settings/company-members",
-      "/settings/company-teams",
-      "/settings/sync",
-      "/settings/environments",
-    ],
+    label: "Account",
+    paths: ["/settings/members-teams", "/settings/environments"],
   },
   {
     label: "Agents",
@@ -132,27 +123,32 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
 export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "company-members",
-    title: "Company members",
-    to: "/settings/company-members",
+    title: "Members and invitations",
+    to: "/settings/members-teams",
   },
   {
     id: "company-teams",
-    title: "Company teams",
-    to: "/settings/company-teams",
+    title: "Teams",
+    to: "/settings/members-teams",
   },
   {
     id: "company-roles",
-    title: "Company roles",
-    to: "/settings/company-teams",
+    title: "Roles and permissions",
+    to: "/settings/members-teams",
+  },
+  {
+    id: "company-upgrade",
+    title: "Upgrade to a company workspace",
+    to: "/settings/members-teams",
   },
   {
     id: "company-sync",
-    title: "Company sync status",
-    to: "/settings/sync",
+    title: "Workspace sync status",
+    to: "/settings/diagnostics",
   },
   {
     id: "company-environments",
-    title: "Company environments",
+    title: "Workspace environments",
     to: "/settings/environments",
   },
   {

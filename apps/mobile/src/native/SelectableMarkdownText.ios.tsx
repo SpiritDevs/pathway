@@ -1,5 +1,5 @@
 import {
-  SelectableMarkdownText as T3SelectableMarkdownText,
+  SelectableMarkdownText as PathwaySelectableMarkdownText,
   type SelectableMarkdownTextProps,
 } from "@spiritdevs/mobile-markdown-text/renderer";
 
@@ -17,5 +17,5 @@ export function hasNativeSelectableMarkdownText(): boolean {
 }
 
 export function SelectableMarkdownText(props: MobileSelectableMarkdownTextProps) {
-  return <T3SelectableMarkdownText {...props} highlightCode={highlightCodeSnippet} />;
+  return <PathwaySelectableMarkdownText {...props} highlightCode={highlightCodeSnippet} />;
 }

@@ -94,7 +94,7 @@ const runCursorRecovery = Effect.fn("runCursorRecovery")(function* (input: {
   const path = yield* Path.Path;
   const tempDir = yield* Effect.acquireRelease(
     fs.makeTempDirectory({
-      prefix: "t3-orchestration-v2-cursor-recovery-",
+      prefix: "pathway-orchestration-v2-cursor-recovery-",
     }),
     (directory) => fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
   );
@@ -190,7 +190,7 @@ describe("orchestrator replay recovery", () => {
           const path = yield* Path.Path;
           const tempDir = yield* Effect.acquireRelease(
             fs.makeTempDirectory({
-              prefix: "t3-orchestration-v2-recovery-",
+              prefix: "pathway-orchestration-v2-recovery-",
             }),
             (directory) =>
               fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),

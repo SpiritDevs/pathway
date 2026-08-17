@@ -76,3 +76,5 @@ export function useCompanySettings() {
     replica,
   };
 }
+
+export type CompanySettings = ReturnType<typeof useCompanySettings>;

@@ -23,7 +23,7 @@ describe("source control timeline markers", () => {
       sourceControlMarkerLabel({
         ...sourceControlItem,
         committed: true,
-        pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+        pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
       }),
     ).toBe("pushed, committed, PR created");
   });

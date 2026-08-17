@@ -42,7 +42,7 @@ the task commands.
 - `infra/relay` (`pathway-relay`): the hosted Pathway Connect relay, deployed with Alchemy. Handles
   environment discovery, cloud-side records, and mobile notifications. It is not in the hot path;
   after connect, client traffic goes directly to the environment. See
-  [t3-connect.md](./t3-connect.md).
+  [pathway-connect.md](./pathway-connect.md).
 
 ## Other top-level directories
 

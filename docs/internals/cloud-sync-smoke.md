@@ -67,9 +67,7 @@ that ceiling still has headroom.
   deployment from `.env.local` or an inherited variable. Verify with
   `CONVEX_DEPLOYMENT=dev:<slug> npx convex run smoke:inspect '{"environmentId":"probe"}'` from
   `packages/backend`.
-- **Target Convex deployment configuration**: `PATHWAY_CLOUD_SYNC=enabled` and
-  `PATHWAY_RELAY_JWT_ISSUER` set to the relay issuer, or every authenticated call fails with
-  `cloud-sync-disabled`.
+- **Target Convex deployment configuration**: `PATHWAY_RELAY_JWT_ISSUER` set to the relay issuer.
 - **A deployment carrying the issue-domain apply handlers** (`convex/lib/issueApply.ts` registered
   in `convex/sync.ts`) and a smoke role granting `workflow.manage` — `smoke:seed` converges the
   role's permissions from `smokeServiceRolePermissions()` on every run, so redeploying the backend

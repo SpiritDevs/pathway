@@ -32,9 +32,8 @@ const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string
 
 const app = <AppRoot router={router} />;
 // Cloud sync sits inside the relay auth provider because it needs the session that provider
-// publishes; it is a second, stricter gate (`VITE_PATHWAY_CLOUD_SYNC` plus a Convex URL), so with
-// the flag off it mounts nothing and loads nothing. It renders no UI, so it is a sibling of the
-// app rather than a wrapper — the app never waits on the sync chunk.
+// publishes. It renders no UI, so it is a sibling of the app rather than a wrapper — the app never
+// waits on the sync chunk.
 const configuredApp = hasCloudPublicConfig() ? (
   <ManagedRelayAuthProvider>
     {app}

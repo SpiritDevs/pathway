@@ -9,10 +9,11 @@ import {
   CheckIcon,
   CircleStopIcon,
   CopyIcon,
+  InfoIcon,
   KeyRoundIcon,
   MessageSquareIcon,
   MonitorIcon,
-  PowerIcon,
+  MoreVerticalIcon,
   RefreshCwIcon,
   SendIcon,
   ServerIcon,
@@ -32,10 +33,28 @@ import { runPrimaryHttp } from "../../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
 import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
+import {
+  requestAlwaysOnCloudLinkRetry,
+  useAlwaysOnCloudLinkStatus,
+} from "../../../cloud/useCloudLinkController";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
+import {
+  Sheet,
+  SheetDescription,
+  SheetHeader,
+  SheetPanel,
+  SheetPopup,
+  SheetTitle,
+} from "../../ui/sheet";
 import { Textarea } from "../../ui/textarea";
 import { EnvironmentConnectionSettings } from "../ConnectionsSettings";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
@@ -46,11 +65,15 @@ import {
   PermissionTooltip,
 } from "./CompanySettingsShared";
 import {
+  deleteConfirmationSecondsRemaining,
+  derivePathwayConnectStatus,
   deriveEnvironmentRows,
   deriveRecentEnvironmentCommands,
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
+  resolveDeleteConfirmationClick,
   type CompanyEnvironmentRow,
+  type PathwayConnectStatus,
 } from "./environmentSettings.logic";
 import { useCompanySettings } from "./useCompanySettings";
 import { useEnvironmentControl } from "./useEnvironmentControl";
@@ -79,6 +102,29 @@ function registrationStateBadge(row: CompanyEnvironmentRow) {
   );
 }
 
+const PATHWAY_CONNECT_BADGE = {
+  active: { label: "active", variant: "success", orbClassName: "bg-success" },
+  connecting: { label: "connecting", variant: "warning", orbClassName: "bg-warning" },
+  failed: { label: "failed", variant: "error", orbClassName: "bg-destructive" },
+} as const satisfies Record<
+  PathwayConnectStatus,
+  {
+    readonly label: string;
+    readonly variant: "success" | "warning" | "error";
+    readonly orbClassName: string;
+  }
+>;
+
+function PathwayConnectBadge({ status }: { readonly status: PathwayConnectStatus }) {
+  const presentation = PATHWAY_CONNECT_BADGE[status];
+  return (
+    <Badge variant={presentation.variant} aria-label={`Pathway Connect: ${presentation.label}`}>
+      <span aria-hidden className={`size-1.5 rounded-full ${presentation.orbClassName}`} />
+      Pathway Connect
+    </Badge>
+  );
+}
+
 function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
   if (state === "succeeded") return <Badge variant="success">Succeeded</Badge>;
   if (state === "failed") return <Badge variant="error">Failed</Badge>;
@@ -89,14 +135,24 @@ function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
 
 function EnvironmentList({
   rows,
-  selectedEnvironmentId,
   ownManagedEndpointAvailable,
-  onSelect,
+  ownCloudLinkPhase,
+  ownCloudLinkError,
+  deleteEnabled,
+  deleteTooltip,
+  deletingEnvironmentId,
+  onInfo,
+  onDelete,
 }: {
   readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
-  readonly selectedEnvironmentId: EnvironmentId | null;
   readonly ownManagedEndpointAvailable: boolean | null;
-  readonly onSelect: (environmentId: EnvironmentId) => void;
+  readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+  readonly ownCloudLinkError: string | null;
+  readonly deleteEnabled: boolean;
+  readonly deleteTooltip: string | null;
+  readonly deletingEnvironmentId: EnvironmentId | null;
+  readonly onInfo: (environmentId: EnvironmentId) => void;
+  readonly onDelete: (environment: CompanyEnvironmentRow) => void;
 }) {
   return (
     <CompanySectionCard>
@@ -106,70 +162,159 @@ function EnvironmentList({
         </div>
       ) : (
         rows.map((row) => (
-          <button
+          <EnvironmentListRow
             key={row.registration.id}
-            type="button"
-            className="flex w-full flex-col gap-3 border-b px-4 py-4 text-left last:border-b-0 hover:bg-muted/30 sm:flex-row sm:items-start"
-            aria-pressed={selectedEnvironmentId === row.environmentId}
-            onClick={() => onSelect(row.environmentId)}
-          >
-            <div
-              className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${
-                selectedEnvironmentId === row.environmentId
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground"
-              }`}
-            >
-              {row.isOwnEnvironment ? (
-                <MonitorIcon className="size-4" />
-              ) : (
-                <ServerIcon className="size-4" />
-              )}
-            </div>
-            <div className="min-w-0 flex-1 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="truncate text-sm font-medium">{row.label}</span>
-                {row.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
-                {registrationStateBadge(row)}
-              </div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span>
-                  {row.registration.descriptor.platform.os}/
-                  {row.registration.descriptor.platform.arch} · server{" "}
-                  {row.registration.descriptor.serverVersion}
-                </span>
-                <span>Last seen {relativeTimestamp(row.registration.lastSeenAt)}</span>
-                <span>
-                  {(
-                    row.isOwnEnvironment && ownManagedEndpointAvailable !== null
-                      ? ownManagedEndpointAvailable
-                      : row.registration.managedEndpointAvailable
-                  )
-                    ? "Managed endpoint available"
-                    : "No managed endpoint"}
-                </span>
-                <span>
-                  {row.isInCatalog
-                    ? row.catalogSource === "local"
-                      ? "Present in local catalog"
-                      : "Discovered in company catalog"
-                    : "Not present in connection catalog"}
-                </span>
-              </div>
-              {row.teamNames.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {row.teamNames.map((teamName) => (
-                    <Badge key={teamName} variant="outline">
-                      {teamName}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </button>
+            row={row}
+            ownManagedEndpointAvailable={ownManagedEndpointAvailable}
+            ownCloudLinkPhase={ownCloudLinkPhase}
+            ownCloudLinkError={ownCloudLinkError}
+            deleteEnabled={deleteEnabled}
+            deleteTooltip={deleteTooltip}
+            deleting={deletingEnvironmentId === row.environmentId}
+            onInfo={() => onInfo(row.environmentId)}
+            onDelete={() => onDelete(row)}
+          />
         ))
       )}
     </CompanySectionCard>
+  );
+}
+
+const DELETE_CONFIRMATION_DURATION_MS = 5_000;
+
+function EnvironmentListRow({
+  row,
+  ownManagedEndpointAvailable,
+  ownCloudLinkPhase,
+  ownCloudLinkError,
+  deleteEnabled,
+  deleteTooltip,
+  deleting,
+  onInfo,
+  onDelete,
+}: {
+  readonly row: CompanyEnvironmentRow;
+  readonly ownManagedEndpointAvailable: boolean | null;
+  readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+  readonly ownCloudLinkError: string | null;
+  readonly deleteEnabled: boolean;
+  readonly deleteTooltip: string | null;
+  readonly deleting: boolean;
+  readonly onInfo: () => void;
+  readonly onDelete: () => void;
+}) {
+  const [deleteArmedUntil, setDeleteArmedUntil] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const deleteSecondsRemaining = deleteConfirmationSecondsRemaining(deleteArmedUntil, now);
+
+  useEffect(() => {
+    if (deleteArmedUntil === null) return;
+    const update = () => {
+      const nextNow = Date.now();
+      if (nextNow >= deleteArmedUntil) {
+        setDeleteArmedUntil(null);
+        return;
+      }
+      setNow(nextNow);
+    };
+    const interval = window.setInterval(update, 250);
+    return () => window.clearInterval(interval);
+  }, [deleteArmedUntil]);
+
+  const managedEndpointAvailable =
+    row.isOwnEnvironment && ownManagedEndpointAvailable !== null
+      ? ownManagedEndpointAvailable
+      : row.registration.managedEndpointAvailable;
+  const pathwayConnectStatus = derivePathwayConnectStatus({
+    row,
+    ownCloudLinkPhase,
+    ownManagedEndpointAvailable: managedEndpointAvailable,
+    ownCloudLinkError,
+  });
+
+  return (
+    <div className="flex w-full gap-3 border-b px-4 py-4 last:border-b-0 sm:items-start">
+      <div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+        {row.isOwnEnvironment ? (
+          <MonitorIcon className="size-4" />
+        ) : (
+          <ServerIcon className="size-4" />
+        )}
+      </div>
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-medium">{row.label}</span>
+          {row.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
+          {registrationStateBadge(row)}
+          <PathwayConnectBadge status={pathwayConnectStatus} />
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span>
+            {row.registration.descriptor.platform.os}/{row.registration.descriptor.platform.arch} ·
+            server {row.registration.descriptor.serverVersion}
+          </span>
+          <span>
+            {row.isInCatalog
+              ? row.catalogSource === "local"
+                ? "Present in local catalog"
+                : "Discovered in company catalog"
+              : "Not present in connection catalog"}
+          </span>
+        </div>
+        {row.teamNames.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {row.teamNames.map((teamName) => (
+              <Badge key={teamName} variant="outline">
+                {teamName}
+              </Badge>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={`Actions for ${row.label}`}
+          className="-mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <MoreVerticalIcon className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem onClick={onInfo}>
+            <InfoIcon />
+            Info
+          </DropdownMenuItem>
+          {!row.isOwnEnvironment ? (
+            <DropdownMenuItem
+              closeOnClick={deleteSecondsRemaining !== null}
+              disabled={!deleteEnabled || deleting}
+              title={deleteTooltip ?? undefined}
+              variant="destructive"
+              onClick={() => {
+                const clickTime = Date.now();
+                const result = resolveDeleteConfirmationClick(
+                  deleteArmedUntil,
+                  clickTime,
+                  DELETE_CONFIRMATION_DURATION_MS,
+                );
+                setNow(clickTime);
+                setDeleteArmedUntil(result.armedUntil);
+                if (!result.confirmed) {
+                  return;
+                }
+                onDelete();
+              }}
+            >
+              <Trash2Icon />
+              {deleting
+                ? "Deleting…"
+                : deleteSecondsRemaining === null
+                  ? "Delete"
+                  : `Click again to delete · ${deleteSecondsRemaining}s`}
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
@@ -429,6 +574,7 @@ export function CompanyEnvironmentsPanel() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const cloudLinkStatus = useAlwaysOnCloudLinkStatus();
   const ownManagedEndpointAvailable = primaryCloudLinkState.data
     ? (primaryCloudLinkState.data.managedTunnelActive ?? primaryCloudLinkState.data.linked)
     : null;
@@ -451,6 +597,7 @@ export function CompanyEnvironmentsPanel() {
     [rows],
   );
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
+  const [environmentInfoOpen, setEnvironmentInfoOpen] = useState(false);
   const [commands, setCommands] = useState<ReadonlyArray<EnvironmentCommandRecord>>([]);
   const [commandLoadError, setCommandLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -460,12 +607,12 @@ export function CompanyEnvironmentsPanel() {
 
   useEffect(() => {
     if (
-      selectedEnvironmentId !== null &&
+      selectedEnvironmentId === null ||
       rows.some((row) => row.environmentId === selectedEnvironmentId)
-    ) {
+    )
       return;
-    }
-    setSelectedEnvironmentId(rows[0]?.environmentId ?? null);
+    setSelectedEnvironmentId(null);
+    setEnvironmentInfoOpen(false);
   }, [rows, selectedEnvironmentId]);
 
   useEffect(() => {
@@ -501,6 +648,14 @@ export function CompanyEnvironmentsPanel() {
   }, [control, settings.companyId]);
 
   const selected = rows.find((row) => row.environmentId === selectedEnvironmentId) ?? null;
+  const selectedPathwayConnectStatus = selected
+    ? derivePathwayConnectStatus({
+        row: selected,
+        ownCloudLinkPhase: cloudLinkStatus.phase,
+        ownManagedEndpointAvailable,
+        ownCloudLinkError: primaryCloudLinkState.error ?? cloudLinkStatus.error,
+      })
+    : null;
   const recentCommands =
     selectedEnvironmentId === null
       ? []
@@ -548,7 +703,7 @@ export function CompanyEnvironmentsPanel() {
       <SettingsPageContainer>
         <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
-          title="Sign in to manage company environments"
+          title="Sign in to manage environments"
           description="Environment discovery and remote control are available after you sign in."
         />
       </SettingsPageContainer>
@@ -559,8 +714,8 @@ export function CompanyEnvironmentsPanel() {
       <SettingsPageContainer>
         <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
-          title="No active company"
-          description="Choose a company from the company switcher to discover its environments."
+          title="Workspace setup is still finishing"
+          description="Pathway is preparing your workspace and will connect this environment automatically."
         />
       </SettingsPageContainer>
     );
@@ -570,8 +725,8 @@ export function CompanyEnvironmentsPanel() {
       <SettingsPageContainer>
         <EnvironmentConnectionSettings />
         <CompanySettingsEmptyState
-          title="Company data is syncing"
-          description="Environment settings will appear when this company's replica is ready."
+          title="Workspace data is syncing"
+          description="Environment settings will appear when this workspace is ready."
         />
       </SettingsPageContainer>
     );
@@ -594,9 +749,9 @@ export function CompanyEnvironmentsPanel() {
               <CompanySectionCard>
                 <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm font-medium">Register this environment</p>
+                    <p className="text-sm font-medium">Connecting this environment</p>
                     <p className="text-xs text-muted-foreground">
-                      Authorize this Pathway server to replicate the company and run migrations.
+                      Pathway is connecting this server to your workspace automatically.
                     </p>
                   </div>
                   <PermissionTooltip tooltip={manageGate.tooltip}>
@@ -627,13 +782,12 @@ export function CompanyEnvironmentsPanel() {
                       }}
                     >
                       <KeyRoundIcon className="size-3.5" />
-                      {pendingAction === "register" ? "Registering…" : "Register environment"}
+                      {pendingAction === "register" ? "Connecting…" : "Retry now"}
                     </Button>
                   </PermissionTooltip>
                   {serviceRole === undefined ? (
                     <p className="text-xs text-destructive">
-                      Create a role with company, project, issue, workflow, and environment access
-                      before registering this server.
+                      Workspace permissions are still syncing. Pathway will retry automatically.
                     </p>
                   ) : null}
                   {actionError ? <p className="text-xs text-destructive">{actionError}</p> : null}
@@ -642,20 +796,137 @@ export function CompanyEnvironmentsPanel() {
             ) : null}
             <EnvironmentList
               rows={rows}
-              selectedEnvironmentId={selectedEnvironmentId}
               ownManagedEndpointAvailable={ownManagedEndpointAvailable}
-              onSelect={setSelectedEnvironmentId}
+              ownCloudLinkPhase={cloudLinkStatus.phase}
+              ownCloudLinkError={primaryCloudLinkState.error ?? cloudLinkStatus.error}
+              deleteEnabled={manageGate.enabled && control !== null && pendingAction === null}
+              deleteTooltip={manageGate.tooltip}
+              deletingEnvironmentId={
+                pendingAction?.startsWith("deactivate:")
+                  ? (pendingAction.slice("deactivate:".length) as EnvironmentId)
+                  : null
+              }
+              onInfo={(environmentId) => {
+                setSelectedEnvironmentId(environmentId);
+                setEnvironmentInfoOpen(true);
+              }}
+              onDelete={(environment) => {
+                if (control === null) return;
+                setSelectedEnvironmentId(environment.environmentId);
+                void runAction(`deactivate:${environment.environmentId}`, () =>
+                  control.deactivateEnvironment({
+                    companyId,
+                    environmentId: environment.environmentId,
+                  }),
+                ).then((deleted) => {
+                  if (!deleted) {
+                    setEnvironmentInfoOpen(true);
+                    return;
+                  }
+                  setEnvironmentInfoOpen(false);
+                  setSelectedEnvironmentId(null);
+                });
+              }}
             />
             {savedEnvironmentRows}
           </SettingsSection>
         )}
       />
 
-      {selected && !selected.isOwnEnvironment ? (
-        <SettingsSection title={selected.label} icon={<PowerIcon className="size-4" />}>
-          <CompanySectionCard>
-            <div className="space-y-5 p-4">
-              {selected.registration.state !== "active" ? (
+      {selected ? (
+        <Sheet
+          open={environmentInfoOpen}
+          onOpenChange={(open) => {
+            setEnvironmentInfoOpen(open);
+            if (!open) setSelectedEnvironmentId(null);
+          }}
+        >
+          <SheetPopup className="max-w-xl">
+            <SheetHeader>
+              <div className="flex items-center gap-2 pr-8">
+                <SheetTitle className="truncate">{selected.label}</SheetTitle>
+                {selected.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
+                {registrationStateBadge(selected)}
+                {selectedPathwayConnectStatus ? (
+                  <PathwayConnectBadge status={selectedPathwayConnectStatus} />
+                ) : null}
+              </div>
+              <SheetDescription>
+                {selected.registration.descriptor.platform.os}/
+                {selected.registration.descriptor.platform.arch} · server{" "}
+                {selected.registration.descriptor.serverVersion}
+              </SheetDescription>
+            </SheetHeader>
+            <SheetPanel className="space-y-5">
+              <div className="grid gap-3 rounded-lg border p-3 text-xs sm:grid-cols-2">
+                <div>
+                  <p className="text-muted-foreground">Managed endpoint</p>
+                  <p className="mt-1 font-medium text-foreground">
+                    {(
+                      selected.isOwnEnvironment && ownManagedEndpointAvailable !== null
+                        ? ownManagedEndpointAvailable
+                        : selected.registration.managedEndpointAvailable
+                    )
+                      ? "Available"
+                      : "Unavailable"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Connection catalog</p>
+                  <p className="mt-1 font-medium text-foreground">
+                    {selected.isInCatalog
+                      ? selected.catalogSource === "local"
+                        ? "Present locally"
+                        : "Discovered through company"
+                      : "Not present"}
+                  </p>
+                </div>
+                {selected.teamNames.length > 0 ? (
+                  <div className="sm:col-span-2">
+                    <p className="mb-1.5 text-muted-foreground">Teams</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selected.teamNames.map((teamName) => (
+                        <Badge key={teamName} variant="outline">
+                          {teamName}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {selected.isOwnEnvironment && cloudLinkStatus.phase === "exhausted" ? (
+                <div
+                  role="alert"
+                  className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3"
+                >
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">
+                      Pathway Connect could not reconnect
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Automatic reconnection stopped after {cloudLinkStatus.maxAttempts} attempts.
+                      Pathway will stay disconnected until you try again.
+                    </p>
+                    {cloudLinkStatus.error ? (
+                      <p className="break-words text-xs text-destructive">
+                        {cloudLinkStatus.error}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={requestAlwaysOnCloudLinkRetry}>
+                    <RefreshCwIcon className="size-3.5" />
+                    Try reconnecting
+                  </Button>
+                </div>
+              ) : null}
+
+              {selected.isOwnEnvironment ? (
+                <div className="rounded-lg border px-3 py-3 text-xs text-muted-foreground">
+                  This is the environment currently hosting Pathway. Remote controls are only
+                  available for other environments.
+                </div>
+              ) : selected.registration.state !== "active" ? (
                 <div className="rounded-lg border px-3 py-3 text-xs text-muted-foreground">
                   This registration is revoked and cannot accept remote actions.
                 </div>
@@ -746,41 +1017,6 @@ export function CompanyEnvironmentsPanel() {
                       </PermissionTooltip>
                     )}
                   </div>
-
-                  <div className="flex flex-col gap-3 rounded-lg border border-destructive/20 p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-medium">Deactivate environment</p>
-                      <p className="text-xs text-muted-foreground">
-                        Revokes this company's registration and removes it from discovery.
-                      </p>
-                    </div>
-                    <PermissionTooltip tooltip={manageGate.tooltip}>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={!manageGate.enabled || control === null || pendingAction !== null}
-                        onClick={() => {
-                          if (
-                            control === null ||
-                            !window.confirm(
-                              `Deactivate ${selected.label}? It will no longer be discoverable for this company.`,
-                            )
-                          ) {
-                            return;
-                          }
-                          void runAction("deactivate", () =>
-                            control.deactivateEnvironment({
-                              companyId,
-                              environmentId: selected.environmentId,
-                            }),
-                          );
-                        }}
-                      >
-                        <Trash2Icon className="size-3.5" />
-                        {pendingAction === "deactivate" ? "Deactivating…" : "Deactivate"}
-                      </Button>
-                    </PermissionTooltip>
-                  </div>
                 </>
               )}
 
@@ -805,9 +1041,9 @@ export function CompanyEnvironmentsPanel() {
                   );
                 }}
               />
-            </div>
-          </CompanySectionCard>
-        </SettingsSection>
+            </SheetPanel>
+          </SheetPopup>
+        </Sheet>
       ) : null}
     </SettingsPageContainer>
   );

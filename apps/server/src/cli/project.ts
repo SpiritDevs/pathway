@@ -30,7 +30,7 @@ import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.t
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as PathwayProjectFileLoader from "../project/PathwayProjectFileLoader.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -203,7 +203,7 @@ const ProjectCliRuntimeLive = ProjectServiceLayerLive.pipe(
   Layer.provideMerge(
     ProjectFaviconResolver.layer.pipe(
       Layer.provide(WorkspacePaths.layer),
-      Layer.provide(T3ProjectFileLoader.layer),
+      Layer.provide(PathwayProjectFileLoader.layer),
     ),
   ),
   Layer.provideMerge(WorkspacePaths.layer),

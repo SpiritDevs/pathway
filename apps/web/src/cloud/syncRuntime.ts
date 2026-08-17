@@ -2,9 +2,8 @@
  * The browser host for the cloud-sync engine: one engine per company the signed-in person is a
  * member of, all of them behind a leader election so only one tab writes the replica.
  *
- * Three gates stand between this module and any network work, and all three are off by default:
- * the deployment's public config must carry the cloud values *and* the explicit
- * `VITE_PATHWAY_CLOUD_SYNC` opt-in *and* a Convex deployment URL; a Clerk session must be active
+ * Three concrete prerequisites stand between this module and any network work: the deployment's
+ * public config must carry a configured Convex deployment URL; a Clerk session must be active
  * (its account id is the storage scope); and the person must be a member of at least one company.
  * Importing this module opens no socket and touches no storage — {@link useCloudSyncRuntime} is
  * what starts anything, and only when {@link hasCloudSyncPublicConfig} agrees.
@@ -26,11 +25,11 @@ import {
   type ManagedRelaySession,
 } from "@spiritdevs/client-runtime/relay";
 import {
-  CloudSyncCapability,
   EnvironmentRegistrationEntity,
   makeIssueSyncAdapter,
   makeSyncEngine,
   makeWebLeaderElection,
+  RoleEntity,
   SyncStore,
   SyncTransport,
   SYNC_INDEXED_DB_PREFIX,
@@ -41,7 +40,7 @@ import { makeIndexedDbSyncStore } from "@spiritdevs/client-runtime/sync/indexedd
 import { runAtomCommand } from "@spiritdevs/client-runtime/state/runtime";
 import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
-import { EnvironmentId } from "@spiritdevs/contracts";
+import { type EnvironmentCloudRegistrationInfo, EnvironmentId } from "@spiritdevs/contracts";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Cause from "effect/Cause";
@@ -59,12 +58,15 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
 import { environmentCatalog, localEnvironmentCatalog } from "../connection/catalog";
+import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
+import { runPrimaryHttp } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
+import { activeCompanyIdAtom } from "./activeCompany";
 import {
   companyRegistryReplicasAtom,
   publishCompanyRegistryMembershipId,
@@ -86,6 +88,9 @@ import {
   type ConvexClientLike,
 } from "./syncTransport";
 import { makeClerkConvexTokenFetcher, managedRelayClerkTokenFetcher } from "./syncTransportAuth";
+import type { EnvironmentControlClient } from "./environmentControl";
+import { useEnvironmentControl } from "./useEnvironmentControl";
+import { automaticCloudRetryDelayMs, useAlwaysOnCloudLink } from "./useCloudLinkController";
 import type { SyncTransportError } from "@spiritdevs/client-runtime/sync";
 
 /** How long a stopped engine waits before it is started again (a lost socket, a lost lock). */
@@ -174,23 +179,24 @@ export function readCloudSyncClientId(options: ReadCloudSyncClientIdOptions): Sy
 
 /** The `companies.listMine` query, named the way Convex names a function (`module:export`). */
 export const COMPANIES_LIST_MINE_FUNCTION = "companies.listMine";
-/** Idempotently provisions a new account and repairs company bootstrap data from older releases. */
-export const COMPANIES_PROVISION_CURRENT_USER_FUNCTION = "companies.provisionCurrentUser";
+/** Repairs bootstrap data for an existing workspace without creating a default one. */
+export const COMPANIES_REPAIR_CURRENT_USER_WORKSPACE_FUNCTION =
+  "companies.repairCurrentUserWorkspace";
 
 const companiesListMineReference = makeFunctionReference<"query", ConvexArgs, unknown>(
   convexFunctionName(COMPANIES_LIST_MINE_FUNCTION),
 );
-const companiesProvisionCurrentUserReference = makeFunctionReference<
+const companiesRepairCurrentUserWorkspaceReference = makeFunctionReference<
   "mutation",
   ConvexArgs,
   unknown
->(convexFunctionName(COMPANIES_PROVISION_CURRENT_USER_FUNCTION));
+>(convexFunctionName(COMPANIES_REPAIR_CURRENT_USER_WORKSPACE_FUNCTION));
 
 /** Runs before company discovery so every engine starts from a complete company bootstrap. */
-export const provisionCloudSyncCurrentUser = Effect.fn("web.cloudSync.provisionCurrentUser")(
+export const repairCloudSyncCurrentUserWorkspace = Effect.fn("web.cloudSync.repairCurrentUser")(
   function* (client: Pick<ConvexClientLike, "mutation">) {
     return yield* Effect.tryPromise({
-      try: () => client.mutation(companiesProvisionCurrentUserReference, {}),
+      try: () => client.mutation(companiesRepairCurrentUserWorkspaceReference, {}),
       catch: classifyConvexSyncTransportError,
     });
   },
@@ -440,9 +446,9 @@ interface CloudSyncEngineStop {
  * exactly its engine. Engines are *built* inside the body too: construction reads and can write the
  * store (it quarantines unreadable outbox rows), which a follower tab must never do.
  *
- * The capability is provided here as enabled. It is a deliberate inversion of the default: nothing
- * reaches this function unless the public-config flag already said yes, and an engine that ran with
- * the capability off would be a silent no-op that looks like a working sync.
+ * Cloud sync is part of every signed-in workspace, so reaching this function is sufficient to run
+ * the engines. Build-time capability gates would leave a correctly authenticated workspace looking
+ * connected while silently withholding its projects and threads.
  */
 export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* (
   options: CloudSyncEnginesOptions,
@@ -657,7 +663,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
     );
 
     yield* Stream.runForEach(connection.companies, reconcile);
-  }).pipe(Effect.scoped, Effect.provideService(CloudSyncCapability, { enabled: true }));
+  }).pipe(Effect.scoped);
 
   /**
    * Losing the lock is ordinary — another tab took over, or this one was backgrounded — so it waits
@@ -741,7 +747,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
       fetchToken: options.fetchToken,
       client,
     });
-    yield* provisionCloudSyncCurrentUser(client);
+    yield* repairCloudSyncCurrentUserWorkspace(client);
     return { transport, companies: cloudSyncCompaniesStream(client) } satisfies CloudSyncConnection;
   });
 
@@ -861,16 +867,35 @@ export function useCloudSyncScope(): string | null {
 
 /**
  * Starts cloud sync for the signed-in account while the calling component is mounted, and stops it
- * on sign-out. With the flag off (or no session) this subscribes to an inert atom: no Convex
+ * on sign-out. With no session this subscribes to an inert atom: no Convex
  * client is constructed, no database is opened, and no lock is taken.
  */
-export function useCloudSyncRuntime(): void {
+export function useCloudSyncRuntime(enabled = true): void {
   const scope = useCloudSyncScope();
   const atom =
-    scope !== null && hasCloudSyncPublicConfig()
+    enabled && scope !== null && hasCloudSyncPublicConfig()
       ? cloudSyncRuntimeAtom(scope)
       : CLOUD_SYNC_IDLE_ATOM;
-  useAppAtomValue(atom);
+  useEffect(() => mountCloudSyncRuntimeAtom(atom), [atom]);
+}
+
+/**
+ * Keeps the Effect atom alive and evaluates it from React's effect phase. `subscribe` is lazy by
+ * default in Effect's registry: without `immediate`, it installs a listener but never reads the
+ * atom, so the sync runtime remains permanently unstarted. Reading during render starts it too
+ * early and lets its status publications update sibling components mid-render. Immediate
+ * subscription here is the safe seam between those two failure modes.
+ */
+export function mountCloudSyncRuntimeAtom<A>(atom: Atom.Atom<A>): () => void {
+  return appAtomRegistry.subscribe(atom, () => undefined, { immediate: true });
+}
+
+/**
+ * Cloud discovery follows authentication, not onboarding metadata. The workspace catalog is
+ * allowed to be empty while onboarding is in progress and is reactive when provisioning lands.
+ */
+export function shouldRunCloudSyncRuntime(isSignedIn: boolean | undefined): boolean {
+  return isSignedIn === true;
 }
 
 /**
@@ -919,6 +944,131 @@ function useCompanyEnvironmentConnections(): void {
 }
 
 const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
+const isRole = Schema.is(RoleEntity);
+
+const ENVIRONMENT_SERVICE_ROLE_PERMISSIONS = [
+  "company.read",
+  "projects.read",
+  "issues.read",
+  "workflow.manage",
+  "environments.read",
+] as const;
+
+/**
+ * Picks the least-privileged role that can back a new environment registration, or `null` when
+ * this environment is already active or the company replica has not delivered a suitable role.
+ */
+export function automaticEnvironmentRegistrationServiceRoleId(
+  values: Iterable<unknown>,
+  environmentId: EnvironmentId,
+): string | null {
+  const roles: Array<RoleEntity> = [];
+  for (const value of values) {
+    if (
+      isEnvironmentRegistration(value) &&
+      value.environmentId === environmentId &&
+      value.state === "active"
+    ) {
+      return null;
+    }
+    if (
+      isRole(value) &&
+      ENVIRONMENT_SERVICE_ROLE_PERMISSIONS.every((permission) =>
+        value.permissions.includes(permission),
+      )
+    ) {
+      roles.push(value);
+    }
+  }
+  return (
+    roles.toSorted((left, right) => left.permissions.length - right.permissions.length)[0]?.id ??
+    null
+  );
+}
+
+export async function registerEnvironmentAutomatically(input: {
+  readonly companyId: CompanyId;
+  readonly environmentId: EnvironmentId;
+  readonly replica: CompanyRegistryReplicaState;
+  readonly control: Pick<EnvironmentControlClient, "registerEnvironment">;
+  readonly readRegistrationInfo: () => Promise<EnvironmentCloudRegistrationInfo>;
+}): Promise<boolean> {
+  const serviceRoleId = automaticEnvironmentRegistrationServiceRoleId(
+    input.replica.view.values(),
+    input.environmentId,
+  );
+  if (serviceRoleId === null) return false;
+  const info = await input.readRegistrationInfo();
+  await input.control.registerEnvironment({
+    companyId: input.companyId,
+    info,
+    serviceRoleIds: [serviceRoleId],
+  });
+  return true;
+}
+
+/** Registers a newly paired primary environment as soon as login has bootstrapped its company. */
+function useAutomaticEnvironmentRegistration(): void {
+  const control = useEnvironmentControl();
+  const companyId = useAppAtomValue(activeCompanyIdAtom);
+  const replicas = useAppAtomValue(companyRegistryReplicasAtom);
+  const environmentId = useAppAtomValue(primaryEnvironmentIdAtom);
+  const inFlight = useRef(new Map<string, Promise<boolean>>());
+  const retryAttempts = useRef(new Map<string, number>());
+  const [retryNonce, setRetryNonce] = useState(0);
+  const replica = companyId === null ? undefined : replicas.get(companyId);
+
+  useEffect(() => {
+    if (control === null || companyId === null || environmentId === null) return;
+    if (replica === undefined) return;
+    if (
+      automaticEnvironmentRegistrationServiceRoleId(replica.view.values(), environmentId) === null
+    )
+      return;
+
+    const registrationKey = `${companyId}\u0000${environmentId}`;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let registration = inFlight.current.get(registrationKey);
+    if (registration === undefined) {
+      registration = registerEnvironmentAutomatically({
+        companyId,
+        environmentId,
+        replica,
+        control,
+        readRegistrationInfo: () =>
+          runPrimaryHttp(
+            PrimaryEnvironmentHttpClient.pipe(
+              Effect.flatMap((client) => client.connect.registrationInfo({ headers: {} })),
+            ),
+          ),
+      });
+      inFlight.current.set(registrationKey, registration);
+      const clearInFlight = () => {
+        if (inFlight.current.get(registrationKey) === registration) {
+          inFlight.current.delete(registrationKey);
+        }
+      };
+      void registration.then(clearInFlight, clearInFlight);
+    }
+    void registration
+      .catch((error: unknown) => {
+        console.warn("Could not automatically register this Pathway environment.", error);
+        if (cancelled) return;
+        const attempt = retryAttempts.current.get(registrationKey) ?? 0;
+        retryAttempts.current.set(registrationKey, attempt + 1);
+        const delay = automaticCloudRetryDelayMs(attempt);
+        retryTimer = setTimeout(() => setRetryNonce((nonce) => nonce + 1), delay);
+      })
+      .then((didRegister) => {
+        if (didRegister) retryAttempts.current.delete(registrationKey);
+      });
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
+  }, [companyId, control, environmentId, replica, retryNonce]);
+}
 
 export function discoverCompanyEnvironmentConnections(
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
@@ -951,7 +1101,7 @@ export function discoverCompanyEnvironmentConnections(
  * unmount and remount as the chunk resolved.
  */
 export function CloudSyncRuntime(): null {
-  const { getToken } = useAuth();
+  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
 
   useEffect(() => {
     activateCloudSyncConvexTokenFetcher(makeClerkConvexTokenFetcher(getToken));
@@ -960,7 +1110,16 @@ export function CloudSyncRuntime(): null {
     };
   }, [getToken]);
 
-  useCloudSyncRuntime();
+  // Start discovery as soon as Clerk has a signed-in identity. Before onboarding creates a
+  // workspace, `companies.listMine` legitimately yields an empty list and then reacts to the
+  // provisioning mutation. Waiting for Clerk's onboarding metadata here creates a second,
+  // eventually-consistent gate: the route can already know the workspace exists while this
+  // runtime remains stopped on a stale metadata snapshot, leaving every company-backed screen in
+  // an indefinite "preparing" state. The repair mutation cannot create a workspace, so starting
+  // early is safe and lets provisioning flow straight into the first replica bootstrap.
+  useCloudSyncRuntime(shouldRunCloudSyncRuntime(isSignedIn));
+  useAutomaticEnvironmentRegistration();
+  useAlwaysOnCloudLink();
   useCompanyEnvironmentConnections();
 
   return null;

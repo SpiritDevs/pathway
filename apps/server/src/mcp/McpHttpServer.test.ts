@@ -277,7 +277,7 @@ it.effect(
       expect(missing.content.some((content) => content.type === "image")).toBe(false);
     }).pipe(
       Effect.provide(
-        ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-issue-images-test-" }).pipe(
+        ServerConfig.layerTest(process.cwd(), { prefix: "pathway-mcp-issue-images-test-" }).pipe(
           Layer.provideMerge(NodeServices.layer),
         ),
       ),

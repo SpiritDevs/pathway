@@ -33,8 +33,8 @@ import { OrchestratorV2 } from "./Orchestrator.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import { layer as mcpSessionRegistryTestLayer } from "../mcp/McpSessionRegistry.testkit.ts";
 
-const liveAgentId = process.env.T3_ACP_REGISTRY_LIVE_AGENT_ID?.trim() || "devin";
-const liveCommandPath = process.env.T3_ACP_REGISTRY_LIVE_COMMAND?.trim();
+const liveAgentId = process.env.Pathway_ACP_REGISTRY_LIVE_AGENT_ID?.trim() || "devin";
+const liveCommandPath = process.env.Pathway_ACP_REGISTRY_LIVE_COMMAND?.trim();
 const liveInstanceId = ProviderInstanceId.make("acpRegistry_live");
 const liveModelSelection = {
   instanceId: liveInstanceId,
@@ -42,7 +42,7 @@ const liveModelSelection = {
 } satisfies ModelSelection;
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-acp-registry-v2-live-",
+  prefix: "pathway-acp-registry-v2-live-",
 });
 
 const vcsDriverRegistryLayer = VcsDriverRegistry.layer.pipe(
@@ -114,7 +114,7 @@ const waitForIdle = Effect.fn("AcpRegistryOrchestratorV2Live.waitForIdle")(funct
   return yield* Effect.die(new Error(`Timed out waiting for ACP Registry thread ${threadId}.`));
 });
 
-describe.runIf(process.env.T3_ACP_REGISTRY_LIVE_ORCHESTRATOR === "1")(
+describe.runIf(process.env.Pathway_ACP_REGISTRY_LIVE_ORCHESTRATOR === "1")(
   "ACP Registry V2 live orchestrator",
   () => {
     it.live(

@@ -1,4 +1,5 @@
 export type ClerkAuthGateState = "authenticated" | "loading" | "onboarding" | "public" | "redirect";
+export type WorkspaceValidationState = "checking" | "valid" | "unavailable";
 
 const PUBLIC_AUTH_PATHNAMES = new Set(["/login", "/register"]);
 
@@ -14,16 +15,19 @@ export function resolveClerkAuthGateState({
   isSignedIn,
   onboardingComplete,
   pathname,
+  workspaceValidation,
 }: {
   readonly isLoaded: boolean;
   readonly isSignedIn: boolean | undefined;
   readonly onboardingComplete: boolean | undefined;
   readonly pathname: string;
+  readonly workspaceValidation: WorkspaceValidationState;
 }): ClerkAuthGateState {
   if (PUBLIC_AUTH_PATHNAMES.has(pathname)) return "public";
   if (!isLoaded) return "loading";
   if (!isSignedIn) return "redirect";
   if (onboardingComplete === undefined) return "loading";
   if (!onboardingComplete && pathname !== "/onboarding") return "onboarding";
+  if (onboardingComplete && workspaceValidation === "checking") return "loading";
   return "authenticated";
 }

@@ -24,7 +24,6 @@ import {
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { appendCompanyChanges, encodeEnvironmentCommand } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
 import {
@@ -246,7 +245,6 @@ export const issue = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "remoteAgents.dispatch");
     if (actor.kind !== "member") {
@@ -366,7 +364,6 @@ export const list = query({
   },
   returns: v.array(commandRecord),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "environments.read");
     const limit = boundedLimit(args.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
@@ -404,7 +401,6 @@ export const claim = mutation({
   },
   returns: v.array(commandRecord),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment") {
       throw backendError("invalid-arguments", "Only an environment may claim commands.");
@@ -470,7 +466,6 @@ export const renewClaim = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment") {
       throw backendError("invalid-arguments", "Only an environment may renew a claim.");
@@ -501,7 +496,6 @@ export const reportStatus = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment") {
       throw backendError("invalid-arguments", "Only the claiming environment may report status.");
@@ -546,7 +540,6 @@ export const cancel = mutation({
   args: { companyId: domainIdArg, commandId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "remoteAgents.dispatch");
     if (actor.kind !== "member") {
@@ -575,7 +568,6 @@ export const expireOverdue = mutation({
   args: { companyId: domainIdArg, limit: v.optional(v.number()) },
   returns: v.object({ expired: v.number() }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "environments.manage");
     const limit = boundedLimit(args.limit, EXPIRE_DEFAULT_LIMIT, EXPIRE_MAX_LIMIT);

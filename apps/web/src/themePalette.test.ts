@@ -25,7 +25,7 @@ import {
   subscribeToThemePreview,
   subscribeToCustomThemes,
   themeAllowsSidebarArtwork,
-  T3_CHAT_THEME,
+  Pathway_CHAT_THEME,
   EMBER_THEME,
   GROVE_THEME,
   IRIS_THEME,
@@ -268,13 +268,13 @@ describe("theme files", () => {
 
   it("canonicalizes the explicitly exported theme", () => {
     const serialized = serializeThemeFile({
-      ...T3_CHAT_THEME,
-      colors: { ...T3_CHAT_THEME.colors, accent: "hsl(263 70% 58%)" },
+      ...Pathway_CHAT_THEME,
+      colors: { ...Pathway_CHAT_THEME.colors, accent: "hsl(263 70% 58%)" },
     });
     expect(JSON.parse(serialized)).toMatchObject({
       version: THEME_FILE_VERSION,
-      id: T3_CHAT_THEME.id,
-      name: T3_CHAT_THEME.label,
+      id: Pathway_CHAT_THEME.id,
+      name: Pathway_CHAT_THEME.label,
       appearance: "light",
       colors: { accent: canonical("hsl(263 70% 58%)") },
     });
@@ -326,7 +326,7 @@ describe("theme files", () => {
       },
     });
 
-    applyThemeColorPreview(T3_CHAT_THEME.colors, "light");
+    applyThemeColorPreview(Pathway_CHAT_THEME.colors, "light");
     expect(getThemePreviewSidebarArtwork()).toBe(false);
     expect(listener).toHaveBeenCalledTimes(1);
 
@@ -355,11 +355,11 @@ describe("theme files", () => {
       canvas: canonical("#101827"),
       text: canonical("#eef5ff"),
     });
-    expect(getThemeModes(T3_CHAT_THEME)).toEqual(["light", "dark"]);
-    expect(resolveThemeAppearance(T3_CHAT_THEME.id, true, true)).toBe("dark");
-    expect(resolveDesktopTheme(T3_CHAT_THEME.id, true)).toBe("system");
-    expect(resolveThemeAppearance(T3_CHAT_THEME.id, false, false, "dark")).toBe("dark");
-    expect(resolveDesktopTheme(T3_CHAT_THEME.id, false, "dark")).toBe("dark");
+    expect(getThemeModes(Pathway_CHAT_THEME)).toEqual(["light", "dark"]);
+    expect(resolveThemeAppearance(Pathway_CHAT_THEME.id, true, true)).toBe("dark");
+    expect(resolveDesktopTheme(Pathway_CHAT_THEME.id, true)).toBe("system");
+    expect(resolveThemeAppearance(Pathway_CHAT_THEME.id, false, false, "dark")).toBe("dark");
+    expect(resolveDesktopTheme(Pathway_CHAT_THEME.id, false, "dark")).toBe("dark");
     expect(JSON.parse(serializeThemeFile(theme)).variants.dark).toMatchObject({
       canvas: canonical("#101827"),
       text: canonical("#eef5ff"),
@@ -367,7 +367,7 @@ describe("theme files", () => {
   });
 
   it("keeps the Pathway Chat palette faithful and readable", () => {
-    expectThemeColors(T3_CHAT_THEME.colors, {
+    expectThemeColors(Pathway_CHAT_THEME.colors, {
       canvas: "#fdf7fd",
       chrome: "#fdf7fd",
       toolbarBorder: "#efbdeb",
@@ -382,7 +382,7 @@ describe("theme files", () => {
       accentSurface: "#f3e6f5",
       sidebar: "#f2e1f4",
     });
-    expectThemeColors(T3_CHAT_THEME.variants!.dark!, {
+    expectThemeColors(Pathway_CHAT_THEME.variants!.dark!, {
       canvas: "#1f1a24",
       chrome: "#1f1a24",
       surface: "#29232d",
@@ -396,7 +396,7 @@ describe("theme files", () => {
     });
 
     for (const mode of ["light", "dark"] as const) {
-      const colors = getThemeColorsForMode(T3_CHAT_THEME, mode)!;
+      const colors = getThemeColorsForMode(Pathway_CHAT_THEME, mode)!;
       expect(contrastRatio(colors.text, colors.canvas)).toBeGreaterThanOrEqual(7);
       expect(contrastRatio(colors.textMuted, colors.canvas)).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(colors.messageForeground, colors.messageSurface)).toBeGreaterThanOrEqual(
@@ -411,7 +411,7 @@ describe("theme files", () => {
   });
 
   it("includes the dual-mode maintainer themes", () => {
-    for (const theme of [T3_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
+    for (const theme of [Pathway_CHAT_THEME, GROVE_THEME, OCEAN_THEME, EMBER_THEME, IRIS_THEME]) {
       expect(getThemeDefinition(theme.id)).toBe(theme);
       expect(getThemeModes(theme)).toEqual(["light", "dark"]);
       expect(theme.sidebarArtwork).toBe(true);
@@ -424,7 +424,7 @@ describe("theme files", () => {
         expect(colors).not.toBeNull();
         expect(contrastRatio(colors!.text, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
         expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeGreaterThanOrEqual(4.5);
-        if (theme !== T3_CHAT_THEME) {
+        if (theme !== Pathway_CHAT_THEME) {
           expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeLessThan(5.5);
           expect(contrastRatio(colors!.textMuted, colors!.canvas)).toBeCloseTo(
             mode === "dark" ? 5.082 : 4.705,
@@ -973,36 +973,38 @@ describe("stored theme preferences", () => {
     }
   });
 
-  it("resolves the legacy t3-chat-dark preference to dark Pathway Chat", () => {
-    expect(getThemeDefinition("t3-chat-dark")).toBe(T3_CHAT_THEME);
-    expect(getThemePreferenceMode("t3-chat-dark")).toBe("dark");
-    expect(resolveThemeAppearance("t3-chat-dark", true, false)).toBe("dark");
-    expect(resolveDesktopTheme("t3-chat-dark", false)).toBe("dark");
-    expect(isKnownThemePreference("t3-chat-dark")).toBe(true);
+  it("resolves the legacy pathway-chat-dark preference to dark Pathway Chat", () => {
+    expect(getThemeDefinition("pathway-chat-dark")).toBe(Pathway_CHAT_THEME);
+    expect(getThemePreferenceMode("pathway-chat-dark")).toBe("dark");
+    expect(resolveThemeAppearance("pathway-chat-dark", true, false)).toBe("dark");
+    expect(resolveDesktopTheme("pathway-chat-dark", false)).toBe("dark");
+    expect(isKnownThemePreference("pathway-chat-dark")).toBe(true);
   });
 
-  it("resolves legacy t3-prefixed ids onto the renamed themes", () => {
+  it("resolves legacy pathway-prefixed ids onto the renamed themes", () => {
     for (const [legacy, theme] of [
-      ["t3-grove", GROVE_THEME],
-      ["t3-ocean", OCEAN_THEME],
-      ["t3-ember", EMBER_THEME],
-      ["t3-iris", IRIS_THEME],
+      ["pathway-grove", GROVE_THEME],
+      ["pathway-ocean", OCEAN_THEME],
+      ["pathway-ember", EMBER_THEME],
+      ["pathway-iris", IRIS_THEME],
     ] as const) {
       expect(getThemeDefinition(legacy)).toBe(theme);
       expect(isKnownThemePreference(legacy)).toBe(true);
       expect(canonicalThemePreference(legacy)).toBe(theme.id);
     }
     // The dark-variant alias keeps its raw form: it still carries a mode hint.
-    expect(canonicalThemePreference("t3-chat-dark")).toBe("t3-chat-dark");
+    expect(canonicalThemePreference("pathway-chat-dark")).toBe("pathway-chat-dark");
     // A stored mix that predates the rename resolves to the new ids.
-    expect(parseThemeHalves(JSON.stringify({ light: "t3-ocean", dark: "t3-grove" }))).toEqual({
+    expect(
+      parseThemeHalves(JSON.stringify({ light: "pathway-ocean", dark: "pathway-grove" })),
+    ).toEqual({
       light: OCEAN_THEME.id,
       dark: GROVE_THEME.id,
     });
   });
 
   it("recognizes only preferences the runtime can render", () => {
-    for (const preference of ["light", "dark", "system", T3_CHAT_THEME.id, GROVE_THEME.id]) {
+    for (const preference of ["light", "dark", "system", Pathway_CHAT_THEME.id, GROVE_THEME.id]) {
       expect(isKnownThemePreference(preference)).toBe(true);
     }
     expect(isKnownThemePreference(`${GROVE_THEME.id}:dark`)).toBe(false);

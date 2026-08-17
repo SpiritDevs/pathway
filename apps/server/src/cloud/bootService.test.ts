@@ -55,7 +55,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-boot-service-test-" });
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-boot-service-test-" });
   const baseDir = path.join(home, ".pathway");
   const sourceLauncher = path.join(home, "service-launcher.mjs");
   const statePath = path.join(baseDir, "runtime", "service-state.json");
@@ -77,7 +77,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
         const command = `${input.command} ${input.args.join(" ")}`;
         commands.push(command);
         return {
-          stdout: input.args[1] === "--version" ? "t3 v1.2.3\n" : "",
+          stdout: input.args[1] === "--version" ? "pathway v1.2.3\n" : "",
           stderr: "",
           code: ChildProcessSpawner.ExitCode(command === control.failCommand ? 1 : 0),
           timedOut: false,

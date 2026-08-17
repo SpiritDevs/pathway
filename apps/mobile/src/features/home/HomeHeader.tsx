@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
-import { T3Wordmark } from "../../components/T3Wordmark";
+import { PathwayWordmark } from "../../components/PathwayWordmark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -218,12 +218,12 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               brand={
                 <View className="flex-row items-center gap-2">
                   {/* Mirrors the desktop SidebarBrand: Pathway mark + muted "Code". */}
-                  <T3Wordmark color={iconColor} height={15} />
-                  <RNText className="-ml-0.5 text-[21px] font-t3-medium tracking-[-0.5px] text-foreground-muted">
+                  <PathwayWordmark color={iconColor} height={15} />
+                  <RNText className="-ml-0.5 text-[21px] font-pathway-medium tracking-[-0.5px] text-foreground-muted">
                     Code
                   </RNText>
                   <View className="rounded-full bg-subtle px-2 py-0.75">
-                    <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
+                    <RNText className="text-[11px] font-pathway-bold tracking-[1.1px] text-foreground-muted uppercase">
                       {stageLabel}
                     </RNText>
                   </View>

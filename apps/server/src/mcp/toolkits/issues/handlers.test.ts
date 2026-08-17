@@ -116,7 +116,7 @@ const TestLayer = Layer.mergeAll(
   ),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issues-mcp-test-" })),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-issues-mcp-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 

@@ -102,6 +102,10 @@ interface InvitationCreateArgs extends ConvexArgs {
 
 export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
   listMine: queryReference<{}, ReadonlyArray<CurrentCompanySummary>>("companies:listMine"),
+  upgradeToOrganization: mutationReference<
+    { readonly companyId: CompanyId; readonly name: string },
+    CurrentCompanySummary
+  >("companies:upgradeToOrganization"),
   listInvitations: queryReference<
     { readonly companyId: CompanyId },
     ReadonlyArray<CompanyInvitationSummary>
@@ -221,6 +225,10 @@ export function mapCompanyAdminError(error: unknown): CompanyAdminError {
 
 export interface CompanyAdminClient {
   readonly listMine: () => Promise<ReadonlyArray<CurrentCompanySummary>>;
+  readonly upgradeToOrganization: (args: {
+    readonly companyId: CompanyId;
+    readonly name: string;
+  }) => Promise<void>;
   readonly listInvitations: (
     companyId: CompanyId,
   ) => Promise<ReadonlyArray<CompanyInvitationSummary>>;
@@ -302,6 +310,8 @@ export function makeCompanyAdminClient(options: {
 
   return {
     listMine: () => query(COMPANY_ADMIN_FUNCTION_REFERENCES.listMine, {}),
+    upgradeToOrganization: (args) =>
+      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.upgradeToOrganization, args),
     listInvitations: (companyId) =>
       query(COMPANY_ADMIN_FUNCTION_REFERENCES.listInvitations, { companyId }),
     createInvitation: (args) => action(COMPANY_ADMIN_FUNCTION_REFERENCES.createInvitation, args),

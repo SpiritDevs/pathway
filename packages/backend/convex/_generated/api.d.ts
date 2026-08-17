@@ -9,18 +9,17 @@
  */
 
 import type * as agentThreads from "../agentThreads.js";
-import type * as cloudProjects from "../cloudProjects.js";
 import type * as capturedEmails from "../capturedEmails.js";
+import type * as cloudProjects from "../cloudProjects.js";
 import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
 import type * as crons from "../crons.js";
-import type * as environmentCommands from "../environmentCommands.js";
 import type * as emailTags from "../emailTags.js";
+import type * as environmentCommands from "../environmentCommands.js";
 import type * as environments from "../environments.js";
 import type * as invitations from "../invitations.js";
 import type * as issueAttachments from "../issueAttachments.js";
 import type * as issueImport from "../issueImport.js";
-import type * as lib_capability from "../lib/capability.js";
 import type * as lib_companyApply from "../lib/companyApply.js";
 import type * as lib_domainIds from "../lib/domainIds.js";
 import type * as lib_errors from "../lib/errors.js";
@@ -40,18 +39,17 @@ import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server
 
 declare const fullApi: ApiFromModules<{
   agentThreads: typeof agentThreads;
-  cloudProjects: typeof cloudProjects;
   capturedEmails: typeof capturedEmails;
+  cloudProjects: typeof cloudProjects;
   companies: typeof companies;
   connectGrants: typeof connectGrants;
   crons: typeof crons;
-  environmentCommands: typeof environmentCommands;
   emailTags: typeof emailTags;
+  environmentCommands: typeof environmentCommands;
   environments: typeof environments;
   invitations: typeof invitations;
   issueAttachments: typeof issueAttachments;
   issueImport: typeof issueImport;
-  "lib/capability": typeof lib_capability;
   "lib/companyApply": typeof lib_companyApply;
   "lib/domainIds": typeof lib_domainIds;
   "lib/errors": typeof lib_errors;

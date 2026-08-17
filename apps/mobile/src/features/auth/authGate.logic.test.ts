@@ -7,6 +7,7 @@ const base = {
   isLoaded: true,
   isSignedIn: true as boolean | undefined,
   onboardingComplete: true as boolean | undefined,
+  workspaceValidation: "valid" as const,
 };
 
 describe("resolveMobileAuthGateState", () => {
@@ -57,5 +58,17 @@ describe("resolveMobileAuthGateState", () => {
 
   it("lets a completed profile through", () => {
     expect(resolveMobileAuthGateState(base)).toEqual("authenticated");
+  });
+
+  it("holds a completed profile until its workspace is validated", () => {
+    expect(resolveMobileAuthGateState({ ...base, workspaceValidation: "checking" })).toEqual(
+      "loading",
+    );
+  });
+
+  it("does not reset onboarding for a temporary validation failure", () => {
+    expect(resolveMobileAuthGateState({ ...base, workspaceValidation: "unavailable" })).toEqual(
+      "authenticated",
+    );
   });
 });

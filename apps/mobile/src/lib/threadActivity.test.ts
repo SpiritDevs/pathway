@@ -283,7 +283,7 @@ describe("buildThreadFeed", () => {
           runId: null,
           type: "source_control",
           committed: true,
-          pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+          pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
         },
         0,
       ),
@@ -418,9 +418,9 @@ describe("buildThreadFeed", () => {
 
   it("pretty prints Pathway MCP dynamic tool activities and attaches the product logo", () => {
     const toolItem: OrchestrationV2TurnItem = {
-      ...base("item-t3-tool", "2026-06-20T00:00:04.000Z", 3),
+      ...base("item-pathway-tool", "2026-06-20T00:00:04.000Z", 3),
       type: "dynamic_tool",
-      toolName: "mcp__pathway__t3_thread_read",
+      toolName: "mcp__pathway__pathway_thread_read",
       input: { threadId: "thread-child" },
       output: { messages: [] },
     };

@@ -131,7 +131,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   const environmentLayer = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
-    homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
+    homeDirectory: `/tmp/pathway-desktop-updates-home-${process.pid}`,
     platform: "darwin",
     processArch: "x64",
     appVersion: "1.2.3",
@@ -144,7 +144,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Layer.mergeAll(
         NodeServices.layer,
         DesktopConfig.layerTest({
-          PATHWAY_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+          PATHWAY_HOME: `/tmp/pathway-desktop-updates-test-${process.pid}`,
           PATHWAY_DESKTOP_MOCK_UPDATES: "true",
           PATHWAY_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
           ...options.env,
@@ -178,7 +178,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(settingsLayer),
     Layer.provideMerge(
       DesktopConfig.layerTest({
-        PATHWAY_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
+        PATHWAY_HOME: `/tmp/pathway-desktop-updates-test-${process.pid}`,
         PATHWAY_DESKTOP_MOCK_UPDATES: "true",
         PATHWAY_DESKTOP_MOCK_UPDATE_SERVER_PORT: "4141",
         ...options.env,

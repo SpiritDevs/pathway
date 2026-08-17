@@ -135,7 +135,7 @@ function categoryLabel(category: ResourceTelemetryProcessCategory): string {
       return "Electron utility";
     case "resource-monitor":
       return "Monitor";
-    case "unknown-t3":
+    case "unknown-pathway":
       return "Pathway process";
   }
 }
@@ -852,7 +852,7 @@ export function ResourceTelemetryDiagnostics() {
   primaryEnvironmentIdRef.current = primaryEnvironment?.environmentId;
   const [isRetrying, setIsRetrying] = useState(false);
   const snapshot = telemetry.data;
-  const allT3 = snapshot?.groups.allT3;
+  const allPathway = snapshot?.groups.allPathway;
 
   const signalProcess = useCallback(
     async (process: ResourceTelemetryProcess, signal: ServerProcessSignal) => {
@@ -1013,40 +1013,46 @@ export function ResourceTelemetryDiagnostics() {
             <IconStat
               icon={<CpuIcon className="size-3.5" />}
               label="Current CPU"
-              value={allT3 ? `${allT3.currentCpuPercent.toFixed(1)}%` : "..."}
-              detail={allT3 ? `${formatCpuTime(allT3.cpuTimeMs)} observed CPU time` : undefined}
+              value={allPathway ? `${allPathway.currentCpuPercent.toFixed(1)}%` : "..."}
+              detail={
+                allPathway ? `${formatCpuTime(allPathway.cpuTimeMs)} observed CPU time` : undefined
+              }
             />
             <IconStat
               icon={<MemoryStickIcon className="size-3.5" />}
               label="Resident memory"
-              value={allT3 ? formatBytes(allT3.currentRssBytes) : "..."}
+              value={allPathway ? formatBytes(allPathway.currentRssBytes) : "..."}
               detail={
-                allT3 ? `${formatBytes(allT3.peakRssBytes)} combined process peaks` : undefined
+                allPathway
+                  ? `${formatBytes(allPathway.peakRssBytes)} combined process peaks`
+                  : undefined
               }
             />
             <IconStat
               icon={<ActivityIcon className="size-3.5" />}
               label="Process count"
-              value={allT3 ? String(allT3.processCount) : "..."}
+              value={allPathway ? String(allPathway.processCount) : "..."}
               detail={
-                allT3 ? `${allT3.processStarts} starts · ${allT3.processExits} exits` : undefined
+                allPathway
+                  ? `${allPathway.processStarts} starts · ${allPathway.processExits} exits`
+                  : undefined
               }
             />
             <IconStat
               icon={<HardDriveIcon className="size-3.5" />}
               label="Read throughput"
-              value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioReadBytes)} observed` : undefined}
+              value={allPathway ? formatRate(allPathway.ioReadBytesPerSecond) : "..."}
+              detail={allPathway ? `${formatBytes(allPathway.ioReadBytes)} observed` : undefined}
             />
             <IconStat
               icon={<DatabaseIcon className="size-3.5" />}
               label="Write throughput"
-              value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioWriteBytes)} observed` : undefined}
+              value={allPathway ? formatRate(allPathway.ioWriteBytesPerSecond) : "..."}
+              detail={allPathway ? `${formatBytes(allPathway.ioWriteBytes)} observed` : undefined}
               tone={
-                allT3 && allT3.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
+                allPathway && allPathway.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
                   ? "danger"
-                  : allT3 && allT3.ioWriteBytesPerSecond >= 1_024 * 1_024
+                  : allPathway && allPathway.ioWriteBytesPerSecond >= 1_024 * 1_024
                     ? "warning"
                     : "default"
               }

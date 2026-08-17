@@ -16,7 +16,6 @@ import {
   CircleDotIcon,
   FileUpIcon,
   CalendarClockIcon,
-  CloudIcon,
   FolderIcon,
   GitBranchIcon,
   InboxIcon,
@@ -27,7 +26,6 @@ import {
   SearchIcon,
   ServerIcon,
   Settings2Icon,
-  ShieldIcon,
   TagsIcon,
   UsersIcon,
   WandSparklesIcon,
@@ -48,7 +46,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
-import { T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
+import { PathwayConnectSidebarSignIn } from "../clerk/PathwayConnectSidebarSignIn";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -67,9 +65,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/projects": FolderIcon,
-  "/settings/company-members": UsersIcon,
-  "/settings/company-teams": ShieldIcon,
-  "/settings/sync": CloudIcon,
+  "/settings/members-teams": UsersIcon,
   "/settings/environments": ServerIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
@@ -329,7 +325,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
-        <T3ConnectSidebarSignIn />
+        <PathwayConnectSidebarSignIn />
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handleBackClick}>

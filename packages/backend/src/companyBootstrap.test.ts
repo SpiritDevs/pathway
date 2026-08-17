@@ -36,7 +36,6 @@ import {
 } from "./sync/bootstrap.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -435,6 +434,7 @@ describe("sync.bootstrap over both domains", () => {
     expect(payloadFor("company", COMPANY_ID)).toMatchObject({
       id: COMPANY_ID,
       name: "Bootstrap Co",
+      workspaceKind: "organization",
       owners: [{ membershipId: OWNER_MEMBERSHIP_ID, grantedByMembershipId: null }],
     });
     expect(kindsOf(seedResult.entities)).not.toContain("companyOwner");

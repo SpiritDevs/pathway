@@ -13,7 +13,7 @@ import {
 } from "react";
 import { isElectron } from "../../env";
 import { cn, isMacPlatform } from "../../lib/utils";
-import { T3ConnectProfileButton } from "../clerk/T3ConnectSidebarSignIn";
+import { PathwayConnectProfileButton } from "../clerk/PathwayConnectSidebarSignIn";
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -198,7 +198,7 @@ export function WorkspaceTopBar() {
       <WorkspaceHistoryControls />
       <div className="flex items-center gap-2">
         <SyncStatusIndicator />
-        <T3ConnectProfileButton />
+        <PathwayConnectProfileButton />
       </div>
     </header>
   );

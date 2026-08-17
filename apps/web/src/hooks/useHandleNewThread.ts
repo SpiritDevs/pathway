@@ -30,7 +30,7 @@ import {
 import { resolveDefaultThreadEnvMode } from "@spiritdevs/shared/threadEnvMode";
 import { readThreadShell, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
-import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
+import { readPathwayProjectFileDefaultThreadEnvMode } from "../lib/pathwayProjectFileDefaults";
 import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
@@ -145,11 +145,11 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
-      // The shared resolver owns the priority order. The t3.json read is
+      // The shared resolver owns the priority order. The pathway.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
-        // t3.json is read out of the project directory; a rootless project has none to read.
+        // pathway.json is read out of the project directory; a rootless project has none to read.
         const consultProjectFile =
           project !== undefined &&
           project.defaultThreadEnvMode == null &&
@@ -157,7 +157,7 @@ export function useNewThreadHandler() {
         return resolveDefaultThreadEnvMode({
           projectSetting: project?.defaultThreadEnvMode,
           projectFile: consultProjectFile
-            ? await readT3ProjectFileDefaultThreadEnvMode(
+            ? await readPathwayProjectFileDefaultThreadEnvMode(
                 project.environmentId,
                 project.workspaceRoot,
               )

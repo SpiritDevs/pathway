@@ -19,13 +19,29 @@ After your email is confirmed, a short setup walks you through:
 3. **A few details** — for companies: the company name, size, and your role. For individuals:
    which coding agents you use today and how you heard about us. All of it is skippable.
 
+Pathway creates a workspace for either choice. An individual workspace has the same projects,
+threads, environments, sync, issues, providers, schedules, source control, and usage features as a
+company workspace. Its **Members & Teams** page explains the collaboration features and can upgrade
+the workspace to a company without moving or recreating any work.
+
+A company workspace adds invitations, member administration, teams, and role management. Pathway
+keeps the membership and service permissions needed for sync and environments internally for an
+individual workspace; they do not require separate setup.
+
 Setup remembers where you were. If you close the app partway through — even if you continue on a
 different computer — it resumes at the step you left.
 
 ## Signing in on another device
 
 Use the same email and password anywhere. Your name and photo follow your account
-automatically.
+automatically. When you sign in through a new Pathway environment, Pathway registers that
+environment with your active workspace automatically. You do not need to register it separately in
+Settings. It also sets up Pathway Connect and activity publishing automatically; if the managed
+relay client is missing, Pathway installs it as part of that setup.
+
+If Pathway Connect cannot establish the tunnel, Pathway tries five times and then stops so it does
+not keep retrying in the background. Open this device from **Settings** → **Environments** to see
+the last connection error and choose **Try reconnecting** for one fresh attempt.
 
 ## Forgot your password?
 

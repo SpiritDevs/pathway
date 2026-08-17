@@ -17,7 +17,6 @@ import { checkOwnershipChange } from "../src/ownership.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import {
   appendCompanyChanges,
   encodeMembership,
@@ -28,6 +27,7 @@ import { backendError } from "./lib/errors.ts";
 import {
   actorRecord,
   requireCompanyActor,
+  requireOrganizationWorkspace,
   requirePermission,
   type CompanyActor,
 } from "./lib/identity.ts";
@@ -55,7 +55,6 @@ export const list = query({
   args: { companyId: domainIdArg },
   returns: v.array(membershipSummary),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "members.read");
 
@@ -115,8 +114,8 @@ export const setState = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "members.manage");
     await assertNotLastActiveOwner(ctx, actor, args.membershipId, args.state === "locked");
 
@@ -161,8 +160,8 @@ export const remove = mutation({
   args: { companyId: domainIdArg, membershipId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "members.manage");
     await assertNotLastActiveOwner(ctx, actor, args.membershipId, true);
     const membership = await membershipInCompany(ctx, actor.company._id, args.membershipId);
@@ -176,8 +175,8 @@ export const leave = mutation({
   args: { companyId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     if (actor.kind !== "member") {
       throw backendError("invalid-arguments", "An environment cannot leave a company.");
     }

@@ -27,7 +27,7 @@ const decodeAcpRegistryAdapterSettings = Schema.decodeUnknownEffect(
 );
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-acp-registry-v2-adapter-",
+  prefix: "pathway-acp-registry-v2-adapter-",
 }).pipe(Layer.provide(NodeServices.layer));
 
 const registryLayer = Layer.succeed(
@@ -112,7 +112,7 @@ describe("AcpRegistryAdapterV2", () => {
         instanceId,
         settings,
         environment: {
-          T3_ACP_SESSION_LIFECYCLE: "1",
+          Pathway_ACP_SESSION_LIFECYCLE: "1",
         },
         childProcessSpawner,
         fileSystem,

@@ -29,7 +29,6 @@ import { hashInvitationToken, INVITATION_TTL_MS } from "./invitations.ts";
 import type { PermissionKey } from "./permissions.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -306,6 +305,20 @@ async function feedRows(t: ReturnType<typeof harness>) {
       }));
   });
 }
+
+describe("personal workspace collaboration guard", () => {
+  it("keeps invitation reads available but refuses to create an invitation", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seeded.companyDocId, { workspaceKind: "personal" });
+    });
+
+    expect(await asOwner(t).query(api.invitations.list, { companyId: COMPANY_ID })).toEqual([]);
+    await expect(invite(t)).rejects.toThrow("Upgrade this personal workspace to an organization");
+    expect(sent).toEqual([]);
+  });
+});
 
 describe("invitation lifecycle", () => {
   it("creates, delivers, accepts, and folds the whole join into one feed run", async () => {

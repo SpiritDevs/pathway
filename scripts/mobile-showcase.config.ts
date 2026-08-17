@@ -69,7 +69,7 @@ export function resolveShowcaseAndroidAbi(
     return value as NonNullable<ShowcaseAndroidDevice["abi"]>;
   }
   throw new Error(
-    `Unsupported T3_SHOWCASE_ANDROID_ABI '${value}'. Use ${ANDROID_ABIS.join(", ")}.`,
+    `Unsupported Pathway_SHOWCASE_ANDROID_ABI '${value}'. Use ${ANDROID_ABIS.join(", ")}.`,
   );
 }
 
@@ -141,7 +141,7 @@ const config: ShowcaseConfig = {
       avd: "Pixel_10_Pro",
       // Apple Silicon uses ARM64 locally; CI overrides this with x86_64 so its
       // Blacksmith Linux runner can use KVM acceleration.
-      abi: resolveShowcaseAndroidAbi(process.env.T3_SHOWCASE_ANDROID_ABI),
+      abi: resolveShowcaseAndroidAbi(process.env.Pathway_SHOWCASE_ANDROID_ABI),
       appearance: "dark",
       viewport: {
         width: 1080,
@@ -163,7 +163,7 @@ const config: ShowcaseConfig = {
       id: "android-tablet-7",
       platform: "android",
       avd: "Pixel_10_Pro",
-      abi: resolveShowcaseAndroidAbi(process.env.T3_SHOWCASE_ANDROID_ABI),
+      abi: resolveShowcaseAndroidAbi(process.env.Pathway_SHOWCASE_ANDROID_ABI),
       appearance: "dark",
       viewport: {
         width: 1080,
@@ -185,7 +185,7 @@ const config: ShowcaseConfig = {
       id: "android-tablet-10",
       platform: "android",
       avd: "Pixel_10_Pro",
-      abi: resolveShowcaseAndroidAbi(process.env.T3_SHOWCASE_ANDROID_ABI),
+      abi: resolveShowcaseAndroidAbi(process.env.Pathway_SHOWCASE_ANDROID_ABI),
       appearance: "dark",
       viewport: {
         width: 1440,

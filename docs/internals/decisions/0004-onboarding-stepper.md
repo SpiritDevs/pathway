@@ -43,6 +43,18 @@ reachable without a completed profile. A signed-in user with a completed profile
 Only the display name is required. Avatar, company detail, and the survey questions are skippable
 with a visible control.
 
+**Workspace provisioning.** Completing the branch provisions the initial Convex tenant before the
+gate opens: Individual creates a personal workspace; Company creates or upgrades that same
+workspace to an organization and applies the entered name. The cloud-sync startup path may repair
+bootstrap rows for an existing workspace, but it cannot create one. Onboarding therefore does not
+depend on winning a sync-leader election. Web, desktop, and mobile follow the same ordering.
+
+For accounts created before workspace provisioning became part of onboarding, the authenticated
+gate validates `companies.listMine` before admitting the app. A successful empty result removes the
+stored account-kind and completion marker and resumes at the account-kind card. Transport, token,
+and configuration failures never mutate Clerk metadata, so a transient outage cannot erase a
+completed profile.
+
 **Resumability.** Step state is written to `unsafeMetadata` as it is completed, not batched at the
 end, so a refresh, crash, or device switch resumes in place. Because the state is on the Clerk
 user, resumption crosses devices for free ([0003](0003-profile-in-clerk-user.md)).

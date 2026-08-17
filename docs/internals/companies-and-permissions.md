@@ -13,9 +13,16 @@ A company is the tenancy boundary. Every cloud project, issue, workflow, integra
 registration, and sync version belongs to exactly one company. A user may hold memberships in any
 number of companies and may join any number of teams in each.
 
-The first successful sign-in creates an ordinary one-member company. It can be renamed, add teams,
-and invite members. There is no separate personal workspace type whose behavior can drift from the
-company model.
+The first successful sign-in creates an ordinary one-member tenant with
+`workspaceKind: "personal"`. Choosing Company during onboarding, or upgrading later from
+**Members & Teams**, changes that same tenant to `"organization"`. It can then be renamed, add
+teams, and invite members.
+
+This discriminator changes product presentation and which collaboration administration actions
+are offered; it does not create a second storage or authorization model. Personal workspaces still
+have their founding membership, ownership grant, and seeded roles because attribution, sync, and
+environment service identities depend on them. Projects, issues, environments, integrations, and
+the sync feed follow the same company id in both modes.
 
 The authoritative entities are:
 

@@ -1,12 +1,12 @@
 # Design QA
 
-- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-4e89e404-4909-4057-9e34-b6530ea46589.png`
+- Source visual truth: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-4e89e404-4909-4057-9e34-b6530ea46589.png`
 - Source pixels: 3360 x 1940 at the supplied Retina density.
-- Before implementation: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-b8f74ff7-d389-450b-b680-d915305963b8.png`
+- Before implementation: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-b8f74ff7-d389-450b-b680-d915305963b8.png`
 - Before pixels: 3278 x 2030 at the supplied Retina density.
-- Dropdown source crop: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-bc145573-bd64-402a-87d6-17d1591e348c.png`
+- Dropdown source crop: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-bc145573-bd64-402a-87d6-17d1591e348c.png`
 - Dropdown source pixels: 964 x 650 at the supplied Retina density.
-- Dropdown before implementation: `/Users/coreybaines/.t3/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-6a3c5da8-e5a0-448d-a287-35a7a35ffd1b.png`
+- Dropdown before implementation: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-6a3c5da8-e5a0-448d-a287-35a7a35ffd1b.png`
 - Dropdown before pixels: 3272 x 2024 at the supplied Retina density.
 - Target implementation: `apps/web/src/components/issues/NewIssueDialog.tsx`
 - Target state: desktop new-issue modal, open with default properties and no attachments.

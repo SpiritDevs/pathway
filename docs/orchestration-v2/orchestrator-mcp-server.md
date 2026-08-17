@@ -243,21 +243,21 @@ inherit the parent's project, branch, and worktree path, but they have no
 sub-agent lineage. Entries with a prompt immediately dispatch a run; entries
 without a prompt remain idle.
 
-### `t3_thread_start`
+### `pathway_thread_start`
 
 Creates one ordinary top-level thread and immediately dispatches its first
 prompt. It is the single-thread convenience form of `create_threads` and
 returns the created thread and run IDs. Use `clientRequestId` when a caller may
 retry the request.
 
-### `t3_thread_list`
+### `pathway_thread_list`
 
 Lists durable thread shells in the calling thread's project, newest first.
 Callers can filter by title, run status, and whether app-owned sub-agent threads
 are included. Results are bounded and offset-paginated. Deleted threads and
 threads from other projects are never exposed.
 
-### `t3_thread_read`
+### `pathway_thread_read`
 
 Reads a project-scoped thread's durable state, recent runs, and visible
 timeline. The default `messages` view returns user messages, assistant
@@ -272,7 +272,7 @@ and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
 
-### `t3_thread_send`
+### `pathway_thread_send`
 
 Sends a message to an ordinary or delegated thread in the calling project:
 
@@ -287,14 +287,14 @@ The target runtime and interaction modes may not be broader than the caller's.
 Stable command and message IDs are derived from `clientRequestId` for
 idempotent retries.
 
-### `t3_thread_wait`
+### `pathway_thread_wait`
 
 Waits for a selected run to become `completed`, `failed`, `cancelled`,
 `interrupted`, or `rolled_back`. Without `runId`, it pins the latest run at call
 time; an idle thread returns immediately. A timeout reports the latest durable
 status and does not cancel work.
 
-### `t3_thread_interrupt`
+### `pathway_thread_interrupt`
 
 Interrupts a selected active run through the normal V2 `run.interrupt` command.
 Without `runId`, it selects the newest interruptible run. A terminal run is

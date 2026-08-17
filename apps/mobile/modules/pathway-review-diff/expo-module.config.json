@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["PathwayReviewDiffModule"],
+    "podspecPath": "PathwayReviewDiffNative.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.pathwayreviewdiff.PathwayReviewDiffModule"]
+  }
+}

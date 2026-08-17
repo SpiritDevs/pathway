@@ -280,6 +280,7 @@ describe("company-domain change payloads", () => {
     const company = decodeCompany({
       id: header.companyId,
       name: "Spirit Devs",
+      workspaceKind: "organization",
       issueKeyPrefix: "PAT",
       lifecycleState: "active",
       deletionScheduledAt: null,
@@ -289,6 +290,19 @@ describe("company-domain change payloads", () => {
       updatedAt: 2_000,
     });
     expect(company.owners.map((owner) => owner.membershipId)).toEqual([OWNER]);
+    expect(
+      decodeCompany({
+        id: header.companyId,
+        name: "Legacy Company",
+        issueKeyPrefix: "PAT",
+        lifecycleState: "active",
+        deletionScheduledAt: null,
+        purgeAfter: null,
+        owners: [],
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      }).workspaceKind,
+    ).toBe("organization");
     // `syncVersion`, `authorizationEpoch`, and `nextIssueNumber` are protocol and lease state, not
     // administered fields: they arrive on `sync.latestVersion` and would be stale here.
     expect(Object.keys(SyncCompanyPayload.fields).sort()).toEqual([
@@ -301,6 +315,7 @@ describe("company-domain change payloads", () => {
       "owners",
       "purgeAfter",
       "updatedAt",
+      "workspaceKind",
     ]);
   });
 
@@ -308,6 +323,7 @@ describe("company-domain change payloads", () => {
     const scheduled = decodeCompany({
       id: header.companyId,
       name: "Spirit Devs",
+      workspaceKind: "personal",
       issueKeyPrefix: "PAT",
       lifecycleState: "deletionScheduled",
       deletionScheduledAt: 5_000,
@@ -321,6 +337,7 @@ describe("company-domain change payloads", () => {
       decodeCompany({
         id: header.companyId,
         name: "Spirit Devs",
+        workspaceKind: "organization",
         issueKeyPrefix: "pat-1",
         lifecycleState: "active",
         deletionScheduledAt: null,

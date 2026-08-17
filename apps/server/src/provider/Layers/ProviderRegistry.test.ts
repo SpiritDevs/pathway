@@ -879,7 +879,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               Layer.provideMerge(instanceRegistryLayer),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-background-refresh-",
+                  prefix: "pathway-provider-registry-background-refresh-",
                 }),
               ),
               Layer.provideMerge(NodeServices.layer),
@@ -1034,7 +1034,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               Layer.provideMerge(instanceRegistryLayer),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-merged-persist-",
+                  prefix: "pathway-provider-registry-merged-persist-",
                 }),
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
@@ -1163,7 +1163,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 Layer.provideMerge(instanceRegistryLayer),
                 Layer.provideMerge(
                   ServerConfig.layerTest(process.cwd(), {
-                    prefix: "t3-provider-registry-opencode-authoritative-persist-",
+                    prefix: "pathway-provider-registry-opencode-authoritative-persist-",
                   }),
                 ),
                 Layer.provideMerge(NodeServices.layer),
@@ -1270,7 +1270,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               Layer.provideMerge(instanceRegistryLayer),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-refresh-failure-",
+                  prefix: "pathway-provider-registry-refresh-failure-",
                 }),
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
@@ -1378,7 +1378,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               Layer.provideMerge(instanceRegistryLayer),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-sync-failure-",
+                  prefix: "pathway-provider-registry-sync-failure-",
                 }),
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
@@ -1475,7 +1475,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ),
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-",
+                prefix: "pathway-provider-registry-",
               }),
             ),
             Layer.provideMerge(TestHttpClientLive),
@@ -1568,7 +1568,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ),
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-",
+                prefix: "pathway-provider-registry-",
               }),
             ),
             Layer.provideMerge(TestHttpClientLive),
@@ -1690,7 +1690,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ),
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-",
+                prefix: "pathway-provider-registry-",
               }),
             ),
             Layer.provideMerge(TestHttpClientLive),
@@ -1752,7 +1752,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
               Layer.provideMerge(
                 ServerConfig.layerTest(process.cwd(), {
-                  prefix: "t3-provider-registry-",
+                  prefix: "pathway-provider-registry-",
                 }),
               ),
               Layer.provideMerge(TestHttpClientLive),

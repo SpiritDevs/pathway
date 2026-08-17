@@ -786,7 +786,7 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
   const tool = yield* resolveIconComposerTool();
   const temporaryDirectory = yield* fs
     .makeTempDirectoryScoped({
-      prefix: "t3-icon-export-",
+      prefix: "pathway-icon-export-",
     })
     .pipe(
       Effect.mapError(

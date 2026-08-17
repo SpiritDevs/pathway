@@ -87,7 +87,7 @@ describe("CodexSessionRuntime collab integration", () => {
         binaryPath: peerPath,
         cwd: "/tmp",
         runtimeMode: "full-access",
-        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        environment: { ...process.env, Pathway_CODEX_COLLAB_SCRIPT: scriptPath },
       });
 
       const eventsFiber = yield* runtime.events.pipe(
@@ -200,7 +200,7 @@ describe("CodexSessionRuntime collab integration", () => {
         binaryPath: peerPath,
         cwd: "/tmp",
         runtimeMode: "full-access",
-        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        environment: { ...process.env, Pathway_CODEX_COLLAB_SCRIPT: scriptPath },
       });
 
       // Wait for both children's turnStarted signals to be processed before
@@ -274,7 +274,7 @@ describe("CodexSessionRuntime collab integration", () => {
         binaryPath: peerPath,
         cwd: "/tmp",
         runtimeMode: "full-access",
-        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        environment: { ...process.env, Pathway_CODEX_COLLAB_SCRIPT: scriptPath },
       });
 
       yield* runtime.start();

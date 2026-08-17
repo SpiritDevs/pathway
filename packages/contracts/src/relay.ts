@@ -136,7 +136,7 @@ export type RelayAgentActivityAggregateState = typeof RelayAgentActivityAggregat
 export const RelayManagedEndpointProviderKind = Schema.Literals([
   "manual",
   "cloudflare_tunnel",
-  "t3_relay",
+  "pathway_relay",
 ]);
 export type RelayManagedEndpointProviderKind = typeof RelayManagedEndpointProviderKind.Type;
 
@@ -682,11 +682,11 @@ export const RelayDpopTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
 export const RelayJwtSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt" as const;
 export const RelayAccessTokenType = "urn:ietf:params:oauth:token-type:access_token" as const;
-export const RelayPublicClientId = Schema.Literals(["t3-mobile", "t3-web"]);
+export const RelayPublicClientId = Schema.Literals(["pathway-mobile", "pathway-web"]);
 export type RelayPublicClientId = typeof RelayPublicClientId.Type;
-export const RelayMobileClientId = "t3-mobile" as const;
-export const RelayWebClientId = "t3-web" as const;
-export const RelayEnvironmentClientId = "t3-env" as const;
+export const RelayMobileClientId = "pathway-mobile" as const;
+export const RelayWebClientId = "pathway-web" as const;
+export const RelayEnvironmentClientId = "pathway-env" as const;
 export const RelayDpopClientId = Schema.Literals([
   RelayMobileClientId,
   RelayWebClientId,
@@ -727,7 +727,7 @@ export type RelayDpopAccessTokenResponse = typeof RelayDpopAccessTokenResponse.T
  * proof key to receive a relay access token.
  */
 export const RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP =
-  "t3-env-relay-access-assertion+jwt" as const;
+  "pathway-env-relay-access-assertion+jwt" as const;
 
 export const RelayEnvironmentDpopAccessAssertionPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
@@ -736,7 +736,7 @@ export const RelayEnvironmentDpopAccessAssertionPayload = Schema.Struct({
   jkt: TrimmedNonEmptyString,
 }).annotate({
   description:
-    "Claims of an environment-signed relay access assertion. `iss` is `t3-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
+    "Claims of an environment-signed relay access assertion. `iss` is `pathway-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
 });
 export type RelayEnvironmentDpopAccessAssertionPayload =
   typeof RelayEnvironmentDpopAccessAssertionPayload.Type;
@@ -768,7 +768,7 @@ export const RelayConvexAudience = "pathway-convex" as const;
 export const RelayConvexControlPlaneSubject = "pathway-relay" as const;
 export const RelayConvexControlPlaneTokenKind = "relay-control-plane" as const;
 
-// RFC 8693 subject-token type for the opaque `t3env_…` credential a linked
+// RFC 8693 subject-token type for the opaque `pathwayenv_…` credential a linked
 // environment already holds. It is relay-specific, so it uses a relay URN rather
 // than one of the IETF-registered token types.
 export const RelayEnvironmentCredentialTokenType =
@@ -779,7 +779,7 @@ export const RelayEnvironmentCredentialTokenType =
  * exchange may bind. Lives here rather than in `@spiritdevs/shared/relayJwt`
  * because it is only ever produced and consumed alongside this request shape.
  */
-export const RELAY_CONVEX_KEY_BINDING_TYP = "t3-env-convex-key-binding+jwt" as const;
+export const RELAY_CONVEX_KEY_BINDING_TYP = "pathway-env-convex-key-binding+jwt" as const;
 
 /**
  * Signed by the environment's link key, which the relay stored when the
@@ -795,7 +795,7 @@ export const RelayConvexKeyBindingPayload = Schema.Struct({
   jkt: TrimmedNonEmptyString,
 }).annotate({
   description:
-    "Claims of an environment-signed Convex key-binding assertion. `iss` is `t3-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
+    "Claims of an environment-signed Convex key-binding assertion. `iss` is `pathway-env:<environmentId>`, `aud` the relay issuer, `sub` the environment ID, and `jkt` the DPoP proof-key thumbprint the exchange may bind.",
 });
 export type RelayConvexKeyBindingPayload = typeof RelayConvexKeyBindingPayload.Type;
 

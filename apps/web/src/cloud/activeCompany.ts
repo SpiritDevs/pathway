@@ -1,5 +1,5 @@
 import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
-import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { CompanyId, WorkspaceKind } from "@spiritdevs/contracts/company";
 import { Atom } from "effect/unstable/reactivity";
 
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
@@ -8,6 +8,7 @@ import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 export interface ActiveCompanyRow {
   readonly id: CompanyId;
   readonly name: string;
+  readonly workspaceKind: WorkspaceKind;
   readonly issueKeyPrefix: string;
 }
 
@@ -88,6 +89,7 @@ function ambientLocalStorage(): ActiveCompanyStorage | null {
 function isReplicaCompanyEntity(value: unknown): value is {
   readonly entityKind: "company";
   readonly name: string;
+  readonly workspaceKind?: unknown;
   readonly issueKeyPrefix: string;
 } {
   return (
@@ -109,7 +111,12 @@ export function companyRowsFromRegistryReplicas(
   for (const [companyId, replica] of replicas) {
     for (const entity of replica.view.values()) {
       if (!isReplicaCompanyEntity(entity)) continue;
-      companies.push({ id: companyId, name: entity.name, issueKeyPrefix: entity.issueKeyPrefix });
+      companies.push({
+        id: companyId,
+        name: entity.name,
+        workspaceKind: entity.workspaceKind === "personal" ? "personal" : "organization",
+        issueKeyPrefix: entity.issueKeyPrefix,
+      });
       break;
     }
   }
@@ -126,6 +133,7 @@ function sameCompanyRows(
       (company, index) =>
         company.id === next[index]?.id &&
         company.name === next[index]?.name &&
+        company.workspaceKind === next[index]?.workspaceKind &&
         company.issueKeyPrefix === next[index]?.issueKeyPrefix,
     )
   );

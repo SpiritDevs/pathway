@@ -202,6 +202,9 @@ export async function encodeCompany(ctx: QueryCtx, company: Doc<"companies">): P
   return {
     id: company.id,
     name: company.name,
+    // A missing kind identifies a pre-workspace row. Those were collaboration-capable companies,
+    // so treating them as organizations preserves their existing surface until lazy repair.
+    workspaceKind: company.workspaceKind ?? "organization",
     issueKeyPrefix: company.issueKeyPrefix,
     lifecycleState: company.lifecycleState,
     deletionScheduledAt: company.deletionScheduledAt,

@@ -61,7 +61,7 @@ authenticated.
 - `vp run typecheck`: Strict TypeScript checks for all packages.
 - `vp run test`: Runs workspace tests.
 - `vp run lint:mobile`: Mobile native static analysis (`scripts/mobile-native-static-check.ts`).
-- `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
+- `node apps/server/scripts/pathway-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated Pathway SQLite database; writes create a private backup first.
 
 ## Desktop artifacts
@@ -80,7 +80,7 @@ authenticated.
 - The DMG build uses `assets/prod/pathway-macos-1024.png` as the production app icon source.
 - Desktop production windows load the bundled UI from the `pathway://app/` root URL (not a
   `127.0.0.1` document URL, and not an explicit `index.html` path).
-- Desktop packaging includes `apps/server/dist` (the `t3` backend) and starts it on loopback with an
+- Desktop packaging includes `apps/server/dist` (the `pathway` backend) and starts it on loopback with an
   auth token for WebSocket/API traffic.
 - Your tester can still open it on macOS by right-clicking the app and choosing **Open** on first
   launch.

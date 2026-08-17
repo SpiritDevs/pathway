@@ -21,7 +21,7 @@ const snapshot: PreviewSessionSnapshot = {
   tabId: "tab-1",
   navStatus: {
     _tag: "Loading",
-    url: "https://t3.chat/",
+    url: "https://pathway.chat/",
     title: "",
   },
   canGoBack: false,
@@ -56,12 +56,12 @@ describe("openPreviewSession", () => {
     await openPreviewSession({
       openPreview: ({ input }) => open(input),
       threadRef,
-      url: "t3.chat",
+      url: "pathway.chat",
     });
 
-    expect(open).toHaveBeenCalledWith({ threadId: "thread-1", url: "t3.chat" });
+    expect(open).toHaveBeenCalledWith({ threadId: "thread-1", url: "pathway.chat" });
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(snapshot);
-    expect(readThreadPreviewState(threadRef).recentlySeenUrls).toEqual(["https://t3.chat/"]);
+    expect(readThreadPreviewState(threadRef).recentlySeenUrls).toEqual(["https://pathway.chat/"]);
   });
 
   it("returns failures without mutating preview state", async () => {
@@ -70,7 +70,7 @@ describe("openPreviewSession", () => {
     const result = await openPreviewSession({
       openPreview: async () => AsyncResult.failure(Cause.fail(failure)),
       threadRef,
-      url: "t3.chat",
+      url: "pathway.chat",
     });
 
     expect(result._tag).toBe("Failure");

@@ -116,7 +116,7 @@ export const makeMailSqliteLayer = Effect.fn("EmailSqlite.makeMailSqliteLayer")(
       filename,
       spanAttributes: {
         "db.name": path.basename(filename),
-        "service.name": "t3-email-capture",
+        "service.name": "pathway-email-capture",
       },
     }),
   );

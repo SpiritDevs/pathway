@@ -13,7 +13,6 @@ import schema from "../convex/schema.ts";
 import { encodeBootstrapCursor } from "./sync/bootstrap.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),

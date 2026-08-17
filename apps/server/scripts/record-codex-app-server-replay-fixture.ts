@@ -55,10 +55,10 @@ import { codexReplayRecordingOutputRecords } from "./codexReplayRecordingRecords
 import { makeReplayRecorderDeferredRegistry } from "./replayRecorderDeferredRegistry.ts";
 
 const CODEX_REPLAY_PLAN_MODE_DEVELOPER_INSTRUCTIONS =
-  process.env.T3_CODEX_REPLAY_PLAN_DEVELOPER_INSTRUCTIONS ??
+  process.env.Pathway_CODEX_REPLAY_PLAN_DEVELOPER_INSTRUCTIONS ??
   "You are in Plan mode. Prefer request_user_input for clarifying questions. When presenting a complete plan, wrap it in <proposed_plan> and </proposed_plan>.";
 const CODEX_CLIENT_INFO = {
-  name: "t3code_desktop",
+  name: "pathway_desktop",
   title: "Pathway Desktop",
   version: "0.1.0",
 } as const;
@@ -185,7 +185,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseScenarios(): ReadonlyArray<ScenarioName> {
   const rawValues = [
     ...readArgValues("--scenario"),
-    ...(process.env.T3_CODEX_REPLAY_SCENARIOS ? [process.env.T3_CODEX_REPLAY_SCENARIOS] : []),
+    ...(process.env.Pathway_CODEX_REPLAY_SCENARIOS
+      ? [process.env.Pathway_CODEX_REPLAY_SCENARIOS]
+      : []),
   ];
   const requested = rawValues.length > 0 ? rawValues : ["simple"];
   const names = requested.flatMap((value) =>
@@ -952,7 +954,7 @@ function makeCodexLayer({ recorder }: { readonly recorder: Recorder }) {
     Effect.gen(function* () {
       const environment = yield* HostProcessEnvironment;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const commandName = environment.T3_CODEX_BIN ?? environment.CODEX_BIN ?? "codex";
+      const commandName = environment.Pathway_CODEX_BIN ?? environment.CODEX_BIN ?? "codex";
       const spawnCommand = yield* resolveSpawnCommand(commandName, ["app-server"], {
         env: environment,
       });
@@ -1281,15 +1283,17 @@ const program = Effect.gen(function* () {
   const path = yield* Path.Path;
   const requestedScenarios = parseScenarios();
   const allScenarios = scenarios();
-  const outDir = readArgValue("--out-dir") ?? process.env.T3_CODEX_REPLAY_OUT_DIR;
-  const singleOutPath = readArgValue("--out") ?? process.env.T3_CODEX_REPLAY_OUT;
+  const outDir = readArgValue("--out-dir") ?? process.env.Pathway_CODEX_REPLAY_OUT_DIR;
+  const singleOutPath = readArgValue("--out") ?? process.env.Pathway_CODEX_REPLAY_OUT;
   const selected = allScenarios.filter((scenario) => requestedScenarios.includes(scenario.name));
 
   if (selected.length === 0) {
     throw new Error("No replay scenarios selected.");
   }
   if (singleOutPath && selected.length !== 1) {
-    throw new Error("--out / T3_CODEX_REPLAY_OUT can only be used with exactly one --scenario.");
+    throw new Error(
+      "--out / Pathway_CODEX_REPLAY_OUT can only be used with exactly one --scenario.",
+    );
   }
 
   yield* Effect.forEach(

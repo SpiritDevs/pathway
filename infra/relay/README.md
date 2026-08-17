@@ -9,7 +9,7 @@ optional mobile notifications and Live Activities.
 
 The relay is intentionally not in the hot path for normal Pathway traffic. After a client connects,
 regular API and WebSocket traffic goes directly between that client and the selected environment.
-See the [Pathway Connect architecture overview](../../docs/internals/t3-code-connect-auth-flow.html) for the larger system
+See the [Pathway Connect architecture overview](../../docs/internals/pathway-connect-auth-flow.html) for the larger system
 design.
 
 ## Responsibilities
@@ -28,9 +28,9 @@ The environment server and relay have separate credentials and trust boundaries.
 [Environment Authentication Profile](../../docs/internals/environment-auth.md) before changing token,
 credential, or authorization behavior.
 
-DPoP relay tokens have three client identities with separate allowlists: `t3-web` may request
-`environment:connect` and `environment:status`; `t3-mobile` additionally may request
-`mobile:registration`; and `t3-env` may request only `environment:connect`. The `t3-env` exchange
+DPoP relay tokens have three client identities with separate allowlists: `pathway-web` may request
+`environment:connect` and `environment:status`; `pathway-mobile` additionally may request
+`mobile:registration`; and `pathway-env` may request only `environment:connect`. The `pathway-env` exchange
 authenticates an assertion signed by an active environment-link Ed25519 key and binds the resulting
 environment-subject token to the request's DPoP key. An environment-subject connect always requires
 a validated Convex connect grant and cannot target itself.
@@ -42,6 +42,8 @@ path cannot create an uncounted tunnel or use a target without a managed allocat
 ## Code Map
 
 - [`alchemy.run.ts`](./alchemy.run.ts) defines the deployed Alchemy stack.
+- [`src/gateway.ts`](./src/gateway.ts) answers browser preflights without loading the full relay and
+  forwards other requests through a private Worker service binding.
 - [`src/worker.ts`](./src/worker.ts) wires Cloudflare bindings, runtime layers, queues, and HTTP APIs.
 - [`src/http/Api.ts`](./src/http/Api.ts) contains the relay HTTP handlers and authentication
   boundaries.
@@ -103,6 +105,12 @@ credentials. Set `APNS_ENABLED=false` to run the relay without mobile push notif
 Activities; web, desktop, Convex sync, and remote agent control remain available. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
+
+The relay API Worker must use Cloudflare's **Standard** usage model. Newly upgraded accounts may
+already use Standard without showing a per-Worker usage-model selector; the presence of **CPU
+Limits** in the API Worker's settings confirms Standard limits are available. Migrate older Workers
+that still expose a legacy usage-model selector. The deployment pins the API Worker to a 100 ms CPU
+limit instead of the paid plan's larger default.
 
 The `prod` Alchemy stage is the shared hosted relay for stable and nightly clients and owns the
 retained Cloudflare zones. Deploy it before a personal stage, which references those zone resources.
@@ -200,8 +208,8 @@ and hosted web builds.
 
 See:
 
-- [Pathway Connect Clerk Setup](../../docs/internals/t3-connect.md) for Clerk keys, JWT templates, and sign-up restrictions
+- [Pathway Connect Clerk Setup](../../docs/internals/pathway-connect.md) for Clerk keys, JWT templates, and sign-up restrictions
   setup.
 - [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
-- [Pathway Connect Architecture Overview](../../docs/internals/t3-code-connect-auth-flow.html) for the full link,
+- [Pathway Connect Architecture Overview](../../docs/internals/pathway-connect-auth-flow.html) for the full link,
   connect, endpoint, and notification flows.

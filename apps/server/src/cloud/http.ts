@@ -439,7 +439,7 @@ const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function
   const nowSeconds = Math.floor(now.epochMilliseconds / 1_000);
   const descriptor = yield* dependencies.environment.getDescriptor;
   const payload = {
-    iss: `t3-env:${descriptor.environmentId}`,
+    iss: `pathway-env:${descriptor.environmentId}`,
     aud: normalizeRelayIssuer(request.relayIssuer),
     sub: descriptor.environmentId,
     jti: yield* Crypto.Crypto.pipe(Effect.flatMap((crypto) => crypto.randomUUIDv4)),
@@ -929,7 +929,7 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
       token: request.proof,
       typ: RELAY_HEALTH_REQUEST_TYP,
       issuer: normalizeRelayIssuer(relayIssuer),
-      audience: `t3-env:${environmentId}`,
+      audience: `pathway-env:${environmentId}`,
       nowEpochSeconds: nowSeconds,
     }).pipe(Effect.flatMap(decodeCloudHealthProof), Effect.option);
     if (
@@ -962,7 +962,7 @@ const cloudEnvironmentHealthHandler = Effect.fn("environment.cloud.health")(
     const descriptor = yield* dependencies.environment.getDescriptor;
     const responseExpiresAt = DateTime.add(now, { minutes: 5 });
     const responsePayload = {
-      iss: `t3-env:${environmentId}`,
+      iss: `pathway-env:${environmentId}`,
       aud: normalizeRelayIssuer(relayIssuer),
       sub: environmentId,
       jti: yield* Crypto.Crypto.pipe(Effect.flatMap((crypto) => crypto.randomUUIDv4)),
@@ -1046,7 +1046,7 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       token: request.proof,
       typ: RELAY_MINT_REQUEST_TYP,
       issuer: normalizeRelayIssuer(relayIssuer),
-      audience: `t3-env:${environmentId}`,
+      audience: `pathway-env:${environmentId}`,
       nowEpochSeconds: nowSeconds,
     }).pipe(Effect.flatMap(decodeCloudMintProof), Effect.option);
     if (
@@ -1115,7 +1115,7 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
       proofKeyThumbprint: proof.clientProofKeyThumbprint,
     });
     const responsePayload = {
-      iss: `t3-env:${environmentId}`,
+      iss: `pathway-env:${environmentId}`,
       aud: normalizeRelayIssuer(relayIssuer),
       sub: environmentId,
       jti: yield* Crypto.Crypto.pipe(Effect.flatMap((crypto) => crypto.randomUUIDv4)),
@@ -1174,7 +1174,7 @@ export const connectHttpApiLayer = HttpApiBuilder.group(
       .handle("preferences", ({ payload }) => cloudPreferencesHandler(dependencies, payload))
       .handle("health", ({ payload }) => cloudEnvironmentHealthHandler(dependencies, payload))
       .handle("mintCredential", ({ payload }) => cloudMintCredentialHandler(dependencies, payload))
-      .handle("t3MintCredential", ({ payload }) =>
+      .handle("pathwayMintCredential", ({ payload }) =>
         traceRelayRequest(cloudMintCredentialHandler(dependencies, payload)),
       );
   }),

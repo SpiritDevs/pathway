@@ -228,7 +228,7 @@ export function wrapCommandForLinuxCgroup(
         "  if (actual !== process.argv[2]) process.exit(126);",
         "  const env = { ...process.env };",
         "  delete env.ELECTRON_RUN_AS_NODE;",
-        "  delete env.T3_ACP_CGROUP_WRAPPER;",
+        "  delete env.Pathway_ACP_CGROUP_WRAPPER;",
         "  process.execve(process.argv[3], process.argv.slice(3), env);",
         "} catch { process.exit(125); }",
       ].join("\n"),
@@ -274,7 +274,7 @@ export function resolveLinuxCgroupTargetCommand(
   return undefined;
 }
 
-const STALE_ACP_CGROUP_SIBLING = /^t3-acp-(\d+)-/;
+const STALE_ACP_CGROUP_SIBLING = /^pathway-acp-(\d+)-/;
 
 export interface SweepStaleLinuxCgroupSiblingsOptions {
   readonly currentPid?: number;
@@ -299,7 +299,7 @@ function defaultReadCgroupPopulated(siblingPath: string): "0" | "1" | undefined 
   return state === "0" || state === "1" ? state : undefined;
 }
 
-/** Best-effort removal of empty `t3-acp-<dead-pid>-*` sibling leases under a parent cgroup. */
+/** Best-effort removal of empty `pathway-acp-<dead-pid>-*` sibling leases under a parent cgroup. */
 export function sweepStaleLinuxCgroupSiblings(
   parentPath: string,
   options: SweepStaleLinuxCgroupSiblingsOptions = {},
@@ -353,7 +353,7 @@ function tryCreateLinuxCgroupLease(
     return undefined;
   }
   sweepStaleLinuxCgroupSiblings(currentPath);
-  const childName = `t3-acp-${process.pid}-${NodeCrypto.randomUUID().replaceAll("-", "")}`;
+  const childName = `pathway-acp-${process.pid}-${NodeCrypto.randomUUID().replaceAll("-", "")}`;
   const childPath = NodePath.join(currentPath, childName);
   const childRelative = NodePath.posix.join(currentRelative, childName);
   if (NodePath.dirname(childPath) !== currentPath) return undefined;
@@ -1396,7 +1396,7 @@ export const make = (
         : {
             ...options.spawn.env,
             ELECTRON_RUN_AS_NODE: "1",
-            T3_ACP_CGROUP_WRAPPER: "1",
+            Pathway_ACP_CGROUP_WRAPPER: "1",
           };
     const child = yield* spawner
       .spawn(
@@ -1741,7 +1741,8 @@ export const make = (
           meta !== null &&
           typeof meta === "object" &&
           !Array.isArray(meta) &&
-          (meta as { readonly t3SessionLoadReady?: unknown }).t3SessionLoadReady === "replay_idle";
+          (meta as { readonly pathwaySessionLoadReady?: unknown }).pathwaySessionLoadReady ===
+            "replay_idle";
         const extractedModelConfigId = extractModelConfigId(sessionSetupResult);
         const nextModelConfigId =
           extractedModelConfigId ?? (syntheticReplayIdle ? current.modelConfigId : undefined);

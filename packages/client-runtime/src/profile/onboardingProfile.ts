@@ -78,6 +78,34 @@ export function isOnboardingComplete(metadata: ProfileMetadata | null): boolean 
 }
 
 /**
+ * Reopens the account-kind step when Clerk says onboarding finished but Convex has no usable
+ * workspace for the identity. Profile details stay available as form defaults; the kind and
+ * completion marker are removed so the user must deliberately provision a personal workspace or
+ * organization again.
+ */
+export function restartOnboardingForWorkspaceRecovery(
+  metadata: ProfileMetadata | null,
+): ProfileMetadata {
+  const current = metadata ?? EMPTY_PROFILE_METADATA;
+  const {
+    accountKind: _accountKind,
+    onboardingCompletedAt: _onboardingCompletedAt,
+    ...preserved
+  } = current;
+  return { ...preserved, v: PROFILE_METADATA_VERSION };
+}
+
+/** Coordinates the destructive recovery write only after an authoritative workspace check. */
+export async function recoverMissingOnboardingWorkspace(options: {
+  readonly hasUsableWorkspace: () => Promise<boolean>;
+  readonly restartOnboarding: () => Promise<void>;
+}): Promise<"valid" | "restarted"> {
+  if (await options.hasUsableWorkspace()) return "valid";
+  await options.restartOnboarding();
+  return "restarted";
+}
+
+/**
  * Shallow-merges a patch over the current metadata, pinning the version. The
  * result is what gets written back to `user.update({ unsafeMetadata })`.
  */

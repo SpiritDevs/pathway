@@ -73,13 +73,13 @@ describe("theme failure handling", () => {
   it("reads the persisted Pathway Chat theme preference", async () => {
     vi.stubGlobal("window", {
       localStorage: createStorage({
-        getItem: () => "t3-chat",
+        getItem: () => "pathway-chat",
       }),
     });
 
     const { readThemePreference } = await import("./useTheme");
 
-    expect(readThemePreference()).toBe("t3-chat");
+    expect(readThemePreference()).toBe("pathway-chat");
   });
 
   it("falls back during initial theme application and logs only safe attributes", async () => {

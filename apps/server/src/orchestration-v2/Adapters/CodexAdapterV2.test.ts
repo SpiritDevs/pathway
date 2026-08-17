@@ -362,7 +362,7 @@ describe("CodexAdapterV2 runtime policy", () => {
   it.effect("omits default-mode collaboration settings without the Pathway MCP server", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({
-        nativeThreadId: "native-default-without-t3-mcp",
+        nativeThreadId: "native-default-without-pathway-mcp",
         codexInput: [{ type: "text", text: "implement this task" }],
         runtimePolicy: {
           runtimeMode: "full-access",
@@ -385,7 +385,7 @@ describe("CodexAdapterV2 runtime policy", () => {
     () =>
       Effect.gen(function* () {
         const params = yield* buildCodexTurnStartParams({
-          nativeThreadId: "native-plan-with-t3-mcp",
+          nativeThreadId: "native-plan-with-pathway-mcp",
           codexInput: [{ type: "text", text: "plan this task" }],
           runtimePolicy: {
             runtimeMode: "full-access",
@@ -414,7 +414,7 @@ describe("CodexAdapterV2 runtime policy", () => {
   it.effect("keeps Codex in plan mode without referencing unavailable Pathway MCP tools", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({
-        nativeThreadId: "native-plan-without-t3-mcp",
+        nativeThreadId: "native-plan-without-pathway-mcp",
         codexInput: [{ type: "text", text: "plan this task" }],
         runtimePolicy: {
           runtimeMode: "full-access",
@@ -915,7 +915,7 @@ function codexReplayPreamble(input: {
         id: 1,
         method: "initialize",
         params: {
-          clientInfo: { name: "t3code_desktop", title: "Pathway Desktop", version: "0.1.0" },
+          clientInfo: { name: "pathway_desktop", title: "Pathway Desktop", version: "0.1.0" },
           capabilities: { experimentalApi: true },
         },
       },
@@ -926,7 +926,7 @@ function codexReplayPreamble(input: {
       frame: {
         id: 1,
         result: {
-          userAgent: "t3code_desktop/0.144.0",
+          userAgent: "pathway_desktop/0.144.0",
           codexHome: "/tmp/codex-home",
           platformFamily: "unix",
           platformOs: "macos",

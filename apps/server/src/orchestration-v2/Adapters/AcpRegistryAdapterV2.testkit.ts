@@ -47,7 +47,7 @@ export function makeAcpRegistryProviderAdapterRegistryReplayLayer(transcript: Ac
       const serverConfig = yield* ServerConfig;
       const replayDir = yield* fileSystem
         .makeTempDirectory({
-          prefix: `t3-orchestration-v2-acp-registry-replay-${transcript.scenario}-`,
+          prefix: `pathway-orchestration-v2-acp-registry-replay-${transcript.scenario}-`,
         })
         .pipe(Effect.orDie);
       const statusPath = path.join(replayDir, "status.json");

@@ -26,7 +26,7 @@ registry.
 macOS:
 
 ```bash
-brew install --cask t3-code
+brew install --cask pathway
 ```
 
 Arch Linux:

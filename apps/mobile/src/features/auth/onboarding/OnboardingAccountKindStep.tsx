@@ -77,7 +77,7 @@ export function OnboardingAccountKindStep(props: {
             <View collapsable={false} className="flex-1 gap-1">
               <Text
                 className={cn(
-                  "text-lg font-t3-bold",
+                  "text-lg font-pathway-bold",
                   isSelected ? "text-primary-foreground" : "text-foreground",
                 )}
               >

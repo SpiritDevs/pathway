@@ -24,7 +24,6 @@ import {
   type AdvertisedEndpoint,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
-  type DesktopServerExposureState,
   type DesktopWslState,
   type EnvironmentId,
 } from "@spiritdevs/contracts";
@@ -51,7 +50,6 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -104,8 +102,6 @@ import {
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
 } from "~/versionSkew";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
 import {
@@ -1283,53 +1279,6 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
   );
 });
 
-function NetworkAccessDescription({
-  endpoint,
-  hiddenEndpointCount,
-  expanded,
-  onToggleExpanded,
-  fallback,
-}: {
-  endpoint: AdvertisedEndpoint | null;
-  hiddenEndpointCount: number;
-  expanded: boolean;
-  onToggleExpanded: () => void;
-  fallback: ReactNode;
-}) {
-  if (!endpoint) {
-    return fallback;
-  }
-
-  const summary = (
-    <>
-      <span className="min-w-0 truncate">{endpoint.httpBaseUrl}</span>
-      {hiddenEndpointCount > 0 ? (
-        <span className="shrink-0 text-xs font-medium">
-          {expanded ? "Hide" : `+${hiddenEndpointCount}`}
-        </span>
-      ) : null}
-    </>
-  );
-
-  return (
-    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
-      <span className="shrink-0">Reachable at</span>
-      {hiddenEndpointCount > 0 ? (
-        <button
-          type="button"
-          className="inline-flex min-w-0 max-w-full items-baseline gap-2 border-b border-dotted border-muted-foreground/60 text-left text-muted-foreground underline-offset-4 hover:border-foreground hover:text-foreground"
-          onClick={onToggleExpanded}
-          aria-expanded={expanded}
-        >
-          {summary}
-        </button>
-      ) : (
-        <span className="inline-flex min-w-0 max-w-full items-baseline gap-2">{summary}</span>
-      )}
-    </span>
-  );
-}
-
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
@@ -1559,134 +1508,6 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
   );
 });
 
-function CloudLinkSwitch({
-  checked,
-  disabled,
-  disabledReason,
-  onCheckedChange,
-  ariaLabel = "Enable Pathway Connect",
-}: {
-  readonly checked: boolean;
-  readonly disabled: boolean;
-  readonly disabledReason: string | null;
-  readonly onCheckedChange?: (enabled: boolean) => void;
-  readonly ariaLabel?: string;
-}) {
-  const control = (
-    <Switch
-      aria-label={ariaLabel}
-      checked={checked}
-      disabled={disabled}
-      {...(onCheckedChange ? { onCheckedChange } : {})}
-    />
-  );
-  return disabledReason ? (
-    <Tooltip>
-      <TooltipTrigger render={<span className="inline-flex">{control}</span>} />
-      <TooltipPopup side="top">{disabledReason}</TooltipPopup>
-    </Tooltip>
-  ) : (
-    control
-  );
-}
-
-function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  const {
-    isSignedIn,
-    linkState: primaryCloudLinkState,
-    managedTunnelActive,
-    publishAgentActivity,
-    operationError,
-    reconcileCloudState,
-  } = useCloudLinkController();
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
-
-  const disabledReason = !isSignedIn
-    ? "Sign in to Pathway Connect to manage this environment."
-    : !canManageRelay
-      ? "Your session does not have permission to manage Pathway Connect access."
-      : null;
-  const isBusy = isUpdating || isUpdatingPreference;
-
-  const updateManagedTunnel = async (enabled: boolean) => {
-    setIsUpdating(true);
-    const ok = await reconcileCloudState({ managedTunnel: enabled, publish: publishAgentActivity });
-    if (ok) {
-      // Turning the tunnel off while publishing stays on downgrades the link
-      // rather than removing it — say so instead of claiming an unlink.
-      toastManager.add({
-        type: "success",
-        title: enabled
-          ? "Pathway Connect linked"
-          : publishAgentActivity
-            ? "Pathway Connect tunnel disabled"
-            : "Pathway Connect unlinked",
-        description: enabled
-          ? "This environment is available through Pathway Connect."
-          : publishAgentActivity
-            ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through Pathway Connect.",
-      });
-    }
-    setIsUpdating(false);
-  };
-
-  const updatePublishAgentActivity = async (enabled: boolean) => {
-    setIsUpdatingPreference(true);
-    const ok = await reconcileCloudState({ managedTunnel: managedTunnelActive, publish: enabled });
-    if (ok) {
-      toastManager.add({
-        type: "success",
-        title: enabled ? "Agent activity enabled" : "Agent activity disabled",
-        description: enabled
-          ? "This environment publishes agent activity to your mobile clients."
-          : "This environment will stop publishing agent activity.",
-      });
-    }
-    setIsUpdatingPreference(false);
-  };
-
-  return (
-    <>
-      <SettingsRow
-        title="Pathway Connect"
-        description={
-          managedTunnelActive
-            ? "This environment is available to your other devices through Pathway Connect."
-            : "Make this environment available to your other devices through Pathway Connect."
-        }
-        status={operationError ?? primaryCloudLinkState.error}
-        control={
-          <CloudLinkSwitch
-            checked={managedTunnelActive}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
-          />
-        }
-      />
-      <SettingsRow
-        title="Publish agent activity"
-        description="Send activity from this environment to your mobile clients for push notifications and Live Activities. Works without a Pathway Connect tunnel."
-        control={
-          <CloudLinkSwitch
-            ariaLabel="Publish agent activity to mobile clients"
-            checked={publishAgentActivity}
-            disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
-            disabledReason={disabledReason}
-            onCheckedChange={(enabled) => void updatePublishAgentActivity(enabled)}
-          />
-        }
-      />
-    </>
-  );
-}
-
-function CloudLinkRow({ canManageRelay }: { readonly canManageRelay: boolean }) {
-  return hasCloudPublicConfig() ? <ConfiguredCloudLinkRow canManageRelay={canManageRelay} /> : null;
-}
-
 function EmptySavedEnvironments() {
   return (
     <Empty className="min-h-52">
@@ -1814,8 +1635,6 @@ export function EnvironmentConnectionSettings({
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
-  const [isUpdatingDesktopServerExposure, setIsUpdatingDesktopServerExposure] = useState(false);
-  const [isDesktopServerExposureDialogOpen, setIsDesktopServerExposureDialogOpen] = useState(false);
   const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
   const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
@@ -1847,15 +1666,11 @@ export function EnvironmentConnectionSettings({
   const [tailscaleServePortInput, setTailscaleServePortInput] = useState(
     String(DEFAULT_TAILSCALE_SERVE_PORT),
   );
-  const [pendingDesktopServerExposureMode, setPendingDesktopServerExposureMode] = useState<
-    DesktopServerExposureState["mode"] | null
-  >(null);
   const primaryServerConfig = primaryEnvironment?.serverConfig ?? null;
   const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
   const primaryServerUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(primaryEnvironmentId),
   );
-  const [isAdvertisedEndpointListExpanded, setIsAdvertisedEndpointListExpanded] = useState(false);
   const defaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.defaultAdvertisedEndpointKey,
   );
@@ -1863,7 +1678,6 @@ export function EnvironmentConnectionSettings({
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
-  const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -1954,40 +1768,6 @@ export function EnvironmentConnectionSettings({
       return pendingTailscaleServeEndpoint.httpBaseUrl;
     }
   }, [isTailscaleServePortValid, parsedTailscaleServePort, pendingTailscaleServeEndpoint]);
-
-  const handleDesktopServerExposureChange = useCallback(
-    async (checked: boolean) => {
-      if (!desktopBridge) return;
-      setIsUpdatingDesktopServerExposure(true);
-      setDesktopServerExposureMutationError(null);
-      try {
-        await desktopBridge.setServerExposureMode(checked ? "network-accessible" : "local-only");
-        refreshDesktopNetworkAccessState();
-        setIsDesktopServerExposureDialogOpen(false);
-        setIsUpdatingDesktopServerExposure(false);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to update network exposure.";
-        setIsDesktopServerExposureDialogOpen(false);
-        setDesktopServerExposureMutationError(message);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not update network access",
-            description: message,
-          }),
-        );
-        setIsUpdatingDesktopServerExposure(false);
-      }
-    },
-    [desktopBridge],
-  );
-
-  const handleConfirmDesktopServerExposureChange = useCallback(() => {
-    if (pendingDesktopServerExposureMode === null) return;
-    const checked = pendingDesktopServerExposureMode === "network-accessible";
-    void handleDesktopServerExposureChange(checked);
-  }, [handleDesktopServerExposureChange, pendingDesktopServerExposureMode]);
 
   const handleConfirmTailscaleServeSetup = useCallback(async () => {
     if (!desktopBridge) return;
@@ -2548,35 +2328,22 @@ export function EnvironmentConnectionSettings({
       </div>
     </div>
   );
-  const renderNetworkAccessToggle = () => (
-    <Switch
-      checked={desktopServerExposureState?.mode === "network-accessible"}
-      disabled={!desktopServerExposureState || isUpdatingDesktopServerExposure}
-      onCheckedChange={(checked) => {
-        setPendingDesktopServerExposureMode(checked ? "network-accessible" : "local-only");
-        setIsDesktopServerExposureDialogOpen(true);
-      }}
-      aria-label="Enable network access"
-    />
-  );
   const renderEndpointRows = (presentation: AccessSectionPresentation) =>
-    isAdvertisedEndpointListExpanded
-      ? visibleDesktopNetworkAdvertisedEndpoints.map((endpoint) => {
-          const endpointKey = endpointDefaultPreferenceKey(endpoint);
-          return (
-            <AdvertisedEndpointListRow
-              key={endpoint.id}
-              endpoint={endpoint}
-              isDefault={endpointKey === defaultDesktopAdvertisedEndpointKey}
-              presentation={presentation}
-              onSetDefault={handleSetDefaultAdvertisedEndpoint}
-              onSetupTailscaleServe={handleStartTailscaleServeSetup}
-              onDisableTailscaleServe={handleStartTailscaleServeDisable}
-              isUpdatingTailscaleServe={isUpdatingTailscaleServe}
-            />
-          );
-        })
-      : null;
+    visibleDesktopNetworkAdvertisedEndpoints.map((endpoint) => {
+      const endpointKey = endpointDefaultPreferenceKey(endpoint);
+      return (
+        <AdvertisedEndpointListRow
+          key={endpoint.id}
+          endpoint={endpoint}
+          isDefault={endpointKey === defaultDesktopAdvertisedEndpointKey}
+          presentation={presentation}
+          onSetDefault={handleSetDefaultAdvertisedEndpoint}
+          onSetupTailscaleServe={handleStartTailscaleServeSetup}
+          onDisableTailscaleServe={handleStartTailscaleServeDisable}
+          isUpdatingTailscaleServe={isUpdatingTailscaleServe}
+        />
+      );
+    });
   // Apply a setting change immediately. The orchestrator reconciles the
   // pool in the background and the primary backend is untouched, so we
   // don't gate this behind a confirmation dialog. After the desktop
@@ -2894,6 +2661,7 @@ export function EnvironmentConnectionSettings({
             : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
           : "Start Tailscale to set up HTTPS access through MagicDNS."
       }
+      status={desktopServerExposureError}
       control={
         tailscaleHttpsEndpoint ? (
           <Switch
@@ -2933,67 +2701,6 @@ export function EnvironmentConnectionSettings({
         onRevokeClientSession={handleRevokeDesktopClientSession}
       />
     </>
-  );
-  const renderNetworkAccessRow = () => (
-    <SettingsRow
-      title="Network access"
-      description={
-        isLocalBackendNetworkAccessible ? (
-          <NetworkAccessDescription
-            endpoint={defaultDesktopNetworkAdvertisedEndpoint}
-            hiddenEndpointCount={Math.max(visibleDesktopNetworkAdvertisedEndpoints.length - 1, 0)}
-            expanded={isAdvertisedEndpointListExpanded}
-            onToggleExpanded={() => setIsAdvertisedEndpointListExpanded((expanded) => !expanded)}
-            fallback={
-              desktopServerExposureState?.endpointUrl
-                ? `Reachable at ${desktopServerExposureState.endpointUrl}`
-                : desktopServerExposureState?.advertisedHost
-                  ? `Exposed on all interfaces. Pairing links use ${desktopServerExposureState.advertisedHost}.`
-                  : "Exposed on all interfaces."
-            }
-          />
-        ) : desktopServerExposureState ? (
-          "Limited to this machine."
-        ) : (
-          "Loading…"
-        )
-      }
-      status={
-        desktopServerExposureError ? (
-          <span className="block text-destructive">{desktopServerExposureError}</span>
-        ) : null
-      }
-      control={renderNetworkAccessToggle()}
-    />
-  );
-  const renderDisabledNetworkAccessRow = () => (
-    <SettingsRow
-      title="Network access"
-      description={
-        currentAuthPolicy === "remote-reachable"
-          ? "This backend is already configured for remote access. Network exposure changes must be made where the server is launched."
-          : "This backend is only reachable on this machine. Restart it with a non-loopback host to enable remote pairing."
-      }
-      control={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span className="inline-flex">
-                <Switch
-                  checked={isLocalBackendNetworkAccessible}
-                  disabled
-                  aria-label="Enable network access"
-                />
-              </span>
-            }
-          />
-          <TooltipPopup side="top">
-            Network exposure changes restart the backend and must be controlled where the server
-            process is launched.
-          </TooltipPopup>
-        </Tooltip>
-      }
-    />
   );
   const addEnvironmentAction = (
     <Dialog
@@ -3127,18 +2834,11 @@ export function EnvironmentConnectionSettings({
             ) : null}
             {desktopBridge ? (
               <>
-                {renderNetworkAccessRow()}
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
                 {renderWslRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
               </>
-            ) : (
-              <>
-                {renderDisabledNetworkAccessRow()}
-                <CloudLinkRow canManageRelay={canManageRelay} />
-              </>
-            )}
+            ) : null}
           </SettingsSection>
 
           {isLocalBackendRemotelyReachable ? (
@@ -3161,59 +2861,6 @@ export function EnvironmentConnectionSettings({
               </ScrollArea>
             </SettingsSection>
           ) : null}
-          <AlertDialog
-            open={isDesktopServerExposureDialogOpen}
-            onOpenChange={(open) => {
-              if (isUpdatingDesktopServerExposure) return;
-              setIsDesktopServerExposureDialogOpen(open);
-            }}
-            onOpenChangeComplete={(open) => {
-              if (!open) setPendingDesktopServerExposureMode(null);
-            }}
-          >
-            <AlertDialogPopup>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Enable network access?"
-                    : "Disable network access?"}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Pathway will restart to expose this environment over the network."
-                    : "Pathway will restart and limit this environment back to this machine."}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogClose
-                  disabled={isUpdatingDesktopServerExposure}
-                  render={<Button variant="outline" disabled={isUpdatingDesktopServerExposure} />}
-                >
-                  Cancel
-                </AlertDialogClose>
-                <Button
-                  variant={
-                    pendingDesktopServerExposureMode === "local-only" ? "destructive" : "default"
-                  }
-                  onClick={handleConfirmDesktopServerExposureChange}
-                  disabled={
-                    pendingDesktopServerExposureMode === null || isUpdatingDesktopServerExposure
-                  }
-                >
-                  {isUpdatingDesktopServerExposure ? (
-                    <>
-                      <Spinner className="size-3.5" />
-                      Restarting…
-                    </>
-                  ) : pendingDesktopServerExposureMode === "network-accessible" ? (
-                    "Restart and enable"
-                  ) : (
-                    "Restart and disable"
-                  )}
-                </Button>
-              </AlertDialogFooter>
-            </AlertDialogPopup>
-          </AlertDialog>
           <AlertDialog
             open={isWslConfirmDialogOpen}
             onOpenChange={(open) => {
@@ -3433,7 +3080,6 @@ export function EnvironmentConnectionSettings({
             title="Administrative access"
             description="Pairing links and client-session management require the access:write scope for this backend."
           />
-          <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
 

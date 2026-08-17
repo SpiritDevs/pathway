@@ -22,6 +22,9 @@ export interface CloudPublicConfig {
   readonly relay: {
     readonly url: string | null;
   };
+  readonly convex: {
+    readonly url: string | null;
+  };
   readonly observability: {
     readonly tracesUrl: string | null;
     readonly tracesDataset: string | null;
@@ -56,6 +59,17 @@ function normalizeSecureUrl(value: unknown): string | null {
   }
 }
 
+function normalizeConvexUrl(value: unknown): string | null {
+  const raw = trimNonEmpty(value);
+  if (raw === null) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig?.extra) {
   return {
     clerk: {
@@ -64,6 +78,9 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig
     },
     relay: {
       url: normalizeSecureRelayUrl(trimNonEmpty(extra?.relay?.url) ?? ""),
+    },
+    convex: {
+      url: normalizeConvexUrl(extra?.convex?.url),
     },
     observability: {
       tracesUrl: normalizeSecureUrl(extra?.observability?.tracesUrl),
@@ -113,4 +130,9 @@ export function resolveRelayClerkTokenOptions() {
     throw new CloudPublicConfigMissingError({ key: "PATHWAY_CLERK_JWT_TEMPLATE" });
   }
   return relayClerkTokenOptions(jwtTemplate);
+}
+
+/** Convex auth is a separate Clerk audience from the relay token. */
+export function resolveConvexClerkTokenOptions() {
+  return { template: "convex" } as const;
 }

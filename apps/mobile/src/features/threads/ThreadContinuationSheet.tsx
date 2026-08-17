@@ -1,4 +1,4 @@
-import type { ModelSelection, ServerConfig as T3ServerConfig } from "@spiritdevs/contracts";
+import type { ModelSelection, ServerConfig as PathwayServerConfig } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,7 +13,7 @@ export function ThreadContinuationSheet(props: {
   readonly visible: boolean;
   readonly kind: "continue" | "handoff" | "recovery";
   readonly sourceModelSelection: ModelSelection;
-  readonly serverConfig: T3ServerConfig | null;
+  readonly serverConfig: PathwayServerConfig | null;
   readonly canCreateWorktree: boolean;
   readonly pending: boolean;
   readonly onDismiss: () => void;
@@ -72,7 +72,7 @@ export function ThreadContinuationSheet(props: {
         >
           <View className="mb-4 items-center">
             <View className="mb-4 h-1 w-10 rounded-full bg-neutral-300 dark:bg-neutral-700" />
-            <Text className="text-xl font-t3-bold text-foreground">
+            <Text className="text-xl font-pathway-bold text-foreground">
               {props.kind === "handoff"
                 ? "Hand off this chat"
                 : props.kind === "recovery"
@@ -90,7 +90,7 @@ export function ThreadContinuationSheet(props: {
           <ScrollView className="mb-4" showsVerticalScrollIndicator={false}>
             {groups.map((group) => (
               <View key={group.providerKey} className="mb-4">
-                <Text className="mb-1 px-2 text-xs font-t3-bold uppercase text-foreground-muted">
+                <Text className="mb-1 px-2 text-xs font-pathway-bold uppercase text-foreground-muted">
                   {group.providerLabel}
                 </Text>
                 <View className="overflow-hidden rounded-2xl bg-neutral-100 dark:bg-white/[0.06]">
@@ -107,7 +107,7 @@ export function ThreadContinuationSheet(props: {
                         onPress={() => setSelection(option.selection)}
                         className="min-h-12 flex-row items-center px-3 py-2.5"
                       >
-                        <Text className="min-w-0 flex-1 text-base font-t3-medium text-foreground">
+                        <Text className="min-w-0 flex-1 text-base font-pathway-medium text-foreground">
                           {option.label}
                         </Text>
                         {selected ? (
@@ -192,7 +192,7 @@ function ContinuationChoice(props: {
         <SymbolView name="arrow.triangle.branch" size={19} tintColor={props.iconColor} />
       )}
       <View className="min-w-0 flex-1">
-        <Text className="text-base font-t3-bold text-foreground">{props.title}</Text>
+        <Text className="text-base font-pathway-bold text-foreground">{props.title}</Text>
         <Text className="text-sm text-foreground-muted">{props.description}</Text>
       </View>
     </Pressable>

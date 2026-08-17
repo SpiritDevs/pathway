@@ -101,7 +101,7 @@ export const EMPTY_PROJECT_SCRIPT_INPUT: NewProjectScriptInput = {
 export interface ProjectScriptEditorRequest {
   scriptId: string | null;
   initial: NewProjectScriptInput;
-  /** Validation error to show immediately (e.g. a failed t3.json import). */
+  /** Validation error to show immediately (e.g. a failed pathway.json import). */
   error?: string;
 }
 

@@ -348,8 +348,8 @@ export function createDevRunnerEnv({
     // agent working inside Pathway), these leak through and the child server
     // fails startup when the service launcher started a different Pathway version
     // (serviceLauncherClient.ts resolveStartup).
-    delete output.T3_SERVICE_LAUNCHER_CONTEXT;
-    delete output.T3_BOOT_SERVICE_UNIT;
+    delete output.Pathway_SERVICE_LAUNCHER_CONTEXT;
+    delete output.Pathway_BOOT_SERVICE_UNIT;
 
     if (!isDesktopMode) {
       output.PATHWAY_PORT = String(serverPort);

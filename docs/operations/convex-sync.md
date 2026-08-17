@@ -12,22 +12,20 @@ explicit recovery decision, but import is not a normal deployment step.
 
 ## Deployment configuration
 
-Cloud sync is default-off in the backend, web client, and Pathway server. Configure each process for
-the same Convex deployment; similar names are deliberately not interchangeable.
+Cloud sync is required for online Pathway deployments. Configure each process for the same Convex
+deployment; similar names are deliberately not interchangeable.
 
 | Owner             | Configuration                                                     | Purpose                                                                                                    |
 | ----------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Convex deployment | `PATHWAY_CLOUD_SYNC=enabled`                                      | Enables every cloud-sync function. Any other value returns `cloud-sync-disabled`.                          |
 | Convex deployment | `CLERK_JWT_ISSUER_DOMAIN`                                         | Clerk issuer used for member JWTs. The Clerk JWT template's application id is `convex`.                    |
 | Convex deployment | `PATHWAY_RELAY_JWT_ISSUER`                                        | Relay origin accepted as the environment-service JWT issuer.                                               |
 | Convex deployment | `PATHWAY_RELAY_JWKS_URL`                                          | Relay ES256 public keys, normally `https://<relay>/.well-known/jwks.json`.                                 |
 | Convex deployment | `UPLOADTHING_TOKEN`                                               | UploadThing API token used to prepare uploads and delete abandoned objects.                                |
 | Relay Worker      | `CONVEX_URL`                                                      | Convex client URL ending in `.convex.cloud`; this is not an HTTP Actions URL or deploy key.                |
 | Relay Worker      | `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWT_AUDIENCE` | Clerk configuration for the relay.                                                                         |
-| Web build         | `VITE_PATHWAY_CLOUD_SYNC=enabled`                                 | Creates the browser sync runtime.                                                                          |
 | Web build         | `VITE_PATHWAY_CONVEX_URL`                                         | Convex client URL used by the browser.                                                                     |
 | Web build         | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`           | Clerk client and the JWT template used to authenticate to Convex.                                          |
-| Pathway server    | `PATHWAY_CLOUD_SYNC=enabled`                                      | Starts the server sync daemon.                                                                             |
+| Mobile build      | `PATHWAY_CONVEX_URL`                                              | Convex client URL embedded in Expo public config for onboarding workspace provisioning.                    |
 | Pathway server    | `PATHWAY_CLOUD_SYNC_COMPANY_ID`                                   | Company replicated by this environment. This is still explicit configuration, not derived from link state. |
 | Pathway server    | `PATHWAY_CONVEX_URL`                                              | Runtime Convex URL. It overrides the `PATHWAY_CONVEX_URL` embedded when the server bundle was built.       |
 
@@ -94,6 +92,13 @@ paste its values into logs, tickets, or documentation.
 
 The relay uses Alchemy, not Wrangler. Its package scripts are `deploy` and `destroy`; there is no
 Wrangler configuration and no dedicated rollback command.
+
+The relay API Worker requires the Cloudflare Workers **Standard** usage model. Newly upgraded
+accounts may already use Standard and omit the per-Worker usage-model selector; the API Worker's
+**Settings** page exposes **CPU Limits** when Standard limits are available. Older Workers that
+still show a usage-model selector must be migrated to Standard once after upgrading. Alchemy deploys
+a 100 ms per-invocation CPU cap for the API Worker, keeping Clerk verification and challenge signing
+available without inheriting the paid plan's much larger default limit.
 
 For a new Convex/relay pair, bootstrap the circular trust relationship in this order:
 
@@ -345,15 +350,15 @@ For relay request failures, token exchange, Worker spans, and Axiom queries, use
 ## Clean cutover checklist
 
 1. Create separate development and production Convex deployments. Set each deployment's Clerk
-   issuer, relay issuer/JWKS, `PATHWAY_CLOUD_SYNC=enabled`, and `UPLOADTHING_TOKEN`.
+   issuer, relay issuer/JWKS, and `UPLOADTHING_TOKEN`.
 2. Push functions to development with `convex dev --once`; run the pinned cloud-sync smoke harness
    and the two live-key UploadThing checks.
 3. Push the same functions to production with `convex deploy`. For a brand-new relay/Convex pair,
    follow the first-deployment relay bootstrap order above so JWKS exists before this push.
 4. Deploy the production relay from `infra/relay/.env.prod.local` and verify
    `https://relay.spiritdevs.com/.well-known/jwks.json` plus a relay health request.
-5. Point the relay's `CONVEX_URL`, web build's `VITE_PATHWAY_CONVEX_URL`, and server's
-   `PATHWAY_CONVEX_URL` at the same production deployment. Enable the web/server gates and configure
+5. Point the relay's `CONVEX_URL`, web build's `VITE_PATHWAY_CONVEX_URL`, mobile build's
+   `PATHWAY_CONVEX_URL`, and server's `PATHWAY_CONVEX_URL` at the same production deployment. Configure
    `PATHWAY_CLOUD_SYNC_COMPANY_ID` on each server environment.
 6. Create/select the empty production company, link the environment, and verify bootstrap, one issue
    round trip, a reconnect, and attachment prepare/finalize/delete. Do not run `smoke:seed` against

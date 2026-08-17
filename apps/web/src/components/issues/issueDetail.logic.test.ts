@@ -830,10 +830,10 @@ describe("todos", () => {
     const todos = [
       todo({ id: IssueTodoId.make("t1"), position: 0 }),
       todo({ id: IssueTodoId.make("t2"), position: 1 }),
-      todo({ id: IssueTodoId.make("t3"), position: 2 }),
+      todo({ id: IssueTodoId.make("todo-3"), position: 2 }),
     ];
-    expect(reorderedIssueTodoIds({ todos, activeId: "t3", overId: "t1" })).toEqual([
-      "t3",
+    expect(reorderedIssueTodoIds({ todos, activeId: "todo-3", overId: "t1" })).toEqual([
+      "todo-3",
       "t1",
       "t2",
     ]);

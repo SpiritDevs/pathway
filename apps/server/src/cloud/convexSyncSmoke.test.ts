@@ -103,7 +103,7 @@ describe("convexSyncSmoke link proof", () => {
         publicKey: payload.environmentPublicKey,
         token: proof,
         typ: RELAY_LINK_PROOF_TYP,
-        issuer: `t3-env:${environmentId}`,
+        issuer: `pathway-env:${environmentId}`,
         audience: RELAY_ISSUER,
         nowEpochSeconds: NOW + 5,
       });
@@ -141,7 +141,7 @@ describe("convexSyncSmoke link proof", () => {
           publicKey: otherKeys.publicKey,
           token: proof,
           typ: RELAY_LINK_PROOF_TYP,
-          issuer: `t3-env:${environmentId}`,
+          issuer: `pathway-env:${environmentId}`,
           audience: RELAY_ISSUER,
           nowEpochSeconds: NOW + 5,
         }),
@@ -181,7 +181,7 @@ describe("convexSyncSmoke key binding", () => {
         publicKey: linkKeys.publicKey,
         token: binding,
         typ: RELAY_CONVEX_KEY_BINDING_TYP,
-        issuer: `t3-env:${environmentId}`,
+        issuer: `pathway-env:${environmentId}`,
         audience: RELAY_ISSUER,
         nowEpochSeconds: NOW + 5,
       });

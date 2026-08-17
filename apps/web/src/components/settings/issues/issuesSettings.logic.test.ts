@@ -103,7 +103,7 @@ describe("issueKeyPrefixError", () => {
     expect(issueKeyPrefixError("PAT")).toBe(null);
     expect(issueKeyPrefixError("  pat  ")).toBe(null);
     expect(issueKeyPrefixError("A")).toBe(null);
-    expect(issueKeyPrefixError("T3X9")).toBe(null);
+    expect(issueKeyPrefixError("PathwayX9")).toBe(null);
     expect(issueKeyPrefixError("ABCDEFGHIJ")).toBe(null);
   });
 

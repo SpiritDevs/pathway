@@ -244,7 +244,7 @@ const makeDependencyLayer = () =>
     // A throwaway state directory, for the one write that puts bytes on disk: a comment
     // attachment. `layerTest` creates the attachments directory it names, and both this and the
     // platform services are merged out so a test can read back what the service wrote.
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-issues-test-" })),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-issues-test-" })),
     // `Crypto`, for the ids the service mints; `FileSystem` and `Path`, for that same write.
     Layer.provideMerge(NodeServices.layer),
   );
@@ -2034,7 +2034,7 @@ describe("IssueTrackerService", () => {
         provider: "github" as const,
         number: 42,
         title: "Show PRs on issues",
-        url: "https://github.com/t3dotgg/pathway/pull/42",
+        url: "https://github.com/SpiritDevs/pathway/pull/42",
         state: "open" as const,
       };
       yield* tracker.recordThreadPullRequest(discovered);

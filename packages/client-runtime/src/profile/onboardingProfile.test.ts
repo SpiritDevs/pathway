@@ -6,6 +6,8 @@ import {
   mergeProfileMetadata,
   onboardingStepIndex,
   parseProfileMetadata,
+  recoverMissingOnboardingWorkspace,
+  restartOnboardingForWorkspaceRecovery,
   resolveOnboardingStep,
 } from "./onboardingProfile.ts";
 
@@ -88,5 +90,68 @@ describe("mergeProfileMetadata", () => {
     });
     expect(next.accountKind).toBe("company");
     expect(isOnboardingComplete(next)).toBe(true);
+  });
+});
+
+describe("restartOnboardingForWorkspaceRecovery", () => {
+  it("returns a completed user to account-kind while preserving reusable profile details", () => {
+    expect(
+      restartOnboardingForWorkspaceRecovery({
+        v: 1,
+        accountKind: "company",
+        onboardingCompletedAt: "2026-08-11T00:00:00.000Z",
+        company: { name: "Spirit Devs", role: "founder" },
+      }),
+    ).toEqual({
+      v: 1,
+      company: { name: "Spirit Devs", role: "founder" },
+    });
+  });
+
+  it("produces fresh metadata when the previous value was invalid", () => {
+    expect(restartOnboardingForWorkspaceRecovery(null)).toEqual({ v: 1 });
+  });
+});
+
+describe("recoverMissingOnboardingWorkspace", () => {
+  it("does not rewrite a completed profile when the workspace exists", async () => {
+    let restarts = 0;
+    await expect(
+      recoverMissingOnboardingWorkspace({
+        hasUsableWorkspace: async () => true,
+        restartOnboarding: async () => {
+          restarts += 1;
+        },
+      }),
+    ).resolves.toBe("valid");
+    expect(restarts).toBe(0);
+  });
+
+  it("restarts onboarding after an authoritative empty result", async () => {
+    let restarts = 0;
+    await expect(
+      recoverMissingOnboardingWorkspace({
+        hasUsableWorkspace: async () => false,
+        restartOnboarding: async () => {
+          restarts += 1;
+        },
+      }),
+    ).resolves.toBe("restarted");
+    expect(restarts).toBe(1);
+  });
+
+  it("preserves onboarding metadata when validation fails", async () => {
+    let restarts = 0;
+    await expect(
+      recoverMissingOnboardingWorkspace({
+        hasUsableWorkspace: async () => {
+          throw new Error("offline");
+        },
+        restartOnboarding: async () => {
+          restarts += 1;
+        },
+      }),
+    ).rejects.toThrow("offline");
+    expect(restarts).toBe(0);
   });
 });

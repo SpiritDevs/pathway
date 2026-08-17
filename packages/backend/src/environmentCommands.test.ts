@@ -10,7 +10,6 @@ import schema from "../convex/schema.ts";
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),

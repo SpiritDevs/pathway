@@ -106,7 +106,7 @@ const make = Effect.gen(function* () {
     const secret = yield* randomTokenPart(3);
     return {
       credentialId,
-      token: `t3env_${credentialId}_${secret}`,
+      token: `pathwayenv_${credentialId}_${secret}`,
     };
   });
   const prepareCredential = Effect.fn("relay.environment_credentials.prepare")(function* (

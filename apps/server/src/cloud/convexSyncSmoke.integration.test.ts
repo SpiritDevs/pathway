@@ -5,8 +5,7 @@
  * Required environment for a live run:
  * - `PATHWAY_CONVEX_SMOKE=1` — enables the suite.
  * - `CONVEX_URL` — Convex deployment URL (the one the relay mints
- *   `pathway-convex` tokens for; that deployment must run with
- *   `PATHWAY_CLOUD_SYNC=enabled`).
+ *   `pathway-convex` tokens for).
  * - `PATHWAY_CONVEX_SMOKE_DEPLOYMENT` — the Convex deployment identifier the
  *   admin hooks are pinned to, e.g. `dev:chatty-ermine-52`. Passed to every
  *   `npx convex run` subprocess as `CONVEX_DEPLOYMENT` (overriding anything

@@ -47,7 +47,9 @@ const makeLayer = (client: SlackApiClientShape) =>
       Layer.mergeAll(Layer.succeed(SlackApiClient, client), SlackIntakeSignal.layer),
     ),
     Layer.provideMerge(ServerSecretStore.layer),
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-slack-engine-test-" })),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "pathway-slack-engine-test-" }),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
 

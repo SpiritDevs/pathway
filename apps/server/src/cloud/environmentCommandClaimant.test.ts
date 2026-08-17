@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { CLOUD_SYNC_CAPABILITY_ENV, CLOUD_SYNC_COMPANY_ID_ENV } from "./syncDaemon.ts";
+import { CLOUD_SYNC_COMPANY_ID_ENV } from "./syncDaemon.ts";
 import {
   executeClaimedEnvironmentCommand,
   makeLocalEnvironmentCommandExecutor,
@@ -503,7 +503,6 @@ describe("environment command claimant", () => {
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
                 env: {
-                  [CLOUD_SYNC_CAPABILITY_ENV]: "enabled",
                   [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
                   PATHWAY_CONVEX_URL: "https://claimant.convex.cloud",
                 },

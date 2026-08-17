@@ -79,10 +79,6 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
-    "./t3McpToolPresentation": {
-      "types": "./src/t3McpToolPresentation.ts",
-      "import": "./src/t3McpToolPresentation.ts"
-    },
     "./pathwayMcpToolPresentation": {
       "types": "./src/pathwayMcpToolPresentation.ts",
       "import": "./src/pathwayMcpToolPresentation.ts"
@@ -111,9 +107,9 @@
       "types": "./src/threadEnvMode.ts",
       "import": "./src/threadEnvMode.ts"
     },
-    "./t3ProjectFile": {
-      "types": "./src/t3ProjectFile.ts",
-      "import": "./src/t3ProjectFile.ts"
+    "./pathwayProjectFile": {
+      "types": "./src/pathwayProjectFile.ts",
+      "import": "./src/pathwayProjectFile.ts"
     },
     "./orchestrationTiming": {
       "types": "./src/orchestrationTiming.ts",

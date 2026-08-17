@@ -76,8 +76,8 @@ vi.mock("../../hooks/useSettings", () => ({
 vi.mock("../../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: vi.fn() }),
 }));
-vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
-  useT3ProjectFileState: () => ({ file: null, scripts: [] }),
+vi.mock("../../hooks/usePathwayProjectFileScripts", () => ({
+  usePathwayProjectFileState: () => ({ file: null, scripts: [] }),
 }));
 vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../../state/entities", () => ({

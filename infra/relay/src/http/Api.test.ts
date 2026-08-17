@@ -40,6 +40,7 @@ import {
   exchangeConvexServiceToken,
   exchangeEnvironmentDpopAccessToken,
   relayCors,
+  relayCorsPreflightResponse,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
@@ -70,12 +71,12 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
     teamId: "apns-team",
     keyId: "apns-key",
     privateKey: Redacted.make("apns-private-key"),
-    bundleId: "com.example.t3",
+    bundleId: "com.example.pathway",
     environment: "sandbox",
   },
   clerkSecretKey: Redacted.make("clerk-secret-key"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "pathway-relay",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
@@ -576,12 +577,12 @@ function signConvexKeyBinding(input: {
   readonly claims?: Record<string, unknown>;
 }) {
   const header = Buffer.from(
-    JSON.stringify({ alg: "EdDSA", typ: "t3-env-convex-key-binding+jwt" }),
+    JSON.stringify({ alg: "EdDSA", typ: "pathway-env-convex-key-binding+jwt" }),
   ).toString("base64url");
   // it.effect runs on the TestClock, which starts at the epoch.
   const payload = Buffer.from(
     JSON.stringify({
-      iss: "t3-env:environment-1",
+      iss: "pathway-env:environment-1",
       aud: "https://relay.example.test",
       sub: "environment-1",
       jti: `key-binding-${input.jkt}`,
@@ -603,7 +604,7 @@ function signConvexKeyBinding(input: {
 function convexServiceTokenPayload(keyBinding: string): RelayConvexServiceTokenRequest {
   return {
     grant_type: RelayDpopTokenExchangeGrantType,
-    subject_token: "t3env_environment-1_secret",
+    subject_token: "pathwayenv_environment-1_secret",
     subject_token_type: RelayEnvironmentCredentialTokenType,
     requested_token_type: RelayAccessTokenType,
     audience: RelayConvexAudience,
@@ -949,7 +950,7 @@ function signEnvironmentAccessAssertion(input: {
   ).toString("base64url");
   const payload = Buffer.from(
     JSON.stringify({
-      iss: "t3-env:environment-1",
+      iss: "pathway-env:environment-1",
       aud: "https://relay.example.test",
       sub: "environment-1",
       jti: `relay-access-${input.jkt}`,
@@ -1049,7 +1050,7 @@ describe("relay environment DPoP access token exchange", () => {
       });
       expect(decodeRelayJwt(response.access_token)).toMatchObject({
         sub: "environment-1",
-        client_id: "t3-env",
+        client_id: "pathway-env",
         subject_kind: "environment",
         scope: "environment:connect",
         cnf: { jkt: proof.thumbprint },
@@ -1231,6 +1232,18 @@ describe("relay request tracing", () => {
 });
 
 describe("relay routing fallback", () => {
+  it("builds browser preflight responses without the relay runtime", () => {
+    const response = HttpServerResponse.toWeb(relayCorsPreflightResponse());
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("access-control-allow-headers")).toBe(
+      "authorization,b3,traceparent,content-type,dpop",
+    );
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST, DELETE, OPTIONS");
+    expect(response.headers.get("access-control-max-age")).toBe("86400");
+  });
+
   it.effect("redirects the relay root to the API docs", () =>
     Effect.gen(function* () {
       const httpEffect = yield* HttpRouter.toHttpEffect(

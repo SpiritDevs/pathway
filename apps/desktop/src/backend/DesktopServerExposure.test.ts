@@ -61,13 +61,6 @@ function mockSpawnerLayer(statusJson = "{}") {
   );
 }
 
-function dieOnSpawnLayer() {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() => Effect.die("unexpected tailscale spawn")),
-  );
-}
-
 function makeEnvironmentLayer(baseDir: string, env: Record<string, string | undefined> = {}) {
   return DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
@@ -131,7 +124,7 @@ const withHarness = <A, E, R>(
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-desktop-server-exposure-test-",
+      prefix: "pathway-desktop-server-exposure-test-",
     });
     return yield* effect.pipe(
       Effect.provide(
@@ -193,7 +186,7 @@ describe("DesktopServerExposure", () => {
         yield* serverExposure.configureFromSettings({ port: 4173 });
 
         const change = yield* serverExposure.setMode("network-accessible");
-        assert.equal(change.requiresRelaunch, true);
+        assert.equal(change.requiresRelaunch, false);
         assert.deepEqual(change.state, {
           mode: "network-accessible",
           endpointUrl: "http://192.168.1.20:4173",
@@ -327,24 +320,23 @@ describe("DesktopServerExposure", () => {
     ),
   );
 
-  it.effect("does not spawn the tailscale CLI while server exposure is local-only", () =>
+  it.effect("keeps network access on when a legacy client requests local-only", () =>
     withHarness(
       lanNetworkInterfaces,
       Effect.gen(function* () {
         const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* serverExposure.configureFromSettings({ port: 4173 });
-        // mode stays at default "local-only", tailscaleServeEnabled stays false.
+        const change = yield* serverExposure.setMode("local-only");
 
+        assert.equal(change.state.mode, "network-accessible");
+        assert.equal((yield* settings.get).serverExposureMode, "network-accessible");
         const endpoints = yield* serverExposure.getAdvertisedEndpoints;
-        // Only the loopback endpoint; no tailscale spawn means the dieOnSpawnLayer
-        // would have crashed the test if the gate was missing.
         assert.deepEqual(
           endpoints.map((endpoint) => endpoint.httpBaseUrl),
-          ["http://127.0.0.1:4173/"],
+          ["http://127.0.0.1:4173/", "http://192.168.1.20:4173/"],
         );
       }),
-      {},
-      dieOnSpawnLayer(),
     ),
   );
 

@@ -41,7 +41,6 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { decodeSyncOperation, type SyncDomainAdapter } from "./adapter.ts";
-import { whenCloudSyncEnabled } from "./capability.ts";
 import {
   SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
@@ -604,16 +603,6 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
     });
   });
 
-  const DISABLED_RECEIPT: SyncCycleReceipt = {
-    outcome: "disabled",
-    cursor: SYNC_INITIAL_VERSION,
-    authorizationEpoch: SYNC_INITIAL_EPOCH,
-    appliedChanges: 0,
-    acceptedOperations: 0,
-    rejectedOperations: 0,
-    error: null,
-  };
-
   const runCycle: Effect.Effect<SyncCycleReceipt, SyncStoreError> = cycle().pipe(
     Effect.catch((error: SyncTransportError | SyncStoreError) => {
       if (error._tag === "SyncStoreError") return Effect.fail(error);
@@ -633,7 +622,7 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   );
 
   const sync: Effect.Effect<SyncCycleReceipt, SyncStoreError> = cycleLock.withPermits(1)(
-    Effect.suspend(() => whenCloudSyncEnabled(runCycle, DISABLED_RECEIPT)),
+    Effect.suspend(() => runCycle),
   );
 
   const enqueue = Effect.fn("SyncEngine.enqueue")(function* (input: {
@@ -754,21 +743,18 @@ export const makeSyncEngine = Effect.fn("makeSyncEngine")(function* <Entity, Ope
   });
 
   const run: Effect.Effect<void, SyncStoreError> = Effect.suspend(() =>
-    whenCloudSyncEnabled(
-      Stream.merge(transport.latestVersion({ companyId }), Stream.fromQueue(localWakeups), {
-        // The remote subscription still owns the driver's lifetime. A cleanly ended or failed
-        // feed must stop `run` so its existing supervisor can reconnect it; the local queue never
-        // ends on its own.
-        haltStrategy: "left",
-      }).pipe(
-        Stream.runForEach(() => syncUntilSettled),
-        Effect.catch((error: SyncTransportError | SyncStoreError) =>
-          error._tag === "SyncStoreError"
-            ? Effect.fail(error)
-            : setPhase(transportPhase(error), error),
-        ),
+    Stream.merge(transport.latestVersion({ companyId }), Stream.fromQueue(localWakeups), {
+      // The remote subscription still owns the driver's lifetime. A cleanly ended or failed
+      // feed must stop `run` so its existing supervisor can reconnect it; the local queue never
+      // ends on its own.
+      haltStrategy: "left",
+    }).pipe(
+      Stream.runForEach(() => syncUntilSettled),
+      Effect.catch((error: SyncTransportError | SyncStoreError) =>
+        error._tag === "SyncStoreError"
+          ? Effect.fail(error)
+          : setPhase(transportPhase(error), error),
       ),
-      undefined,
     ),
   );
 

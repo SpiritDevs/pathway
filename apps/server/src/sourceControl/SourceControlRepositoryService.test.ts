@@ -81,7 +81,9 @@ function makeLayer(input: {
     Layer.provide(
       ServerConfig.layerTest(
         process.cwd(),
-        input.fileSystem ? "/tmp/t3-source-control-repos" : { prefix: "t3-source-control-repos-" },
+        input.fileSystem
+          ? "/tmp/pathway-source-control-repos"
+          : { prefix: "pathway-source-control-repos-" },
       ),
     ),
   );
@@ -154,7 +156,7 @@ it.effect("clones a looked-up repository into the requested destination", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const parent = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3-source-control-clone-parent-",
+      prefix: "pathway-source-control-clone-parent-",
     });
     const destinationPath = `${parent}/pathway`;
     const cloneCalls: Array<{ cwd: string; args: ReadonlyArray<string> }> = [];

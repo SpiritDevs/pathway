@@ -639,7 +639,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          binary_name="t3-resource-monitor"
+          binary_name="pathway-resource-monitor"
           if [[ "${{ matrix.platform }}" == "win" ]]; then
             binary_name="${binary_name}.exe"
           fi
@@ -734,8 +734,8 @@ jobs:
             resource_key="${artifact_dir##*/resource-monitor-}"
             target_dir="apps/server/dist/resource-monitor/${resource_key}"
             mkdir -p "$target_dir"
-            cp "$artifact_dir"/t3-resource-monitor* "$target_dir/"
-            chmod +x "$target_dir"/t3-resource-monitor 2>/dev/null || true
+            cp "$artifact_dir"/pathway-resource-monitor* "$target_dir/"
+            chmod +x "$target_dir"/pathway-resource-monitor 2>/dev/null || true
           done
 
       - name: Publish CLI package

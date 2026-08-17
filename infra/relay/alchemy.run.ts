@@ -6,8 +6,19 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { RelayObservability } from "./src/observability.ts";
-import { ManagedEndpointZone, RelayApiZone } from "./src/zone.ts";
+import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./src/zone.ts";
 import ApiLive, { Api } from "./src/worker.ts";
+
+export const RelayGateway = RelayDeploymentConfig.pipe(
+  Effect.flatMap(({ relayPublicDomain }) =>
+    Cloudflare.Worker("RelayGateway", {
+      main: "./src/gateway.ts",
+      compatibility: { date: "2026-05-22" },
+      domain: relayPublicDomain,
+      env: { API: Api },
+    }),
+  ),
+);
 
 export default Alchemy.Stack(
   "PathwayRelay",
@@ -19,11 +30,11 @@ export default Alchemy.Stack(
     const managedEndpointZone = yield* ManagedEndpointZone.pipe(Effect.orDie);
     const relayApiZone = yield* RelayApiZone.pipe(Effect.orDie);
     const observability = yield* RelayObservability;
-    const api = yield* Api;
+    const gateway = yield* RelayGateway;
 
     return {
-      workerName: api.workerName,
-      url: api.url,
+      workerName: gateway.workerName,
+      url: gateway.url,
       relayApiZoneId: relayApiZone.zoneId,
       managedEndpointZoneId: managedEndpointZone.zoneId,
       mobileTracingUrl: observability.traces.otelTracesEndpoint,

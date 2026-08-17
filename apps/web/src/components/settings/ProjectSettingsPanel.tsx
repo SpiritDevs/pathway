@@ -17,7 +17,7 @@ import type {
   ModelSelection,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
-  T3ProjectFileScript,
+  PathwayProjectFileScript,
   ThreadEnvMode,
 } from "@spiritdevs/contracts";
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
@@ -44,7 +44,7 @@ import {
   usePrimarySettings,
 } from "../../hooks/useSettings";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import { useT3ProjectFileState } from "../../hooks/useT3ProjectFileScripts";
+import { usePathwayProjectFileState } from "../../hooks/usePathwayProjectFileScripts";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { readLocalApi } from "../../localApi";
@@ -366,17 +366,18 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   // from the same snapshot would drop each other's changes. One at a time.
   const [isSavingScripts, setIsSavingScripts] = useState(false);
   const savingScriptsRef = useRef(false);
-  const t3File = useT3ProjectFileState(
+  const pathwayFile = usePathwayProjectFileState(
     selectedCheckout.environmentId,
     selectedCheckout.workspaceRoot,
   );
   // What the "Default" option resolves to while no override is set: the
-  // repo's t3.json value when present, otherwise the global setting.
-  const inheritedEnvMode = t3File.file?.defaultThreadEnvMode ?? settings.defaultThreadEnvMode;
-  const inheritedEnvModeSource = t3File.file?.defaultThreadEnvMode != null ? "t3.json" : "global";
+  // repo's pathway.json value when present, otherwise the global setting.
+  const inheritedEnvMode = pathwayFile.file?.defaultThreadEnvMode ?? settings.defaultThreadEnvMode;
+  const inheritedEnvModeSource =
+    pathwayFile.file?.defaultThreadEnvMode != null ? "pathway.json" : "global";
   const importableScripts = useMemo(
     () =>
-      t3File.scripts.filter(
+      pathwayFile.scripts.filter(
         (fileScript) =>
           !scripts.some(
             (script) =>
@@ -384,7 +385,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               script.name.toLowerCase() === fileScript.name.toLowerCase(),
           ),
       ),
-    [scripts, t3File.scripts],
+    [scripts, pathwayFile.scripts],
   );
 
   const persistScripts = useCallback(
@@ -518,7 +519,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   );
 
   const importFileScript = useCallback(
-    async (fileScript: T3ProjectFileScript) => {
+    async (fileScript: PathwayProjectFileScript) => {
       const payload: NewProjectScriptInput = {
         name: fileScript.name,
         command: fileScript.command,
@@ -859,7 +860,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
           <SettingsRow
             title="Workspace"
-            description="Where new threads in this project start. Overrides t3.json and the global default; applies to every checkout in this group."
+            description="Where new threads in this project start. Overrides pathway.json and the global default; applies to every checkout in this group."
             resetAction={
               storedEnvMode !== null ? (
                 <SettingResetButton
@@ -891,7 +892,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem value="inherit">
                     {group.memberProjects.length > 1
-                      ? "Default (each checkout's t3.json or global setting)"
+                      ? "Default (each checkout's pathway.json or global setting)"
                       : `Default (${inheritedEnvModeSource}: ${resolveEnvModeLabel(inheritedEnvMode).toLowerCase()})`}
                   </SelectItem>
                   <SelectItem value="worktree">{resolveEnvModeLabel("worktree")}</SelectItem>
@@ -1046,7 +1047,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   </MenuTrigger>
                   <MenuPopup align="end" className="w-72">
                     <MenuGroup>
-                      <MenuGroupLabel>Import from t3.json</MenuGroupLabel>
+                      <MenuGroupLabel>Import from pathway.json</MenuGroupLabel>
                       <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
                         Add actions declared by this checkout without editing them first.
                       </p>
@@ -1141,10 +1142,10 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               );
             })
           )}
-          {t3File.status === "invalid" ? (
+          {pathwayFile.status === "invalid" ? (
             <SettingsRow
-              title="t3.json is invalid"
-              description="A t3.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
+              title="pathway.json is invalid"
+              description="A pathway.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
               className="text-warning"
             />
           ) : null}

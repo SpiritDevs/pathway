@@ -398,7 +398,7 @@ Promote project-bound job claims to a first-class remote command channel that wo
 
 Ship direct control for live, low-latency cross-machine steering; Convex dispatch remains the fallback when no direct path exists:
 
-- Add a relay server client ID with the `environment:connect` scope. The initiating environment authenticates with its existing Ed25519 environment key via DPoP; today that scope is issued only to `t3-web`/`t3-mobile`.
+- Add a relay server client ID with the `environment:connect` scope. The initiating environment authenticates with its existing Ed25519 environment key via DPoP; today that scope is issued only to `pathway-web`/`pathway-mobile`.
 - Give `apps/server` a client-runtime connection handle by adopting (or extracting the transport core of) `packages/client-runtime`'s connection and RPC session layers, so an environment drives a peer through the same hardened WS RPC surface remote clients already use — no new federation protocol.
 - Every env-to-env call carries the initiating environment's service identity plus an on-behalf-of actor (member or agent). The target environment enforces that actor's company permissions from its synced replica; the initiating environment's identity alone grants nothing.
 - Expose remote targeting through the orchestrator MCP toolkit with an explicit target-environment parameter; the default remains the local environment, and the existing same-project scoping applies within the target.
@@ -531,7 +531,7 @@ The mobile release receives shared contracts, sync engine compatibility, and a p
   - `docs/internals/issue-tracker.md`
   - `docs/internals/connection-runtime.md`
   - `docs/internals/remote.md`
-  - `docs/internals/t3-connect.md`
+  - `docs/internals/pathway-connect.md`
   - `docs/internals/environment-auth.md`
   - `docs/internals/overview.md`
   - `docs/internals/glossary.md`

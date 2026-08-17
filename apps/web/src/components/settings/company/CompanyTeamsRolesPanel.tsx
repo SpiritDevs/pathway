@@ -46,9 +46,8 @@ import {
   CompanySettingsEmptyState,
   PermissionTooltip,
 } from "./CompanySettingsShared";
-import { useCompanySettings } from "./useCompanySettings";
+import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
-type CompanySettings = ReturnType<typeof useCompanySettings>;
 type RoleRow = CompanySettings["directory"]["roles"][number];
 const ADD_MEMBER_VALUE = "__add_member__";
 
@@ -500,8 +499,7 @@ function RoleCard({
   );
 }
 
-export function CompanyTeamsRolesPanel() {
-  const settings = useCompanySettings();
+export function CompanyTeamsRolesSections({ settings }: { readonly settings: CompanySettings }) {
   const teams = useMemo(() => deriveTeamRows(settings.directory), [settings.directory]);
   const members = useMemo(() => deriveMemberRows(settings.directory), [settings.directory]);
   const roles = useMemo(() => sortRoles(settings.directory.roles), [settings.directory.roles]);
@@ -516,40 +514,10 @@ export function CompanyTeamsRolesPanel() {
   const teamGate = permissionGate(settings.permissions, "teams.manage");
   const roleGate = permissionGate(settings.permissions, "roles.manage");
 
-  if (settings.isAuthLoaded && !settings.isSignedIn) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Sign in to manage teams and roles"
-          description="Company teams, rosters, and permission roles are available after you sign in."
-        />
-      </SettingsPageContainer>
-    );
-  }
-  if (settings.activeCompany === null || settings.companyId === null) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="No active company"
-          description="Choose a company from the company switcher to manage its teams and roles."
-        />
-      </SettingsPageContainer>
-    );
-  }
-  if (settings.replica === null) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Company data is syncing"
-          description="Team and role settings will appear when this company's replica is ready."
-        />
-      </SettingsPageContainer>
-    );
-  }
-
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
+        id="company-teams"
         title="Teams"
         icon={<UsersRoundIcon className="size-4" />}
         headerAction={
@@ -584,6 +552,7 @@ export function CompanyTeamsRolesPanel() {
       </SettingsSection>
 
       <SettingsSection
+        id="company-roles"
         title="Roles"
         icon={<ShieldIcon className="size-4" />}
         headerAction={
@@ -630,6 +599,47 @@ export function CompanyTeamsRolesPanel() {
         open={roleDialog.open}
         onOpenChange={(open) => setRoleDialog((current) => ({ ...current, open }))}
       />
+    </>
+  );
+}
+
+export function CompanyTeamsRolesPanel() {
+  const settings = useCompanySettings();
+
+  if (settings.isAuthLoaded && !settings.isSignedIn) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Sign in to manage teams and roles"
+          description="Company teams, rosters, and permission roles are available after you sign in."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.activeCompany === null || settings.companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="No active workspace"
+          description="Your workspace is still being prepared. Try again in a moment."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.replica === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Workspace data is syncing"
+          description="Team and role settings will appear when this workspace is ready."
+        />
+      </SettingsPageContainer>
+    );
+  }
+
+  return (
+    <SettingsPageContainer>
+      <CompanyTeamsRolesSections settings={settings} />
     </SettingsPageContainer>
   );
 }

@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["PathwayTerminalModule"],
+    "podspecPath": "PathwayTerminalNative.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.pathwayterminal.PathwayTerminalModule"]
+  }
+}

@@ -32,6 +32,29 @@ export interface CompanyEnvironmentRow {
   readonly isOwnEnvironment: boolean;
 }
 
+export type PathwayConnectStatus = "active" | "connecting" | "failed";
+
+export function derivePathwayConnectStatus(input: {
+  readonly row: CompanyEnvironmentRow;
+  readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+  readonly ownManagedEndpointAvailable: boolean | null;
+  readonly ownCloudLinkError: string | null;
+}): PathwayConnectStatus {
+  if (input.row.registration.state !== "active") return "failed";
+
+  if (input.row.isOwnEnvironment) {
+    if (input.ownCloudLinkPhase === "exhausted" || input.ownCloudLinkError !== null) {
+      return "failed";
+    }
+    return input.ownCloudLinkPhase === "connected" && input.ownManagedEndpointAvailable === true
+      ? "active"
+      : "connecting";
+  }
+
+  if (input.row.registration.relayLinkState !== "linked") return "failed";
+  return input.row.registration.managedEndpointAvailable ? "active" : "connecting";
+}
+
 export function deriveEnvironmentRows(input: {
   readonly registrations: ReadonlyArray<EnvironmentRegistrationEntityType>;
   readonly catalogEntries: ReadonlyMap<EnvironmentId, EffectiveConnectionCatalogEntry>;
@@ -104,4 +127,23 @@ export function environmentCommandSummary(command: EnvironmentCommandRecord): st
   if (command.state === "expired") return "Expired before completion";
   if (command.state === "failed") return "The environment reported a failure";
   return "Completed without a result pointer";
+}
+
+export function deleteConfirmationSecondsRemaining(
+  armedUntil: number | null,
+  now: number,
+): number | null {
+  if (armedUntil === null || armedUntil <= now) return null;
+  return Math.ceil((armedUntil - now) / 1_000);
+}
+
+export function resolveDeleteConfirmationClick(
+  armedUntil: number | null,
+  now: number,
+  confirmationDurationMs: number,
+): { readonly confirmed: boolean; readonly armedUntil: number | null } {
+  if (deleteConfirmationSecondsRemaining(armedUntil, now) !== null) {
+    return { confirmed: true, armedUntil: null };
+  }
+  return { confirmed: false, armedUntil: now + confirmationDurationMs };
 }

@@ -2,8 +2,8 @@ import * as Schema from "effect/Schema";
 import "culori/css";
 import { converter, parse } from "culori/fn";
 
-export const T3_CHAT_THEME_ID = "t3-chat" as const;
-export const T3_CHAT_THEME_LABEL = "Pathway Chat";
+export const Pathway_CHAT_THEME_ID = "pathway-chat" as const;
+export const Pathway_CHAT_THEME_LABEL = "Pathway Chat";
 export const GROVE_THEME_ID = "grove" as const;
 export const GROVE_THEME_LABEL = "Grove";
 export const OCEAN_THEME_ID = "ocean" as const;
@@ -18,7 +18,7 @@ export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "pathway:theme-follow-system";
 export const THEME_APPEARANCE_MODE_STORAGE_KEY = "pathway:theme-appearance-mode";
 export const THEME_HALVES_STORAGE_KEY = "pathway:theme-halves:v1";
 
-const LEGACY_T3_CHAT_DARK_THEME_ID = "t3-chat-dark";
+const LEGACY_Pathway_CHAT_DARK_THEME_ID = "pathway-chat-dark";
 
 export const ThemePreference = Schema.String;
 export type ThemePreference = typeof ThemePreference.Type;
@@ -122,16 +122,16 @@ const RESERVED_THEME_IDS = new Set([
   "system",
   "light",
   "dark",
-  T3_CHAT_THEME_ID,
+  Pathway_CHAT_THEME_ID,
   GROVE_THEME_ID,
   OCEAN_THEME_ID,
   EMBER_THEME_ID,
   IRIS_THEME_ID,
-  LEGACY_T3_CHAT_DARK_THEME_ID,
-  "t3-grove",
-  "t3-ocean",
-  "t3-ember",
-  "t3-iris",
+  LEGACY_Pathway_CHAT_DARK_THEME_ID,
+  "pathway-grove",
+  "pathway-ocean",
+  "pathway-ember",
+  "pathway-iris",
 ]);
 
 const customThemeListeners = new Set<() => void>();
@@ -332,15 +332,15 @@ export function subscribeToCustomThemes(listener: () => void): () => void {
   };
 }
 
-// Earlier builds shipped every maintainer theme under a t3- prefix; only the
+// Earlier builds shipped every maintainer theme under a pathway- prefix; only the
 // genuinely Pathway-branded palette keeps it. Stored preferences and mixes with the
 // old ids stay readable through this alias table.
 const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
-  [LEGACY_T3_CHAT_DARK_THEME_ID]: T3_CHAT_THEME_ID,
-  "t3-grove": GROVE_THEME_ID,
-  "t3-ocean": OCEAN_THEME_ID,
-  "t3-ember": EMBER_THEME_ID,
-  "t3-iris": IRIS_THEME_ID,
+  [LEGACY_Pathway_CHAT_DARK_THEME_ID]: Pathway_CHAT_THEME_ID,
+  "pathway-grove": GROVE_THEME_ID,
+  "pathway-ocean": OCEAN_THEME_ID,
+  "pathway-ember": EMBER_THEME_ID,
+  "pathway-iris": IRIS_THEME_ID,
 };
 
 function normalizeThemeId(themeId: string): string {
@@ -353,7 +353,7 @@ function normalizeThemeId(themeId: string): string {
  * still carries the appearance hint getThemePreferenceMode reads.
  */
 export function canonicalThemePreference(theme: string): string {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? theme : normalizeThemeId(theme);
+  return theme === LEGACY_Pathway_CHAT_DARK_THEME_ID ? theme : normalizeThemeId(theme);
 }
 
 function themeIdFromPreference(theme: ThemePreference): string {
@@ -363,18 +363,18 @@ function themeIdFromPreference(theme: ThemePreference): string {
 // Older builds stored the dark Pathway Chat palette as a separate theme. Keep
 // those preferences readable while mapping them to the dark variant.
 function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
-  return theme === LEGACY_T3_CHAT_DARK_THEME_ID ? "dark" : null;
+  return theme === LEGACY_Pathway_CHAT_DARK_THEME_ID ? "dark" : null;
 }
 
 /**
  * Maintainer palettes use product color roles rather than Tailwind or component
  * names so the same definitions can feed other clients and native surfaces.
  */
-// Measured from the live t3.chat default theme. Translucent chat surfaces are
+// Measured from the live pathway.chat default theme. Translucent chat surfaces are
 // flattened over --chat-background so this opaque palette reproduces the
 // pixels users see after Pathway Chat's blur and noise layers are composited.
 // Foreground pairs deviate where necessary to keep normal text at WCAG AA.
-const T3_CHAT_LIGHT_COLORS: ThemeColors = {
+const Pathway_CHAT_LIGHT_COLORS: ThemeColors = {
   canvas: "#fdf7fd",
   // Pathway's workspace header belongs to the chat panel, so keep it seamless
   // with the light chat canvas rather than mapping it to Pathway Chat's outer shell.
@@ -442,7 +442,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   terminalScrollbarHover: "#eaa7cb",
 };
 
-const T3_CHAT_DARK_COLORS: ThemeColors = {
+const Pathway_CHAT_DARK_COLORS: ThemeColors = {
   canvas: "#1f1a24",
   // Pathway's workspace header belongs to the chat panel, so keep it seamless
   // with the canvas rather than mapping it to Pathway Chat's outer shell.
@@ -522,7 +522,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
  * their real backdrops (canvas, or the sidebar for its rows) because theme
  * colors are stored as opaque OKLCH tokens.
  */
-const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
+const Pathway_CODE_LIGHT_THEME_COLORS: ThemeColors = {
   canvas: "#fcfcfc",
   chrome: "#fcfcfc",
   toolbar: "#fcfcfc",
@@ -582,7 +582,7 @@ const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
   terminalScrollbarHover: "#bdbdbd",
 };
 
-const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
+const Pathway_CODE_DARK_THEME_COLORS: ThemeColors = {
   canvas: "#0a0a0a",
   chrome: "#0a0a0a",
   toolbar: "#0a0a0a",
@@ -650,9 +650,9 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
   if (appearance === "dark") {
-    return (standardDarkThemeColors ??= decodeThemeColors(T3_CODE_DARK_THEME_COLORS));
+    return (standardDarkThemeColors ??= decodeThemeColors(Pathway_CODE_DARK_THEME_COLORS));
   }
-  return (standardLightThemeColors ??= decodeThemeColors(T3_CODE_LIGHT_THEME_COLORS));
+  return (standardLightThemeColors ??= decodeThemeColors(Pathway_CODE_LIGHT_THEME_COLORS));
 }
 
 type ThemeRgbColor = {
@@ -1427,20 +1427,20 @@ export function createManagedThemeColors(
   };
 }
 
-export const T3_CHAT_THEME: ThemeDefinition = {
-  id: T3_CHAT_THEME_ID,
-  label: T3_CHAT_THEME_LABEL,
+export const Pathway_CHAT_THEME: ThemeDefinition = {
+  id: Pathway_CHAT_THEME_ID,
+  label: Pathway_CHAT_THEME_LABEL,
   appearance: "light",
-  colors: decodeThemeColors(T3_CHAT_LIGHT_COLORS),
+  colors: decodeThemeColors(Pathway_CHAT_LIGHT_COLORS),
   variants: {
-    dark: decodeThemeColors(T3_CHAT_DARK_COLORS),
+    dark: decodeThemeColors(Pathway_CHAT_DARK_COLORS),
   },
   sidebarArtwork: true,
 };
 
 /** Theme-file defaults follow the flagship palette for the requested mode. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_THEME.variants!.dark! : T3_CHAT_THEME.colors;
+  return appearance === "dark" ? Pathway_CHAT_THEME.variants!.dark! : Pathway_CHAT_THEME.colors;
 }
 
 /**
@@ -1533,7 +1533,7 @@ export const IRIS_THEME: ThemeDefinition = {
 };
 
 const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [
-  T3_CHAT_THEME,
+  Pathway_CHAT_THEME,
   GROVE_THEME,
   OCEAN_THEME,
   EMBER_THEME,

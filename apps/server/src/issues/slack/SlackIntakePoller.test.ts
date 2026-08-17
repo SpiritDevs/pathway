@@ -196,7 +196,7 @@ const makeTestLayer = (client: SlackApiClientShape) => {
   ).pipe(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(ServerSecretStore.layer),
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-slack-test-" })),
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-slack-test-" })),
     Layer.provideMerge(NodeServices.layer),
   );
 

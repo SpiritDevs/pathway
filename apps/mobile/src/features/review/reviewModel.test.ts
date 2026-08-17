@@ -18,7 +18,7 @@ function makeCheckpoint(
     Pick<ThreadCheckpointSummary, "runId" | "checkpointTurnCount" | "completedAt">,
 ): ThreadCheckpointSummary {
   return {
-    checkpointRef: `refs/t3/checkpoints/thread/${input.checkpointTurnCount}` as any,
+    checkpointRef: `refs/pathway/checkpoints/thread/${input.checkpointTurnCount}` as any,
     status: "ready",
     files: [],
     assistantMessageId: MessageId.make(`msg-${input.checkpointTurnCount}`),

@@ -24,7 +24,7 @@ describe("V2LifecycleRow", () => {
       updatedAt: now,
       type: "source_control",
       committed: true,
-      pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+      pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     };
 
     expect(isV2LifecycleItem(item)).toBe(true);

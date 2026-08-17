@@ -43,9 +43,9 @@ describe("RelayApi security", () => {
         requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
         resource: "https://relay.example.test",
         scope: "environment:connect",
-        client_id: "t3-env",
+        client_id: "pathway-env",
       }),
-    ).toMatchObject({ client_id: "t3-env", scope: "environment:connect" });
+    ).toMatchObject({ client_id: "pathway-env", scope: "environment:connect" });
     expect(() =>
       decode({
         grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -54,7 +54,7 @@ describe("RelayApi security", () => {
         requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
         resource: "https://relay.example.test",
         scope: "environment:status",
-        client_id: "t3-env",
+        client_id: "pathway-env",
       }),
     ).toThrow();
   });

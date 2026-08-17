@@ -1,7 +1,7 @@
 /**
  * Every refusal leaves this deployment as a `ConvexError` carrying a stable code, because clients
- * branch on it: `cloud-sync-disabled` is a capability message, `upgrade-required` forces an update,
- * and a rejection code lands in the rejected-changes panel.
+ * branch on it: `upgrade-required` forces an update, and a rejection code lands in the
+ * rejected-changes panel.
  *
  * @module lib/errors
  */

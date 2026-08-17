@@ -157,7 +157,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
   it("groups the tracker pages under Issues", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
       "Workspace",
-      "Company",
+      "Account",
       "Agents",
       "Issues",
       "Email",
@@ -173,18 +173,24 @@ describe("SETTINGS_NAV_GROUPS", () => {
     ]);
   });
 
-  it("puts environment discovery and control in the Company group", () => {
-    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Company")?.paths).toEqual([
-      "/settings/company-members",
-      "/settings/company-teams",
-      "/settings/sync",
+  it("puts collaboration and environments in the Account group", () => {
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Account")?.paths).toEqual([
+      "/settings/members-teams",
       "/settings/environments",
     ]);
-    expect(searchSettings("company sync status")[0]).toMatchObject({
-      id: "company-sync",
-      to: "/settings/sync",
+    expect(searchSettings("members and invitations")[0]).toMatchObject({
+      id: "company-members",
+      to: "/settings/members-teams",
     });
-    expect(searchSettings("company environments")[0]).toMatchObject({
+    expect(searchSettings("upgrade to a company workspace")[0]).toMatchObject({
+      id: "company-upgrade",
+      to: "/settings/members-teams",
+    });
+    expect(searchSettings("workspace sync status")[0]).toMatchObject({
+      id: "company-sync",
+      to: "/settings/diagnostics",
+    });
+    expect(searchSettings("workspace environments")[0]).toMatchObject({
       id: "company-environments",
       to: "/settings/environments",
     });

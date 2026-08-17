@@ -263,7 +263,7 @@ describe("remote environment authorization", () => {
               policy: "remote-reachable",
               bootstrapMethods: ["one-time-token"],
               sessionMethods: ["browser-session-cookie", "bearer-access-token"],
-              sessionCookieName: "t3_session",
+              sessionCookieName: "pathway_session",
             },
             scopes: [
               "orchestration:read",
@@ -318,7 +318,7 @@ describe("remote environment authorization", () => {
       });
 
       expectFetchCall(fetch.calls, 1, {
-        url: "https://remote.example.com/.well-known/t3/environment",
+        url: "https://remote.example.com/.well-known/pathway/environment",
         method: "GET",
       });
       expectFetchCall(fetch.calls, 2, {
@@ -347,7 +347,7 @@ describe("remote environment authorization", () => {
             policy: "remote-reachable",
             bootstrapMethods: ["one-time-token"],
             sessionMethods: ["dpop-access-token"],
-            sessionCookieName: "t3_session",
+            sessionCookieName: "pathway_session",
           },
           sessionMethod: "dpop-access-token",
           scopes: [
@@ -391,7 +391,7 @@ describe("remote environment authorization", () => {
 
       expect(error).toBeInstanceOf(RemoteEnvironmentAuthTimeoutError);
       expect(error.message).toBe(
-        "Remote environment endpoint http://remote.example.com/.well-known/t3/environment timed out after 25ms.",
+        "Remote environment endpoint http://remote.example.com/.well-known/pathway/environment timed out after 25ms.",
       );
     }).pipe(Effect.provide(TestClock.layer())),
   );

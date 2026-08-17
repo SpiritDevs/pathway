@@ -53,7 +53,6 @@ import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
 import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
 import {
-  CLOUD_SYNC_CAPABILITY_ENV,
   CLOUD_SYNC_COMPANY_ID_ENV,
   cloudSyncActor,
   cloudSyncClientId,
@@ -74,7 +73,6 @@ const ENVIRONMENT_CREDENTIAL = "environment-credential";
 
 /** Every gate satisfied. Individual tests drop one key to exercise a refusal. */
 const ENABLED_ENV = {
-  [CLOUD_SYNC_CAPABILITY_ENV]: "enabled",
   [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
   PATHWAY_CONVEX_URL: CONVEX_URL,
 } as const;
@@ -377,40 +375,37 @@ describe("cloud sync daemon gates", () => {
       }),
     );
 
-  it.effect("is off with no configuration at all", () =>
+  it.effect("reports missing company configuration", () =>
     Effect.gen(function* () {
       expect(yield* resolveWith({ env: {} })).toEqual({
         _tag: "Disabled",
-        reason: "capability-disabled",
-        optedIn: false,
+        reason: "company-not-configured",
       });
     }),
   );
 
-  it.effect("refuses the flag on its own, and the flag plus a deployment", () =>
+  it.effect("requires a company and a deployment", () =>
     Effect.gen(function* () {
-      expect(yield* resolveWith({ env: { [CLOUD_SYNC_CAPABILITY_ENV]: "enabled" } })).toEqual({
+      expect(yield* resolveWith({ env: {} })).toEqual({
         _tag: "Disabled",
         reason: "company-not-configured",
-        optedIn: true,
       });
 
       // A company but no deployment to reach.
       expect(
         yield* resolveWith({
           env: {
-            [CLOUD_SYNC_CAPABILITY_ENV]: "enabled",
             [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
           },
         }),
-      ).toMatchObject({ reason: "convex-url-unavailable", optedIn: true });
+      ).toMatchObject({ reason: "convex-url-unavailable" });
 
       // A deployment that is not an origin is the same *answer* as no deployment, but it is not
       // the same refusal: the operator typo'd something and the detail has to say so.
       const invalid = yield* resolveWith({
         env: { ...ENABLED_ENV, PATHWAY_CONVEX_URL: "https://daemon.convex.cloud/api" },
       });
-      expect(invalid).toMatchObject({ reason: "convex-url-unavailable", optedIn: true });
+      expect(invalid).toMatchObject({ reason: "convex-url-unavailable" });
       expect(invalid._tag === "Disabled" ? invalid.detail : "").toContain("absolute HTTPS origin");
     }),
   );
@@ -420,13 +415,12 @@ describe("cloud sync daemon gates", () => {
       expect(yield* resolveWith({ env: ENABLED_ENV, secrets: [] })).toEqual({
         _tag: "Disabled",
         reason: "environment-not-linked",
-        optedIn: true,
       });
 
       // A relay URL without the credential the token exchange presents is still not linked.
       expect(
         yield* resolveWith({ env: ENABLED_ENV, secrets: [[RELAY_URL_SECRET, RELAY_URL]] }),
-      ).toMatchObject({ reason: "environment-not-linked", optedIn: true });
+      ).toMatchObject({ reason: "environment-not-linked" });
     }),
   );
 
@@ -543,7 +537,7 @@ describe("cloud sync service tokens", () => {
 // --------------------------------------------------------------------------
 
 layer("cloud sync daemon layer", (it) => {
-  it.effect("builds as a no-op without the capability flag", () =>
+  it.effect("builds as a no-op and reports missing required configuration", () =>
     Effect.gen(function* () {
       const { store, values } = makeMemorySecretStore(linkedSecrets);
       const logs = makeLogCapture();
@@ -559,12 +553,11 @@ layer("cloud sync daemon layer", (it) => {
       expect([...values.keys()].sort()).toEqual(
         [RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET].sort(),
       );
-      // A server that never asked for cloud sync is not warned about not having it.
-      expect(logs.entries.filter((entry) => entry.level === "Warn")).toEqual([]);
+      expect(logs.find("Warn", "company-not-configured")).toBeDefined();
     }),
   );
 
-  it.effect("warns when the operator opted in and a later gate refused", () =>
+  it.effect("warns when configured cloud sync cannot start", () =>
     Effect.gen(function* () {
       const { store } = makeMemorySecretStore(linkedSecrets);
       const logs = makeLogCapture();
@@ -572,8 +565,7 @@ layer("cloud sync daemon layer", (it) => {
       yield* Effect.scoped(
         Layer.build(cloudSyncDaemonLayer({ transport: forbiddenTransport })).pipe(
           provideDaemon({
-            // The flag is on, the company is named, and the deployment URL has a path typo'd onto
-            // it. Without a warning this server boots byte-identically to one with no flag at all.
+            // The company is named, but the deployment URL has a path typo'd onto it.
             env: { ...ENABLED_ENV, PATHWAY_CONVEX_URL: "https://daemon.convex.cloud/api" },
             secrets: store,
             logger: logs.layer,
@@ -598,7 +590,6 @@ layer("cloud sync daemon layer", (it) => {
         Layer.build(cloudSyncDaemonLayer({ transport: forbiddenTransport })).pipe(
           provideDaemon({
             env: {
-              [CLOUD_SYNC_CAPABILITY_ENV]: "enabled",
               [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
             },
             secrets: store,

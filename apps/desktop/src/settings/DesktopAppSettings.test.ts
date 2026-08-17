@@ -68,7 +68,7 @@ const withSettings = <A, E, R>(
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-desktop-settings-test-",
+      prefix: "pathway-desktop-settings-test-",
     });
     return yield* effect.pipe(
       Effect.provide(
@@ -108,7 +108,7 @@ describe("DesktopSettings", () => {
         linuxPasswordStore: "auto",
         mainWindowBounds: null,
         mainWindowMaximized: false,
-        serverExposureMode: "local-only",
+        serverExposureMode: "network-accessible",
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
         updateChannel: "nightly",
@@ -126,7 +126,6 @@ describe("DesktopSettings", () => {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* writeSettingsPatch({
           linuxPasswordStore: "gnome-libsecret",
-          serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
           updateChannel: "latest",
@@ -148,8 +147,8 @@ describe("DesktopSettings", () => {
         } satisfies DesktopAppSettings.DesktopSettings);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
-        assert.isTrue(exposure.changed);
-        assert.equal(exposure.settings.serverExposureMode, "local-only");
+        assert.isFalse(exposure.changed);
+        assert.equal(exposure.settings.serverExposureMode, "network-accessible");
 
         const tailscale = yield* settings.setTailscaleServe({
           enabled: true,
@@ -174,7 +173,9 @@ describe("DesktopSettings", () => {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* fileSystem.makeDirectory(environment.desktopSettingsPath, { recursive: true });
 
-        const error = yield* settings.setServerExposureMode("network-accessible").pipe(Effect.flip);
+        const error = yield* settings
+          .setTailscaleServe({ enabled: true, port: Option.none() })
+          .pipe(Effect.flip);
         assert.instanceOf(error, DesktopAppSettings.DesktopSettingsWriteError);
         assert.equal(error.operation, "replace-settings-file");
         assert.equal(error.path, environment.desktopSettingsPath);
@@ -192,7 +193,7 @@ describe("DesktopSettings", () => {
       Effect.gen(function* () {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
 
-        const exposure = yield* settings.setServerExposureMode("local-only");
+        const exposure = yield* settings.setServerExposureMode("network-accessible");
         assert.isFalse(exposure.changed);
 
         const tailscale = yield* settings.setTailscaleServe({
@@ -329,7 +330,6 @@ describe("DesktopSettings", () => {
         assert.deepEqual(persisted, {
           mainWindowBounds: { x: -1200, y: 40, width: 1440, height: 960 },
           mainWindowMaximized: true,
-          serverExposureMode: "network-accessible",
         } satisfies typeof DesktopSettingsPatch.Type);
       }),
     ),
@@ -348,7 +348,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
-          serverExposureMode: "local-only",
+          serverExposureMode: "network-accessible",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "nightly",
@@ -376,7 +376,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
-          serverExposureMode: "local-only",
+          serverExposureMode: "network-accessible",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "latest",
@@ -403,7 +403,7 @@ describe("DesktopSettings", () => {
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
-          serverExposureMode: "local-only",
+          serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
           tailscaleServePort: 443,
           updateChannel: "latest",

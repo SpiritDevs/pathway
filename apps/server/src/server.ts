@@ -85,7 +85,7 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
-import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
+import * as PathwayProjectFileLoader from "./project/PathwayProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -105,12 +105,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import {
-  connectHttpApiLayer,
-  pendingServiceUpdateExists,
-  reconcileDesiredCloudLink,
-  releaseManagedTunnelOnShutdown,
-} from "./cloud/http.ts";
+import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
@@ -428,7 +423,7 @@ const WorkspaceLayerLive = Layer.mergeAll(
 
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
-  Layer.provide(T3ProjectFileLoader.layer),
+  Layer.provide(PathwayProjectFileLoader.layer),
 );
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
@@ -730,34 +725,13 @@ export const makeServerLayer = Layer.unwrap(
           yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
           return;
         }
-        const releaseManagedTunnel = releaseManagedTunnelOnShutdown().pipe(
-          Effect.timeout("10 seconds"),
-          Effect.tap((released) =>
-            released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              "Failed to release the managed tunnel on shutdown; the next link reuses it",
-              { cause },
-            ),
-          ),
-          Effect.asVoid,
-        );
-        // A launcher trial can be stopped before activation. The previous
-        // server is already gone, so the trial owns cleanup immediately; the
-        // pending-state check keeps the tunnel for normal commit or rollback,
-        // while the launcher's explicit-stop marker allows it to be released.
-        // Other runtimes wait for activation so a failed standby cannot tear
-        // down the active runtime's tunnel.
-        const cleanupBeforeActivation = yield* pendingServiceUpdateExists;
-        if (cleanupBeforeActivation) {
-          yield* Effect.addFinalizer(() => releaseManagedTunnel);
-        }
+        // Keep the managed tunnel allocation and connector token durable across
+        // shutdowns. The process naturally disconnects while this environment is
+        // offline, then the next launch can reattach immediately without waiting
+        // for Cloudflare resource recreation and DNS propagation. Explicit unlink
+        // remains responsible for deprovisioning the allocation.
         yield* forkParked(
           Effect.gen(function* () {
-            if (!cleanupBeforeActivation) {
-              yield* Effect.addFinalizer(() => releaseManagedTunnel);
-            }
             if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
             const server = yield* HttpServer.HttpServer;
             const address = server.address;
@@ -770,6 +744,7 @@ export const makeServerLayer = Layer.unwrap(
             // reachability after a restart.
             yield* reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`).pipe(
               Effect.retry({
+                times: CloudManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1,
                 while: (error) =>
                   error._tag !== "EnvironmentHttpBadRequestError" &&
                   error._tag !== "EnvironmentHttpUnauthorizedError" &&
@@ -778,7 +753,6 @@ export const makeServerLayer = Layer.unwrap(
                   Schedule.modifyDelay(({ duration }) =>
                     Effect.succeed(Duration.min(duration, Duration.seconds(30))),
                   ),
-                  Schedule.upTo({ duration: "10 minutes" }),
                 ),
               }),
               Effect.tap(() =>
@@ -820,7 +794,7 @@ export const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       // Default-off. Every gate is read inside the layer (see `cloud/syncDaemon.ts`), so on a
-      // server without `PATHWAY_CLOUD_SYNC=enabled` this contributes one debug log and nothing
+      // A server without cloud configuration contributes one warning and nothing
       // else — no replica tables, no Convex client, no forked fiber. It sits here rather than in
       // the runtime chain because this is where the `SqlClient` behind every repository, the
       // secret store, the environment, and the HTTP client are all in scope at once.

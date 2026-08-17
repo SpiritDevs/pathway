@@ -15,7 +15,6 @@ import { v } from "convex/values";
 import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { appendCompanyChanges, encodeEnvironmentRegistration } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
@@ -206,7 +205,6 @@ export const list = query({
   args: { companyId: domainIdArg },
   returns: v.array(registrationResult),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "environments.read");
     const rows = await ctx.db
@@ -223,7 +221,6 @@ export const get = query({
   args: { companyId: domainIdArg, environmentId: v.string() },
   returns: v.union(registrationResult, v.null()),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "environments.read");
     const row = await registrationByEnvironment(ctx, actor.company._id, args.environmentId);
@@ -239,7 +236,6 @@ export const register = mutation({
   args: REGISTER_ARGS,
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const environmentId = requireTrimmed(args.environmentId, "An environment id");
     requireTrimmed(args.descriptor.label, "An environment label");
     requireTrimmed(args.descriptor.serverVersion, "A server version");
@@ -402,7 +398,6 @@ export const heartbeat = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment") {
       throw backendError(
@@ -449,7 +444,6 @@ export const deactivate = mutation({
   args: { companyId: domainIdArg, environmentId: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "environments.manage");
     const registration = await registrationByEnvironment(

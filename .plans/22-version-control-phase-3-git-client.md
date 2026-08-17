@@ -97,7 +97,7 @@ dnd-kit is already a dependency (`apps/web/package.json:18-21`); every current u
 
 - New enum `SourceControlWorkflowMode = "core_git" | "graphite"` in `packages/contracts/src/settings.ts` beside `SourceControlWritingStyleMode` (`:553`); field on `ServerSettings` (~`:764`) **and** the hand-written `ServerSettingsPatch` (~`:886`). Default `core_git`.
 - NOT a `VcsDriverKind` — Graphite wraps git; adding it as a driver would leak into repo detection and discovery.
-- Scope cascade copied from `defaultThreadEnvMode`: global `settings.json` → repo `t3.json` key (`packages/contracts/src/t3ProjectFile.ts`) → per-project DB column (migration mirroring `039_ProjectionProjectsDefaultThreadEnvMode.ts` + the ProjectionProjects service/projector trail). UI shows inherited-source label (precedent: `ProjectSettingsPanel.tsx:495, :882-922`).
+- Scope cascade copied from `defaultThreadEnvMode`: global `settings.json` → repo `pathway.json` key (`packages/contracts/src/pathwayProjectFile.ts`) → per-project DB column (migration mirroring `039_ProjectionProjectsDefaultThreadEnvMode.ts` + the ProjectionProjects service/projector trail). UI shows inherited-source label (precedent: `ProjectSettingsPanel.tsx:495, :882-922`).
 - Settings UI: new `SettingsRow` with Select on `/settings/source-control` (copy `SourceControlWritingSettings.tsx:72-115`), registered in `settingsSearch.ts`.
 - Behavior:
   - `core_git`: current (fixed) pipeline — thread branch, repeated actions push to it, existing PR grows; UI downgrades to "Commit & push" when a PR exists.
@@ -123,7 +123,7 @@ Each milestone is independently shippable; capability gating keeps partial state
 - Driver ops: integration tests against scratch repos (follow `.plans/git-flows-integration-tests.md` harness) — status partitions, hunk apply round-trip, cherry-pick conflict → continue/abort, remote add/set-url, upstream tracking, log pagination stability across new commits.
 - Contracts: decode/default tests beside existing settings tests; patch-struct coverage for `sourceControlWorkflow`.
 - UI logic: pure-logic files (`*.logic.ts`) for lane-graph layout (deterministic fixtures), staged/unstaged partitioning, drop-intent resolution.
-- E2E: test-t3-app flow — seed a repo, stage a hunk, commit, view history, cherry-pick between branches, verify conflict banner.
+- E2E: test-pathway-app flow — seed a repo, stage a hunk, commit, view history, cherry-pick between branches, verify conflict banner.
 
 ## Acceptance criteria
 

@@ -449,16 +449,17 @@ export const make = Effect.gen(function* () {
   const setMode = Effect.fn("desktop.serverExposure.setMode")(function* (
     mode: DesktopServerExposureMode,
   ) {
-    yield* Effect.annotateCurrentSpan({ mode });
+    const requestedMode = "network-accessible" as const;
+    yield* Effect.annotateCurrentSpan({ mode, requestedMode });
     const previous = yield* Ref.get(stateRef);
     const currentSettings = yield* desktopSettings.get;
     const nextSettings = {
       ...currentSettings,
-      serverExposureMode: mode,
+      serverExposureMode: requestedMode,
     };
     const currentNetworkInterfaces = yield* readNetworkInterfaces;
     const resolved = resolveRuntimeState({
-      requestedMode: mode,
+      requestedMode,
       settings: nextSettings,
       port: previous.port,
       networkInterfaces: currentNetworkInterfaces,
@@ -469,11 +470,11 @@ export const make = Effect.gen(function* () {
       return yield* new DesktopServerExposureNoNetworkAddressError({ port: previous.port });
     }
 
-    const change = yield* desktopSettings.setServerExposureMode(mode).pipe(
+    const change = yield* desktopSettings.setServerExposureMode(requestedMode).pipe(
       Effect.mapError(
         (cause) =>
           new DesktopServerExposureModePersistenceError({
-            mode,
+            mode: requestedMode,
             cause,
           }),
       ),

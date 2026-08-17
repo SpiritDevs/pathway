@@ -110,10 +110,10 @@ describe("reconcileRootEnvPublicConfig", () => {
   const config = {
     relayUrl: "https://relay.example.test",
     mobileTracingUrl: "https://api.axiom.co/v1/traces",
-    mobileTracingDataset: "t3-code-mobile-traces-dev",
+    mobileTracingDataset: "pathway-mobile-traces-dev",
     mobileTracingToken: "xaat-public-ingest",
     clientTracingUrl: "https://api.axiom.co/v1/traces",
-    clientTracingDataset: "t3-code-relay-client-traces-dev",
+    clientTracingDataset: "pathway-relay-client-traces-dev",
     clientTracingToken: "xaat-relay-client-ingest",
   } as const;
 
@@ -122,10 +122,10 @@ describe("reconcileRootEnvPublicConfig", () => {
       [
         "PATHWAY_RELAY_URL=https://relay.example.test",
         "PATHWAY_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "PATHWAY_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev",
+        "PATHWAY_MOBILE_OTLP_TRACES_DATASET=pathway-mobile-traces-dev",
         "PATHWAY_MOBILE_OTLP_TRACES_TOKEN=xaat-public-ingest",
         "PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET=t3-code-relay-client-traces-dev",
+        "PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET=pathway-relay-client-traces-dev",
         "PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-relay-client-ingest",
         "",
       ].join("\n"),
@@ -153,10 +153,10 @@ describe("reconcileRootEnvPublicConfig", () => {
         "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_test_example",
         "PATHWAY_RELAY_URL=https://relay.example.test",
         "PATHWAY_MOBILE_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "PATHWAY_MOBILE_OTLP_TRACES_DATASET=t3-code-mobile-traces-dev",
+        "PATHWAY_MOBILE_OTLP_TRACES_DATASET=pathway-mobile-traces-dev",
         "PATHWAY_MOBILE_OTLP_TRACES_TOKEN=xaat-public-ingest",
         "PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL=https://api.axiom.co/v1/traces",
-        "PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET=t3-code-relay-client-traces-dev",
+        "PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET=pathway-relay-client-traces-dev",
         "PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=xaat-relay-client-ingest",
         "",
       ].join("\n"),

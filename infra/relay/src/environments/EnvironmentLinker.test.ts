@@ -40,7 +40,7 @@ const config = RelayConfiguration.RelayConfiguration.of({
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
   clerkSecretKey: Redacted.make("clerk-secret"),
   clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  clerkJwtAudience: "pathway-relay",
   cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
   cloudMintPublicKey: relayKeyPair.publicKey,
   managedEndpointBaseDomain: undefined,
@@ -71,7 +71,7 @@ const makeRequest = Effect.gen(function* () {
     expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
   });
   const payload = {
-    iss: "t3-env:env-link-test",
+    iss: "pathway-env:env-link-test",
     aud: "https://relay.example.test",
     sub: "env-link-test",
     jti: "link-proof-jti",
@@ -131,9 +131,9 @@ function testLayer(input?: {
           revokeForUser: () => Effect.succeed(false),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
-          create: () => Effect.succeed("t3env_credential_secret"),
+          create: () => Effect.succeed("pathwayenv_credential_secret"),
           replaceLinkAndCreate:
-            input?.replaceLinkAndCreate ?? (() => Effect.succeed("t3env_credential_secret")),
+            input?.replaceLinkAndCreate ?? (() => Effect.succeed("pathwayenv_credential_secret")),
           authenticate: () => Effect.succeedNone,
           revokeForEnvironmentPublicKey: () => Effect.succeed(false),
         }),
@@ -164,7 +164,7 @@ describe("EnvironmentLinker", () => {
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
       const result = yield* linker.link({ userId: "user_123", request });
       expect(result.environmentId).toBe(payload.environmentId);
-      expect(result.environmentCredential).toBe("t3env_credential_secret");
+      expect(result.environmentCredential).toBe("pathwayenv_credential_secret");
       expect(persistedEnvironmentId).toBe(payload.environmentId);
     }).pipe(
       Effect.provide(
@@ -172,7 +172,7 @@ describe("EnvironmentLinker", () => {
           replaceLinkAndCreate: (input) =>
             Effect.sync(() => {
               persistedEnvironmentId = input.proof.environmentId;
-              return "t3env_credential_secret";
+              return "pathwayenv_credential_secret";
             }),
         }),
       ),
@@ -198,7 +198,7 @@ describe("EnvironmentLinker", () => {
         expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
       });
       const payload = {
-        iss: "t3-env:env-link-test",
+        iss: "pathway-env:env-link-test",
         aud: "https://relay.example.test",
         sub: "env-link-test",
         jti: "publish-only-proof-jti",
@@ -230,7 +230,7 @@ describe("EnvironmentLinker", () => {
       } satisfies RelayEnvironmentLinkRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
       const result = yield* linker.link({ userId: "user_123", request });
-      expect(result.environmentCredential).toBe("t3env_credential_secret");
+      expect(result.environmentCredential).toBe("pathwayenv_credential_secret");
       expect(result.endpointRuntime).toBeNull();
       expect(persistedEndpoint).toBe("http://127.0.0.1:3773/");
       // Downgrading from a managed link must release the previously provisioned
@@ -242,7 +242,7 @@ describe("EnvironmentLinker", () => {
           replaceLinkAndCreate: (input) =>
             Effect.sync(() => {
               persistedEndpoint = input.endpoint.httpBaseUrl;
-              return "t3env_credential_secret";
+              return "pathwayenv_credential_secret";
             }),
           deprovision: (input) =>
             Effect.sync(() => {
@@ -283,7 +283,7 @@ describe("EnvironmentLinker", () => {
           replaceLinkAndCreate: () =>
             Effect.sync(() => {
               persisted = true;
-              return "t3env_credential_secret";
+              return "pathwayenv_credential_secret";
             }),
         }),
       ),

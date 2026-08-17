@@ -20,6 +20,7 @@ import {
   normalizeCompanyName,
   normalizeIssueKeyPrefix,
   OFFLINE_ACCESS_DEFAULT_DAYS,
+  type WorkspaceKind,
 } from "../src/companies.ts";
 import { normalizeEmail } from "../src/invitations.ts";
 import { checkOwnershipChange } from "../src/ownership.ts";
@@ -27,7 +28,6 @@ import { SEED_ROLES } from "../src/permissions.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import {
   appendCompanyChanges,
   encodeCompanySettings,
@@ -44,6 +44,7 @@ import {
   isEnvironmentIdentity,
   requireCompanyActor,
   requireIdentity,
+  requireOrganizationWorkspace,
   requirePermission,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
@@ -58,6 +59,7 @@ const companySummary = v.object({
    */
   membershipId: domainIdArg,
   name: v.string(),
+  workspaceKind: v.union(v.literal("personal"), v.literal("organization")),
   issueKeyPrefix: v.string(),
   lifecycleState: v.union(v.literal("active"), v.literal("deletionScheduled"), v.literal("purged")),
   purgeAfter: v.union(v.number(), v.null()),
@@ -167,6 +169,53 @@ async function ensureDefaultIssueStatuses(
   return repaired;
 }
 
+/**
+ * Persists a legacy workspace kind or performs the only supported transition. Callers select an
+ * organization for a missing legacy kind because those rows predate personal workspaces and were
+ * already fully collaboration-capable.
+ */
+async function ensureWorkspaceKindTransition(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  membership: Doc<"memberships">,
+  workspaceKind: WorkspaceKind,
+  workspaceName?: string,
+): Promise<Doc<"companies">> {
+  const currentKind = company.workspaceKind ?? "organization";
+  if (currentKind === "organization" && workspaceKind === "personal") {
+    return company;
+  }
+
+  const isLegacyRepair = company.workspaceKind === undefined;
+  const isUpgrade = currentKind === "personal" && workspaceKind === "organization";
+  if (!isLegacyRepair && !isUpgrade) return company;
+
+  const name = workspaceName ?? company.name;
+  await ctx.db.patch(company._id, {
+    workspaceKind,
+    name,
+    updatedAt: Date.now(),
+  });
+  await appendCompanyChanges(ctx, {
+    companyId: company._id,
+    actor: { kind: "member", membershipId: membership.id },
+    changes: [],
+    companyUpsert: true,
+  });
+  const repaired = await ctx.db.get(company._id);
+  if (repaired === null) throw backendError("entity-not-found", "Workspace is missing.");
+  return repaired;
+}
+
+function optionalWorkspaceName(name: string | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  const normalized = normalizeCompanyName(name);
+  if (normalized.length === 0) {
+    throw backendError("invalid-arguments", "A workspace needs a name.");
+  }
+  return normalized;
+}
+
 /** The `companySummary` view of a company as seen through one of its memberships. */
 async function summarize(
   ctx: QueryCtx,
@@ -176,6 +225,7 @@ async function summarize(
   id: string;
   membershipId: string;
   name: string;
+  workspaceKind: WorkspaceKind;
   issueKeyPrefix: string;
   lifecycleState: "active" | "deletionScheduled" | "purged";
   purgeAfter: number | null;
@@ -187,6 +237,7 @@ async function summarize(
     id: company.id,
     membershipId: membership.id,
     name: company.name,
+    workspaceKind: company.workspaceKind ?? "organization",
     issueKeyPrefix: company.issueKeyPrefix,
     lifecycleState: company.lifecycleState,
     purgeAfter: company.purgeAfter,
@@ -217,6 +268,7 @@ async function createCompanyOwnedBy(
     readonly user: Doc<"users">;
     readonly companyDomainId: string;
     readonly name: string;
+    readonly workspaceKind: WorkspaceKind;
     readonly issueKeyPrefix: string;
   },
 ): Promise<{ company: Doc<"companies">; membership: Doc<"memberships"> }> {
@@ -228,6 +280,7 @@ async function createCompanyOwnedBy(
   const companyDocId = await ctx.db.insert("companies", {
     id: input.companyDomainId,
     name: input.name,
+    workspaceKind: input.workspaceKind,
     issueKeyPrefix: input.issueKeyPrefix,
     nextIssueNumber: 1,
     lifecycleState: "active",
@@ -351,7 +404,6 @@ export const listMine = query({
   args: {},
   returns: v.array(companySummary),
   handler: async (ctx) => {
-    requireCloudSyncEnabled();
     await requireIdentity(ctx);
     const user = await currentUser(ctx);
     if (user === null) return [];
@@ -376,6 +428,7 @@ export const listMine = query({
         id: company.id,
         membershipId: membership.id,
         name: company.name,
+        workspaceKind: company.workspaceKind ?? "organization",
         issueKeyPrefix: company.issueKeyPrefix,
         lifecycleState: company.lifecycleState,
         purgeAfter: company.purgeAfter,
@@ -390,8 +443,8 @@ export const listMine = query({
 
 /**
  * Idempotently provisions the signed-in Clerk identity: the `users` row, and — on a first sign-in
- * — one ordinary single-member company they own. That company is not a personal-data model; it can
- * be renamed, gain teams, and invite others like any other.
+ * — one ordinary single-member personal workspace they own. Organization onboarding upgrades that
+ * same workspace in place; a caller may also request an organization on its first call.
  *
  * Idempotence is what makes this safe to call on every sign-in: the `users` row is upserted (the
  * display name and email are re-snapshotted from the identity, because Clerk is authoritative for
@@ -401,10 +454,13 @@ export const listMine = query({
  * fresh one, because {@link restore} is a deliberate act and they need somewhere to work meanwhile.
  */
 export const provisionCurrentUser = mutation({
-  args: { displayName: v.optional(v.string()) },
+  args: {
+    displayName: v.optional(v.string()),
+    workspaceKind: v.optional(v.union(v.literal("personal"), v.literal("organization"))),
+    workspaceName: v.optional(v.string()),
+  },
   returns: companySummary,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const identity = await ctx.auth.getUserIdentity();
     if (identity === null) {
       throw backendError("not-authenticated", "Provisioning requires a signed-in identity.");
@@ -420,6 +476,7 @@ export const provisionCurrentUser = mutation({
       (args.displayName ?? identity.name ?? "").trim() ||
       (email.split("@")[0] ?? "").trim() ||
       "Member";
+    const workspaceName = optionalWorkspaceName(args.workspaceName);
 
     const now = Date.now();
     const existingUser = await ctx.db
@@ -445,8 +502,10 @@ export const provisionCurrentUser = mutation({
     const user = await ctx.db.get(userDocId);
     if (user === null) throw backendError("entity-not-found", "The user insert did not persist.");
 
-    // Prefer a company the caller owns: that is the one this function would have created, and
-    // handing back a company they merely joined would make a first sign-in look already-provisioned.
+    // Prefer a workspace the caller owns: that is the one this function would have created. An
+    // explicit onboarding choice must match the workspace kind; otherwise choosing Personal after
+    // joining an organization would incorrectly adopt somebody else's organization as home.
+    const owned: Array<{ company: Doc<"companies">; membership: Doc<"memberships"> }> = [];
     let fallback: { company: Doc<"companies">; membership: Doc<"memberships"> } | null = null;
     const memberships = await ctx.db
       .query("memberships")
@@ -457,15 +516,68 @@ export const provisionCurrentUser = mutation({
       const company = await ctx.db.get(membership.companyId);
       if (company === null || company.lifecycleState !== "active") continue;
       if (await isOwnerMembership(ctx, company._id, membership._id)) {
-        return await summarize(
-          ctx,
-          await ensureDefaultIssueStatuses(ctx, company, membership),
-          membership,
-        );
+        owned.push({ company, membership });
+        continue;
       }
       fallback ??= { company, membership };
     }
-    if (fallback !== null) {
+
+    if (args.workspaceKind === undefined && owned[0] !== undefined) {
+      const selected = owned[0];
+      const repaired = await ensureWorkspaceKindTransition(
+        ctx,
+        selected.company,
+        selected.membership,
+        selected.company.workspaceKind ?? "organization",
+      );
+      return await summarize(
+        ctx,
+        await ensureDefaultIssueStatuses(ctx, repaired, selected.membership),
+        selected.membership,
+      );
+    }
+
+    if (args.workspaceKind !== undefined) {
+      const exact = owned.find(
+        ({ company }) => (company.workspaceKind ?? "organization") === args.workspaceKind,
+      );
+      if (exact !== undefined) {
+        const repaired = await ensureWorkspaceKindTransition(
+          ctx,
+          exact.company,
+          exact.membership,
+          args.workspaceKind,
+          exact.company.workspaceKind === undefined ? workspaceName : undefined,
+        );
+        return await summarize(
+          ctx,
+          await ensureDefaultIssueStatuses(ctx, repaired, exact.membership),
+          exact.membership,
+        );
+      }
+
+      if (args.workspaceKind === "organization") {
+        const personal = owned.find(({ company }) => company.workspaceKind === "personal");
+        if (personal !== undefined) {
+          const upgraded = await ensureWorkspaceKindTransition(
+            ctx,
+            personal.company,
+            personal.membership,
+            "organization",
+            workspaceName,
+          );
+          return await summarize(
+            ctx,
+            await ensureDefaultIssueStatuses(ctx, upgraded, personal.membership),
+            personal.membership,
+          );
+        }
+      }
+    }
+
+    // Preserve the pre-workspace behavior for older callers. New onboarding callers always send a
+    // kind, and therefore create an owned workspace rather than silently adopting a joined one.
+    if (args.workspaceKind === undefined && fallback !== null) {
       return await summarize(
         ctx,
         await ensureDefaultIssueStatuses(ctx, fallback.company, fallback.membership),
@@ -473,14 +585,96 @@ export const provisionCurrentUser = mutation({
       );
     }
 
-    const name = normalizeCompanyName(`${displayName}'s Company`);
+    const workspaceKind = args.workspaceKind ?? "personal";
+    const name =
+      workspaceName ??
+      normalizeCompanyName(
+        workspaceKind === "personal" ? `${displayName}'s Workspace` : `${displayName}'s Company`,
+      );
     const created = await createCompanyOwnedBy(ctx, {
       user,
       companyDomainId: mintDomainId(now),
       name,
+      workspaceKind,
       issueKeyPrefix: defaultIssueKeyPrefix(name),
     });
     return await summarize(ctx, created.company, created.membership);
+  },
+});
+
+/**
+ * Repairs bootstrap rows for an existing workspace without ever creating one. The background sync
+ * runtime may call this alongside the onboarding gate's catalog validation; keeping creation out
+ * of this path makes that concurrency harmless and ensures a legacy account with no workspace
+ * returns to the user's personal/company choice instead of silently receiving a default.
+ */
+export const repairCurrentUserWorkspace = mutation({
+  args: {},
+  returns: v.union(companySummary, v.null()),
+  handler: async (ctx) => {
+    const user = await currentUser(ctx);
+    if (user === null) return null;
+
+    let owned: { company: Doc<"companies">; membership: Doc<"memberships"> } | null = null;
+    let fallback: { company: Doc<"companies">; membership: Doc<"memberships"> } | null = null;
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const membership of memberships) {
+      if (membership.state !== "active") continue;
+      const company = await ctx.db.get(membership.companyId);
+      if (company === null || company.lifecycleState !== "active") continue;
+      if (await isOwnerMembership(ctx, company._id, membership._id)) {
+        owned ??= { company, membership };
+        continue;
+      }
+      fallback ??= { company, membership };
+    }
+
+    const selected = owned ?? fallback;
+    if (selected === null) return null;
+    const repaired = await ensureWorkspaceKindTransition(
+      ctx,
+      selected.company,
+      selected.membership,
+      selected.company.workspaceKind ?? "organization",
+    );
+    return await summarize(
+      ctx,
+      await ensureDefaultIssueStatuses(ctx, repaired, selected.membership),
+      selected.membership,
+    );
+  },
+});
+
+/**
+ * Converts a personal workspace into an organization without replacing its identity or moving any
+ * data. The transition is deliberately one-way; retrying after a successful response was lost is
+ * harmless and returns the already-upgraded workspace.
+ */
+export const upgradeToOrganization = mutation({
+  args: { companyId: domainIdArg, name: v.string() },
+  returns: companySummary,
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "member") {
+      throw backendError("invalid-arguments", "An environment cannot upgrade a workspace.");
+    }
+    requirePermission(actor, "company.manage");
+    const name = optionalWorkspaceName(args.name);
+    if (name === undefined) {
+      throw backendError("invalid-arguments", "An organization needs a name.");
+    }
+
+    const upgraded = await ensureWorkspaceKindTransition(
+      ctx,
+      actor.company,
+      actor.membership,
+      "organization",
+      name,
+    );
+    return await summarize(ctx, upgraded, actor.membership);
   },
 });
 
@@ -501,7 +695,6 @@ export const create = mutation({
   },
   returns: companySummary,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const user = await currentUser(ctx);
     if (user === null) {
       throw backendError("user-not-provisioned", "Provision the user before creating a company.");
@@ -522,6 +715,7 @@ export const create = mutation({
       user,
       companyDomainId: args.id,
       name,
+      workspaceKind: "organization",
       issueKeyPrefix,
     });
     return await summarize(ctx, created.company, created.membership);
@@ -537,7 +731,6 @@ export const rename = mutation({
   args: { companyId: domainIdArg, name: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "company.manage");
     const name = normalizeCompanyName(args.name);
@@ -568,7 +761,6 @@ export const setOfflineAccessDays = mutation({
   args: { companyId: domainIdArg, days: v.number() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "company.manage");
     // Clamped rather than rejected: zero and ninety are both meaningful ends of the same dial.
@@ -636,8 +828,8 @@ export const addOwner = mutation({
   args: { companyId: domainIdArg, membershipId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     if (!actor.permissions.isOwner) {
       throw backendError("permission-denied", "Only an owner may grant ownership.");
     }
@@ -678,8 +870,8 @@ export const removeOwner = mutation({
   args: { companyId: domainIdArg, membershipId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     if (!actor.permissions.isOwner) {
       throw backendError("permission-denied", "Only an owner may revoke ownership.");
     }
@@ -740,7 +932,6 @@ export const scheduleDeletion = mutation({
   args: { companyId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (!actor.permissions.isOwner) {
       throw backendError("permission-denied", "Only an owner may delete a company.");
@@ -776,7 +967,6 @@ export const restore = mutation({
   args: { companyId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const user = await currentUser(ctx);
     if (user === null) {
       throw backendError("not-authenticated", "Restoring a company requires a signed-in user.");

@@ -22,7 +22,7 @@ export function UsageLimitRecoveryCard(props: {
   return (
     <View className="mx-2 mb-2 gap-3 rounded-2xl border border-rose-500/20 bg-rose-500/[0.04] p-3.5">
       <View className="gap-1">
-        <Text className="font-t3-bold text-sm text-foreground">Usage limit reached</Text>
+        <Text className="font-pathway-bold text-sm text-foreground">Usage limit reached</Text>
         <Text className="text-xs leading-5 text-foreground-muted">
           Continue this work with another model, or put the thread aside until the allowance resets.
         </Text>
@@ -36,7 +36,7 @@ export function UsageLimitRecoveryCard(props: {
           className="min-h-10 flex-row items-center gap-2 rounded-xl bg-primary px-3 disabled:opacity-50"
         >
           <SymbolView name="arrow.left.arrow.right" size={13} tintColor="white" type="monochrome" />
-          <Text className="font-t3-bold text-xs text-white">Try another model</Text>
+          <Text className="font-pathway-bold text-xs text-white">Try another model</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -46,7 +46,7 @@ export function UsageLimitRecoveryCard(props: {
           className="min-h-10 flex-row items-center gap-2 rounded-xl border border-neutral-300/70 px-3 disabled:opacity-50 dark:border-white/[0.12]"
         >
           <SymbolView name="alarm" size={13} type="monochrome" />
-          <Text className="font-t3-bold text-xs text-foreground">
+          <Text className="font-pathway-bold text-xs text-foreground">
             {props.pending ? "Working…" : resetTimeLabel(props.resetAt)}
           </Text>
         </Pressable>

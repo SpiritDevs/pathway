@@ -11,7 +11,6 @@ import { api } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -80,9 +79,9 @@ describe("companies.listMine", () => {
 
     const companies = await asClerkUser(t, "user_member").query(api.companies.listMine, {});
 
-    expect(companies.map((company) => [company.id, company.membershipId])).toEqual([
-      [COMPANY_ID, MEMBERSHIP_ID],
-    ]);
+    expect(
+      companies.map((company) => [company.id, company.membershipId, company.workspaceKind]),
+    ).toEqual([[COMPANY_ID, MEMBERSHIP_ID, "organization"]]);
   });
 
   /**

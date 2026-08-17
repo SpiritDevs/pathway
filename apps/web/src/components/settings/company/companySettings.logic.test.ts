@@ -36,6 +36,7 @@ const company = {
   entityKind: "company",
   id: COMPANY_ID,
   name: "Acme",
+  workspaceKind: "organization",
   issueKeyPrefix: "ACME",
   lifecycleState: "active",
   deletionScheduledAt: null,

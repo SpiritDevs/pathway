@@ -69,7 +69,7 @@ export function AuthScreenShell(props: {
               <View className="size-11" />
             )}
             {props.progressLabel ? (
-              <Text className="text-2xs font-t3-bold tracking-[1px] uppercase text-foreground-muted">
+              <Text className="text-2xs font-pathway-bold tracking-[1px] uppercase text-foreground-muted">
                 {props.progressLabel}
               </Text>
             ) : null}
@@ -83,7 +83,7 @@ export function AuthScreenShell(props: {
           ) : null}
 
           <View collapsable={false} className="gap-2">
-            <Text className="text-3xl font-t3-bold tracking-[-0.6px] text-foreground">
+            <Text className="text-3xl font-pathway-bold tracking-[-0.6px] text-foreground">
               {props.title}
             </Text>
             {props.subtitle ? (

@@ -24,7 +24,6 @@ import { isPermissionKey, PERMISSIONS, SEED_ROLES } from "../src/permissions.ts"
 import { SYNC_MAX_ID_CHARS } from "../src/sync/operations.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import {
   appendCompanyChanges,
   encodeRole,
@@ -32,7 +31,12 @@ import {
   type CompanyChange,
 } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
-import { actorRecord, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  actorRecord,
+  requireCompanyActor,
+  requireOrganizationWorkspace,
+  requirePermission,
+} from "./lib/identity.ts";
 import { domainIdArg, roleAssignmentArg } from "./lib/validators.ts";
 
 const roleSummary = v.object({
@@ -57,7 +61,6 @@ export const availablePermissions = query({
   args: {},
   returns: v.array(v.string()),
   handler: async () => {
-    requireCloudSyncEnabled();
     return [...PERMISSIONS];
   },
 });
@@ -74,7 +77,6 @@ export const seedRoleTemplates = query({
     }),
   ),
   handler: async () => {
-    requireCloudSyncEnabled();
     return SEED_ROLES.map((role) => ({
       key: role.key,
       name: role.name,
@@ -88,7 +90,6 @@ export const list = query({
   args: { companyId: domainIdArg },
   returns: v.array(roleSummary),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "roles.read");
     const roles = await ctx.db
@@ -187,8 +188,8 @@ export const create = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "roles.manage");
     assertKnownPermissions(args.permissions);
     if (args.name.trim().length === 0) {
@@ -244,8 +245,8 @@ export const update = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "roles.manage");
     if (args.permissions !== undefined) assertKnownPermissions(args.permissions);
     if (
@@ -316,8 +317,8 @@ export const remove = mutation({
   args: { companyId: domainIdArg, roleId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "roles.manage");
     const role = await requireRole(ctx, actor.company._id, args.roleId);
 
@@ -387,8 +388,8 @@ export const assign = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "roles.manage");
     assertDomainId(args.id, "A role assignment id");
 
@@ -485,8 +486,8 @@ export const unassign = mutation({
   args: { companyId: domainIdArg, assignmentId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
     requirePermission(actor, "roles.manage");
 
     const assignment = await assignmentByDomainId(ctx, actor.company._id, args.assignmentId);

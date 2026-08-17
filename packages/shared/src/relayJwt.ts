@@ -14,18 +14,18 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
-export const RELAY_LINK_PROOF_TYP = "t3-env-link+jwt";
-export const RELAY_MINT_REQUEST_TYP = "t3-cloud-mint+jwt";
-export const RELAY_HEALTH_REQUEST_TYP = "t3-cloud-health+jwt";
-export const RELAY_MINT_RESPONSE_TYP = "t3-env-mint+jwt";
-export const RELAY_HEALTH_RESPONSE_TYP = "t3-env-health+jwt";
-export const RELAY_ACTIVITY_PUBLISH_TYP = "t3-env-activity+jwt";
+export const RELAY_LINK_PROOF_TYP = "pathway-env-link+jwt";
+export const RELAY_MINT_REQUEST_TYP = "pathway-cloud-mint+jwt";
+export const RELAY_HEALTH_REQUEST_TYP = "pathway-cloud-health+jwt";
+export const RELAY_MINT_RESPONSE_TYP = "pathway-env-mint+jwt";
+export const RELAY_HEALTH_RESPONSE_TYP = "pathway-env-health+jwt";
+export const RELAY_ACTIVITY_PUBLISH_TYP = "pathway-env-activity+jwt";
 /** Relay-issued environment service token for the `pathway-convex` audience. */
-export const RELAY_CONVEX_SERVICE_TOKEN_TYP = "t3-relay-convex-service+jwt";
+export const RELAY_CONVEX_SERVICE_TOKEN_TYP = "pathway-relay-convex-service+jwt";
 /** Relay worker identity for its own Convex persistence calls. */
-export const RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP = "t3-relay-convex-control-plane+jwt";
+export const RELAY_CONVEX_CONTROL_PLANE_TOKEN_TYP = "pathway-relay-convex-control-plane+jwt";
 /** Convex-issued connect grant the relay validates against its configured Convex issuer. */
-export const RELAY_CONVEX_CONNECT_GRANT_TYP = "t3-convex-connect-grant+jwt";
+export const RELAY_CONVEX_CONNECT_GRANT_TYP = "pathway-convex-connect-grant+jwt";
 
 export class RelayJwtError extends Schema.TaggedErrorClass<RelayJwtError>()("RelayJwtError", {
   operation: Schema.Literals(["sign", "verify"]),

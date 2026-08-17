@@ -50,7 +50,7 @@
         // Keep this small boot-time copy in sync with the built-in palettes so
         // the selected theme is visible before the app has mounted.
         const BUILT_IN_THEME_PALETTES = {
-          "t3-chat": {
+          "pathway-chat": {
             light: {
               background: "oklch(0.982446 0.010114 325.653)",
               foreground: "oklch(0.325698 0.116116 325.037)",
@@ -133,16 +133,16 @@
           "system",
           "light",
           "dark",
-          "t3-chat",
+          "pathway-chat",
           "grove",
           "ocean",
           "ember",
           "iris",
-          "t3-chat-dark",
-          "t3-grove",
-          "t3-ocean",
-          "t3-ember",
-          "t3-iris",
+          "pathway-chat-dark",
+          "pathway-grove",
+          "pathway-ocean",
+          "pathway-ember",
+          "pathway-iris",
         ];
         // Update every theme-color meta so any element another layer added
         // carries the resolved color too.
@@ -219,19 +219,19 @@
           const storedTheme = window.localStorage.getItem("pathway:theme");
           const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
           // Older builds stored the dark Pathway Chat palette as its own theme id
-          // and every maintainer theme under a t3- prefix; keep those
+          // and every maintainer theme under a pathway- prefix; keep those
           // preferences readable. Mirrors the runtime's legacy alias table.
           const LEGACY_THEME_IDS = {
-            "t3-chat-dark": "t3-chat",
-            "t3-grove": "grove",
-            "t3-ocean": "ocean",
-            "t3-ember": "ember",
-            "t3-iris": "iris",
+            "pathway-chat-dark": "pathway-chat",
+            "pathway-grove": "grove",
+            "pathway-ocean": "ocean",
+            "pathway-ember": "ember",
+            "pathway-iris": "iris",
           };
-          const isLegacyT3ChatDark = storedTheme === "t3-chat-dark";
+          const isLegacyPathwayChatDark = storedTheme === "pathway-chat-dark";
           const themeId =
             storedTheme === null ? "" : (LEGACY_THEME_IDS[storedTheme] ?? storedTheme);
-          const legacyMode = isLegacyT3ChatDark ? "dark" : null;
+          const legacyMode = isLegacyPathwayChatDark ? "dark" : null;
           const builtInModes = BUILT_IN_THEME_MODES[themeId] ?? null;
           const customTheme = builtInModes ? null : findCustomTheme(themeId);
           const themeModes =
@@ -420,13 +420,22 @@
         color: #f5f5f5;
       }
 
-      #boot-shell {
+      /* The boot shell is the app's only loading screen. React re-renders this
+         same markup from components/SplashScreen.tsx while the environment,
+         account, or profile is still resolving, so these rules live here rather
+         than in index.css: this style element is applied on the first paint and
+         outlives the React mount, which keeps both frames identical by
+         construction instead of by discipline. */
+      .boot-shell {
         position: relative;
         overflow: hidden;
         display: flex;
-        min-height: 100%;
+        min-height: 100dvh;
         align-items: center;
         justify-content: center;
+      }
+
+      #boot-shell {
         background: inherit;
         color: inherit;
       }
@@ -436,30 +445,91 @@
         color: var(--boot-foreground);
       }
 
-      #boot-shell-card {
+      /* The lift is half the message block, so the logo starts in the exact
+         middle of the screen and the logo and message end up centered as a
+         pair. Keep it in sync with the gap and the message line height. */
+      .boot-stack {
+        --boot-lift: 19px;
         position: relative;
         z-index: 1;
         display: flex;
+        flex-direction: column;
         align-items: center;
-        justify-content: center;
-        width: 96px;
-        height: 96px;
+        gap: 20px;
+        animation: boot-lift 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
 
-      #boot-shell-logo {
+      .boot-logo {
         width: 64px;
         height: 64px;
         object-fit: contain;
+      }
+
+      .boot-message {
+        margin: 0;
+        font-size: 13px;
+        line-height: 18px;
+        color: color-mix(in srgb, currentColor 62%, transparent);
+        animation: boot-message-in 300ms ease-out 220ms both;
+      }
+
+      /* Stepped rotation: a boot that stalls draws twelve frames a second
+         instead of one per vsync. */
+      .boot-spinner {
+        position: absolute;
+        bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+        width: 18px;
+        height: 18px;
+        box-sizing: border-box;
+        border: 2px solid color-mix(in srgb, currentColor 16%, transparent);
+        border-top-color: color-mix(in srgb, currentColor 55%, transparent);
+        border-radius: 9999px;
+        animation: boot-spinner 1s steps(12) infinite;
+      }
+
+      @keyframes boot-lift {
+        from {
+          transform: translateY(var(--boot-lift));
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes boot-message-in {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes boot-spinner {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-stack,
+        .boot-message {
+          animation: none;
+        }
       }
     </style>
     <title>Pathway (Alpha)</title>
   </head>
   <body>
     <div id="root">
-      <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="Pathway splash screen">
-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="Pathway" />
+      <!-- Mirrors components/SplashScreen.tsx. The message is the one line this
+           frame can be sure of: nothing but the bundle is loading yet. -->
+      <div id="boot-shell" class="boot-shell" aria-label="Pathway splash screen">
+        <div class="boot-stack">
+          <img class="boot-logo" src="/apple-touch-icon.png" alt="Pathway" />
+          <p class="boot-message">Starting up…</p>
         </div>
+        <span class="boot-spinner" aria-hidden="true"></span>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>

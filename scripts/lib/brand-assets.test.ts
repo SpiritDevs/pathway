@@ -38,7 +38,7 @@ describe("brand-assets", () => {
     });
   });
 
-  it("maps development web assets to the public splash and favicon files", () => {
+  it("maps development favicons and the Pathway splash icon into public files", () => {
     expect(DEVELOPMENT_PUBLIC_ICON_OVERRIDES).toEqual([
       {
         sourceRelativePath: BRAND_ASSET_PATHS.developmentWebFaviconIco,
@@ -53,7 +53,7 @@ describe("brand-assets", () => {
         targetRelativePath: "apps/web/public/favicon-32x32.png",
       },
       {
-        sourceRelativePath: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
+        sourceRelativePath: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
         targetRelativePath: "apps/web/public/apple-touch-icon.png",
       },
     ]);

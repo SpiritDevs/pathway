@@ -25,8 +25,8 @@ import {
 } from "./GuestProtocol.ts";
 const OVERLAY_ATTRIBUTE = "data-pathway-annotation-ui";
 const Z_INDEX_OVERLAY = 2147483646;
-const PRIMARY = "var(--t3-primary)";
-const PRIMARY_FILL = "color-mix(in srgb, var(--t3-primary) 10%, transparent)";
+const PRIMARY = "var(--pathway-primary)";
+const PRIMARY_FILL = "color-mix(in srgb, var(--pathway-primary) 10%, transparent)";
 const MAX_MARQUEE_ELEMENTS = 20;
 const CONTENT_LAYER_Z_INDEX = 1;
 const CHROME_LAYER_Z_INDEX = 10;
@@ -57,22 +57,22 @@ const applyAnnotationTheme = (
   if (!theme) return;
   host.style.colorScheme = theme.colorScheme;
   const variables = {
-    "--t3-radius": theme.radius,
-    "--t3-background": theme.background,
-    "--t3-foreground": theme.foreground,
-    "--t3-popover": theme.popover,
-    "--t3-popover-foreground": theme.popoverForeground,
-    "--t3-primary": theme.primary,
-    "--t3-primary-foreground": theme.primaryForeground,
-    "--t3-muted": theme.muted,
-    "--t3-muted-foreground": theme.mutedForeground,
-    "--t3-accent": theme.accent,
-    "--t3-accent-foreground": theme.accentForeground,
-    "--t3-border": theme.border,
-    "--t3-input": theme.input,
-    "--t3-ring": theme.ring,
-    "--t3-font-sans": theme.fontSans,
-    "--t3-font-mono": theme.fontMono,
+    "--pathway-radius": theme.radius,
+    "--pathway-background": theme.background,
+    "--pathway-foreground": theme.foreground,
+    "--pathway-popover": theme.popover,
+    "--pathway-popover-foreground": theme.popoverForeground,
+    "--pathway-primary": theme.primary,
+    "--pathway-primary-foreground": theme.primaryForeground,
+    "--pathway-muted": theme.muted,
+    "--pathway-muted-foreground": theme.mutedForeground,
+    "--pathway-accent": theme.accent,
+    "--pathway-accent-foreground": theme.accentForeground,
+    "--pathway-border": theme.border,
+    "--pathway-input": theme.input,
+    "--pathway-ring": theme.ring,
+    "--pathway-font-sans": theme.fontSans,
+    "--pathway-font-mono": theme.fontMono,
   };
   for (const [name, value] of Object.entries(variables)) {
     host.style.setProperty(name, value);
@@ -1075,7 +1075,7 @@ function startAnnotation(): void {
           regions.push(region);
           const regionBox = createBox(
             PRIMARY,
-            "color-mix(in srgb, var(--t3-primary) 6%, transparent)",
+            "color-mix(in srgb, var(--pathway-primary) 6%, transparent)",
           );
           regionBox.setAttribute("data-region-id", region.id);
           positionBox(regionBox, rect);

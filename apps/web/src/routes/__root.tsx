@@ -1,6 +1,11 @@
 import { type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
-import { isOnboardingComplete, parseProfileMetadata } from "@spiritdevs/client-runtime/profile";
+import {
+  isOnboardingComplete,
+  parseProfileMetadata,
+  recoverMissingOnboardingWorkspace,
+  restartOnboardingForWorkspaceRecovery,
+} from "@spiritdevs/client-runtime/profile";
 import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import { useAuth, useUser } from "@clerk/react";
 import {
@@ -10,19 +15,24 @@ import {
   useLocation,
   useNavigate,
 } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
-import { hasClerkPublicConfig } from "../cloud/publicConfig";
+import {
+  hasClerkPublicConfig,
+  resolveCloudSyncConvexUrl,
+  resolveConvexClerkTokenOptions,
+} from "../cloud/publicConfig";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
-import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { SplashScreen } from "../components/SplashScreen";
+import { resolveAuthGateLoadingReason } from "../components/splashScreen.logic";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { EmailCaptureToastHost } from "../components/email/EmailCaptureToastHost";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -60,7 +70,10 @@ import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
-import { resolveClerkAuthGateState } from "../components/clerk/authGate.logic";
+import {
+  resolveClerkAuthGateState,
+  type WorkspaceValidationState,
+} from "../components/clerk/authGate.logic";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -99,10 +112,23 @@ export const Route = createRootRoute({
   },
   component: RootRouteView,
   errorComponent: RootRouteErrorView,
+  // Nothing below can render until `beforeLoad` has resolved the primary
+  // environment, so without a pending component the boot shell blinks out to an
+  // empty background while that bootstrap runs. `pendingMs: 0` hands the splash
+  // straight over; an already-bootstrapped gate state resolves in a microtask,
+  // ahead of that timer, so navigations never flash it. `pendingMinMs: 0` keeps
+  // the default 500ms floor from padding a boot that was quicker than that.
+  pendingComponent: EnvironmentPendingView,
+  pendingMs: 0,
+  pendingMinMs: 0,
   head: () => ({
     meta: [{ name: "title", content: APP_DISPLAY_NAME }],
   }),
 });
+
+function EnvironmentPendingView() {
+  return <SplashScreen reason="environment" />;
+}
 
 function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -138,19 +164,30 @@ function MissingAuthConfigScreen() {
 }
 
 function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
   const navigate = useNavigate();
+  const metadata = user ? parseProfileMetadata(user.unsafeMetadata) : null;
   const onboardingComplete = isSignedIn
     ? user
-      ? isOnboardingComplete(parseProfileMetadata(user.unsafeMetadata))
+      ? isOnboardingComplete(metadata)
       : undefined
     : undefined;
+  const fetchConvexToken = useCallback(
+    () => getToken(resolveConvexClerkTokenOptions()),
+    [getToken],
+  );
+  const workspaceValidation = useWorkspaceRecoveryValidation({
+    enabled: onboardingComplete === true,
+    fetchToken: fetchConvexToken,
+    user,
+  });
   const gateState = resolveClerkAuthGateState({
     isLoaded,
     isSignedIn,
     onboardingComplete,
     pathname,
+    workspaceValidation,
   });
 
   useEffect(() => {
@@ -162,15 +199,81 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
     }
   }, [gateState, navigate]);
 
-  if (gateState === "loading" || gateState === "redirect" || gateState === "onboarding") {
-    return (
-      <div className="surface-grain flex min-h-dvh items-center justify-center bg-background">
-        <div className="h-1 w-12 animate-pulse rounded-full bg-muted-foreground/35" />
-      </div>
-    );
+  const loadingReason = resolveAuthGateLoadingReason({ gateState, isLoaded });
+  if (loadingReason) {
+    return <SplashScreen reason={loadingReason} />;
   }
 
   return <RootRouteContent pathname={pathname} />;
+}
+
+interface WorkspaceValidationResult {
+  readonly key: string;
+  readonly status: Exclude<WorkspaceValidationState, "checking">;
+}
+
+/**
+ * Confirms that a completed Clerk profile has a matching Convex workspace. Only a successful empty
+ * catalog restarts onboarding; a network, token, or configuration failure leaves existing profile
+ * state untouched so a transient outage cannot lock the user out.
+ */
+function useWorkspaceRecoveryValidation(options: {
+  readonly enabled: boolean;
+  readonly fetchToken: () => Promise<string | null>;
+  readonly user: ReturnType<typeof useUser>["user"];
+}): WorkspaceValidationState {
+  const convexUrl = resolveCloudSyncConvexUrl();
+  const completionMarker = options.user
+    ? parseProfileMetadata(options.user.unsafeMetadata)?.onboardingCompletedAt
+    : undefined;
+  const validationKey =
+    options.enabled && options.user && completionMarker && convexUrl
+      ? `${options.user.id}:${completionMarker}`
+      : null;
+  const [result, setResult] = useState<WorkspaceValidationResult | null>(null);
+
+  useEffect(() => {
+    const user = options.user;
+    if (validationKey === null || convexUrl === null || !user) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const { hasUsableOnboardingWorkspace } = await import("../cloud/onboardingProvisioning");
+        const recovery = await recoverMissingOnboardingWorkspace({
+          hasUsableWorkspace: async () => {
+            const hasWorkspace = await hasUsableOnboardingWorkspace({
+              convexUrl,
+              fetchToken: options.fetchToken,
+            });
+            return cancelled ? true : hasWorkspace;
+          },
+          restartOnboarding: async () => {
+            if (cancelled) return;
+            await user.update({
+              unsafeMetadata: restartOnboardingForWorkspaceRecovery(
+                parseProfileMetadata(user.unsafeMetadata),
+              ),
+            });
+          },
+        });
+        if (cancelled) return;
+        if (recovery === "valid") {
+          setResult({ key: validationKey, status: "valid" });
+        }
+      } catch {
+        if (!cancelled) setResult({ key: validationKey, status: "unavailable" });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [convexUrl, options.fetchToken, options.user, validationKey]);
+
+  if (!options.enabled) return "valid";
+  if (convexUrl === null) return "unavailable";
+  return result?.key === validationKey ? result.status : "checking";
 }
 
 function RootRouteContent({ pathname }: { readonly pathname: string }) {
@@ -226,7 +329,6 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <GlassAppearanceSync />
         <FontAppearanceSync />
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-        <RelayClientInstallDialog />
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <ConfirmDialogHost />

@@ -63,7 +63,7 @@ export class ResourceMonitorBinary extends Context.Service<
 >()("@spiritdevs/pathway/resourceTelemetry/ResourceMonitorBinary") {}
 
 function binaryName(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor";
+  return platform === "win32" ? "pathway-resource-monitor.exe" : "pathway-resource-monitor";
 }
 
 export type ResourceMonitorLinuxLibc = "gnu" | "musl";

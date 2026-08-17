@@ -82,7 +82,7 @@ function ModelRow(props: {
     >
       <Text
         className={cn(
-          "shrink text-sm font-t3-medium",
+          "shrink text-sm font-pathway-medium",
           props.selected ? "text-primary-foreground" : "text-foreground",
         )}
         numberOfLines={1}
@@ -91,12 +91,12 @@ function ModelRow(props: {
       </Text>
       {props.option.isDefault ? (
         <View className="rounded-md bg-subtle-strong px-1.5 py-0.5">
-          <Text className="text-3xs font-t3-bold text-foreground-muted">Default</Text>
+          <Text className="text-3xs font-pathway-bold text-foreground-muted">Default</Text>
         </View>
       ) : null}
       {props.option.isLegacy ? (
         <View className="rounded-md bg-subtle px-1.5 py-0.5">
-          <Text className="text-3xs font-t3-bold text-foreground-muted">Legacy</Text>
+          <Text className="text-3xs font-pathway-bold text-foreground-muted">Legacy</Text>
         </View>
       ) : null}
       <View className="flex-1" />
@@ -136,14 +136,14 @@ function ProviderHeader(props: {
       )}
     >
       <ProviderIcon provider={props.driver} size={15} />
-      <Text className="text-2xs font-t3-bold uppercase tracking-widest text-foreground-muted">
+      <Text className="text-2xs font-pathway-bold uppercase tracking-widest text-foreground-muted">
         {props.label}
       </Text>
       {props.collapsible ? (
         <>
           <View className="flex-1" />
           {props.collapsed ? (
-            <Text className="text-2xs font-t3-medium text-foreground-muted">
+            <Text className="text-2xs font-pathway-medium text-foreground-muted">
               {props.modelCount}
             </Text>
           ) : null}
@@ -177,7 +177,7 @@ function DisclosureRow(props: {
         props.disabled && "opacity-40",
       )}
     >
-      <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
+      <Text className="text-sm font-pathway-medium text-foreground">{props.label}</Text>
       <View className="flex-1" />
       {props.value ? (
         <Text className="text-sm text-foreground-muted" numberOfLines={1}>
@@ -208,7 +208,7 @@ function ChoiceRow(props: {
     >
       <Text
         className={cn(
-          "shrink text-sm font-t3-medium",
+          "shrink text-sm font-pathway-medium",
           props.selected ? "text-primary-foreground" : "text-foreground",
         )}
       >
@@ -237,7 +237,7 @@ function SwitchRow(props: {
         props.disabled && "opacity-40",
       )}
     >
-      <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
+      <Text className="text-sm font-pathway-medium text-foreground">{props.label}</Text>
       <Switch
         disabled={props.disabled}
         ios_backgroundColor={track}
@@ -491,7 +491,7 @@ export function ThreadSettingsSheet(props: {
                 }}
                 className="rounded-full border border-border bg-subtle px-3 py-1.5 active:opacity-70"
               >
-                <Text className="text-2xs font-t3-medium text-foreground-muted">
+                <Text className="text-2xs font-pathway-medium text-foreground-muted">
                   {showLegacy ? "Hide legacy models" : "Show legacy models"}
                 </Text>
               </Pressable>
@@ -600,7 +600,7 @@ export function ThreadSettingsSheet(props: {
               onPress={handleSave}
               className="mx-4 mt-2 h-12 items-center justify-center rounded-full bg-primary active:opacity-80"
             >
-              <Text className="text-sm font-t3-bold text-primary-foreground">
+              <Text className="text-sm font-pathway-bold text-primary-foreground">
                 {pendingModel ? "Save" : "Done"}
               </Text>
             </Pressable>
@@ -625,7 +625,7 @@ export function ThreadSettingsSheet(props: {
               >
                 <View className="h-1 w-9 rounded-full bg-subtle-strong" />
               </Pressable>
-              <Text className="px-5 pb-1.5 text-2xs font-t3-bold uppercase tracking-widest text-foreground-muted">
+              <Text className="px-5 pb-1.5 text-2xs font-pathway-bold uppercase tracking-widest text-foreground-muted">
                 {submenuContent.title}
               </Text>
               <ScrollView

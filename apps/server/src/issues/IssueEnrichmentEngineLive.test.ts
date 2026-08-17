@@ -107,7 +107,7 @@ const DependenciesLive = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-enrichment-test-" })),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-enrichment-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 

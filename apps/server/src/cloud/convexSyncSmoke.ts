@@ -278,7 +278,7 @@ export function buildLinkProofPayload(input: {
   readonly nowEpochSeconds: number;
 }): RelayEnvironmentLinkProofPayload {
   return {
-    iss: `t3-env:${input.environmentId}`,
+    iss: `pathway-env:${input.environmentId}`,
     aud: normalizeRelayIssuer(input.relayIssuer),
     sub: input.environmentId,
     jti: input.jti,

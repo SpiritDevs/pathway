@@ -11,7 +11,7 @@ will use automatically.
 
 ## Customize a project icon
 
-Pathway selects a project icon automatically. It checks `t3.json`, common favicon and app icon
+Pathway selects a project icon automatically. It checks `pathway.json`, common favicon and app icon
 paths, and icon links in project HTML files.
 
 To choose a different icon:

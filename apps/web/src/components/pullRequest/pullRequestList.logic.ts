@@ -205,7 +205,7 @@ const SNAPSHOT_MAX_ENTRIES = 99;
 
 type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
 
-const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${environmentId}`;
+const snapshotStorageKey = (environmentId: string) => `pathway.pullRequests.list:${environmentId}`;
 
 /**
  * The priority groups' own server-filtered answers, carried with the feed. An authored pull

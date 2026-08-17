@@ -160,7 +160,7 @@ function QueueRow(props: {
           accessibilityLabel="Queued automatically by an agent"
           className="rounded-full bg-neutral-200/70 px-1.5 py-px dark:bg-white/[0.1]"
         >
-          <Text className="font-t3-medium text-3xs text-foreground-muted">Agent</Text>
+          <Text className="font-pathway-medium text-3xs text-foreground-muted">Agent</Text>
         </View>
       ) : null}
       <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
@@ -179,7 +179,7 @@ function QueueRow(props: {
           tintColor={props.iconColor}
           type="monochrome"
         />
-        <Text className="font-t3-medium text-2xs text-foreground">Steer</Text>
+        <Text className="font-pathway-medium text-2xs text-foreground">Steer</Text>
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -315,7 +315,7 @@ export function ThreadQueueControl(props: {
     <View className="mx-4 mb-3 overflow-hidden rounded-2xl border border-neutral-300/60 bg-card dark:border-white/[0.1]">
       <View className="flex-row items-center gap-2 border-b border-neutral-300/50 px-3 py-2 dark:border-white/[0.08]">
         <SymbolView name="list.number" size={13} tintColor={iconColor} type="monochrome" />
-        <Text className="font-t3-medium text-xs text-foreground">Queue</Text>
+        <Text className="font-pathway-medium text-xs text-foreground">Queue</Text>
         <Text className="ml-auto text-2xs tabular-nums text-foreground-muted">
           {ordered.length}
         </Text>

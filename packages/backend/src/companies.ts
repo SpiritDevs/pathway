@@ -7,6 +7,9 @@
 export const COMPANY_LIFECYCLE_STATES = ["active", "deletionScheduled", "purged"] as const;
 export type CompanyLifecycleState = (typeof COMPANY_LIFECYCLE_STATES)[number];
 
+export const WORKSPACE_KINDS = ["personal", "organization"] as const;
+export type WorkspaceKind = (typeof WORKSPACE_KINDS)[number];
+
 export const MEMBERSHIP_STATES = ["active", "locked", "left"] as const;
 export type MembershipState = (typeof MEMBERSHIP_STATES)[number];
 

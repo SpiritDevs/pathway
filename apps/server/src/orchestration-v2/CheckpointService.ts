@@ -23,7 +23,7 @@ import { parseTurnDiffFilesFromUnifiedDiff } from "../checkpointing/Diffs.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import { IdAllocatorV2, type IdAllocatorV2Shape } from "./IdAllocator.ts";
 
-const CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
+const CHECKPOINT_REFS_PREFIX = "refs/pathway/orchestration-v2/checkpoints";
 const ROOT_CHECKPOINT_SCOPE_NAME = "root";
 
 export class CheckpointRootScopePrepareError extends Schema.TaggedErrorClass<CheckpointRootScopePrepareError>()(

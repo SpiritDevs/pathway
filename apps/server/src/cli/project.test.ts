@@ -20,7 +20,7 @@ import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.t
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
-import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
+import * as PathwayProjectFileLoader from "../project/PathwayProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import {
   ProjectLiveServerDeclaredResponseError,
@@ -72,7 +72,7 @@ const readProjects = (baseDir: string) =>
       Layer.provideMerge(ProjectEnrichmentService.layer),
       Layer.provideMerge(RepositoryIdentityResolver.layer),
       Layer.provideMerge(ProjectFaviconResolver.layer),
-      Layer.provideMerge(T3ProjectFileLoader.layer),
+      Layer.provideMerge(PathwayProjectFileLoader.layer),
       Layer.provideMerge(WorkspacePaths.layer),
       Layer.provideMerge(SqlitePersistenceLayerLive),
       Layer.provideMerge(NodeServices.layer),
@@ -115,9 +115,9 @@ it("preserves unexpected server failures without deriving the message from them"
 
 it.effect("adds, renames, and removes projects through the V2 project CLI domain", () =>
   Effect.gen(function* () {
-    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-v2-project-cli-"));
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-v2-project-cli-"));
     const workspaceRoot = NodeFS.mkdtempSync(
-      NodePath.join(NodeOS.tmpdir(), "t3-v2-project-workspace-"),
+      NodePath.join(NodeOS.tmpdir(), "pathway-v2-project-workspace-"),
     );
 
     yield* runCli(["project", "add", workspaceRoot, "--title", "Alpha", "--base-dir", baseDir]);

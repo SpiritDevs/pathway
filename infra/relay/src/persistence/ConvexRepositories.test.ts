@@ -111,7 +111,7 @@ const linkRequest = {
 } satisfies RelayEnvironmentLinkRequest;
 
 const linkProof = {
-  iss: "t3-env:env-one",
+  iss: "pathway-env:env-one",
   aud: "https://relay.example.test",
   sub: "env-one",
   jti: "proof-one",
@@ -571,7 +571,7 @@ describe("Convex relay repositories", () => {
           environmentId: "env-one",
           environmentPublicKey: "public-key",
         }),
-      ).toMatch(/^t3env_/u);
+      ).toMatch(/^pathwayenv_/u);
       expect(
         yield* credentials.replaceLinkAndCreate({
           userId: "user-one",
@@ -579,8 +579,10 @@ describe("Convex relay repositories", () => {
           proof: linkProof,
           endpoint: managedEndpoint,
         }),
-      ).toMatch(/^t3env_/u);
-      expect(Option.getOrNull(yield* credentials.authenticate("t3env_credential_secret"))).toEqual({
+      ).toMatch(/^pathwayenv_/u);
+      expect(
+        Option.getOrNull(yield* credentials.authenticate("pathwayenv_credential_secret")),
+      ).toEqual({
         credentialId: "credential-one",
         environmentId: "env-one",
         environmentPublicKey: "public-key",
@@ -609,7 +611,7 @@ describe("Convex relay repositories", () => {
         now: "1970-01-01T00:00:00.000Z",
       });
       expect(calls[2]?.args).toEqual({
-        credentialHash: Buffer.from("t3env_credential_secret").toString("base64url"),
+        credentialHash: Buffer.from("pathwayenv_credential_secret").toString("base64url"),
       });
     }).pipe(Effect.provide(layer));
   });

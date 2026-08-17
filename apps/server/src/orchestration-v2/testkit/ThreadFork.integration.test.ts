@@ -91,10 +91,10 @@ function runGit(
 const makeCheckpointWorkspace = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const cwd = yield* fs.makeTempDirectory({ prefix: "t3-orchestrator-v2-thread-fork-" });
+  const cwd = yield* fs.makeTempDirectory({ prefix: "pathway-orchestrator-v2-thread-fork-" });
   yield* runGit(cwd, ["init"]);
   yield* runGit(cwd, ["config", "user.name", "Pathway Test"]);
-  yield* runGit(cwd, ["config", "user.email", "t3code-test@example.com"]);
+  yield* runGit(cwd, ["config", "user.email", "pathway-test@example.com"]);
   yield* fs.writeFileString(path.join(cwd, "README.md"), "# thread fork\n");
   yield* runGit(cwd, ["add", "README.md"]);
   yield* runGit(cwd, ["commit", "-m", "initial"]);

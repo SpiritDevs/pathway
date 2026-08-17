@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   activeCompanyIdStorageKey,
+  companyRowsFromRegistryReplicas,
   readActiveCompanyId,
   resolveActiveCompanyId,
   writeActiveCompanyId,
@@ -12,6 +13,57 @@ import {
 const COMPANY_A = CompanyId.make("company-a");
 const COMPANY_B = CompanyId.make("company-b");
 const COMPANIES = [{ id: COMPANY_A }, { id: COMPANY_B }];
+
+describe("companyRowsFromRegistryReplicas", () => {
+  it("preserves personal workspace kind for account-menu decisions", () => {
+    const rows = companyRowsFromRegistryReplicas(
+      new Map([
+        [
+          COMPANY_A,
+          {
+            view: new Map([
+              [
+                "company-a",
+                {
+                  entityKind: "company",
+                  name: "Corey's Workspace",
+                  workspaceKind: "personal",
+                  issueKeyPrefix: "COR",
+                },
+              ],
+            ]),
+          },
+        ],
+      ]),
+    );
+
+    expect(rows).toEqual([
+      {
+        id: COMPANY_A,
+        name: "Corey's Workspace",
+        workspaceKind: "personal",
+        issueKeyPrefix: "COR",
+      },
+    ]);
+  });
+
+  it("treats a legacy workspace without a kind as an organization", () => {
+    const rows = companyRowsFromRegistryReplicas(
+      new Map([
+        [
+          COMPANY_A,
+          {
+            view: new Map([
+              ["company-a", { entityKind: "company", name: "Acme", issueKeyPrefix: "ACM" }],
+            ]),
+          },
+        ],
+      ]),
+    );
+
+    expect(rows[0]?.workspaceKind).toBe("organization");
+  });
+});
 
 function memoryStorage(initial: Readonly<Record<string, string>> = {}) {
   const values = new Map(Object.entries(initial));

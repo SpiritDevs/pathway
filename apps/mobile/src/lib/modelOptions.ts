@@ -2,7 +2,7 @@ import type { MenuAction } from "@react-native-menu/menu";
 import type {
   ModelCapabilities,
   ModelSelection,
-  ServerConfig as T3ServerConfig,
+  ServerConfig as PathwayServerConfig,
 } from "@spiritdevs/contracts";
 import {
   buildProviderOptionSelectionsFromDescriptors,
@@ -68,7 +68,7 @@ function normalizeSelectionOptions(
  * validated, so stored selections pass through untouched.
  */
 export function resolveSelectableModelSelection(
-  config: T3ServerConfig | null | undefined,
+  config: PathwayServerConfig | null | undefined,
   selection: ModelSelection | null,
 ): ModelSelection | null {
   if (!selection || !config) {
@@ -93,7 +93,7 @@ export function resolveSelectableModelSelection(
  * sheet are unaffected.
  */
 export function resolveDefaultableModelSelection(
-  config: T3ServerConfig | null | undefined,
+  config: PathwayServerConfig | null | undefined,
   selection: ModelSelection | null,
 ): ModelSelection | null {
   const usable = resolveSelectableModelSelection(config, selection);
@@ -106,7 +106,7 @@ export function resolveDefaultableModelSelection(
 }
 
 export function buildModelOptions(
-  config: T3ServerConfig | null | undefined,
+  config: PathwayServerConfig | null | undefined,
   fallbackModelSelection: ModelSelection | null,
 ): ReadonlyArray<ModelOption> {
   const options = new Map<string, ModelOption>();

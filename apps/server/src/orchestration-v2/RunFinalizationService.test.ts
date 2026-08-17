@@ -27,7 +27,7 @@ const vcsStatus = {
   pr: {
     number: 42,
     title: "Show PRs on issues",
-    url: "https://github.com/t3dotgg/pathway/pull/42",
+    url: "https://github.com/SpiritDevs/pathway/pull/42",
     baseRef: "main",
     headRef: "feature/issues-pr",
     state: "open",
@@ -41,7 +41,7 @@ it("maps refreshed VCS status to issue PR metadata", () => {
     provider: "github",
     number: 42,
     title: "Show PRs on issues",
-    url: "https://github.com/t3dotgg/pathway/pull/42",
+    url: "https://github.com/SpiritDevs/pathway/pull/42",
     state: "open",
   });
   assert.isNull(RunFinalization.issuePullRequestFromStatus(threadId, { ...vcsStatus, pr: null }));

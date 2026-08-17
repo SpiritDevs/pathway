@@ -645,7 +645,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
         if (presentation.kind === "file") {
           return (
             <NativeText
-              className="font-t3-bold"
+              className="font-pathway-bold"
               onPress={() => onLinkPress(href)}
               style={{ color: inlineTextColor }}
             >
@@ -921,7 +921,7 @@ function renderFeedEntry(
         hitSlop={4}
         className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
       >
-        <Text className="font-t3-medium text-sm tabular-nums text-foreground-muted">
+        <Text className="font-pathway-medium text-sm tabular-nums text-foreground-muted">
           {entry.label}
         </Text>
         <SymbolView
@@ -978,7 +978,7 @@ function renderFeedEntry(
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           {message.createdBy === "agent" ? (
-            <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
+            <Text className="mb-1 pr-1 font-pathway-medium text-2xs text-foreground-muted opacity-60">
               Sent by another agent
             </Text>
           ) : null}
@@ -1030,7 +1030,7 @@ function renderFeedEntry(
               >
                 <Text
                   className={cn(
-                    "font-t3-medium text-2xs tracking-wide",
+                    "font-pathway-medium text-2xs tracking-wide",
                     intentBadge.tone === "queued"
                       ? "text-amber-700 dark:text-amber-300"
                       : "text-sky-700 dark:text-sky-300",
@@ -1040,7 +1040,7 @@ function renderFeedEntry(
                 </Text>
               </View>
             ) : null}
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+            <Text className="font-pathway-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
             {message.text.trim().length > 0 ? (
@@ -1113,7 +1113,7 @@ function renderFeedEntry(
               buttonSize={28}
               iconSize={13}
             />
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+            <Text className="font-pathway-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
               {timestampLabel}
             </Text>
           </View>
@@ -1158,7 +1158,7 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
         <View className="h-1 w-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
         <View className="h-1 w-1 rounded-full bg-neutral-400/60 dark:bg-neutral-500/60" />
       </View>
-      <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+      <Text className="font-pathway-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
         Working for {durationLabel}
       </Text>
     </View>
@@ -1423,7 +1423,7 @@ function ThreadFeedPlaceholder(props: {
       }}
     >
       <View className="max-w-[320px] items-center gap-2">
-        <Text className="text-center font-t3-bold text-lg text-foreground">{props.title}</Text>
+        <Text className="text-center font-pathway-bold text-lg text-foreground">{props.title}</Text>
         <Text className="text-center text-sm leading-normal text-foreground-secondary">
           {props.detail}
         </Text>

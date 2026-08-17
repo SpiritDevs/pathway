@@ -96,27 +96,6 @@ const confirmedNote = (state: NoteState, id: SyncEntityId): TestNote | null =>
   state.confirmed.get(syncEntityKey(testNoteKey(id))) ?? null;
 
 describe("SyncEngine", () => {
-  it.effect("does nothing at all while the cloud sync capability is off", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness();
-
-      yield* Effect.gen(function* () {
-        const engine = yield* openEngine("client-a");
-        yield* engine.enqueue({
-          operationId: operationId("op-create"),
-          operation: createNote({ id: NOTE_A, title: "A", body: "" }),
-        });
-        const receipt = yield* engine.sync;
-        yield* engine.run;
-
-        expect(receipt.outcome).toBe("disabled");
-        expect(yield* harness.server.submissions).toEqual(new Map());
-        // The optimistic overlay is local-only, so the row is still there for the user.
-        expect(viewNote(yield* SubscriptionRef.get(engine.state), NOTE_A)?.title).toBe("A");
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
-
   it.effect("merges edits to different fields of the same entity", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

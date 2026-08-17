@@ -73,7 +73,7 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
         type="monochrome"
       />
       {props.label ? (
-        <Text className="font-t3-medium text-2xs" style={{ color: props.tintColor }}>
+        <Text className="font-pathway-medium text-2xs" style={{ color: props.tintColor }}>
           {copied ? "Copied" : props.label}
         </Text>
       ) : null}

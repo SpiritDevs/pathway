@@ -131,7 +131,7 @@ const decodeCodexBackgroundTerminalsListResponse = Schema.decodeUnknownEffect(
   CodexBackgroundTerminalsListResponse,
 );
 const CODEX_CLIENT_INFO = {
-  name: "t3code_desktop",
+  name: "pathway_desktop",
   title: "Pathway Desktop",
   version: "0.1.0",
 } as const;

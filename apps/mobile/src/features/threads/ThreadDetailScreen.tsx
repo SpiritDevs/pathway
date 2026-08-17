@@ -12,7 +12,7 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   RuntimeRequestId,
-  ServerConfig as T3ServerConfig,
+  ServerConfig as PathwayServerConfig,
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { ThreadUserInputQuestion } from "@spiritdevs/client-runtime/state/thread-requests";
@@ -113,7 +113,7 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
-  readonly serverConfig: T3ServerConfig | null;
+  readonly serverConfig: PathwayServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;

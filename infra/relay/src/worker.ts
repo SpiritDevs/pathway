@@ -10,6 +10,7 @@ import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
@@ -22,6 +23,7 @@ import {
   metadataApi,
   mobileApi,
   relayClientAuthLayer,
+  relayCorsPreflightResponse,
   relayDpopClientAuthLayer,
   relayCors,
   relayDocsRedirectRoute,
@@ -106,17 +108,19 @@ const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningS
 export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
 
 export const ApiLive = Api.make(
-  RelayDeploymentConfig.pipe(
-    Effect.map(({ relayPublicDomain }) => ({
-      main: import.meta.filename,
-      compatibility: {
-        date: "2026-05-22",
-        flags: ["nodejs_compat"],
-      },
-      domain: relayPublicDomain,
-    })),
-    Effect.orDie,
-  ),
+  {
+    main: import.meta.filename,
+    compatibility: {
+      date: "2026-05-22",
+      flags: ["nodejs_compat"],
+    },
+    // Clerk verification and challenge signing regularly exceed the Free plan's 10 ms ceiling.
+    // Keep the paid Worker tightly bounded rather than inheriting its 30-second default.
+    limits: { cpuMs: 100 },
+    // Public traffic enters through the tiny gateway Worker, which forwards non-preflight
+    // requests over this private service binding.
+    url: false,
+  },
   Effect.gen(function* () {
     //
     // 1. Provision Infrastructure for the Worker to use
@@ -340,7 +344,16 @@ export const ApiLive = Api.make(
       HttpRouter.toHttpEffect,
       withoutCapturedParentSpan,
       Effect.flatMap((httpEffect) =>
-        traceRelayHttpRequestWith(httpEffect.pipe(Effect.provide(runtimeLayer)), relayTraceLayer),
+        HttpServerRequest.HttpServerRequest.pipe(
+          Effect.flatMap((request) =>
+            request.method === "OPTIONS"
+              ? Effect.succeed(relayCorsPreflightResponse())
+              : traceRelayHttpRequestWith(
+                  httpEffect.pipe(Effect.provide(runtimeLayer)),
+                  relayTraceLayer,
+                ),
+          ),
+        ),
       ),
     );
 

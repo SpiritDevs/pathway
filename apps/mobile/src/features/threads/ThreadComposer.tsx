@@ -6,7 +6,7 @@ import type {
   ModelSelection,
   ProviderInteractionMode,
   RuntimeMode,
-  ServerConfig as T3ServerConfig,
+  ServerConfig as PathwayServerConfig,
 } from "@spiritdevs/contracts";
 import {
   detectComposerTrigger,
@@ -107,7 +107,7 @@ export interface ThreadComposerProps {
    */
   readonly threadSyncPhase?: "loading" | "syncing" | null;
   readonly selectedThread: EnvironmentThreadShell;
-  readonly serverConfig: T3ServerConfig | null;
+  readonly serverConfig: PathwayServerConfig | null;
   readonly queueCount: number;
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;
@@ -267,7 +267,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
           <View className="h-2 w-2 rounded-full bg-red-500" />
         )}
         <Text
-          className="max-w-[260px] text-sm font-t3-bold leading-snug text-foreground"
+          className="max-w-[260px] text-sm font-pathway-bold leading-snug text-foreground"
           numberOfLines={1}
         >
           {props.status.label}
@@ -303,7 +303,7 @@ const ComposerBrowserTakeoverPill = memo(function ComposerBrowserTakeoverPill(pr
           <View className="h-2 w-2 rounded-full bg-amber-500" />
         )}
         <Text
-          className="max-w-[260px] text-sm font-t3-bold leading-snug text-foreground"
+          className="max-w-[260px] text-sm font-pathway-bold leading-snug text-foreground"
           numberOfLines={2}
         >
           {props.status.label}
@@ -874,7 +874,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               ))}
               {props.draftAttachments.length > 3 ? (
                 <View className="size-[30px] items-center justify-center rounded-lg bg-subtle-strong">
-                  <Text className="text-foreground-muted text-2xs font-t3-bold">
+                  <Text className="text-foreground-muted text-2xs font-pathway-bold">
                     +{props.draftAttachments.length - 3}
                   </Text>
                 </View>

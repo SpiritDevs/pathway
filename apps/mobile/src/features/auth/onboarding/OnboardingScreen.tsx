@@ -1,4 +1,4 @@
-import { useClerk, useUser } from "@clerk/expo";
+import { useAuth, useClerk, useUser } from "@clerk/expo";
 import {
   isOnboardingComplete,
   mergeProfileMetadata,
@@ -17,6 +17,7 @@ import { Alert, View } from "react-native";
 
 import { ErrorBanner } from "../../../components/ErrorBanner";
 import { LoadingScreen } from "../../../components/LoadingScreen";
+import { resolveCloudPublicConfig, resolveConvexClerkTokenOptions } from "../../cloud/publicConfig";
 import { AuthButton, AuthLinkButton } from "../components/AuthControls";
 import { AuthScreenShell } from "../components/AuthScreenShell";
 import { clerkErrorMessage } from "../clerkErrorMessage";
@@ -35,6 +36,8 @@ import { OnboardingAccountKindStep } from "./OnboardingAccountKindStep";
 import { OnboardingCompanyStep } from "./OnboardingCompanyStep";
 import { OnboardingIdentityStep } from "./OnboardingIdentityStep";
 import { OnboardingIndividualStep } from "./OnboardingIndividualStep";
+
+class WorkspaceProvisioningError extends Error {}
 
 async function loadImagePicker() {
   // Matches lib/composerImages.ts: the native module can be missing in
@@ -64,6 +67,7 @@ export function OnboardingScreen() {
  */
 function OnboardingStepper({ user }: { readonly user: UserResource }) {
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
   const metadata = parseProfileMetadata(user.unsafeMetadata);
 
   // Seeded once. `user` mutates under us as each step is written, and the
@@ -198,16 +202,47 @@ function OnboardingStepper({ user }: { readonly user: UserResource }) {
                   : buildIndividualProfile({ providers, referralDetail, referralSource }),
               };
         try {
-          await user.update({
-            unsafeMetadata: mergeProfileMetadata(current, {
-              ...branch,
-              onboardingCompletedAt: new Date().toISOString(),
-            }),
-          });
+          if (accountKind === null) throw new Error("Choose how you will use Pathway first.");
+          const convexUrl = resolveCloudPublicConfig().convex.url;
+          if (convexUrl === null) {
+            throw new Error("Workspace provisioning is not configured for this Pathway build.");
+          }
+          const {
+            completeOnboardingAfterWorkspaceProvision,
+            onboardingProvisioningErrorMessage,
+            onboardingWorkspaceProvisioningArgs,
+            provisionOnboardingWorkspace,
+          } = await import("../../cloud/onboardingProvisioning");
+          try {
+            await completeOnboardingAfterWorkspaceProvision({
+              provisionWorkspace: () =>
+                provisionOnboardingWorkspace({
+                  convexUrl,
+                  fetchToken: () => getToken(resolveConvexClerkTokenOptions()),
+                  args: onboardingWorkspaceProvisioningArgs(accountKind, companyName),
+                }),
+              persistCompletedProfile: async () => {
+                await user.update({
+                  unsafeMetadata: mergeProfileMetadata(current, {
+                    ...branch,
+                    onboardingCompletedAt: new Date().toISOString(),
+                  }),
+                });
+              },
+            });
+          } catch (cause) {
+            throw new WorkspaceProvisioningError(onboardingProvisioningErrorMessage(cause), {
+              cause,
+            });
+          }
           // No navigation: the gate observes `onboardingCompletedAt` and hands
           // the app over on the next render.
         } catch (cause) {
-          setError(clerkErrorMessage(cause, "Could not finish setting up. Try again."));
+          setError(
+            cause instanceof WorkspaceProvisioningError
+              ? cause.message
+              : clerkErrorMessage(cause, "Could not finish setting up. Try again."),
+          );
           setIsSaving(false);
         }
       })();
@@ -217,6 +252,7 @@ function OnboardingStepper({ user }: { readonly user: UserResource }) {
       companyName,
       companyRole,
       companySize,
+      getToken,
       providers,
       referralDetail,
       referralSource,

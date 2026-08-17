@@ -136,19 +136,19 @@ describe("CloudManagedEndpointRuntime", () => {
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-1",
         tunnelId: "tunnel-1",
-        tunnelName: "t3-code-env-1",
+        tunnelName: "pathway-env-1",
       });
       yield* runtime.applyConfig({
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-1",
         tunnelId: "tunnel-1",
-        tunnelName: "t3-code-env-1",
+        tunnelName: "pathway-env-1",
       });
       yield* runtime.applyConfig({
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-2",
         tunnelId: "tunnel-1",
-        tunnelName: "t3-code-env-1",
+        tunnelName: "pathway-env-1",
       });
       const stopped = yield* runtime.applyConfig(null);
 
@@ -280,6 +280,69 @@ describe("CloudManagedEndpointRuntime", () => {
       expect(started).toMatchObject({ status: "running", pid: 400 });
       expect(spawned).toEqual([400, 401]);
       expect(killed).toEqual([400]);
+    }),
+  );
+
+  it.effect("caps automatic connector attempts and allows an explicit retry", () =>
+    Effect.gen(function* () {
+      const spawned: Array<number> = [];
+      const killed: Array<number> = [];
+      const exits = yield* Effect.all(
+        Array.from({ length: ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS }, () =>
+          Deferred.make<ChildProcessSpawner.ExitCode>(),
+        ),
+      );
+      const spawnSignals = yield* Effect.all(
+        Array.from({ length: ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS + 1 }, () =>
+          Deferred.make<void>(),
+        ),
+      );
+      const exhausted = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.gen(function* () {
+          const index = spawned.length;
+          const pid = 600 + index;
+          spawned.push(pid);
+          yield* Deferred.succeed(spawnSignals[index]!, undefined);
+          const handle = makeHandle({
+            pid,
+            exitCode: exits[index]
+              ? Deferred.await(exits[index])
+              : (Effect.never as Effect.Effect<ChildProcessSpawner.ExitCode>),
+            onKill: () => {
+              killed.push(pid);
+              if (index === ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1) {
+                Deferred.doneUnsafe(exhausted, Effect.void);
+              }
+            },
+          });
+          yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
+          return handle;
+        }),
+      );
+      const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
+      const config = {
+        providerKind: "cloudflare_tunnel" as const,
+        connectorToken: "token",
+        tunnelId: "tunnel-1",
+      };
+
+      yield* runtime.applyConfig(config);
+      for (let index = 0; index < exits.length; index += 1) {
+        yield* Deferred.succeed(exits[index]!, ChildProcessSpawner.ExitCode(1));
+        if (index + 1 < exits.length) {
+          yield* Deferred.await(spawnSignals[index + 1]!);
+        }
+      }
+      yield* Deferred.await(exhausted);
+
+      expect(spawned).toHaveLength(ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS);
+
+      const retried = yield* runtime.applyConfig(config);
+      yield* Deferred.await(spawnSignals[ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS]!);
+
+      expect(retried).toMatchObject({ status: "running", pid: 605 });
+      expect(spawned).toHaveLength(ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS + 1);
     }),
   );
 

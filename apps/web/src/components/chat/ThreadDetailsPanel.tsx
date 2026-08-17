@@ -11,7 +11,7 @@ import { AlertTriangleIcon, XIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";
 import type { ProviderInstanceEntry } from "../../providerInstances";
-import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
+import { usePathwayProjectFileScripts } from "../../hooks/usePathwayProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
@@ -117,7 +117,10 @@ function ThreadDetailsActionsSection({
   | "onUpdateProjectScript"
   | "onDeleteProjectScript"
 >) {
-  const fileScripts = useT3ProjectFileScripts(environmentId, activeProjectScripts ? gitCwd : null);
+  const fileScripts = usePathwayProjectFileScripts(
+    environmentId,
+    activeProjectScripts ? gitCwd : null,
+  );
   if (!activeProjectScripts) return null;
 
   return (

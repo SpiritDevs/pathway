@@ -53,7 +53,6 @@ import { isChangeVisible, type ChangeViewer } from "../src/sync/visibility.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import type { CompanyVersionedTable } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
 import {
@@ -102,7 +101,6 @@ export const latestVersion = query({
   args: { companyId: domainIdArg },
   returns: v.object({ version: v.number(), authorizationEpoch: v.number() }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     return {
       version: actor.company.syncVersion,
@@ -145,7 +143,6 @@ export const listChanges = query({
     }),
   ),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     // Clamped at both ends: Convex validates `limit` as a number, so a client asking for zero or a
     // negative page would otherwise be handed an empty page at its own cursor with `hasMore` set,
@@ -272,7 +269,6 @@ export const bootstrap = query({
     isDone: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
 
     let state: BootstrapCursorState;
@@ -403,7 +399,6 @@ export const reserveIssueKeys = mutation({
     firstKey: v.string(),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     const size = clampPageLimit(args.blockSize, ISSUE_KEY_BLOCK_SIZE);
 
@@ -538,7 +533,6 @@ export const applyOperations = mutation({
     authorizationEpoch: v.number(),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
 
     const operations: readonly SyncOperationEnvelope[] = args.operations;

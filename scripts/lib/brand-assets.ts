@@ -108,4 +108,11 @@ export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("development",
 export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides(
   "development",
   "apps/web/public",
+).map((override) =>
+  override.targetRelativePath.endsWith(`/${WEB_ICON_TARGET_FILENAMES.appleTouchIconPng}`)
+    ? {
+        ...override,
+        sourceRelativePath: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
+      }
+    : override,
 );

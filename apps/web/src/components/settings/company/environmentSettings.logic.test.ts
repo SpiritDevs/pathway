@@ -11,10 +11,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentCommandRecord } from "../../../cloud/environmentControl";
 import {
+  deleteConfirmationSecondsRemaining,
+  derivePathwayConnectStatus,
   deriveEnvironmentRows,
   deriveRecentEnvironmentCommands,
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
+  resolveDeleteConfirmationClick,
 } from "./environmentSettings.logic";
 
 const OWN_ID = "environment-own" as EnvironmentId;
@@ -78,6 +81,62 @@ function command(
 }
 
 describe("environment settings derivation", () => {
+  it("derives Pathway Connect status from live state for this device", () => {
+    const row = deriveEnvironmentRows({
+      registrations: [registration(OWN_ID)],
+      catalogEntries: new Map(),
+      teams: [],
+      ownEnvironmentId: OWN_ID,
+    })[0]!;
+
+    expect(
+      derivePathwayConnectStatus({
+        row,
+        ownCloudLinkPhase: "connected",
+        ownManagedEndpointAvailable: true,
+        ownCloudLinkError: null,
+      }),
+    ).toBe("active");
+    expect(
+      derivePathwayConnectStatus({
+        row,
+        ownCloudLinkPhase: "waiting",
+        ownManagedEndpointAvailable: false,
+        ownCloudLinkError: null,
+      }),
+    ).toBe("connecting");
+    expect(
+      derivePathwayConnectStatus({
+        row,
+        ownCloudLinkPhase: "exhausted",
+        ownManagedEndpointAvailable: false,
+        ownCloudLinkError: "Relay unavailable",
+      }),
+    ).toBe("failed");
+  });
+
+  it("derives Pathway Connect status for remote registrations", () => {
+    const derive = (overrides: Partial<EnvironmentRegistrationEntity>) => {
+      const row = deriveEnvironmentRows({
+        registrations: [registration(REMOTE_ID, overrides)],
+        catalogEntries: new Map(),
+        teams: [],
+        ownEnvironmentId: OWN_ID,
+      })[0]!;
+      return derivePathwayConnectStatus({
+        row,
+        ownCloudLinkPhase: "idle",
+        ownManagedEndpointAvailable: null,
+        ownCloudLinkError: null,
+      });
+    };
+
+    expect(derive({ managedEndpointAvailable: true })).toBe("active");
+    expect(derive({ managedEndpointAvailable: false })).toBe("connecting");
+    expect(derive({ relayLinkState: "unlinked" })).toBe("failed");
+    expect(derive({ state: "revoked" })).toBe("failed");
+  });
+
   it("extracts registrations and joins catalog, own-device, and team metadata", () => {
     const own = registration(OWN_ID);
     const remote = registration(REMOTE_ID);
@@ -158,5 +217,21 @@ describe("environment settings derivation", () => {
         }),
       ),
     ).toBe("Thread is idle");
+  });
+
+  it("requires a second delete click within the five-second confirmation window", () => {
+    const firstClick = resolveDeleteConfirmationClick(null, 10_000, 5_000);
+    expect(firstClick).toEqual({ confirmed: false, armedUntil: 15_000 });
+    expect(deleteConfirmationSecondsRemaining(firstClick.armedUntil, 10_001)).toBe(5);
+    expect(deleteConfirmationSecondsRemaining(firstClick.armedUntil, 14_001)).toBe(1);
+
+    expect(resolveDeleteConfirmationClick(firstClick.armedUntil, 14_999, 5_000)).toEqual({
+      confirmed: true,
+      armedUntil: null,
+    });
+    expect(resolveDeleteConfirmationClick(firstClick.armedUntil, 15_000, 5_000)).toEqual({
+      confirmed: false,
+      armedUntil: 20_000,
+    });
   });
 });

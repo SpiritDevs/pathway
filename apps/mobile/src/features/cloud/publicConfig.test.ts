@@ -4,6 +4,7 @@ import {
   CloudPublicConfigMissingError,
   hasTracingPublicConfig,
   resolveCloudPublicConfig,
+  resolveConvexClerkTokenOptions,
   resolveRelayClerkTokenOptions,
 } from "./publicConfig";
 
@@ -31,6 +32,9 @@ describe("resolveCloudPublicConfig", () => {
       relay: {
         url: null,
       },
+      convex: {
+        url: null,
+      },
       observability: {
         tracesUrl: null,
         tracesDataset: null,
@@ -44,6 +48,7 @@ describe("resolveCloudPublicConfig", () => {
       resolveCloudPublicConfig({
         clerk: { publishableKey: "  pk_test_example  ", jwtTemplate: "  pathway-relay  " },
         relay: { url: " https://relay.example.test/// " },
+        convex: { url: " https://example.convex.cloud/some-path " },
         observability: {
           tracesUrl: " https://api.axiom.co/v1/traces ",
           tracesDataset: " mobile-traces ",
@@ -58,6 +63,9 @@ describe("resolveCloudPublicConfig", () => {
       relay: {
         url: "https://relay.example.test",
       },
+      convex: {
+        url: "https://example.convex.cloud",
+      },
       observability: {
         tracesUrl: "https://api.axiom.co/v1/traces",
         tracesDataset: "mobile-traces",
@@ -71,6 +79,7 @@ describe("resolveCloudPublicConfig", () => {
       resolveCloudPublicConfig({
         clerk: { publishableKey: "pk_test_example", jwtTemplate: "pathway-relay" },
         relay: { url: "http://relay.example.test" },
+        convex: { url: "http://example.convex.cloud" },
       }),
     ).toEqual({
       clerk: {
@@ -80,12 +89,19 @@ describe("resolveCloudPublicConfig", () => {
       relay: {
         url: null,
       },
+      convex: {
+        url: null,
+      },
       observability: {
         tracesUrl: null,
         tracesDataset: null,
         tracesToken: null,
       },
     });
+  });
+
+  it("uses the Convex Clerk JWT template for workspace provisioning", () => {
+    expect(resolveConvexClerkTokenOptions()).toEqual({ template: "convex" });
   });
 
   it("rejects an insecure traces URL", () => {

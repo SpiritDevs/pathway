@@ -210,8 +210,8 @@ function escapeHtml(value: string): string {
 const PREVIEW_BASE_STYLE = `
   html, body { margin: 0; padding: 0; background: #ffffff; color: #18181b; }
   body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-  .t3-email-plain { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; }
-  .t3-email-empty { margin: 0; padding: 16px; color: #71717a; font-style: italic; }
+  .pathway-email-plain { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; }
+  .pathway-email-empty { margin: 0; padding: 16px; color: #71717a; font-style: italic; }
 `;
 
 export interface EmailPreviewSource {
@@ -235,8 +235,8 @@ export function buildEmailPreviewDocument(
     source.htmlBody !== null && source.htmlBody.trim().length > 0
       ? source.htmlBody
       : source.textBody !== null && source.textBody.trim().length > 0
-        ? `<pre class="t3-email-plain">${escapeHtml(source.textBody)}</pre>`
-        : `<p class="t3-email-empty">This message has no body.</p>`;
+        ? `<pre class="pathway-email-plain">${escapeHtml(source.textBody)}</pre>`
+        : `<p class="pathway-email-empty">This message has no body.</p>`;
 
   return [
     "<!doctype html>",

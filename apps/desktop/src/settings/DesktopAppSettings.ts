@@ -76,7 +76,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
-  serverExposureMode: "local-only",
+  serverExposureMode: "network-accessible",
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
@@ -227,8 +227,9 @@ function normalizeDesktopSettingsDocument(
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
-    serverExposureMode:
-      parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
+    // Network access is an always-on product capability. Existing settings that explicitly
+    // disabled it are migrated back to the network-accessible desired state on load.
+    serverExposureMode: "network-accessible",
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
@@ -286,13 +287,13 @@ function toDesktopSettingsDocument(
 
 function setServerExposureMode(
   settings: DesktopSettings,
-  requestedMode: DesktopServerExposureMode,
+  _requestedMode: DesktopServerExposureMode,
 ): DesktopSettings {
-  return settings.serverExposureMode === requestedMode
+  return settings.serverExposureMode === "network-accessible"
     ? settings
     : {
         ...settings,
-        serverExposureMode: requestedMode,
+        serverExposureMode: "network-accessible",
       };
 }
 

@@ -29,7 +29,6 @@ import { SYNC_MAX_ID_CHARS } from "./sync/operations.ts";
 import { SYNC_FEED_RETENTION_MS } from "./sync/protocol.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -63,6 +62,7 @@ async function seed(t: ReturnType<typeof harness>) {
     const companyDocId = await ctx.db.insert("companies", {
       id: COMPANY_ID,
       name: "Company Apply Co",
+      workspaceKind: "organization",
       issueKeyPrefix: "PAT",
       nextIssueNumber: 1,
       lifecycleState: "active",
@@ -573,6 +573,7 @@ describe("company payload encoders", () => {
     expect(encoded.company).toEqual({
       id: COMPANY_ID,
       name: "Company Apply Co",
+      workspaceKind: "organization",
       issueKeyPrefix: "PAT",
       lifecycleState: "active",
       deletionScheduledAt: null,

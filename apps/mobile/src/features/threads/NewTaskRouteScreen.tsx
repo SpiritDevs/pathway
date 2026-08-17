@@ -251,7 +251,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         {projectScopes.length === 0 ? (
           <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
             {projectEmptyState.loading ? <ActivityIndicator color={accentColor} /> : null}
-            <Text className="text-center text-lg font-t3-bold text-foreground">
+            <Text className="text-center text-lg font-pathway-bold text-foreground">
               {projectEmptyState.title}
             </Text>
             <Text className="text-center text-sm leading-normal text-foreground-muted">
@@ -262,7 +262,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.navigate("ConnectionsNew")}
               >
-                <Text className="text-sm font-t3-bold text-primary-foreground">
+                <Text className="text-sm font-pathway-bold text-primary-foreground">
                   Add environment
                 </Text>
               </Pressable>
@@ -271,7 +271,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
                 onPress={() => navigation.navigate("NewTaskSheet", { screen: "AddProject" })}
               >
-                <Text className="text-sm font-t3-bold text-primary-foreground">
+                <Text className="text-sm font-pathway-bold text-primary-foreground">
                   Add new project
                 </Text>
               </Pressable>
@@ -309,7 +309,9 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                       />
                     </View>
                     <View className="min-w-0 flex-1">
-                      <Text className="text-base leading-snug font-t3-bold">{scope.title}</Text>
+                      <Text className="text-base leading-snug font-pathway-bold">
+                        {scope.title}
+                      </Text>
                       <Text
                         className="text-xs leading-snug text-foreground-muted"
                         ellipsizeMode="middle"
@@ -343,7 +345,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                             workspaceRoot={project.workspaceRoot}
                           />
                           <View className="min-w-0 flex-1">
-                            <Text className="text-sm font-t3-bold text-foreground">
+                            <Text className="text-sm font-pathway-bold text-foreground">
                               {project.title}
                             </Text>
                             <Text

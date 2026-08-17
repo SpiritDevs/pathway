@@ -291,7 +291,7 @@ export interface ServerAuthShape {
 }
 
 export class ServerAuth extends ServiceMap.Service<ServerAuth, ServerAuthShape>()(
-  "t3/ServerAuth",
+  "pathway/ServerAuth",
 ) {}
 ```
 
@@ -692,9 +692,9 @@ Participants:
 
 DesktopUser -> DesktopMain : add SSH host
 DesktopMain -> SSH : connect to remote host
-SSH -> RemoteHost : probe environment / verify t3 availability
+SSH -> RemoteHost : probe environment / verify pathway availability
 DesktopMain -> SSH : run remote launch command
-SSH -> RemoteHost : t3 remote launch --json
+SSH -> RemoteHost : pathway remote launch --json
 RemoteHost -> RemotePathway : start or reuse server
 RemotePathway --> RemoteHost : port + environment metadata
 RemoteHost --> SSH : launch result JSON

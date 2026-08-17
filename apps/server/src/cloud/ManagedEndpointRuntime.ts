@@ -61,6 +61,8 @@ export class CloudManagedEndpointRuntime extends Context.Service<
   }
 >()("@spiritdevs/pathway/cloud/ManagedEndpointRuntime/CloudManagedEndpointRuntime") {}
 
+export const MAX_AUTOMATIC_CONNECTOR_ATTEMPTS = 5;
+
 interface ActiveConnector {
   readonly child: ChildProcessSpawner.ChildProcessHandle;
   readonly scope: Scope.Closeable;
@@ -102,8 +104,10 @@ const stopConnector = (connector: ActiveConnector | null) =>
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const relayClient = yield* RelayClient.RelayClient;
+  const runtimeScope = yield* Scope.Scope;
   const activeRef = yield* Ref.make<ActiveConnector | null>(null);
   const desiredConfigRef = yield* Ref.make<RelayManagedEndpointRuntimeConfig | null>(null);
+  const restartAttemptsRef = yield* Ref.make(0);
   const reconcileSemaphore = yield* Semaphore.make(1);
   let reconcileConfig: CloudManagedEndpointRuntime["Service"]["applyConfig"];
 
@@ -125,7 +129,6 @@ export const make = Effect.gen(function* () {
             return;
           }
           yield* Ref.set(activeRef, null);
-          yield* stopConnector(connector);
 
           const desiredConfig = yield* Ref.get(desiredConfigRef);
           if (
@@ -136,14 +139,34 @@ export const make = Effect.gen(function* () {
             return;
           }
 
+          const restartAttempt = yield* Ref.updateAndGet(restartAttemptsRef, (attempts) =>
+            Math.min(attempts + 1, MAX_AUTOMATIC_CONNECTOR_ATTEMPTS),
+          );
+
+          if (restartAttempt >= MAX_AUTOMATIC_CONNECTOR_ATTEMPTS) {
+            yield* Effect.logWarning("Relay client exited; automatic restarts exhausted", {
+              pid: Number(connector.child.pid),
+              ...(Result.isSuccess(result)
+                ? { exitCode: Number(result.success) }
+                : { cause: result.failure }),
+              restartAttempt,
+              tunnelId: connector.config.tunnelId,
+              tunnelName: connector.config.tunnelName,
+            });
+            yield* stopConnector(connector);
+            return;
+          }
+
           yield* Effect.logWarning("Relay client exited; restarting", {
             pid: Number(connector.child.pid),
             ...(Result.isSuccess(result)
               ? { exitCode: Number(result.success) }
               : { cause: result.failure }),
+            restartAttempt,
             tunnelId: connector.config.tunnelId,
             tunnelName: connector.config.tunnelName,
           });
+          yield* stopConnector(connector);
           yield* reconcileConfig(desiredConfig);
         }),
       );
@@ -167,7 +190,11 @@ export const make = Effect.gen(function* () {
         };
         switch (classifyRelayClientOutput(line)) {
           case "connected":
-            return Effect.logInfo("Relay client tunnel connection registered", attributes);
+            return Ref.set(restartAttemptsRef, 0).pipe(
+              Effect.andThen(
+                Effect.logInfo("Relay client tunnel connection registered", attributes),
+              ),
+            );
           case "warning":
             return Effect.logWarning("Relay client reported a transport warning", attributes);
           case "debug":
@@ -277,7 +304,10 @@ export const make = Effect.gen(function* () {
       } satisfies ActiveConnector;
       yield* Ref.set(activeRef, connector);
       yield* Effect.forkIn(observeConnectorOutput(connector), connectorScope);
-      yield* Effect.forkIn(superviseConnector(connector), connectorScope);
+      // Supervision must outlive the connector scope it closes after an exit.
+      // Binding this fiber to that child scope interrupts the restart path as
+      // soon as cleanup begins.
+      yield* Effect.forkIn(superviseConnector(connector), runtimeScope);
       return {
         status: "running",
         providerKind: "cloudflare_tunnel",
@@ -299,7 +329,10 @@ export const make = Effect.gen(function* () {
   const applyConfig = Effect.fn("CloudManagedEndpointRuntime.applyConfig")(
     (config: RelayManagedEndpointRuntimeConfig | null) =>
       reconcileSemaphore.withPermits(1)(
-        Ref.set(desiredConfigRef, config).pipe(Effect.andThen(reconcileConfig(config))),
+        Ref.set(desiredConfigRef, config).pipe(
+          Effect.andThen(Ref.set(restartAttemptsRef, 0)),
+          Effect.andThen(reconcileConfig(config)),
+        ),
       ),
   );
 

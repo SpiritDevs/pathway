@@ -34,7 +34,7 @@ it("presents showcase transports as remote endpoints", () => {
     environments.map(({ displayUrl }) => displayUrl),
     [
       "https://moonbase.tail9f3a.ts.net/",
-      "https://suspense-vps.hel1.t3.sh/",
+      "https://suspense-vps.hel1.pathway.sh/",
       "http://100.82.16.5:3773/",
     ],
   );

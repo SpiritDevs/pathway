@@ -23,7 +23,6 @@ import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, internalQuery, mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import {
   appendCompanyChanges,
   encodeCloudProject,
@@ -1240,7 +1239,6 @@ export const start = mutation({
   },
   returns: importRunResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "member")
       throw backendError("permission-denied", "Only a company member may start an import.");
@@ -1344,7 +1342,6 @@ export const get = query({
   args: { companyId: domainIdArg, runId: domainIdArg },
   returns: v.union(importRunResult, v.null()),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const run = await readableRun(ctx, args.companyId, args.runId);
     return run === null ? null : await runResult(ctx, run);
   },
@@ -1354,7 +1351,6 @@ export const list = query({
   args: { companyId: domainIdArg, limit: v.optional(v.number()) },
   returns: v.array(importRunResult),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     const rows = await ctx.db
       .query("issueImportRuns")
@@ -1373,7 +1369,6 @@ export const applyEntities = mutation({
   args: { companyId: domainIdArg, runId: domainIdArg, entities: v.array(importEntityArg) },
   returns: applyBatchResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     return await applyBatch(ctx, args);
   },
 });
@@ -1383,7 +1378,6 @@ export const applyProjects = mutation({
   args: { companyId: domainIdArg, runId: domainIdArg, projects: v.array(cloudProjectEntity) },
   returns: applyBatchResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     return await applyBatch(ctx, {
       companyId: args.companyId,
       runId: args.runId,
@@ -1405,7 +1399,6 @@ export const applyTrackerConfig = mutation({
     nextIssueNumber: v.number(),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const { actor, run } = await requireExecutingRun(ctx, args.companyId, args.runId);
     const prefix = normalizeIssueKeyPrefix(args.issueKeyPrefix);
     if (prefix !== run.selectedIssueKeyPrefix)
@@ -1479,7 +1472,6 @@ export const verifyAttachmentUpload = internalQuery({
   args: { companyId: domainIdArg, runId: domainIdArg, attachmentId: domainIdArg },
   returns: v.null(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const { actor, run } = await requireExecutingRun(ctx, args.companyId, args.runId);
     if ((await provenance(ctx, run._id, "issueAttachment", args.attachmentId)) === null)
       throw backendError("entity-not-found", "The attachment is not part of this run.");
@@ -1493,7 +1485,6 @@ export const generateAttachmentUploadUrl = action({
   args: { companyId: domainIdArg, runId: domainIdArg, attachmentId: domainIdArg },
   returns: v.string(),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     await ctx.runQuery(internal.issueImport.verifyAttachmentUpload, args);
     return await ctx.storage.generateUploadUrl();
   },
@@ -1510,7 +1501,6 @@ export const finalizeAttachment = mutation({
   },
   returns: v.object({ status: v.union(v.literal("finalized"), v.literal("alreadyFinalized")) }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const { actor, run } = await requireExecutingRun(ctx, args.companyId, args.runId);
     if ((await provenance(ctx, run._id, "issueAttachment", args.attachmentId)) === null)
       throw backendError("entity-not-found", "The attachment is not part of this run.");
@@ -1565,7 +1555,6 @@ export const complete = mutation({
   args: { companyId: domainIdArg, runId: domainIdArg, expectedCounts: expectedCountsArg },
   returns: importRunResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "environment")
       throw backendError(
@@ -1652,7 +1641,6 @@ export const abandon = mutation({
   args: { companyId: domainIdArg, runId: domainIdArg },
   returns: importRunResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     const run = await runById(ctx, actor.company._id, args.runId);
     if (run === null) throw backendError("entity-not-found", `No issue import run ${args.runId}.`);

@@ -427,7 +427,7 @@ Push and trigger paths need their own coverage:
 - A trigger rule fires once per matching message, respects its hourly cap, and
   auto-disables when its own run produces a matching message
 
-A browser pass with `test-t3-app` needs explicit sign-off each time, per the
+A browser pass with `test-pathway-app` needs explicit sign-off each time, per the
 same document.
 
 ## Docs

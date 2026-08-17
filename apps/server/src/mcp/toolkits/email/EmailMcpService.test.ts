@@ -229,7 +229,7 @@ const withDatabase = <A, E>(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-email-mcp-test-" });
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-email-mcp-test-" });
       const databasePath = path.join(directory, "mail.sqlite");
       return yield* effect(databasePath).pipe(Effect.provide(testLayer(databasePath)));
     }),
@@ -302,7 +302,9 @@ describe("EmailMcpService", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-email-restart-test-" });
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "pathway-email-restart-test-",
+        });
         const databasePath = path.join(directory, "mail.sqlite");
 
         const taskId = yield* Effect.scoped(

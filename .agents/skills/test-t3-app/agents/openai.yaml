@@ -1,4 +1,0 @@
-interface:
-  display_name: "Pathway App Testing"
-  short_description: "Launch and retain isolated Pathway test environments"
-  default_prompt: "Use $test-t3-app to launch an isolated Pathway environment and iteratively test it in the browser while preserving state."

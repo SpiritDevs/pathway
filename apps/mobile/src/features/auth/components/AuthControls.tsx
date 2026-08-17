@@ -32,7 +32,7 @@ export function AuthButton(props: {
       {props.busy ? <ActivityIndicator size="small" /> : null}
       <Text
         className={cn(
-          "text-base font-t3-bold",
+          "text-base font-pathway-bold",
           tone === "primary" ? "text-primary-foreground" : "text-secondary-foreground",
         )}
       >
@@ -63,7 +63,7 @@ export function AuthLinkButton(props: {
       hitSlop={8}
       onPress={props.onPress}
     >
-      <Text className="text-sm font-t3-medium text-foreground-secondary">{props.label}</Text>
+      <Text className="text-sm font-pathway-medium text-foreground-secondary">{props.label}</Text>
     </Pressable>
   );
 }
@@ -75,7 +75,7 @@ export function AuthField(props: {
 }) {
   return (
     <View collapsable={false} className="gap-1.5">
-      <Text className="text-2xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted">
+      <Text className="text-2xs font-pathway-bold tracking-[0.8px] uppercase text-foreground-muted">
         {props.label}
       </Text>
       <TextInput accessibilityLabel={props.label} {...props.inputProps} />
@@ -111,7 +111,7 @@ export function AuthChip(props: {
     >
       <Text
         className={cn(
-          "text-sm font-t3-medium",
+          "text-sm font-pathway-medium",
           props.selected ? "text-primary-foreground" : "text-foreground",
         )}
       >
@@ -124,7 +124,7 @@ export function AuthChip(props: {
 export function AuthChipGroup(props: { readonly label: string; readonly children: ReactNode }) {
   return (
     <View collapsable={false} className="gap-2.5">
-      <Text className="text-2xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted">
+      <Text className="text-2xs font-pathway-bold tracking-[0.8px] uppercase text-foreground-muted">
         {props.label}
       </Text>
       <View collapsable={false} className="flex-row flex-wrap gap-2">

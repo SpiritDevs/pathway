@@ -1,16 +1,25 @@
 import { useAuth, useUser } from "@clerk/expo";
-import { isOnboardingComplete, parseProfileMetadata } from "@spiritdevs/client-runtime/profile";
-import type { ReactNode } from "react";
+import {
+  isOnboardingComplete,
+  parseProfileMetadata,
+  recoverMissingOnboardingWorkspace,
+  restartOnboardingForWorkspaceRecovery,
+} from "@spiritdevs/client-runtime/profile";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { StatusBar, View, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { BrandMark } from "../../components/BrandMark";
 import { LoadingScreen } from "../../components/LoadingScreen";
-import { hasClerkPublicConfig } from "../cloud/publicConfig";
+import {
+  hasClerkPublicConfig,
+  resolveCloudPublicConfig,
+  resolveConvexClerkTokenOptions,
+} from "../cloud/publicConfig";
 import { AuthFlowScreen } from "./AuthFlowScreen";
 import { OnboardingScreen } from "./onboarding/OnboardingScreen";
-import { resolveMobileAuthGateState } from "./authGate.logic";
+import { resolveMobileAuthGateState, type WorkspaceValidationState } from "./authGate.logic";
 import { useThemeColor } from "../../lib/useThemeColor";
 
 /**
@@ -32,18 +41,26 @@ export function AuthGate(props: { readonly children: ReactNode }) {
 }
 
 function ConfiguredAuthGate(props: { readonly children: ReactNode }) {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
-  const onboardingComplete =
-    isSignedIn && user
-      ? isOnboardingComplete(parseProfileMetadata(user.unsafeMetadata))
-      : undefined;
+  const metadata = user ? parseProfileMetadata(user.unsafeMetadata) : null;
+  const onboardingComplete = isSignedIn && user ? isOnboardingComplete(metadata) : undefined;
+  const fetchConvexToken = useCallback(
+    () => getToken(resolveConvexClerkTokenOptions()),
+    [getToken],
+  );
+  const workspaceValidation = useWorkspaceRecoveryValidation({
+    enabled: onboardingComplete === true,
+    fetchToken: fetchConvexToken,
+    user,
+  });
 
   const state = resolveMobileAuthGateState({
     hasClerkConfig: true,
     isLoaded,
     isSignedIn,
     onboardingComplete,
+    workspaceValidation,
   });
 
   switch (state) {
@@ -58,6 +75,71 @@ function ConfiguredAuthGate(props: { readonly children: ReactNode }) {
     case "authenticated":
       return props.children;
   }
+}
+
+interface WorkspaceValidationResult {
+  readonly key: string;
+  readonly status: Exclude<WorkspaceValidationState, "checking">;
+}
+
+/** Mobile mirror of the web recovery check; see the web root for the state-transition rationale. */
+function useWorkspaceRecoveryValidation(options: {
+  readonly enabled: boolean;
+  readonly fetchToken: () => Promise<string | null>;
+  readonly user: ReturnType<typeof useUser>["user"];
+}): WorkspaceValidationState {
+  const convexUrl = resolveCloudPublicConfig().convex.url;
+  const completionMarker = options.user
+    ? parseProfileMetadata(options.user.unsafeMetadata)?.onboardingCompletedAt
+    : undefined;
+  const validationKey =
+    options.enabled && options.user && completionMarker && convexUrl
+      ? `${options.user.id}:${completionMarker}`
+      : null;
+  const [result, setResult] = useState<WorkspaceValidationResult | null>(null);
+
+  useEffect(() => {
+    const user = options.user;
+    if (validationKey === null || convexUrl === null || !user) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const { hasUsableOnboardingWorkspace } = await import("../cloud/onboardingProvisioning");
+        const recovery = await recoverMissingOnboardingWorkspace({
+          hasUsableWorkspace: async () => {
+            const hasWorkspace = await hasUsableOnboardingWorkspace({
+              convexUrl,
+              fetchToken: options.fetchToken,
+            });
+            return cancelled ? true : hasWorkspace;
+          },
+          restartOnboarding: async () => {
+            if (cancelled) return;
+            await user.update({
+              unsafeMetadata: restartOnboardingForWorkspaceRecovery(
+                parseProfileMetadata(user.unsafeMetadata),
+              ),
+            });
+          },
+        });
+        if (cancelled) return;
+        if (recovery === "valid") {
+          setResult({ key: validationKey, status: "valid" });
+        }
+      } catch {
+        if (!cancelled) setResult({ key: validationKey, status: "unavailable" });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [convexUrl, options.fetchToken, options.user, validationKey]);
+
+  if (!options.enabled) return "valid";
+  if (convexUrl === null) return "unavailable";
+  return result?.key === validationKey ? result.status : "checking";
 }
 
 /**
@@ -82,7 +164,7 @@ function MissingAuthConfigScreen() {
       />
       <View collapsable={false} className="w-full gap-4 rounded-[24px] bg-card p-6">
         <BrandMark />
-        <Text className="text-xl font-t3-bold tracking-[-0.4px] text-foreground">
+        <Text className="text-xl font-pathway-bold tracking-[-0.4px] text-foreground">
           Authentication is not configured.
         </Text>
         <Text className="text-sm leading-normal text-foreground-muted">

@@ -22,47 +22,13 @@ export interface CloudPublicConfig {
     readonly tracesDataset: string | null;
     readonly tracesToken: string | null;
   };
-  /**
-   * Cloud sync is opt-in per deployment, on top of the rest of the cloud config: the flag is what
-   * makes a build open a Convex socket at all, so an unconfigured (or merely relay-configured)
-   * deployment behaves exactly as it did before.
-   */
   readonly cloudSync: {
-    readonly enabled: boolean;
     readonly convexUrl: string | null;
   };
 }
 
 export function trimNonEmpty(value: string | undefined): string | null {
   return value?.trim() || null;
-}
-
-/**
- * Public flags arrive as strings (or as `undefined` in a build that never set them), so only an
- * explicit affirmative counts. Everything else — absent, empty, `"0"`, a typo — reads as off,
- * which is the safe direction for a feature that is default-off.
- */
-export function parsePublicFlag(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
-}
-
-/**
- * The literal the *deployment* side of cloud sync is gated on: Convex's `requireCloudSyncEnabled`
- * and the server daemon both demand exactly `PATHWAY_CLOUD_SYNC=enabled`, and it is the only value
- * any documentation names. One operator knob feeds both halves (see `scripts/lib/public-config.ts`,
- * which projects it to `VITE_PATHWAY_CLOUD_SYNC` as well), so the web gate has to accept it too —
- * otherwise the documented value turns Convex and the daemon on while every browser stays dark.
- */
-export const CLOUD_SYNC_ENABLED_VALUE = "enabled";
-
-/**
- * The cloud-sync opt-in, which answers to one more spelling than the other public flags: the
- * canonical {@link CLOUD_SYNC_ENABLED_VALUE} the deployment gates on, alongside the ordinary
- * affirmatives. Anything else — absent, empty, `"0"`, a typo — is off, as everywhere else.
- */
-export function parseCloudSyncFlag(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === CLOUD_SYNC_ENABLED_VALUE || parsePublicFlag(value);
 }
 
 function normalizeSecureUrl(value: string): string | null {
@@ -117,7 +83,6 @@ export function resolveCloudPublicConfig(): CloudPublicConfig {
       tracesToken: trimNonEmpty(import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN as string | undefined),
     },
     cloudSync: {
-      enabled: parseCloudSyncFlag(import.meta.env.VITE_PATHWAY_CLOUD_SYNC as string | undefined),
       convexUrl: normalizeConvexDeploymentUrl(
         (import.meta.env.VITE_PATHWAY_CONVEX_URL as string | undefined) ?? "",
       ),
@@ -146,16 +111,15 @@ export function hasClerkPublicConfig(): boolean {
 }
 
 /**
- * Whether this build may run cloud sync: the whole cloud config, plus the explicit opt-in flag,
- * plus a Convex deployment to talk to. All three are required, so a deployment that only has the
- * relay configured — every deployment today — opens no Convex socket and runs no engine.
+ * Whether this build can run cloud sync. Online Pathway deployments always use it; the only
+ * remaining checks are the concrete services the runtime needs to connect.
  */
 export function hasCloudSyncPublicConfig(): boolean {
   const { cloudSync } = resolveCloudPublicConfig();
-  return hasCloudPublicConfig() && cloudSync.enabled && cloudSync.convexUrl !== null;
+  return hasCloudPublicConfig() && cloudSync.convexUrl !== null;
 }
 
-/** The Convex deployment origin, or `null` when cloud sync is off or misconfigured. */
+/** The Convex deployment origin, or `null` when cloud sync is not configured. */
 export function resolveCloudSyncConvexUrl(): string | null {
   return hasCloudSyncPublicConfig() ? resolveCloudPublicConfig().cloudSync.convexUrl : null;
 }

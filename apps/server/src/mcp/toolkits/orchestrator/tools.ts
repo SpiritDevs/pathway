@@ -150,9 +150,9 @@ export const CreateThreadsTool = Tool.make("create_threads", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-export const ThreadStartTool = Tool.make("t3_thread_start", {
+export const ThreadStartTool = Tool.make("pathway_thread_start", {
   description:
-    "Create an ordinary TOP-LEVEL Pathway conversation and immediately start its first turn. This is not a child agent/subagent; use delegate_task for delegated work. The new thread inherits this thread's project, checkout, provider, model, and runtime settings unless overridden. Use t3_thread_wait and t3_thread_read to collect its result.",
+    "Create an ordinary TOP-LEVEL Pathway conversation and immediately start its first turn. This is not a child agent/subagent; use delegate_task for delegated work. The new thread inherits this thread's project, checkout, provider, model, and runtime settings unless overridden. Use pathway_thread_wait and pathway_thread_read to collect its result.",
   parameters: OrchestratorMcpThreadStartInput,
   success: OrchestratorMcpCreatedThread,
   failure: OrchestratorMcpFailure,
@@ -163,7 +163,7 @@ export const ThreadStartTool = Tool.make("t3_thread_start", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-export const ThreadListTool = Tool.make("t3_thread_list", {
+export const ThreadListTool = Tool.make("pathway_thread_list", {
   description:
     "List Pathway threads in the calling thread's project, newest first. Filter by durable run status or title and paginate with the returned cursor. Threads from other projects are never exposed.",
   parameters: OrchestratorMcpThreadListInput,
@@ -177,7 +177,7 @@ export const ThreadListTool = Tool.make("t3_thread_list", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const ThreadReadTool = Tool.make("t3_thread_read", {
+export const ThreadReadTool = Tool.make("pathway_thread_read", {
   description:
     "Read durable state and a paginated timeline from a Pathway thread in the calling project. The default messages view returns user messages, assistant messages, and proposed plans; activity returns all summarized timeline items. Reading an untruncated terminal assistant result from this parent thread's direct app-owned child acknowledges that child's automatic completion delivery. Continue with afterPosition=nextPosition.",
   parameters: OrchestratorMcpThreadReadInput,
@@ -191,7 +191,7 @@ export const ThreadReadTool = Tool.make("t3_thread_read", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const ThreadSendTool = Tool.make("t3_thread_send", {
+export const ThreadSendTool = Tool.make("pathway_thread_send", {
   description:
     "Send a message to a Pathway thread in the calling project. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadSendInput,
@@ -204,9 +204,9 @@ export const ThreadSendTool = Tool.make("t3_thread_send", {
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
 
-export const ThreadWaitTool = Tool.make("t3_thread_wait", {
+export const ThreadWaitTool = Tool.make("pathway_thread_wait", {
   description:
-    "Wait for a Pathway thread run to reach a terminal durable state. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
+    "Wait for a Pathway thread run to reach a terminal durable state. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use pathway_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
@@ -218,7 +218,7 @@ export const ThreadWaitTool = Tool.make("t3_thread_wait", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
-export const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
+export const ThreadInterruptTool = Tool.make("pathway_thread_interrupt", {
   description:
     "Request interruption of a running turn in a Pathway thread in the calling project. Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
   parameters: OrchestratorMcpThreadInterruptInput,

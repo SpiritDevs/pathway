@@ -236,7 +236,7 @@ const makeHarness = Effect.fn("PeerEnvironmentsTest.makeHarness")(function* (
             expiresAt: EXPIRES_AT,
           });
         }
-        if (pathname === "/.well-known/t3/environment") {
+        if (pathname === "/.well-known/pathway/environment") {
           return jsonResponse(request, 200, descriptor);
         }
         if (pathname === "/oauth/token") {
@@ -348,7 +348,7 @@ describe("PeerEnvironments", () => {
           expect(harness.requests.map((request) => new URL(request.url).pathname)).toEqual([
             "/v1/environment/dpop-token",
             `/v1/environments/${TARGET_ENVIRONMENT_ID}/connect`,
-            "/.well-known/t3/environment",
+            "/.well-known/pathway/environment",
             "/oauth/token",
             "/api/auth/websocket-ticket",
           ]);
@@ -367,7 +367,7 @@ describe("PeerEnvironments", () => {
             publicKey: harness.linkPublicKey ?? "",
             token: exchangeForm.get("subject_token") ?? "",
             typ: RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
-            issuer: `t3-env:${OWN_ENVIRONMENT_ID}`,
+            issuer: `pathway-env:${OWN_ENVIRONMENT_ID}`,
             audience: RELAY_URL,
             nowEpochSeconds: assertion.claims?.iat ?? 0,
           }).pipe(Effect.map(decodeAssertion));
@@ -376,7 +376,7 @@ describe("PeerEnvironments", () => {
             typ: RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
           });
           expect(assertion.claims).toMatchObject({
-            iss: `t3-env:${OWN_ENVIRONMENT_ID}`,
+            iss: `pathway-env:${OWN_ENVIRONMENT_ID}`,
             sub: OWN_ENVIRONMENT_ID,
             aud: RELAY_URL,
             environmentId: OWN_ENVIRONMENT_ID,

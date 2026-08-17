@@ -15,7 +15,7 @@ describe("electron development launcher", () => {
       environment: {
         VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
         PATHWAY_PORT: "16566",
-        PATHWAY_HOME: "/tmp/t3",
+        PATHWAY_HOME: "/tmp/pathway",
       },
     });
 

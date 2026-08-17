@@ -54,7 +54,7 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3-orchestration-v2-runtime-layer-",
+  prefix: "pathway-orchestration-v2-runtime-layer-",
 });
 
 const modelSelection = {
@@ -382,7 +382,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         threadId,
         title: "Renamed lifecycle thread",
         branch: "feature/v2",
-        worktreePath: "/tmp/t3-v2-worktree",
+        worktreePath: "/tmp/pathway-v2-worktree",
       });
       const staleWorkspaceUpdate = yield* orchestrator
         .dispatch({
@@ -397,7 +397,10 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.instanceOf(staleWorkspaceUpdate, OrchestratorDispatchError);
       const projectionAfterStaleWorkspaceUpdate = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projectionAfterStaleWorkspaceUpdate.thread.branch, "feature/v2");
-      assert.equal(projectionAfterStaleWorkspaceUpdate.thread.worktreePath, "/tmp/t3-v2-worktree");
+      assert.equal(
+        projectionAfterStaleWorkspaceUpdate.thread.worktreePath,
+        "/tmp/pathway-v2-worktree",
+      );
       yield* orchestrator.dispatch({
         type: "thread.runtime-mode.set",
         commandId: CommandId.make("runtime-layer-lifecycle-runtime"),
@@ -493,7 +496,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.thread.title, "Renamed lifecycle thread");
       assert.equal(projection.thread.branch, "feature/v2");
-      assert.equal(projection.thread.worktreePath, "/tmp/t3-v2-worktree");
+      assert.equal(projection.thread.worktreePath, "/tmp/pathway-v2-worktree");
       assert.equal(projection.thread.runtimeMode, "approval-required");
       assert.equal(projection.thread.interactionMode, "plan");
       assert.equal(projection.thread.modelSelection.model, "gpt-5.5");
@@ -542,7 +545,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         commandId: CommandId.make("runtime-layer-source-control-record"),
         threadId,
         committed: true,
-        pullRequest: { number: 47, url: "https://github.com/t3dotgg/pathway/pull/47" },
+        pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
       };
 
       const first = yield* orchestrator.dispatch(command);
@@ -630,7 +633,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
               parentCheckpointId: null,
               ordinalWithinScope: 0,
               appRunOrdinal: null,
-              ref: CheckpointRef.make("refs/t3/runtime-layer-edit-restart-baseline"),
+              ref: CheckpointRef.make("refs/pathway/runtime-layer-edit-restart-baseline"),
               status: "ready",
               files: [],
               capturedAt: completedAt,

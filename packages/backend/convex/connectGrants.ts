@@ -24,7 +24,6 @@ import {
 import { hasCompanyPermission, isPermissionKey } from "../src/permissions.ts";
 import { internal } from "./_generated/api.js";
 import { action, internalMutation, mutation } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
 import { membershipAuthorization, requireCompanyActor, requirePermission } from "./lib/identity.ts";
@@ -81,7 +80,6 @@ export const issue = action({
   },
   returns: issuedGrant,
   handler: async (ctx, args): Promise<IssuedGrant> => {
-    requireCloudSyncEnabled();
     const token = generateConnectGrantToken();
     const tokenHash = await hashConnectGrantToken(token);
     const recorded = await ctx.runMutation(internal.connectGrants.record, {
@@ -109,7 +107,6 @@ export const record = internalMutation({
     expiresAt: v.number(),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "member") {
       throw backendError("permission-denied", "Only a company member may issue a connect grant.");
@@ -174,7 +171,6 @@ export const validate = mutation({
   args: { tokenHash: v.string() },
   returns: validationResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const relay = await requireRelayControlPlane(ctx);
     const grants = await ctx.db
       .query("connectGrants")

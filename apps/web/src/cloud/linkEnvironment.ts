@@ -33,11 +33,6 @@ import {
 } from "../environments/primary";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import { resolveCloudPublicConfig } from "./publicConfig";
-import {
-  finishRelayClientInstall,
-  reportRelayClientInstallProgress,
-  requestRelayClientInstallConfirmation,
-} from "./relayClientInstallDialog";
 
 export function normalizeRelayBaseUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -78,27 +73,11 @@ function ensureRelayClientAvailable(
       });
     }
 
-    const confirmed = yield* Effect.tryPromise({
-      try: () => requestRelayClientInstallConfirmation(status.version),
-      catch: relayClientRpcError("Could not confirm relay client installation."),
-    });
-    if (!confirmed) {
-      return yield* new CloudEnvironmentLinkError({
-        message: "Relay client installation was cancelled.",
-      });
-    }
-
     const installed = yield* registry
-      .runStream(
-        environmentId,
-        runStream(WS_METHODS.cloudInstallRelayClient, {}).pipe(
-          Stream.tap((event) => Effect.sync(() => reportRelayClientInstallProgress(event))),
-        ),
-      )
+      .runStream(environmentId, runStream(WS_METHODS.cloudInstallRelayClient, {}))
       .pipe(
         Stream.runLast,
         Effect.mapError(relayClientRpcError("Could not install the relay client.")),
-        Effect.ensuring(Effect.sync(finishRelayClientInstall)),
       );
     if (Option.isNone(installed) || installed.value.type !== "complete") {
       return yield* new CloudEnvironmentLinkError({

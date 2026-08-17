@@ -115,7 +115,7 @@ Default Grafana login:
 ```bash
 export PATHWAY_OTLP_TRACES_URL=http://localhost:4318/v1/traces
 export PATHWAY_OTLP_METRICS_URL=http://localhost:4318/v1/metrics
-export PATHWAY_OTLP_SERVICE_NAME=t3-local
+export PATHWAY_OTLP_SERVICE_NAME=pathway-local
 ```
 
 Optional:
@@ -154,7 +154,7 @@ macOS app bundle example:
 ```bash
 PATHWAY_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 PATHWAY_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-PATHWAY_OTLP_SERVICE_NAME=t3-desktop \
+PATHWAY_OTLP_SERVICE_NAME=pathway-desktop \
 "/Applications/Pathway.app/Contents/MacOS/Pathway"
 ```
 
@@ -163,7 +163,7 @@ Direct binary example:
 ```bash
 PATHWAY_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 PATHWAY_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-PATHWAY_OTLP_SERVICE_NAME=t3-desktop \
+PATHWAY_OTLP_SERVICE_NAME=pathway-desktop \
 ./path/to/your/desktop-app-binary
 ```
 
@@ -299,7 +299,7 @@ Recommended flow in Grafana:
 
 Good first searches:
 
-- service name such as `t3-local`, `t3-dev`, or `t3-desktop`
+- service name such as `pathway-local`, `pathway-dev`, or `pathway-desktop`
 - span names like `sendTurn` or a Git operation such as `GitVcsDriver.statusDetails.status`
 - Git spans whose `git.operation` attribute identifies the operation
 - orchestration spans with attributes like `orchestration.command_type`
@@ -313,18 +313,18 @@ Traces are best for one request. Metrics are best for trends.
 
 Good metric families to watch:
 
-- `t3_rpc_request_duration`
-- `t3_orchestration_command_duration`
-- `t3_orchestration_command_ack_duration`
-- `t3_provider_turn_duration`
-- `t3_git_command_duration`
+- `pathway_rpc_request_duration`
+- `pathway_orchestration_command_duration`
+- `pathway_orchestration_command_ack_duration`
+- `pathway_provider_turn_duration`
+- `pathway_git_command_duration`
 
 Counters tell you volume and failure rate:
 
-- `t3_rpc_requests_total`
-- `t3_orchestration_commands_total`
-- `t3_provider_turns_total`
-- `t3_git_commands_total`
+- `pathway_rpc_requests_total`
+- `pathway_orchestration_commands_total`
+- `pathway_provider_turns_total`
+- `pathway_git_commands_total`
 
 Use metrics when the question is:
 
@@ -340,7 +340,7 @@ Use traces when the question is:
 
 ### What The New Ack Metric Means
 
-`t3_orchestration_command_ack_duration` measures:
+`pathway_orchestration_command_ack_duration` measures:
 
 - start: command dispatch enters the orchestration engine
 - end: the first committed domain event for that command is published by the server
@@ -371,7 +371,7 @@ If you need those later, add client-side instrumentation or a dedicated server f
 
 ### "Did this command take too long to acknowledge?"
 
-1. Check `t3_orchestration_command_ack_duration` by `commandType`.
+1. Check `pathway_orchestration_command_ack_duration` by `commandType`.
 2. If it is high, inspect the corresponding orchestration trace.
 3. Look at child spans for projection, sqlite, provider, or git work.
 
@@ -521,7 +521,7 @@ OTLP export:
 - `PATHWAY_OTLP_TRACES_URL`: OTLP trace endpoint
 - `PATHWAY_OTLP_METRICS_URL`: OTLP metric endpoint
 - `PATHWAY_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
-- `PATHWAY_OTLP_SERVICE_NAME`: service name, default `t3-server`
+- `PATHWAY_OTLP_SERVICE_NAME`: service name, default `pathway-server`
 
 If the OTLP URLs are unset, local tracing still works and metrics stay in-process only.
 

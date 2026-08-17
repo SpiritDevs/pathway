@@ -150,7 +150,7 @@ const persistenceLayer = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerSecretStore.layer),
-  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mention-test-" })),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-mention-test-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 

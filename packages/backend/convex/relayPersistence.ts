@@ -58,7 +58,7 @@ const aggregateState = v.object({
 const endpointProviderKind = v.union(
   v.literal("manual"),
   v.literal("cloudflare_tunnel"),
-  v.literal("t3_relay"),
+  v.literal("pathway_relay"),
 );
 const deliveryKind = v.union(
   v.literal("live_activity_start"),
@@ -661,7 +661,10 @@ export const listEnvironmentLinksForUser = query({
         endpoint: {
           httpBaseUrl: row.endpointHttpBaseUrl,
           wsBaseUrl: row.endpointWsBaseUrl,
-          providerKind: row.endpointProviderKind as "manual" | "cloudflare_tunnel" | "t3_relay",
+          providerKind: row.endpointProviderKind as
+            | "manual"
+            | "cloudflare_tunnel"
+            | "pathway_relay",
         },
         linkedAt: row.createdAt,
       }));
@@ -687,7 +690,10 @@ export const getEnvironmentLinkForUser = query({
           endpoint: {
             httpBaseUrl: row.endpointHttpBaseUrl,
             wsBaseUrl: row.endpointWsBaseUrl,
-            providerKind: row.endpointProviderKind as "manual" | "cloudflare_tunnel" | "t3_relay",
+            providerKind: row.endpointProviderKind as
+              | "manual"
+              | "cloudflare_tunnel"
+              | "pathway_relay",
           },
           linkedAt: row.createdAt,
         };

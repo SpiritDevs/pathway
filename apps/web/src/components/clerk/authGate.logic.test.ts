@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { resolveClerkAuthGateState } from "./authGate.logic";
 
+const validWorkspace = { workspaceValidation: "valid" as const };
+
 describe("resolveClerkAuthGateState", () => {
   it("keeps the login and register routes public while Clerk loads", () => {
     expect(
@@ -10,6 +12,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: undefined,
         onboardingComplete: undefined,
         pathname: "/login",
+        ...validWorkspace,
       }),
     ).toBe("public");
     expect(
@@ -18,6 +21,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: false,
         onboardingComplete: undefined,
         pathname: "/register",
+        ...validWorkspace,
       }),
     ).toBe("public");
   });
@@ -29,6 +33,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: undefined,
         onboardingComplete: undefined,
         pathname: "/threads",
+        ...validWorkspace,
       }),
     ).toBe("loading");
   });
@@ -40,6 +45,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: false,
         onboardingComplete: undefined,
         pathname: "/settings",
+        ...validWorkspace,
       }),
     ).toBe("redirect");
   });
@@ -51,6 +57,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: false,
         onboardingComplete: undefined,
         pathname: "/onboarding",
+        ...validWorkspace,
       }),
     ).toBe("redirect");
   });
@@ -62,6 +69,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: true,
         onboardingComplete: undefined,
         pathname: "/threads",
+        ...validWorkspace,
       }),
     ).toBe("loading");
   });
@@ -73,6 +81,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: true,
         onboardingComplete: false,
         pathname: "/threads",
+        ...validWorkspace,
       }),
     ).toBe("onboarding");
   });
@@ -84,6 +93,7 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: true,
         onboardingComplete: false,
         pathname: "/onboarding",
+        ...validWorkspace,
       }),
     ).toBe("authenticated");
   });
@@ -95,6 +105,31 @@ describe("resolveClerkAuthGateState", () => {
         isSignedIn: true,
         onboardingComplete: true,
         pathname: "/threads",
+        ...validWorkspace,
+      }),
+    ).toBe("authenticated");
+  });
+
+  it("holds a completed profile until its workspace is validated", () => {
+    expect(
+      resolveClerkAuthGateState({
+        isLoaded: true,
+        isSignedIn: true,
+        onboardingComplete: true,
+        pathname: "/threads",
+        workspaceValidation: "checking",
+      }),
+    ).toBe("loading");
+  });
+
+  it("does not reset onboarding when workspace validation is temporarily unavailable", () => {
+    expect(
+      resolveClerkAuthGateState({
+        isLoaded: true,
+        isSignedIn: true,
+        onboardingComplete: true,
+        pathname: "/threads",
+        workspaceValidation: "unavailable",
       }),
     ).toBe("authenticated");
   });

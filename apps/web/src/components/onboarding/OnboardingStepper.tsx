@@ -10,11 +10,12 @@ import {
   type ProviderUsage,
   type ReferralSource,
 } from "@spiritdevs/client-runtime/profile";
-import { useUser } from "@clerk/react";
+import { useAuth, useUser } from "@clerk/react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useState } from "react";
 
 import { clerkErrorMessage } from "~/components/auth/clerkErrorMessage";
+import { resolveCloudSyncConvexUrl, resolveConvexClerkTokenOptions } from "~/cloud/publicConfig";
 import { AccountKindStep } from "./AccountKindStep";
 import { CompanyDetailsStep } from "./CompanyDetailsStep";
 import { IdentityStep } from "./IdentityStep";
@@ -42,6 +43,8 @@ export type SignedInClerkUser = Extract<ReturnType<typeof useUser>, { isSignedIn
 
 type ProfilePatch = Partial<Omit<ProfileMetadata, "v">>;
 
+class WorkspaceProvisioningError extends Error {}
+
 /**
  * The blocking profile stepper (docs/internals/decisions/0004). Where the user
  * resumes comes from the Clerk user; from then on local state drives the deck,
@@ -50,6 +53,7 @@ type ProfilePatch = Partial<Omit<ProfileMetadata, "v">>;
  */
 export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }) {
   const navigate = useNavigate();
+  const { getToken } = useAuth();
   const metadata = parseProfileMetadata(user.unsafeMetadata);
   const accountKind = metadata?.accountKind ?? null;
 
@@ -112,7 +116,11 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
     try {
       await action();
     } catch (cause) {
-      setError(clerkErrorMessage(cause, fallbackMessage));
+      setError(
+        cause instanceof WorkspaceProvisioningError
+          ? cause.message
+          : clerkErrorMessage(cause, fallbackMessage),
+      );
     } finally {
       setPending(false);
     }
@@ -168,10 +176,39 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
     setPendingKind(null);
   }
 
-  function completeOnboarding(patch: ProfilePatch) {
+  function completeOnboarding(
+    accountKind: AccountKind,
+    patch: ProfilePatch,
+    workspaceName: string,
+  ) {
     void runWrite(async () => {
-      await writeProfileMetadata({ ...patch, onboardingCompletedAt: new Date().toISOString() });
-      await navigate({ replace: true, to: "/" });
+      const convexUrl = resolveCloudSyncConvexUrl();
+      if (convexUrl === null) {
+        throw new Error("Workspace provisioning is not configured for this Pathway build.");
+      }
+      const {
+        completeOnboardingAfterWorkspaceProvision,
+        onboardingProvisioningErrorMessage,
+        onboardingWorkspaceProvisioningArgs,
+        provisionOnboardingWorkspace,
+      } = await import("~/cloud/onboardingProvisioning");
+      try {
+        await completeOnboardingAfterWorkspaceProvision({
+          provisionWorkspace: () =>
+            provisionOnboardingWorkspace({
+              convexUrl,
+              fetchToken: () => getToken(resolveConvexClerkTokenOptions()),
+              args: onboardingWorkspaceProvisioningArgs(accountKind, workspaceName),
+            }),
+          persistCompletedProfile: () =>
+            writeProfileMetadata({ ...patch, onboardingCompletedAt: new Date().toISOString() }),
+          navigateHome: () => navigate({ replace: true, to: "/" }),
+        });
+      } catch (cause) {
+        throw new WorkspaceProvisioningError(onboardingProvisioningErrorMessage(cause), {
+          cause,
+        });
+      }
     }, "We could not finish setting up your account. Try again.");
   }
 
@@ -181,16 +218,16 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
       role: companyRole,
       size: companySize,
     });
-    completeOnboarding(company === null ? {} : { company });
+    completeOnboarding("company", company === null ? {} : { company }, companyName);
   }
 
   function handleIndividualFinish() {
     const individual = buildIndividualPatch({ providers, referralDetail, referralSource });
-    completeOnboarding(individual === null ? {} : { individual });
+    completeOnboarding("individual", individual === null ? {} : { individual }, "");
   }
 
   function handleSkipBranch() {
-    completeOnboarding({});
+    if (accountKind !== null) completeOnboarding(accountKind, {}, companyName);
   }
 
   const handleArrowKey = useEffectEvent((event: KeyboardEvent) => {

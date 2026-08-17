@@ -640,7 +640,7 @@ function makeManager(input?: {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
   const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
-    prefix: "t3-git-manager-test-",
+    prefix: "pathway-git-manager-test-",
   });
 
   const serverSettingsLayer = ServerSettings.ServerSettingsService.layerTest(input?.serverSettings);
@@ -689,7 +689,7 @@ function makeManager(input?: {
 const asThreadId = (threadId: string) => threadId as ThreadId;
 
 const GitManagerTestLayer = GitVcsDriver.layer.pipe(
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-git-manager-test-" })),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "pathway-git-manager-test-" })),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -2861,7 +2861,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const primaryDir = yield* createBareRemote();
         const upstreamDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "github", primaryDir]);
-        yield* runGit(repoDir, ["remote", "add", "t3code-github", upstreamDir]);
+        yield* runGit(repoDir, ["remote", "add", "pathway-github", upstreamDir]);
         yield* runGit(repoDir, ["checkout", "-b", "feature/issue-attachments"]);
         yield* runGit(repoDir, ["push", "-u", "github", "feature/issue-attachments"]);
         yield* configureVisibleRemoteUrlWithLocalRewrite(
@@ -2872,8 +2872,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         );
         yield* configureVisibleRemoteUrlWithLocalRewrite(
           repoDir,
-          "t3code-github",
-          "https://github.com/pingdotgg/t3code.git",
+          "pathway-github",
+          "https://github.com/pingdotgg/pathway.git",
           upstreamDir,
         );
 

@@ -39,12 +39,11 @@ run a headless server from the CLI, or have the desktop app launch Pathway over 
 
 ### Option 1: Desktop App
 
-If you are already running the desktop app and want to make it reachable from other devices:
+The desktop app enables network access automatically. To pair another device:
 
 1. Open **Settings** → **Environments**.
-2. Under **This environment**, toggle **Network access** on. This will restart the app and run the backend on all network interfaces.
-3. The settings panel will show the default reachable endpoint, with a `+N` control when more endpoints are available. Expand it to inspect alternatives such as loopback, LAN, private-network, or HTTPS endpoints.
-4. Use **Create Link** to generate a pairing link you can share with another device.
+2. The settings panel shows the reachable endpoints for this environment.
+3. Use **Create Link** to generate a pairing link you can share with another device.
 
 The default endpoint controls the QR code and primary copy action for pairing links. You can change it from the expanded endpoint list. The preference is stored by endpoint type, so choosing the local LAN endpoint survives normal IP address changes when you move between networks.
 

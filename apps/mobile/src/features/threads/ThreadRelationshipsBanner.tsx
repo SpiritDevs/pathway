@@ -167,7 +167,10 @@ export function ThreadRelationshipsBanner(props: {
           tintColor={iconColor}
           type="monochrome"
         />
-        <Text className="min-w-0 flex-1 font-t3-medium text-xs text-foreground" numberOfLines={1}>
+        <Text
+          className="min-w-0 flex-1 font-pathway-medium text-xs text-foreground"
+          numberOfLines={1}
+        >
           {summary}
         </Text>
         {rows.length > 1 ? (
@@ -197,7 +200,7 @@ export function ThreadRelationshipsBanner(props: {
             <View className="mb-4 h-1 w-10 self-center rounded-full bg-neutral-400/40" />
             <View className="mb-3 flex-row items-center justify-between px-1">
               <View>
-                <Text className="font-t3-bold text-lg text-foreground">Thread lineage</Text>
+                <Text className="font-pathway-bold text-lg text-foreground">Thread lineage</Text>
                 <Text className="text-xs text-foreground-muted">
                   {rows.length} related {rows.length === 1 ? "thread" : "threads"}
                 </Text>
@@ -242,7 +245,10 @@ export function ThreadRelationshipsBanner(props: {
                       <Text className="text-3xs uppercase tracking-wide text-foreground-muted">
                         {relationshipLabel(edge, props.threadId)}
                       </Text>
-                      <Text className="font-t3-medium text-sm text-foreground" numberOfLines={1}>
+                      <Text
+                        className="font-pathway-medium text-sm text-foreground"
+                        numberOfLines={1}
+                      >
                         {node?.thread?.title ?? threadId}
                       </Text>
                     </View>
@@ -275,7 +281,7 @@ export function ThreadRelationshipsBanner(props: {
                     ) : (
                       <SymbolView name="arrow.triangle.merge" size={14} tintColor="white" />
                     )}
-                    <Text className="font-t3-medium text-sm text-primary-foreground">
+                    <Text className="font-pathway-medium text-sm text-primary-foreground">
                       Merge back to source
                     </Text>
                   </Pressable>
@@ -288,7 +294,7 @@ export function ThreadRelationshipsBanner(props: {
                     className="min-h-11 flex-row items-center justify-center gap-2 rounded-xl border border-neutral-300/60 px-3 dark:border-white/[0.1]"
                   >
                     {busyAction === "detach" ? <ActivityIndicator /> : null}
-                    <Text className="font-t3-medium text-sm text-foreground">
+                    <Text className="font-pathway-medium text-sm text-foreground">
                       Disconnect agent session
                     </Text>
                   </Pressable>

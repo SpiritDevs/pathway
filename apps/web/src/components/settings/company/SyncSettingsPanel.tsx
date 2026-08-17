@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { CloudIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { activeCompanyIdAtom, companyListAtom } from "../../../cloud/activeCompany";
 import { cloudSyncAvailabilityAtom, companySyncStatusesAtom } from "../../../cloud/syncStatus";
@@ -12,7 +12,7 @@ import {
 } from "../../../cloud/syncStatus.logic";
 import { cn } from "../../../lib/utils";
 import { Badge } from "../../ui/badge";
-import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
+import { SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
 import { CompanySectionCard, CompanySettingsEmptyState } from "./CompanySettingsShared";
 
@@ -126,7 +126,7 @@ function CompanyStatusCard({
   );
 }
 
-export function SyncSettingsPanel() {
+export function CloudSyncDiagnostics() {
   const availability = useAtomValue(cloudSyncAvailabilityAtom);
   const companies = useAtomValue(companyListAtom);
   const statuses = useAtomValue(companySyncStatusesAtom);
@@ -143,77 +143,64 @@ export function SyncSettingsPanel() {
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [companies, statuses]);
 
+  let content: ReactNode;
+  let lacksCrossTabLeadership = false;
   if (availability.phase === "disabled") {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Cloud sync is not configured"
-          description="This Pathway deployment has cloud sync disabled. No browser sync engine is running."
-        />
-      </SettingsPageContainer>
+    content = (
+      <CompanySettingsEmptyState
+        title="Cloud sync is not configured"
+        description="This Pathway deployment has cloud sync disabled. No browser sync engine is running."
+      />
     );
-  }
-  if (availability.phase === "signed-out") {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Sign in to view sync status"
-          description="Company sync health is available after you sign in."
-        />
-      </SettingsPageContainer>
+  } else if (availability.phase === "signed-out") {
+    content = (
+      <CompanySettingsEmptyState
+        title="Sign in to view sync status"
+        description="Company sync health is available after you sign in."
+      />
     );
-  }
-  if (!("tab" in availability)) return null;
-  if (availability.tab.role === "follower") {
-    return (
-      <SettingsPageContainer>
+  } else if (!("tab" in availability)) {
+    content = null;
+  } else {
+    lacksCrossTabLeadership = !availability.tab.crossContext;
+    content =
+      availability.tab.role === "follower" ? (
         <CompanySettingsEmptyState
           title="Sync is running in another tab"
           description="Only the leader tab opens company sync engines. Open that tab to see live per-company status, or close it to let this tab take over."
         />
-      </SettingsPageContainer>
-    );
-  }
-  if (availability.tab.role === "inactive") {
-    return (
-      <SettingsPageContainer>
+      ) : availability.tab.role === "inactive" ? (
         <CompanySettingsEmptyState
           title="Cloud sync is starting"
           description="Pathway is preparing the tab leader election and company sync engines."
         />
-      </SettingsPageContainer>
-    );
+      ) : rows.length === 0 ? (
+        <CompanySettingsEmptyState
+          title="No workspaces to sync"
+          description="No workspace sync engine is active for this signed-in account."
+        />
+      ) : (
+        <CompanySectionCard>
+          {rows.map((row) => (
+            <CompanyStatusCard
+              key={row.companyId}
+              {...row}
+              active={row.companyId === activeCompanyId}
+            />
+          ))}
+        </CompanySectionCard>
+      );
   }
 
   return (
-    <SettingsPageContainer>
-      <SettingsSection
-        {...searchableSetting("company-sync")}
-        icon={<CloudIcon className="size-4" />}
-      >
-        {!availability.tab.crossContext ? (
-          <div className="mb-3 rounded-xl border border-warning/20 bg-warning/5 px-4 py-3 text-xs text-warning-foreground">
-            This browser does not support cross-tab sync leadership. Each open tab may run its own
-            engine.
-          </div>
-        ) : null}
-        {rows.length === 0 ? (
-          <CompanySettingsEmptyState
-            title="No companies to sync"
-            description="No company engine is active for this signed-in account."
-          />
-        ) : (
-          <CompanySectionCard>
-            {rows.map((row) => (
-              <CompanyStatusCard
-                key={row.companyId}
-                {...row}
-                active={row.companyId === activeCompanyId}
-              />
-            ))}
-          </CompanySectionCard>
-        )}
-      </SettingsSection>
-    </SettingsPageContainer>
+    <SettingsSection {...searchableSetting("company-sync")} icon={<CloudIcon className="size-4" />}>
+      {lacksCrossTabLeadership ? (
+        <div className="mb-3 rounded-xl border border-warning/20 bg-warning/5 px-4 py-3 text-xs text-warning-foreground">
+          This browser does not support cross-tab sync leadership. Each open tab may run its own
+          engine.
+        </div>
+      ) : null}
+      {content}
+    </SettingsSection>
   );
 }

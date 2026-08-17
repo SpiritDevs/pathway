@@ -136,7 +136,7 @@ how the server got started or who manages the process.
 
 ### Direct WebSocket access
 
-`wss://t3.example.com` or `ws://10.0.0.15:3773`, paired as a bearer target. This is the base model.
+`wss://pathway.example.com` or `ws://10.0.0.15:3773`, paired as a bearer target. This is the base model.
 It works for desktop, mobile, and web with no client-side process management. Browser security rules
 are part of it: a hosted HTTPS client cannot connect to plain `ws://` or `http://` LAN backends.
 
@@ -147,7 +147,7 @@ behind NAT, inbound ports are unavailable, or mobile must reach a desktop-hosted
 the client's perspective this is still an ordinary WebSocket connection; the route is mediated. The
 relay Worker only brokers credentials and a managed endpoint; application traffic then flows over
 the provisioned Cloudflare tunnel hostname for the life of the connection, not through the relay
-Worker itself. See [t3-connect.md](./t3-connect.md).
+Worker itself. See [pathway-connect.md](./pathway-connect.md).
 
 ### Tailscale access
 
@@ -225,7 +225,7 @@ supervisor owns the resulting disconnect and reconnect like any other involuntar
 These remain unbuilt and are listed to keep the model honest:
 
 - third-party tunnel products as additional endpoint providers;
-- a relay-hosted OAuth callback broker (see [t3-connect.md](./t3-connect.md));
+- a relay-hosted OAuth callback broker (see [pathway-connect.md](./pathway-connect.md));
 - richer multi-environment UI beyond the current connections list.
 
 [model]: ../../packages/client-runtime/src/connection/model.ts

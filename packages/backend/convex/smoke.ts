@@ -4,8 +4,7 @@
  *
  * Every function here is an `internalMutation`/`internalQuery`, so nothing in this module is
  * reachable from a client bundle — the only way in is `npx convex run smoke:<fn>` with admin
- * credentials. They also deliberately skip the `PATHWAY_CLOUD_SYNC` capability gate: seeding and
- * cleanup must work on a deployment where the public surface is still switched off.
+ * credentials. Seeding and cleanup stay internal so they never become part of the client surface.
  *
  * All of them operate exclusively on the reserved smoke company
  * ({@link SMOKE_COMPANY_DOMAIN_ID}) and refuse anything else, so re-runs converge and real company

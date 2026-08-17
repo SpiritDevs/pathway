@@ -15,7 +15,6 @@ import { api } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
-process.env.PATHWAY_CLOUD_SYNC = "enabled";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -158,6 +157,26 @@ function asMember(t: ReturnType<typeof harness>, subject: string) {
 
 const asManager = (t: ReturnType<typeof harness>) => asMember(t, "manager");
 const asReader = (t: ReturnType<typeof harness>) => asMember(t, "reader");
+
+describe("personal workspace collaboration guard", () => {
+  it("keeps seeded-role reads available but blocks role administration", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(seeded.companyDocId, { workspaceKind: "personal" });
+    });
+
+    expect(await asManager(t).query(api.roles.list, { companyId: COMPANY_ID })).not.toEqual([]);
+    await expect(
+      asManager(t).mutation(api.roles.create, {
+        companyId: COMPANY_ID,
+        id: ROLE_ID,
+        name: "Blocked",
+        permissions: [],
+      }),
+    ).rejects.toThrow("Upgrade this personal workspace to an organization");
+  });
+});
 
 /**
  * Only the rows this file's mutations wrote. The seed inserts its cast directly, so the feed starts

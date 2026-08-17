@@ -531,7 +531,7 @@ export function syntheticLoadSessionResponseFromInitialize(
     ...(models ? { models } : {}),
     ...(modes ? { modes } : {}),
     _meta: {
-      t3SessionLoadReady: "replay_idle",
+      pathwaySessionLoadReady: "replay_idle",
     },
   };
 }

@@ -46,7 +46,7 @@ const proof = (
   grant: RelayValidatedConnectGrantIdentity | undefined,
 ): RelayCloudMintCredentialProofPayload => ({
   iss: "https://relay.example.test",
-  aud: `t3-env:${ENVIRONMENT_ID}`,
+  aud: `pathway-env:${ENVIRONMENT_ID}`,
   sub: "cloud-user-connect",
   jti: "connect-proof-jti",
   iat: 1,

@@ -250,7 +250,7 @@ describe("normalizeCompactToolLabel", () => {
 
 describe("resolveTimelineToolPresentation", () => {
   it("pretty prints Claude and Cursor Pathway MCP tool names", () => {
-    expect(resolveTimelineToolPresentation("mcp__pathway__t3_thread_read")).toEqual({
+    expect(resolveTimelineToolPresentation("mcp__pathway__pathway_thread_read")).toEqual({
       displayName: "Read a Pathway thread",
       logo: "pathway",
     });

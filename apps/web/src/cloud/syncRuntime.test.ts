@@ -25,7 +25,7 @@ import {
   type SyncOperationEnvelope,
 } from "@spiritdevs/contracts/cloudSync";
 import { EnvironmentRegistrationId } from "@spiritdevs/contracts/cloudProject";
-import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import { CompanyId, MembershipId, RoleId } from "@spiritdevs/contracts/company";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -34,6 +34,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { Atom } from "effect/unstable/reactivity";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -43,10 +44,14 @@ import {
   cloudSyncScope,
   decodeCloudSyncCompanies,
   discoverCompanyEnvironmentConnections,
-  provisionCloudSyncCurrentUser,
+  automaticEnvironmentRegistrationServiceRoleId,
+  registerEnvironmentAutomatically,
+  repairCloudSyncCurrentUserWorkspace,
   readCloudSyncClientId,
   reconcileCloudSyncEngines,
   runCloudSyncEngines,
+  mountCloudSyncRuntimeAtom,
+  shouldRunCloudSyncRuntime,
   useCloudSyncScope,
   type CloudSyncClientIdStorage,
   type CloudSyncCompany,
@@ -144,6 +149,28 @@ describe("cloudSyncScope", () => {
   });
 });
 
+describe("shouldRunCloudSyncRuntime", () => {
+  it("starts discovery for every signed-in account, including one still completing onboarding", () => {
+    expect(shouldRunCloudSyncRuntime(true)).toBe(true);
+    expect(shouldRunCloudSyncRuntime(false)).toBe(false);
+    expect(shouldRunCloudSyncRuntime(undefined)).toBe(false);
+  });
+});
+
+describe("mountCloudSyncRuntimeAtom", () => {
+  it("evaluates the lazy atom when the effect-phase subscription mounts", () => {
+    let evaluations = 0;
+    const atom = Atom.make(() => {
+      evaluations += 1;
+      return undefined;
+    });
+
+    const unmount = mountCloudSyncRuntimeAtom(atom);
+    expect(evaluations).toBe(1);
+    unmount();
+  });
+});
+
 describe("discoverCompanyEnvironmentConnections", () => {
   it("never presents the current environment as a remote connection", () => {
     const replica = {
@@ -156,6 +183,88 @@ describe("discoverCompanyEnvironmentConnections", () => {
     expect(
       discoverCompanyEnvironmentConnections(new Map([[COMPANY_A, replica]]), OWN_ENVIRONMENT_ID),
     ).toEqual(new Map([[REMOTE_ENVIRONMENT_ID, "Build server"]]));
+  });
+});
+
+describe("automaticEnvironmentRegistrationServiceRoleId", () => {
+  const role = (id: string, permissions: ReadonlyArray<string>) => ({
+    entityKind: "role" as const,
+    id: RoleId.make(id),
+    name: id,
+    description: "",
+    permissions,
+    seeded: false,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  const requiredPermissions = [
+    "company.read",
+    "projects.read",
+    "issues.read",
+    "workflow.manage",
+    "environments.read",
+  ];
+
+  it("does nothing when this environment already has an active registration", () => {
+    expect(
+      automaticEnvironmentRegistrationServiceRoleId(
+        [role("service", requiredPermissions), environmentRegistration(OWN_ENVIRONMENT_ID)],
+        OWN_ENVIRONMENT_ID,
+      ),
+    ).toBeNull();
+  });
+
+  it("selects the least-privileged suitable service role for a new environment", () => {
+    expect(
+      automaticEnvironmentRegistrationServiceRoleId(
+        [
+          role("insufficient", requiredPermissions.slice(0, -1)),
+          role("broad", [...requiredPermissions, "environments.manage"]),
+          role("service", requiredPermissions),
+        ],
+        OWN_ENVIRONMENT_ID,
+      ),
+    ).toBe("service");
+  });
+
+  it("reactivates a revoked registration", () => {
+    expect(
+      automaticEnvironmentRegistrationServiceRoleId(
+        [
+          role("service", requiredPermissions),
+          { ...environmentRegistration(OWN_ENVIRONMENT_ID), state: "revoked" as const },
+        ],
+        OWN_ENVIRONMENT_ID,
+      ),
+    ).toBe("service");
+  });
+
+  it("registers a new primary environment as soon as its company replica is ready", async () => {
+    const registrations: unknown[] = [];
+    const info = {
+      descriptor: environmentRegistration(OWN_ENVIRONMENT_ID).descriptor,
+      publicKeyThumbprint: "thumbprint",
+      relayLinkState: "unlinked" as const,
+      managedEndpointAvailable: false,
+    };
+    const registered = await registerEnvironmentAutomatically({
+      companyId: COMPANY_A,
+      environmentId: OWN_ENVIRONMENT_ID,
+      replica: {
+        view: new Map([["role:service", role("service", requiredPermissions)]]),
+      },
+      control: {
+        registerEnvironment: async (args) => {
+          registrations.push(args);
+        },
+      },
+      readRegistrationInfo: async () => info,
+    });
+
+    expect(registered).toBe(true);
+    expect(registrations).toEqual([
+      { companyId: COMPANY_A, info, serviceRoleIds: [RoleId.make("service")] },
+    ]);
   });
 });
 
@@ -283,11 +392,11 @@ describe("decodeCloudSyncCompanies", () => {
   });
 });
 
-describe("provisionCloudSyncCurrentUser", () => {
+describe("repairCloudSyncCurrentUserWorkspace", () => {
   it.effect("repairs company bootstrap data before company discovery starts", () => {
     let calls = 0;
     return Effect.gen(function* () {
-      const result = yield* provisionCloudSyncCurrentUser({
+      const result = yield* repairCloudSyncCurrentUserWorkspace({
         mutation: async (_reference, args) => {
           expect(args).toEqual({});
           calls += 1;

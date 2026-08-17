@@ -6,7 +6,7 @@ export interface PathwayMcpToolPresentation {
 }
 
 // Legacy aliases keep persisted tool names from older Pathway releases presentable.
-const PATHWAY_MCP_SERVER_ALIASES = new Set(["pathway", "t3-code", "t3_code", "t3code"]);
+const PATHWAY_MCP_SERVER_ALIASES = new Set(["pathway", "pathway", "pathway_code", "pathway"]);
 
 const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   orchestrator_capabilities: "Get orchestration capabilities",
@@ -18,14 +18,14 @@ const PATHWAY_MCP_TOOL_DISPLAY_NAMES: Record<string, string> = {
   update_scheduled_task: "Update a scheduled task",
   delete_scheduled_task: "Delete a scheduled task",
   create_threads: "Create Pathway threads",
-  t3_thread_start: "Start a Pathway thread",
-  t3_thread_list: "List Pathway threads",
-  t3_thread_read: "Read a Pathway thread",
-  t3_thread_send: "Send to a Pathway thread",
-  t3_thread_wait: "Wait for a Pathway thread",
-  t3_thread_interrupt: "Interrupt a Pathway thread",
-  t3_worktree_handoff: "Hand off thread to a git worktree",
-  t3_worktree_status: "Get thread worktree status",
+  pathway_thread_start: "Start a Pathway thread",
+  pathway_thread_list: "List Pathway threads",
+  pathway_thread_read: "Read a Pathway thread",
+  pathway_thread_send: "Send to a Pathway thread",
+  pathway_thread_wait: "Wait for a Pathway thread",
+  pathway_thread_interrupt: "Interrupt a Pathway thread",
+  pathway_worktree_handoff: "Hand off thread to a git worktree",
+  pathway_worktree_status: "Get thread worktree status",
   preview_status: "Get preview browser status",
   preview_open: "Open a page in the preview browser",
   preview_navigate: "Navigate the preview browser",
@@ -72,7 +72,9 @@ function resolvePathwayMcpToolName(value: string): string | null {
       : null;
   }
 
-  const namespaceMatch = /^(?<server>pathway|t3-code|t3_code|t3code)[.:/](?<tool>.+)$/i.exec(label);
+  const namespaceMatch = /^(?<server>pathway|pathway|pathway_code|pathway)[.:/](?<tool>.+)$/i.exec(
+    label,
+  );
   if (namespaceMatch?.groups) {
     return namespaceMatch.groups.tool ?? null;
   }

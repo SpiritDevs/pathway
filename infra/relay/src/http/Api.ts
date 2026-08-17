@@ -89,6 +89,24 @@ const relayCorsAllowedHeaders = [
 ] as const;
 const relayCorsExposedHeaders = ["traceparent", "www-authenticate"] as const;
 
+/**
+ * Browser preflights do not need the relay runtime. Keep this response independent of Clerk,
+ * Convex, tracing, and tunnel layers so an OPTIONS request stays comfortably below the Worker
+ * resource limit even on a cold isolate.
+ */
+export function relayCorsPreflightResponse(): HttpServerResponse.HttpServerResponse {
+  return HttpServerResponse.empty({
+    status: 204,
+    headers: {
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": relayCorsAllowedHeaders.join(","),
+      "access-control-allow-methods": relayCorsAllowedMethods.join(", "),
+      "access-control-expose-headers": relayCorsExposedHeaders.join(","),
+      "access-control-max-age": "86400",
+    },
+  });
+}
+
 const appendRelayCredentialResponseHeaders = HttpEffect.appendPreResponseHandler(
   (_request, response) =>
     Effect.succeed(
@@ -727,7 +745,7 @@ export const exchangeConvexServiceToken = Effect.fn("relay.token.exchange_convex
       publicKey: principal.value.environmentPublicKey,
       token: payload.key_binding,
       typ: RELAY_CONVEX_KEY_BINDING_TYP,
-      issuer: `t3-env:${principal.value.environmentId}`,
+      issuer: `pathway-env:${principal.value.environmentId}`,
       audience: normalizeRelayIssuer(config.relayIssuer),
       nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
     }).pipe(
@@ -810,7 +828,7 @@ export const exchangeEnvironmentDpopAccessToken = Effect.fn(
       publicKey,
       token: payload.subject_token,
       typ: RELAY_ENVIRONMENT_DPOP_ACCESS_ASSERTION_TYP,
-      issuer: `t3-env:${candidate.environmentId}`,
+      issuer: `pathway-env:${candidate.environmentId}`,
       audience: issuer,
       nowEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
     }).pipe(Effect.flatMap(decodeEnvironmentDpopAccessAssertion), Effect.option);

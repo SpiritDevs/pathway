@@ -53,6 +53,7 @@ import {
   RoleAssignmentScope,
   RoleId,
   TeamId,
+  WorkspaceKind,
   isCompanyPermission,
   type CompanyPermission,
 } from "./company.ts";
@@ -86,6 +87,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { CapturedEmailMessage, EmailTagId, TrustedEmailSenderId } from "./email.ts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 // ---------------------------------------------------------------------------
@@ -355,6 +357,11 @@ export type SyncCompanyOwnerGrant = typeof SyncCompanyOwnerGrant.Type;
 export const SyncCompanyPayload = Schema.Struct({
   id: CompanyId,
   name: Schema.String,
+  // Old feed rows predate this field. Decode them as organizations so an in-flight drain remains
+  // valid across deployment, while every newly encoded payload carries the kind explicitly.
+  workspaceKind: WorkspaceKind.pipe(
+    Schema.withDecodingDefaultType(Effect.succeed("organization" as const)),
+  ),
   /** The human half of every issue key in the company; immutable once keys are handed out. */
   issueKeyPrefix: IssueKeyPrefix,
   lifecycleState: CompanyLifecycleState,

@@ -44,10 +44,9 @@ import {
   CompanySettingsEmptyState,
   PermissionTooltip,
 } from "./CompanySettingsShared";
-import { useCompanySettings } from "./useCompanySettings";
+import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
 const ADD_ROLE_VALUE = "__add_role__";
-type CompanySettings = ReturnType<typeof useCompanySettings>;
 
 function reportError(title: string, error: unknown): void {
   toastManager.add(
@@ -436,8 +435,7 @@ function MemberRow({
   );
 }
 
-export function CompanyMembersPanel() {
-  const settings = useCompanySettings();
+export function CompanyMembersSections({ settings }: { readonly settings: CompanySettings }) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invitations, setInvitations] = useState<ReadonlyArray<CompanyInvitationSummary>>([]);
   const [invitationLoadError, setInvitationLoadError] = useState<string | null>(null);
@@ -463,40 +461,10 @@ export function CompanyMembersPanel() {
     void refreshInvitations();
   }, [refreshInvitations]);
 
-  if (settings.isAuthLoaded && !settings.isSignedIn) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Sign in to manage company members"
-          description="Company membership, invitations, and roles are available after you sign in."
-        />
-      </SettingsPageContainer>
-    );
-  }
-  if (settings.activeCompany === null || settings.companyId === null) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="No active company"
-          description="Choose a company from the company switcher to manage its members."
-        />
-      </SettingsPageContainer>
-    );
-  }
-  if (settings.replica === null) {
-    return (
-      <SettingsPageContainer>
-        <CompanySettingsEmptyState
-          title="Company data is syncing"
-          description="Member settings will appear when this company's replica is ready."
-        />
-      </SettingsPageContainer>
-    );
-  }
-
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
+        id="company-members"
         title="Members"
         icon={<UsersIcon className="size-4" />}
         headerAction={
@@ -543,6 +511,47 @@ export function CompanyMembersPanel() {
         onOpenChange={setInviteOpen}
         onInvited={refreshInvitations}
       />
+    </>
+  );
+}
+
+export function CompanyMembersPanel() {
+  const settings = useCompanySettings();
+
+  if (settings.isAuthLoaded && !settings.isSignedIn) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Sign in to manage company members"
+          description="Company membership, invitations, and roles are available after you sign in."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.activeCompany === null || settings.companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="No active workspace"
+          description="Your workspace is still being prepared. Try again in a moment."
+        />
+      </SettingsPageContainer>
+    );
+  }
+  if (settings.replica === null) {
+    return (
+      <SettingsPageContainer>
+        <CompanySettingsEmptyState
+          title="Workspace data is syncing"
+          description="Member settings will appear when this workspace is ready."
+        />
+      </SettingsPageContainer>
+    );
+  }
+
+  return (
+    <SettingsPageContainer>
+      <CompanyMembersSections settings={settings} />
     </SettingsPageContainer>
   );
 }

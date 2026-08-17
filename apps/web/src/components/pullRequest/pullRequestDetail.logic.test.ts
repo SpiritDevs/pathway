@@ -309,7 +309,7 @@ describe("fix findings handoff", () => {
       reviewThreads: [
         thread("already handled", { isResolved: true }),
         thread("   ", { id: "t2" }),
-        thread("still open", { id: "t3" }),
+        thread("still open", { id: "thread-3" }),
       ],
       checks: [],
     });

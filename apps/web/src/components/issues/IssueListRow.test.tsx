@@ -83,7 +83,7 @@ describe("IssueListRow investigation badge", () => {
         provider: "github",
         number: 42,
         title: "Show PRs on issues",
-        url: "https://github.com/t3dotgg/pathway/pull/42",
+        url: "https://github.com/SpiritDevs/pathway/pull/42",
         state: "open",
         createdAt: NOW,
         updatedAt: NOW,
@@ -91,7 +91,7 @@ describe("IssueListRow investigation badge", () => {
     });
 
     expect(html).toContain("PR #42");
-    expect(html).toContain('href="https://github.com/t3dotgg/pathway/pull/42"');
+    expect(html).toContain('href="https://github.com/SpiritDevs/pathway/pull/42"');
     expect(html.indexOf("PR #42")).toBeGreaterThan(html.indexOf(issue.title));
   });
 

@@ -2,7 +2,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ServerProvider,
-  T3ProjectFileScript,
+  PathwayProjectFileScript,
   ThreadId,
 } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   actionPaletteSections: [] as Array<{ id: string; visible: boolean }>,
-  useT3ProjectFileScripts: vi.fn(),
+  usePathwayProjectFileScripts: vi.fn(),
   projectScriptsControl: vi.fn(),
   providerUsage: vi.fn(),
   providerUsageList: vi.fn(),
@@ -24,9 +24,9 @@ vi.mock("../../hooks/useSettings", () => ({
     selector({ actionPaletteSections: testState.actionPaletteSections }),
 }));
 
-vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
-  useT3ProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
-    testState.useT3ProjectFileScripts(...args),
+vi.mock("../../hooks/usePathwayProjectFileScripts", () => ({
+  usePathwayProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
+    testState.usePathwayProjectFileScripts(...args),
 }));
 vi.mock("../BranchToolbar", () => ({
   BranchToolbar: () => null,
@@ -79,7 +79,7 @@ import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetail
 describe("ThreadDetailsPanel", () => {
   beforeEach(() => {
     testState.actionPaletteSections = [];
-    testState.useT3ProjectFileScripts.mockReset();
+    testState.usePathwayProjectFileScripts.mockReset();
     testState.projectScriptsControl.mockReset();
     testState.providerUsage.mockReset();
     testState.providerUsageList.mockReset();
@@ -88,7 +88,7 @@ describe("ThreadDetailsPanel", () => {
     testState.threadIssuePanel.mockReset();
   });
 
-  it("passes checked-in t3.json scripts to the project scripts control", () => {
+  it("passes checked-in pathway.json scripts to the project scripts control", () => {
     const environmentId = "environment:thread-details" as EnvironmentId;
     const gitCwd = "/tmp/thread-details-project";
     const fileScripts = [
@@ -97,8 +97,8 @@ describe("ThreadDetailsPanel", () => {
         command: "vp check",
         icon: "test",
       },
-    ] satisfies ReadonlyArray<T3ProjectFileScript>;
-    testState.useT3ProjectFileScripts.mockReturnValue(fileScripts);
+    ] satisfies ReadonlyArray<PathwayProjectFileScript>;
+    testState.usePathwayProjectFileScripts.mockReturnValue(fileScripts);
 
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
@@ -135,7 +135,7 @@ describe("ThreadDetailsPanel", () => {
     const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
     expect(html).toContain("Actions");
-    expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
+    expect(testState.usePathwayProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
     expect(testState.projectScriptsControl).toHaveBeenCalledWith(
       expect.objectContaining({
         displayMode: "panel",
@@ -160,7 +160,7 @@ describe("ThreadDetailsPanel", () => {
 
   it("shows the target machine when it is the project's only environment", () => {
     const environmentId = "environment:thread-details" as EnvironmentId;
-    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    testState.usePathwayProjectFileScripts.mockReturnValue([]);
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
       environmentId,
@@ -210,7 +210,7 @@ describe("ThreadDetailsPanel", () => {
 
   it("places the issues section between the runtime controls and version control", () => {
     const environmentId = "environment:thread-details" as EnvironmentId;
-    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    testState.usePathwayProjectFileScripts.mockReturnValue([]);
 
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
@@ -265,7 +265,7 @@ describe("ThreadDetailsPanel", () => {
     const activeProviderEntry = {
       displayName: "Work Codex",
     } as NonNullable<ThreadDetailsPanelProps["activeProviderEntry"]>;
-    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    testState.usePathwayProjectFileScripts.mockReturnValue([]);
 
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
@@ -317,7 +317,7 @@ describe("ThreadDetailsPanel", () => {
   it("shows every supported provider on a new thread without depending on the picker selection", () => {
     const environmentId = "environment:new-thread" as EnvironmentId;
     const threadId = "thread:new-thread" as ThreadId;
-    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    testState.usePathwayProjectFileScripts.mockReturnValue([]);
 
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
@@ -368,7 +368,7 @@ describe("ThreadDetailsPanel", () => {
     "applies the same visibility and ordering in %s mode",
     (mode) => {
       const environmentId = "environment:configured-palette" as EnvironmentId;
-      testState.useT3ProjectFileScripts.mockReturnValue([]);
+      testState.usePathwayProjectFileScripts.mockReturnValue([]);
       testState.actionPaletteSections = [
         { id: "issues", visible: true },
         { id: "workspace", visible: true },

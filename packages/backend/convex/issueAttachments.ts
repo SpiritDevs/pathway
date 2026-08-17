@@ -25,7 +25,6 @@ import {
   query,
 } from "./_generated/server.js";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./_generated/server.js";
-import { requireCloudSyncEnabled } from "./lib/capability.ts";
 import { appendCompanyChanges } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
@@ -344,7 +343,6 @@ export const beginPrepare = internalMutation({
   args: { companyId: domainIdArg, issueId: domainIdArg, upload: uploadInput },
   returns: beginResult,
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await memberForUpload(ctx, args.companyId);
     const issue = await issueForUpload(ctx, actor, args.issueId);
     const upload = normalizeUpload(args.upload);
@@ -461,7 +459,6 @@ export const prepareUpload = action({
   args: { companyId: domainIdArg, issueId: domainIdArg, uploads: v.array(uploadInput) },
   returns: v.array(preparedUpload),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     if (args.uploads.length === 0 || args.uploads.length > 8)
       throw backendError("invalid-arguments", "Prepare between one and eight attachments.");
     const results: Array<{
@@ -531,7 +528,6 @@ export const finalizeCandidate = internalQuery({
     state: v.union(v.literal("pending"), v.literal("ready")),
   }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await memberForUpload(ctx, args.companyId);
     const row = await ctx.db
       .query("issueAttachments")
@@ -622,7 +618,6 @@ export const finalizeUpload = action({
   args: { companyId: domainIdArg, attachmentId: domainIdArg },
   returns: v.object({ status: v.union(v.literal("ready"), v.literal("already-ready")) }),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const candidate = await ctx.runQuery(functions.finalizeCandidate, args);
     if (candidate.state === "ready") return { status: "already-ready" as const };
     const verified = await client().verifyUpload(candidate.key);
@@ -651,7 +646,6 @@ export const urls = query({
   args: { companyId: domainIdArg, issueId: domainIdArg, attachmentIds: v.array(domainIdArg) },
   returns: v.array(attachmentUrl),
   handler: async (ctx, args) => {
-    requireCloudSyncEnabled();
     const actor = await requireCompanyActor(ctx, args.companyId);
     const issue = await ctx.db
       .query("issues")

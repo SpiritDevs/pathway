@@ -5,13 +5,13 @@ import { WorktreeMcpService } from "../../WorktreeMcpService.ts";
 import { WorktreeToolkit } from "./tools.ts";
 
 const handlers = {
-  t3_worktree_handoff: (input) =>
+  pathway_worktree_handoff: (input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* WorktreeMcpService;
       return yield* service.handoff(scope, input);
     }),
-  t3_worktree_status: () =>
+  pathway_worktree_status: () =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;
       const service = yield* WorktreeMcpService;
