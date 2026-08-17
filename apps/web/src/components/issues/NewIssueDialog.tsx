@@ -24,7 +24,7 @@ import type {
   IssueStatus,
   IssueStatusId,
 } from "@spiritdevs/contracts";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
+import { ISSUE_KEY_DRAFT_PLACEHOLDER } from "@spiritdevs/contracts/cloudSync";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CalendarRangeIcon,
@@ -55,8 +55,9 @@ import {
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
 import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
-import { useSyncedCloudProjects } from "~/cloud/issueDomainReadModel";
+import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
+import { useSyncIssueOperations } from "~/cloud/issueDomainMutations";
 import {
   useCreateIssue,
   useCreateIssueComment,
@@ -109,7 +110,8 @@ import {
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
-import { canResizeNewIssueDialog, resolveAvailableIssueProjectId } from "./newIssueDialog.logic";
+import { canResizeNewIssueDialog, resolveIssueProjectOptionId } from "./newIssueDialog.logic";
+import type { IssueProjectOption } from "./useIssueProjectOptions";
 
 const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
@@ -280,7 +282,7 @@ export function NewIssueDialog({
   onOpenChange: (open: boolean) => void;
   statuses: ReadonlyArray<IssueStatus>;
   labels: ReadonlyArray<IssueLabel>;
-  projects: ReadonlyArray<EnvironmentProject>;
+  projects: ReadonlyArray<IssueProjectOption>;
   /** The tab's first status, so a new issue lands where the user is looking. */
   defaultStatusId: IssueStatusId | null;
   defaultProjectId: ProjectId | null;
@@ -294,24 +296,14 @@ export function NewIssueDialog({
   const createComment = useCreateIssueComment();
   const createLabel = useCreateIssueLabel();
   const uploadAttachment = useUploadIssueCommentAttachment();
+  const syncIssueOperations = useSyncIssueOperations();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
   const activeCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
-  const syncedCloudProjects = useSyncedCloudProjects();
+  const attachmentCloud = useReplicaIssueAttachmentCloud();
   const environmentControl = useEnvironmentControl();
-  const availableProjects = useMemo(() => {
-    if (activeCompanyId === null) return projects;
-    const available = new Map<string, { readonly id: ProjectId; readonly title: string }>(
-      syncedCloudProjects
-        .filter((project) => project.archivedAt === null)
-        .map((project) => [project.id, { id: ProjectId.make(project.id), title: project.name }]),
-    );
-    for (const project of projects) {
-      if (!available.has(String(project.id))) available.set(String(project.id), project);
-    }
-    return [...available.values()];
-  }, [activeCompanyId, projects, syncedCloudProjects]);
-  const availableDefaultProjectId = resolveAvailableIssueProjectId(
+  const availableProjects = projects;
+  const availableDefaultProjectId = resolveIssueProjectOptionId(
     defaultProjectId,
     availableProjects,
   );
@@ -479,7 +471,11 @@ export function NewIssueDialog({
   };
 
   const prepareAttachments = async () => {
-    const prepared: Array<{ readonly name: string; readonly dataUrl: string }> = [];
+    const prepared: Array<{
+      readonly name: string;
+      readonly file: File;
+      readonly dataUrl: string | null;
+    }> = [];
     for (const attachment of attachments) {
       const compressed = await compressImageToByteLimit(
         attachment.file,
@@ -493,17 +489,20 @@ export function NewIssueDialog({
         );
         return null;
       }
-      const dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
-      if (dataUrl === null) {
-        reportAttachmentRejection(`${attachment.name} could not be read as an image.`);
-        return null;
+      let dataUrl: string | null = null;
+      if (attachmentCloud === null) {
+        dataUrl = await readFileAsDataUrl(compressed.file).catch(() => null);
+        if (dataUrl === null) {
+          reportAttachmentRejection(`${attachment.name} could not be read as an image.`);
+          return null;
+        }
+        const rejection = newIssueAttachmentDataUrlRejection({ name: attachment.name, dataUrl });
+        if (rejection !== null) {
+          reportAttachmentRejection(rejection);
+          return null;
+        }
       }
-      const rejection = newIssueAttachmentDataUrlRejection({ name: attachment.name, dataUrl });
-      if (rejection !== null) {
-        reportAttachmentRejection(rejection);
-        return null;
-      }
-      prepared.push({ name: attachment.name, dataUrl });
+      prepared.push({ name: attachment.name, file: compressed.file, dataUrl });
     }
     return prepared;
   };
@@ -517,16 +516,22 @@ export function NewIssueDialog({
       setSubmitting(false);
       return;
     }
-    const submittedProjectId = resolveAvailableIssueProjectId(projectId, availableProjects);
+    if (preparedAttachments.length > 0 && attachmentCloud !== null && !attachmentCloud.isOnline) {
+      reportAttachmentRejection(
+        "Attachments need an internet connection on cloud-synced issues. You can still create the issue without the image.",
+      );
+      setSubmitting(false);
+      return;
+    }
+    const submittedProjectId = resolveIssueProjectOptionId(projectId, availableProjects);
     if (
       activeCompanyId !== null &&
       submittedProjectId !== null &&
-      !syncedCloudProjects.some((project) => String(project.id) === String(submittedProjectId))
+      selectedProject !== null &&
+      !selectedProject.isCompanyProject
     ) {
-      const localProject = projects.find(
-        (project) => String(project.id) === String(submittedProjectId),
-      );
-      if (localProject === undefined || environmentControl === null) {
+      const localProject = selectedProject.localProject;
+      if (localProject === null || environmentControl === null) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
@@ -578,25 +583,96 @@ export function NewIssueDialog({
       setSubmitting(false);
       return;
     }
+    const createdIssueLabel =
+      result.value.issue.key === ISSUE_KEY_DRAFT_PLACEHOLDER
+        ? "Issue"
+        : `Issue ${result.value.issue.key}`;
 
     if (preparedAttachments.length > 0) {
-      const attachmentIds: ChatAttachmentId[] = [];
-      for (const attachment of preparedAttachments) {
-        const uploadResult = await uploadAttachment({
-          issueId: result.value.issue.id,
-          dataUrl: attachment.dataUrl,
-        });
-        if (!AsyncResult.isSuccess(uploadResult)) {
+      if (attachmentCloud !== null && activeCompanyId !== null) {
+        const syncResult = await syncIssueOperations(activeCompanyId);
+        if (!AsyncResult.isSuccess(syncResult)) {
           reportIssueWriteFailure(
-            `Issue ${result.value.issue.key} was created, but ${attachment.name} could not be attached`,
-            uploadResult,
+            `${createdIssueLabel} was created, but could not be synced before attaching ${preparedAttachments[0]?.name ?? "the image"}`,
+            syncResult,
           );
           clearAttachments();
           setSubmitting(false);
           onOpenChange(false);
           return;
         }
-        attachmentIds.push(uploadResult.value.attachmentId);
+        if (
+          syncResult.value.rejectedOperations > 0 ||
+          syncResult.value.outcome === "offline" ||
+          syncResult.value.outcome === "failed" ||
+          syncResult.value.outcome === "disabled"
+        ) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `${createdIssueLabel} could not be synced before attaching the image`,
+              description:
+                syncResult.value.error?.message ??
+                "The issue is still pending sync. Try attaching the image from the issue after reconnecting.",
+            }),
+          );
+          clearAttachments();
+          setSubmitting(false);
+          onOpenChange(false);
+          return;
+        }
+      }
+      const attachmentIds: ChatAttachmentId[] = [];
+      for (const attachment of preparedAttachments) {
+        if (attachmentCloud !== null) {
+          try {
+            attachmentIds.push(
+              await attachmentCloud.client.upload({
+                companyId: attachmentCloud.companyId,
+                issueId: result.value.issue.id,
+                clientRequestId: randomUUID(),
+                fileName: attachment.name,
+                file: attachment.file,
+              }),
+            );
+          } catch (error) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: `${createdIssueLabel} was created, but ${attachment.name} could not be attached`,
+                description:
+                  error instanceof Error ? error.message : "The attachment upload failed.",
+              }),
+            );
+            clearAttachments();
+            setSubmitting(false);
+            onOpenChange(false);
+            return;
+          }
+        } else {
+          if (attachment.dataUrl === null) {
+            reportAttachmentRejection(`${attachment.name} could not be read as an image.`);
+            clearAttachments();
+            setSubmitting(false);
+            onOpenChange(false);
+            return;
+          }
+          const uploadResult = await uploadAttachment({
+            issueId: result.value.issue.id,
+            dataUrl: attachment.dataUrl,
+          });
+          if (!AsyncResult.isSuccess(uploadResult)) {
+            reportIssueWriteFailure(
+              `${createdIssueLabel} was created, but ${attachment.name} could not be attached`,
+              uploadResult,
+            );
+            clearAttachments();
+            setSubmitting(false);
+            onOpenChange(false);
+            return;
+          }
+          attachmentIds.push(uploadResult.value.attachmentId);
+        }
       }
 
       const commentResult = await createComment({
@@ -606,7 +682,7 @@ export function NewIssueDialog({
       });
       if (!AsyncResult.isSuccess(commentResult)) {
         reportIssueWriteFailure(
-          `Issue ${result.value.issue.key} was created, but its attachments could not be added`,
+          `${createdIssueLabel} was created, but its attachments could not be added`,
           commentResult,
         );
         clearAttachments();

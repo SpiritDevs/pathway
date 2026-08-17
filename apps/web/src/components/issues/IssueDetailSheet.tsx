@@ -11,6 +11,7 @@
  * @module components/issues/IssueDetailSheet
  */
 import { useAtomValue } from "@effect/atom-react";
+import { connectionStatusTitle } from "@spiritdevs/client-runtime/connection";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
 import type {
@@ -71,7 +72,7 @@ import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
-import { usePrimarySettings } from "~/hooks/useSettings";
+import { useEnvironmentSettings, usePrimarySettings } from "~/hooks/useSettings";
 import { cn, newMessageId, randomUUID } from "~/lib/utils";
 import { getCustomModelOptionsByInstance } from "~/modelSelection";
 import {
@@ -85,10 +86,10 @@ import {
 } from "~/rightPanelLayout";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { useProjects, useThreadShells } from "~/state/entities";
-import { usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { useBranches } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
-import { primaryServerProvidersAtom } from "~/state/server";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "~/state/server";
 import {
   issueRelationDisplays,
   useCancelIssueCommentAgentRun,
@@ -146,7 +147,7 @@ import { IssueAgentSection } from "./IssueAgentSection";
 import { IssueAttachments } from "./IssueAttachments";
 import { IssueComments } from "./IssueComments";
 import { IssueDescriptionEditor } from "./IssueDescriptionEditor";
-import { IssueDetailProperties } from "./IssueDetailProperties";
+import { IssueDetailProperties, type IssueEnvironmentOption } from "./IssueDetailProperties";
 import { IssueDetailTabs, type IssueDetailTab } from "./IssueDetailTabs";
 import { IssueEnrichmentPanel } from "./IssueEnrichmentPanel";
 import { IssueImageViewer } from "./IssueImageViewer";
@@ -159,6 +160,11 @@ import { issueAttachmentIds } from "./issueCommentAttachments";
 import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
 import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
+import {
+  issueProjectEnvironmentProjects,
+  resolveIssueEnvironmentProject,
+  useIssueProjectOptions,
+} from "./useIssueProjectOptions";
 import { reportIssueWriteFailure as reportFailure } from "./issueWriteFeedback";
 import {
   issueAssigneePatch,
@@ -532,6 +538,7 @@ function IssueDetailBody({
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const issueProjects = useIssueProjectOptions();
   const cycles = useIssueCycles();
   const milestones = useIssueMilestonesForProject(issue.projectId);
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
@@ -546,10 +553,9 @@ function IssueDetailBody({
   const attachmentCloud = useReplicaIssueAttachmentCloud();
   const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id, attachmentCloud);
   const childRollup = useIssueChildRollup(issue.id);
-  const settings = usePrimarySettings();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const timestampFormat = settings.timestampFormat;
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const { presentationById } = useEnvironments();
+  const [selectedPhysicalProjectKey, setSelectedPhysicalProjectKey] = useState<string | null>(null);
   // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
   // them: the header has to know whether an investigation has ever run, and the rail has to list
   // the threads. Two small reads on a local socket, patched live by the stream afterwards.
@@ -617,8 +623,13 @@ function IssueDetailBody({
   const titleProps = useCommitOnBlur<HTMLTextAreaElement>(issue.title, commitTitle);
 
   const projectTitles = useMemo(
-    () => new Map<string, string>(projects.map((project) => [project.id, project.title])),
-    [projects],
+    () =>
+      new Map<string, string>(
+        issueProjects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project.title] as const),
+        ),
+      ),
+    [issueProjects],
   );
   const issueKeys = useMemo(() => {
     const keys = new Map<string, string>();
@@ -629,6 +640,65 @@ function IssueDetailBody({
   const status = statuses.find((candidate) => candidate.id === issue.statusId) ?? null;
   const projectTitle =
     issue.projectId === null ? null : (projectTitles.get(issue.projectId) ?? null);
+  const issueProject = useMemo(() => {
+    const issueProjectId = issue.projectId;
+    return issueProjectId === null
+      ? null
+      : (issueProjects.find(
+          (candidate) =>
+            candidate.id === issueProjectId || candidate.projectIds.includes(issueProjectId),
+        ) ?? null);
+  }, [issue.projectId, issueProjects]);
+  const project = useMemo(
+    () =>
+      resolveIssueEnvironmentProject({
+        issueProjectId: issue.projectId,
+        projects: issueProjects,
+        selectedPhysicalProjectKey,
+        preferredEnvironmentId: primaryEnvironmentId,
+      }),
+    [issue.projectId, issueProjects, primaryEnvironmentId, selectedPhysicalProjectKey],
+  );
+  const agentEnvironmentId = project?.environmentId ?? primaryEnvironmentId;
+  const primarySettings = usePrimarySettings();
+  const agentSettings = useEnvironmentSettings(agentEnvironmentId);
+  const timestampFormat = primarySettings.timestampFormat;
+  const agentServerConfig = useAtomValue(serverEnvironment.configValueAtom(agentEnvironmentId));
+  const serverProviders = agentServerConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
+  const environmentOptions = useMemo<ReadonlyArray<IssueEnvironmentOption>>(
+    () =>
+      issueProject === null
+        ? []
+        : issueProjectEnvironmentProjects(issueProject).map((candidate) => {
+            const presentation = presentationById.get(candidate.environmentId);
+            return {
+              value: candidate.physicalProjectKey,
+              label:
+                candidate.environmentLabel ??
+                presentation?.entry.target.label ??
+                (candidate.environmentId === primaryEnvironmentId ? "This machine" : "Environment"),
+              status:
+                candidate.workspaceRoot === null
+                  ? "No directory"
+                  : presentation === undefined
+                    ? "Unavailable"
+                    : connectionStatusTitle(presentation.connection),
+              disabled:
+                candidate.workspaceRoot === null || presentation?.connection.phase !== "connected",
+            };
+          }),
+    [issueProject, presentationById, primaryEnvironmentId],
+  );
+  const selectedEnvironmentOption =
+    environmentOptions.find((option) => option.value === project?.physicalProjectKey) ?? null;
+  const selectedEnvironmentPresentation =
+    project === null ? undefined : presentationById.get(project.environmentId);
+  const agentEnvironmentBlockReason =
+    project !== null && selectedEnvironmentPresentation?.connection.phase !== "connected"
+      ? `${selectedEnvironmentOption?.label ?? "The selected environment"} is ${
+          selectedEnvironmentOption?.status.toLowerCase() ?? "unavailable"
+        }.`
+      : null;
 
   const statusById = useMemo(
     () => new Map(statuses.map((candidate) => [candidate.id, candidate])),
@@ -654,7 +724,7 @@ function IssueDetailBody({
   const { attachments: startWorkAttachments } = useIssueAttachmentUrls({
     attachmentIds: startWorkAttachmentIds,
     cloud: attachmentCloud,
-    environmentId: primaryEnvironmentId,
+    environmentId: agentEnvironmentId,
     issueId: issue.id,
   });
   const startWorkAttachmentUrls = startWorkAttachments.map((attachment) =>
@@ -782,16 +852,6 @@ function IssueDetailBody({
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const [startingWork, setStartingWork] = useState(false);
 
-  const project = useMemo(
-    () =>
-      issue.projectId === null
-        ? null
-        : (projects.find(
-            (candidate) =>
-              candidate.id === issue.projectId && candidate.environmentId === primaryEnvironmentId,
-          ) ?? null),
-    [issue.projectId, primaryEnvironmentId, projects],
-  );
   const startWorkGitStatus = useEnvironmentQuery(
     project?.workspaceRoot
       ? vcsEnvironment.status({
@@ -821,17 +881,20 @@ function IssueDetailBody({
   const providerInstanceEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(serverProviders),
+          agentSettings,
+        ),
       ),
-    [serverProviders, settings],
+    [agentSettings, serverProviders],
   );
   const startWorkInstanceEntries = useMemo(() => {
     if (startWorkProvider === null) return [];
     return providerInstanceEntries.filter((entry) => entry.driverKind === startWorkProvider);
   }, [providerInstanceEntries, startWorkProvider]);
   const startWorkModelOptionsByInstance = useMemo(
-    () => getCustomModelOptionsByInstance(settings, serverProviders),
-    [serverProviders, settings],
+    () => getCustomModelOptionsByInstance(agentSettings, serverProviders),
+    [agentSettings, serverProviders],
   );
   const initialStartWorkModelSelection = useMemo<ModelSelection | null>(() => {
     return resolveIssueStartWorkModelSelection({
@@ -966,21 +1029,21 @@ function IssueDetailBody({
   const threadsById = useMemo(() => {
     const byId = new Map<ThreadId, (typeof threadShells)[number]>();
     for (const shell of threadShells) {
-      if (shell.environmentId !== primaryEnvironmentId) continue;
       byId.set(shell.id, shell);
     }
     return byId;
-  }, [primaryEnvironmentId, threadShells]);
+  }, [threadShells]);
 
   const handleOpenThread = useCallback(
     (threadId: ThreadId) => {
-      if (primaryEnvironmentId === null) return;
+      const environmentId = threadsById.get(threadId)?.environmentId ?? project?.environmentId;
+      if (environmentId === undefined) return;
       void navigate({
         to: "/threads/$environmentId/$threadId",
-        params: buildThreadRouteParams({ environmentId: primaryEnvironmentId, threadId }),
+        params: buildThreadRouteParams({ environmentId, threadId }),
       });
     },
-    [navigate, primaryEnvironmentId],
+    [navigate, project?.environmentId, threadsById],
   );
 
   const handleUnlinkThread = useCallback(
@@ -1030,7 +1093,8 @@ function IssueDetailBody({
         completionStatusName:
           statuses.find(
             (candidate) =>
-              candidate.id === settings.issueAutomation.statusTransitions.workFinishedStatusId,
+              candidate.id ===
+              primarySettings.issueAutomation.statusTransitions.workFinishedStatusId,
           )?.name ??
           statuses.find((candidate) => candidate.category === "review")?.name ??
           null,
@@ -1064,7 +1128,7 @@ function IssueDetailBody({
           workspaceMode === "new_worktree"
             ? startWorkBranchRefs.find((ref) => ref.name === baseBranch)?.isRemote === true
               ? false
-              : settings.newWorktreesStartFromOrigin
+              : agentSettings.newWorktreesStartFromOrigin
             : false,
         // An issue launch is a task boundary. It must never consume an unrelated empty draft.
         forceNew: true,
@@ -1091,8 +1155,8 @@ function IssueDetailBody({
       project,
       projectTitle,
       relationDisplays,
-      settings.issueAutomation.statusTransitions.workFinishedStatusId,
-      settings.newWorktreesStartFromOrigin,
+      agentSettings.newWorktreesStartFromOrigin,
+      primarySettings.issueAutomation.statusTransitions.workFinishedStatusId,
       startWorkAttachmentsReady,
       startWorkAttachmentUrls,
       startWorkBranchRefs,
@@ -1169,7 +1233,8 @@ function IssueDetailBody({
           if (reportFailure("Failed to start work", started)) return;
 
           const targetStatusId = resolveIssueStartWorkStatusId({
-            configuredStatusId: settings.issueAutomation.statusTransitions.workStartedStatusId,
+            configuredStatusId:
+              primarySettings.issueAutomation.statusTransitions.workStartedStatusId,
             statuses,
           });
           if (targetStatusId !== null && (issue.triage || issue.statusId !== targetStatusId)) {
@@ -1211,7 +1276,7 @@ function IssueDetailBody({
       issue,
       linkThread,
       prepareIssueThreadDraft,
-      settings.issueAutomation.statusTransitions.workStartedStatusId,
+      primarySettings.issueAutomation.statusTransitions.workStartedStatusId,
       startingWork,
       startThreadTurn,
       statuses,
@@ -1348,7 +1413,11 @@ function IssueDetailBody({
       return;
     }
     onStartWorkRequestHandled?.();
-    if (project === null || initialStartWorkModelSelection === null) {
+    if (
+      project === null ||
+      agentEnvironmentBlockReason !== null ||
+      initialStartWorkModelSelection === null
+    ) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
@@ -1356,13 +1425,16 @@ function IssueDetailBody({
           description:
             project === null
               ? "The selected project has no connected workspace."
-              : `No available ${startWorkRequestProvider} model can start this work.`,
+              : agentEnvironmentBlockReason !== null
+                ? agentEnvironmentBlockReason
+                : `No available ${startWorkRequestProvider} model can start this work.`,
         }),
       );
       return;
     }
     handleStartWork(initialStartWorkModelSelection);
   }, [
+    agentEnvironmentBlockReason,
     detailPending,
     handleStartWork,
     initialStartWorkModelSelection,
@@ -1393,13 +1465,15 @@ function IssueDetailBody({
   const talkAboutIssueBlockReason =
     project?.workspaceRoot == null
       ? "Assign this issue to a project with a connected workspace before starting a discussion."
-      : storeStatus === "disconnected"
-        ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
-        : !startWorkAttachmentsReady
-          ? "Issue images are still loading."
-          : startingWork
-            ? "Another issue thread is being prepared."
-            : null;
+      : agentEnvironmentBlockReason !== null
+        ? agentEnvironmentBlockReason
+        : storeStatus === "disconnected"
+          ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+          : !startWorkAttachmentsReady
+            ? "Issue images are still loading."
+            : startingWork
+              ? "Another issue thread is being prepared."
+              : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1679,6 +1753,8 @@ function IssueDetailBody({
               <IssuePropertiesResizeHandle maxWidth={propertiesMaxWidth} size={propertiesSize} />
               <IssueDetailProperties
                 cycles={cycles}
+                environmentOptions={environmentOptions}
+                environmentValue={project?.physicalProjectKey ?? null}
                 issue={issue}
                 issues={store.issuesById}
                 labels={labels}
@@ -1690,6 +1766,7 @@ function IssueDetailBody({
                 onCreateMilestone={handleCreateMilestone}
                 onCycle={(cycleId: IssueCycleId | null) => write(issueCyclePatch(issue, cycleId))}
                 onDueDate={(value: string) => write(issueDueDatePatch(issue, value))}
+                onEnvironment={setSelectedPhysicalProjectKey}
                 onMilestone={(milestoneId: IssueMilestoneId | null) =>
                   write(issueMilestonePatch(issue, milestoneId))
                 }
@@ -1703,7 +1780,7 @@ function IssueDetailBody({
                   write(issueLabelTogglePatch(issue, labelId))
                 }
                 parent={parent}
-                projects={projects}
+                projects={issueProjects}
                 projectTitle={projectTitle}
                 status={status}
                 statusById={statusById}
@@ -1711,6 +1788,7 @@ function IssueDetailBody({
               />
 
               <IssueAgentSection
+                key={project?.physicalProjectKey ?? "no-project"}
                 initialModelSelection={initialStartWorkModelSelection}
                 instanceEntries={startWorkInstanceEntries}
                 issue={issue}
@@ -1728,11 +1806,13 @@ function IssueDetailBody({
                 startWorkBlockReason={
                   project?.workspaceRoot == null
                     ? ISSUE_INVESTIGATE_BLOCK_REASONS["no-project"]
-                    : storeStatus === "disconnected"
-                      ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
-                      : !startWorkAttachmentsReady
-                        ? "Issue images are still loading."
-                        : null
+                    : agentEnvironmentBlockReason !== null
+                      ? agentEnvironmentBlockReason
+                      : storeStatus === "disconnected"
+                        ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
+                        : !startWorkAttachmentsReady
+                          ? "Issue images are still loading."
+                          : null
                 }
                 threadsById={threadsById}
               />
@@ -1768,11 +1848,11 @@ function IssueDetailBody({
         </ScrollArea>
       </div>
       {viewedAttachmentId === null ||
-      (attachmentCloud === null && primaryEnvironmentId === null) ? null : (
+      (attachmentCloud === null && agentEnvironmentId === null) ? null : (
         <IssueImageViewer
           attachmentIds={galleryAttachmentIds}
           cloud={attachmentCloud}
-          environmentId={primaryEnvironmentId}
+          environmentId={agentEnvironmentId}
           issueId={issue.id}
           onClose={() => setViewedAttachmentId(null)}
           onComment={(body, attachmentId) => handleCreateComment(body, [attachmentId])}

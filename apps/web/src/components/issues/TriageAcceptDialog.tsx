@@ -54,6 +54,7 @@ import { ISSUE_INVESTIGATE_BLOCK_REASONS } from "./issueEnrichment.logic";
 import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
+import { useIssueProjectOptions } from "./useIssueProjectOptions";
 import {
   triageAcceptDefaults,
   triageAcceptInput,
@@ -90,6 +91,7 @@ export function TriageAcceptDialog({
   const acceptTriage = useTriageAccept();
   const investigatedIssueIds = useInvestigatedIssueIds();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const issueProjects = useIssueProjectOptions();
   const memberDirectory = useIssueMemberDirectory();
   const [draft, setDraft] = useState<TriageAcceptDraft>({
     statusId: null,
@@ -161,7 +163,10 @@ export function TriageAcceptDialog({
     workspaceRoots,
   });
   const selectedStatus = statuses.find((status) => status.id === draft.statusId) ?? null;
-  const selectedProject = projects.find((project) => project.id === draft.projectId) ?? null;
+  const selectedProject =
+    issueProjects.find((project) =>
+      draft.projectId === null ? false : project.projectIds.includes(draft.projectId),
+    ) ?? null;
   const selectedAssigneeLabel =
     draft.assignee?.kind === "agent"
       ? (PROVIDER_CLIENT_DEFINITION_BY_VALUE[draft.assignee.provider]?.label ??
@@ -318,7 +323,7 @@ export function TriageAcceptDialog({
                     runEnrichment: triageInvestigateBlock({ projectId, workspaceRoots }) === null,
                   })
                 }
-                projects={projects}
+                projects={issueProjects}
                 trigger={
                   <button className={PICKER_CLASS} type="button">
                     <FolderIcon className="size-3.5 text-muted-foreground" />

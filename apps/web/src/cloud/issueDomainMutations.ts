@@ -10,6 +10,7 @@
 import {
   type IssueSyncOperationKind,
   type IssueSyncOperationOf,
+  type SyncCycleReceipt,
   type SyncEnqueueReceipt,
   type SyncStoreError,
 } from "@spiritdevs/client-runtime/sync";
@@ -93,6 +94,33 @@ export const enqueueIssueOperationCommand: AtomCommand<
 /** React command hook returning the usual settled `AsyncResult` promise. */
 export const useEnqueueIssueOperation = () =>
   useAtomCommand(enqueueIssueOperationCommand, {
+    reportFailure: false,
+    reportDefect: true,
+  });
+
+export function syncIssueOperations(
+  companyId: CompanyId,
+  registry: AtomRegistry.AtomRegistry = appAtomRegistry,
+): Effect.Effect<SyncCycleReceipt, IssueDomainMutationError> {
+  if (registry.get(cloudSyncTabStateAtom).role !== "leader") {
+    return Effect.fail(unavailableError(registry, companyId));
+  }
+  const handle = registry.get(companySyncEngineHandlesAtom).get(companyId);
+  return handle === undefined ? Effect.fail(unavailableError(registry, companyId)) : handle.sync;
+}
+
+export const syncIssueOperationsCommand: AtomCommand<
+  CompanyId,
+  SyncCycleReceipt,
+  IssueDomainMutationError
+> = {
+  label: "cloud-sync:issue-domain:sync",
+  run: (registry, companyId) =>
+    settleAsyncResult(() => Effect.runPromiseExit(syncIssueOperations(companyId, registry))),
+};
+
+export const useSyncIssueOperations = () =>
+  useAtomCommand(syncIssueOperationsCommand, {
     reportFailure: false,
     reportDefect: true,
   });

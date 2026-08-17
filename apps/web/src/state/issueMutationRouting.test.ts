@@ -88,6 +88,7 @@ function fakeHandle() {
         } satisfies SyncEnqueueReceipt;
       }),
     discardRejected: () => Effect.void,
+    sync: Effect.die("sync is not used by this test"),
   };
   return { handle, inputs };
 }

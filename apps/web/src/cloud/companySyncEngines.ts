@@ -9,6 +9,7 @@
  */
 import {
   type IssueSyncOperation,
+  type SyncCycleReceipt,
   type SyncEnqueueReceipt,
   type SyncStoreError,
 } from "@spiritdevs/client-runtime/sync";
@@ -28,6 +29,8 @@ export interface CompanySyncEngineMutationHandle {
   readonly discardRejected: (
     operationIds: ReadonlyArray<SyncOperationId>,
   ) => Effect.Effect<void, SyncStoreError>;
+  /** Completes one drain/flush/drain cycle when a follow-up side effect needs server durability. */
+  readonly sync: Effect.Effect<SyncCycleReceipt, SyncStoreError>;
 }
 
 export const companySyncEngineHandlesAtom = Atom.make<

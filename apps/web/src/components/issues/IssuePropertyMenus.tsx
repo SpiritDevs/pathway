@@ -16,7 +16,6 @@ import type {
   IssueStatusId,
   ProjectId,
 } from "@spiritdevs/contracts";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { PlusIcon } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
@@ -46,6 +45,7 @@ import {
   ISSUE_PRIORITY_ORDER,
   issueLabelSelectionState,
 } from "./issuesList.logic";
+import type { IssueProjectChoice } from "./useIssueProjectOptions";
 
 /**
  * `display: contents` keeps the guard out of the row's flex layout while still sitting on the
@@ -266,7 +266,7 @@ export function IssueProjectMenu({
   align = "start",
   nullLabel = "No project",
 }: {
-  projects: ReadonlyArray<EnvironmentProject>;
+  projects: ReadonlyArray<IssueProjectChoice>;
   value: ProjectId | null;
   onSelect: (projectId: ProjectId | null) => void;
   /**
@@ -280,6 +280,11 @@ export function IssueProjectMenu({
   /** What a null selection means in this caller: absence, inheritance, or a default route. */
   nullLabel?: string;
 }) {
+  const selectedValue =
+    value === null
+      ? NO_PROJECT_VALUE
+      : (projects.find((project) => (project.projectIds ?? [project.id]).includes(value))?.id ??
+        value);
   return (
     <IssuePropertyGuard>
       <Menu>
@@ -288,7 +293,7 @@ export function IssueProjectMenu({
           <MenuGroup>
             <MenuGroupLabel>Project</MenuGroupLabel>
             <MenuRadioGroup
-              value={value ?? NO_PROJECT_VALUE}
+              value={selectedValue}
               onValueChange={(next) => {
                 onSelect(next === NO_PROJECT_VALUE ? null : (next as ProjectId));
               }}

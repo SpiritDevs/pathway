@@ -34,7 +34,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
 import {
   issueCyclesByStatus,
   todayIssueDate,
@@ -100,6 +99,7 @@ import {
   issuesFilterSearchPatch,
   issuesSearchFilter,
   parseIssuesSearch,
+  withIssuesFilterValues,
   type IssuesFilterField,
   type IssuesSearchPatch,
 } from "./issuesList.logic";
@@ -113,6 +113,7 @@ import {
 } from "./issuesViews.logic";
 import { isMilestonesPathname, milestoneIdInPathname } from "./milestonesOverview.logic";
 import { useIssueMemberDirectory } from "./issueMemberDirectory";
+import { useIssueProjectOptions } from "./useIssueProjectOptions";
 
 /** A stable empty array: the milestone rows are memo-free, but a fresh `[]` per render is noise. */
 const NO_MILESTONE_IDS: ReadonlyArray<string> = [];
@@ -126,7 +127,7 @@ export function IssuesSidebar() {
   const search = parseIssuesSearch(rawSearch as Record<string, unknown>);
   const onIssues = pathname === "/issues";
   const triageCount = useTriageCount();
-  const projects = useProjects();
+  const projects = useIssueProjectOptions();
   const labels = useIssueLabels();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
@@ -191,6 +192,10 @@ export function IssuesSidebar() {
    */
   const applyFilter = (field: IssuesFilterField, value: string) => {
     navigateWith(issuesFilterSearchPatch(applyIssuesFilter(filter, field, value)));
+  };
+
+  const applyProjectFilter = (projectIds: ReadonlyArray<string>) => {
+    navigateWith(issuesFilterSearchPatch(withIssuesFilterValues(filter, "project", projectIds)));
   };
 
   const clearFilters = () => navigateWith(issuesFilterSearchPatch(NO_ISSUES_LIST_FILTER));
@@ -363,12 +368,19 @@ export function IssuesSidebar() {
             ) : (
               projects.map((project) => (
                 <ProjectRow
-                  isActive={onIssues && issuesFilterHasValue(filter, "project", project.id)}
+                  isActive={
+                    onIssues &&
+                    project.projectIds.every((projectId) =>
+                      issuesFilterHasValue(filter, "project", projectId),
+                    )
+                  }
                   key={project.id}
-                  milestones={milestones.filter((milestone) => milestone.projectId === project.id)}
+                  milestones={milestones.filter((milestone) =>
+                    project.projectIds.includes(milestone.projectId),
+                  )}
                   milestoneProgress={milestoneProgress}
                   onSelectMilestone={navigateToMilestone}
-                  onSelectProject={() => applyFilter("project", project.id)}
+                  onSelectProject={() => applyProjectFilter(project.projectIds)}
                   selectedMilestoneIds={openMilestoneIds}
                   title={project.title}
                 />

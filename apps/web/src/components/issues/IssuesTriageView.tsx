@@ -55,6 +55,7 @@ import {
   type IssuesSelection,
 } from "./issuesList.logic";
 import { triageRowPresentation, type TriageRowPresentation } from "./triage.logic";
+import { useIssueProjectOptions } from "./useIssueProjectOptions";
 
 /** Two lines of chips under a title; taller than a list row and still one estimate for all of them. */
 const ESTIMATED_TRIAGE_ROW_HEIGHT = 52;
@@ -144,6 +145,7 @@ export function IssuesTriageView({
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const issueProjects = useIssueProjectOptions();
   const storeStatus = useIssuesStoreStatus();
   const channelNames = useSlackChannelNames();
   const rejectTriage = useTriageReject();
@@ -460,7 +462,7 @@ export function IssuesTriageView({
         labels={labels}
         onOpenChange={setNewIssueOpen}
         open={newIssueOpen}
-        projects={projects}
+        projects={issueProjects}
         statuses={statuses}
       />
 

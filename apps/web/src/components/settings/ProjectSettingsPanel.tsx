@@ -23,9 +23,10 @@ import type {
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@spiritdevs/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import {
+  ArrowLeftIcon,
   ChevronDownIcon,
   CopyIcon,
   MonitorIcon,
@@ -684,61 +685,72 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   return (
     <>
       <SettingsPageContainer>
-        <SettingsSection title="Project">
-          <SettingsRow
-            title="Name"
-            description="The shared name for this project group in the sidebar and thread lists."
-            control={
-              <Input
-                key={`${group.projectKey}:${group.displayName}`}
-                className="w-full sm:w-64"
-                aria-label="Project name"
-                defaultValue={group.displayName}
-                onBlur={(event) => {
-                  void renameGroup(event.currentTarget.value);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
-            }
-          />
-          <SettingsRow
-            title="Project icon"
-            description={faviconPath ?? "Automatic"}
-            resetAction={
-              faviconPath !== null ? (
-                <SettingResetButton
-                  label="project icon"
-                  disabled={isSavingFavicon}
-                  onClick={() => void setFaviconPath(null)}
+        <div className="space-y-4">
+          <Button
+            render={<Link to="/settings/projects" resetScroll={false} />}
+            size="sm"
+            variant="ghost"
+            className="-ms-2 w-fit text-muted-foreground"
+          >
+            <ArrowLeftIcon aria-hidden className="size-4" />
+            Projects
+          </Button>
+          <SettingsSection title="Project">
+            <SettingsRow
+              title="Name"
+              description="The shared name for this project group in the sidebar and thread lists."
+              control={
+                <Input
+                  key={`${group.projectKey}:${group.displayName}`}
+                  className="w-full sm:w-64"
+                  aria-label="Project name"
+                  defaultValue={group.displayName}
+                  onBlur={(event) => {
+                    void renameGroup(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
                 />
-              ) : null
-            }
-            control={
-              <div className="flex items-center gap-2">
-                <ProjectFavicon
-                  environmentId={representative.environmentId}
-                  cwd={representative.workspaceRoot}
-                  faviconPath={faviconPath}
-                  className="size-6"
-                />
-                <Button
-                  size="xs"
-                  variant="outline"
-                  type="button"
-                  aria-label="Choose a project icon file"
-                  // The picker browses the project's directory; there is nothing to browse until
-                  // one is attached.
-                  disabled={isSavingFavicon || representative.workspaceRoot === null}
-                  onClick={() => setFaviconPickerOpen(true)}
-                >
-                  Choose file
-                </Button>
-              </div>
-            }
-          />
-        </SettingsSection>
+              }
+            />
+            <SettingsRow
+              title="Project icon"
+              description={faviconPath ?? "Automatic"}
+              resetAction={
+                faviconPath !== null ? (
+                  <SettingResetButton
+                    label="project icon"
+                    disabled={isSavingFavicon}
+                    onClick={() => void setFaviconPath(null)}
+                  />
+                ) : null
+              }
+              control={
+                <div className="flex items-center gap-2">
+                  <ProjectFavicon
+                    environmentId={representative.environmentId}
+                    cwd={representative.workspaceRoot}
+                    faviconPath={faviconPath}
+                    className="size-6"
+                  />
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    type="button"
+                    aria-label="Choose a project icon file"
+                    // The picker browses the project's directory; there is nothing to browse until
+                    // one is attached.
+                    disabled={isSavingFavicon || representative.workspaceRoot === null}
+                    onClick={() => setFaviconPickerOpen(true)}
+                  >
+                    Choose file
+                  </Button>
+                </div>
+              }
+            />
+          </SettingsSection>
+        </div>
 
         <SettingsSection title="Connections">
           <div className="space-y-2 px-3 py-3 sm:px-4">

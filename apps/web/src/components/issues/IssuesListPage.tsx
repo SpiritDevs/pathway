@@ -103,6 +103,7 @@ import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { ISSUE_INVESTIGATE_BLOCK_REASONS, issueInvestigateBlock } from "./issueEnrichment.logic";
 import { buildIssuesTalkContexts, issueTalkHostProjectId } from "./issueStartWork.logic";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
+import { useIssueProjectOptions } from "./useIssueProjectOptions";
 import {
   EMPTY_ISSUES_BOARD_COLUMNS,
   issuesBoardColumns,
@@ -221,6 +222,7 @@ function IssuesListView({
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const issueProjects = useIssueProjectOptions();
   const threads = useThreadShells();
   const milestones = useIssueMilestones();
   const cycles = useIssueCycles();
@@ -320,8 +322,13 @@ function IssuesListView({
     [statuses],
   );
   const projectTitles = useMemo(
-    () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
-    [projects],
+    () =>
+      new Map<ProjectId, string>(
+        issueProjects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project.title] as const),
+        ),
+      ),
+    [issueProjects],
   );
   const view = useMemo(
     () =>
@@ -1097,7 +1104,7 @@ function IssuesListView({
           labels={labels}
           milestones={milestones}
           onChange={setFilter}
-          projects={projects}
+          projects={issueProjects}
           statuses={statuses}
         />
 
@@ -1276,7 +1283,7 @@ function IssuesListView({
           if (!open) setNewIssueStatusId(null);
         }}
         open={newIssueOpen}
-        projects={projects}
+        projects={issueProjects}
         statuses={statuses}
       />
 
@@ -1292,7 +1299,7 @@ function IssuesListView({
         onOpen={openIssue}
         onPatch={applyContextPatch}
         onToggleLabel={(labelId, add) => toggleLabelOn(contextIssues, labelId, add)}
-        projects={projects}
+        projects={issueProjects}
         statuses={statuses}
         target={contextMenu}
         today={today}

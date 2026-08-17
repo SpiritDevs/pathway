@@ -1,4 +1,8 @@
-import { issueSyncOperation, type SyncEnqueueReceipt } from "@spiritdevs/client-runtime/sync";
+import {
+  issueSyncOperation,
+  type SyncCycleReceipt,
+  type SyncEnqueueReceipt,
+} from "@spiritdevs/client-runtime/sync";
 import { LocalSequence, SyncEntityId, SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "@effect/vitest";
@@ -10,7 +14,11 @@ import {
   publishCompanySyncEngineHandle,
   type CompanySyncEngineMutationHandle,
 } from "./companySyncEngines";
-import { enqueueIssueOperation, IssueSyncUnavailableError } from "./issueDomainMutations";
+import {
+  enqueueIssueOperation,
+  IssueSyncUnavailableError,
+  syncIssueOperations,
+} from "./issueDomainMutations";
 import { cloudSyncTabStateAtom, publishCloudSyncTabState } from "./syncStatus";
 
 const COMPANY_ID = CompanyId.make("company-a");
@@ -20,6 +28,13 @@ const DELETE_ISSUE = issueSyncOperation({
   entityId: ISSUE_ID,
   args: {},
 });
+const SYNC_RECEIPT = {
+  outcome: "synced",
+  appliedChanges: 1,
+  acceptedOperations: 1,
+  rejectedOperations: 0,
+  error: null,
+} as SyncCycleReceipt;
 
 function makeFakeHandle() {
   const seen = new Map<SyncOperationId, LocalSequence>();
@@ -47,6 +62,7 @@ function makeFakeHandle() {
         } satisfies SyncEnqueueReceipt;
       }),
     discardRejected: () => Effect.void,
+    sync: Effect.succeed(SYNC_RECEIPT),
   };
   return { handle, inputs };
 }
@@ -117,6 +133,15 @@ describe("enqueueIssueOperation", () => {
         companyId: COMPANY_ID,
         reason: "no-engine",
       });
+    }),
+  );
+
+  it.effect("waits for the engine's drain/flush/drain receipt", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeHandle();
+      yield* publishCompanySyncEngineHandle(COMPANY_ID, fake.handle);
+
+      expect(yield* syncIssueOperations(COMPANY_ID)).toBe(SYNC_RECEIPT);
     }),
   );
 

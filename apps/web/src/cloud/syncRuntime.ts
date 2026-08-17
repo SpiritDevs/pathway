@@ -500,6 +500,7 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       yield* publishHandle(company.companyId, {
         enqueue: engine.enqueue,
         discardRejected: engine.discardRejected,
+        sync: engine.sync,
       });
       // Covers every exit: authenticated terminal errors, retryable feed loss, membership removal,
       // leadership loss, and runtime teardown. A retry publishes its replacement only after this

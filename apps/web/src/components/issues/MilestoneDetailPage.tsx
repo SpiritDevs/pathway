@@ -79,6 +79,7 @@ import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMember
 import { MilestoneBurnUpChart } from "./MilestoneBurnUpChart";
 import { NewIssueDialog } from "./NewIssueDialog";
 import { reportIssueWriteFailure } from "./issueWriteFeedback";
+import { useIssueProjectOptions } from "./useIssueProjectOptions";
 import {
   formatMilestoneDaysRemaining,
   formatMilestonePace,
@@ -186,6 +187,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
   const projects = useProjects();
+  const issueProjects = useIssueProjectOptions();
   const grouping = useIssuesGrouped("all");
   const progress = useIssueMilestoneProgress().get(milestone.id) ?? { done: 0, total: 0 };
   const categoryCounts = useIssueMilestoneCategoryCount(milestone.id);
@@ -543,7 +545,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
         labels={labels}
         onOpenChange={setNewIssueOpen}
         open={newIssueOpen}
-        projects={projects}
+        projects={issueProjects}
         statuses={statuses}
       />
 

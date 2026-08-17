@@ -24,13 +24,13 @@ import type {
   IssueStatusId,
   ProjectId,
 } from "@spiritdevs/contracts";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import {
   CalendarIcon,
   CalendarRangeIcon,
   FlagIcon,
   FolderIcon,
   GitBranchIcon,
+  MonitorIcon,
   TagIcon,
   XIcon,
 } from "lucide-react";
@@ -75,11 +75,19 @@ import {
 } from "./issueDetail.logic";
 import { issueAssigneeDisplayName, useIssueMemberDirectory } from "./issueMemberDirectory";
 import { ISSUE_PRIORITY_LABELS } from "./issuesList.logic";
+import type { IssueProjectOption } from "./useIssueProjectOptions";
 
 const ROW_CONTROL_CLASS =
   "flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-start text-[13px] text-foreground outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring";
 
 const PLACEHOLDER_CLASS = "text-muted-foreground";
+
+export interface IssueEnvironmentOption {
+  readonly value: string;
+  readonly label: string;
+  readonly status: string;
+  readonly disabled: boolean;
+}
 
 function PropertyRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -217,6 +225,8 @@ export function IssueDetailProperties({
   labels,
   projects,
   projectTitle,
+  environmentOptions,
+  environmentValue,
   milestones,
   cycles,
   issues,
@@ -225,6 +235,7 @@ export function IssueDetailProperties({
   onPriority,
   onAssignee,
   onProject,
+  onEnvironment,
   onToggleLabel,
   onCreateLabel,
   onDueDate,
@@ -238,8 +249,10 @@ export function IssueDetailProperties({
   statuses: ReadonlyArray<IssueStatus>;
   statusById: ReadonlyMap<IssueStatusId, IssueStatus>;
   labels: ReadonlyArray<IssueLabel>;
-  projects: ReadonlyArray<EnvironmentProject>;
+  projects: ReadonlyArray<IssueProjectOption>;
   projectTitle: string | null;
+  environmentOptions: ReadonlyArray<IssueEnvironmentOption>;
+  environmentValue: string | null;
   /** Already narrowed to the issue's project; empty when it has none. */
   milestones: ReadonlyArray<IssueMilestone>;
   cycles: ReadonlyArray<IssueCycle>;
@@ -250,6 +263,7 @@ export function IssueDetailProperties({
   onPriority: (priority: IssuePriority) => void;
   onAssignee: (assignee: IssueAssignee | null) => void;
   onProject: (projectId: ProjectId | null) => void;
+  onEnvironment: (physicalProjectKey: string) => void;
   onToggleLabel: (labelId: IssueLabelId) => void;
   onCreateLabel: (input: { readonly name: string; readonly color: string }) => Promise<boolean>;
   onDueDate: (value: string) => void;
@@ -267,6 +281,8 @@ export function IssueDetailProperties({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const channelNames = useSlackChannelNames();
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  const selectedEnvironment =
+    environmentOptions.find((option) => option.value === environmentValue) ?? null;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -361,6 +377,45 @@ export function IssueDetailProperties({
           }
           value={issue.projectId}
         />
+      </PropertyRow>
+
+      <PropertyRow label="Environment">
+        <Menu>
+          <MenuTrigger
+            render={
+              <button
+                aria-label="Agent environment"
+                className={ROW_CONTROL_CLASS}
+                disabled={!hasProject || environmentOptions.length === 0}
+                type="button"
+              >
+                <MonitorIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className={cn("truncate", selectedEnvironment === null && PLACEHOLDER_CLASS)}>
+                  {selectedEnvironment?.label ??
+                    (hasProject ? "No environment" : "Needs a project")}
+                </span>
+              </button>
+            }
+          />
+          <MenuPopup align="start" className="min-w-56" side="bottom">
+            <MenuGroup>
+              <MenuGroupLabel>Run agents in</MenuGroupLabel>
+              <MenuRadioGroup onValueChange={onEnvironment} value={environmentValue ?? undefined}>
+                {environmentOptions.map((option) => (
+                  <MenuRadioItem disabled={option.disabled} key={option.value} value={option.value}>
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <MonitorIcon className="size-3.5" />
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        {option.status}
+                      </span>
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </MenuPopup>
+        </Menu>
       </PropertyRow>
 
       <PropertyRow label="Milestone">

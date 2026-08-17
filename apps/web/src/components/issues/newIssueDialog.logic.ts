@@ -10,6 +10,15 @@ export function resolveAvailableIssueProjectId<T extends string>(
     : null;
 }
 
+/** Resolves an environment-local alias to the one logical project choice shown in the dialog. */
+export function resolveIssueProjectOptionId<T extends string>(
+  requested: T | null,
+  projects: ReadonlyArray<{ readonly id: T; readonly projectIds: ReadonlyArray<T> }>,
+): T | null {
+  if (requested === null) return null;
+  return projects.find((project) => project.projectIds.includes(requested))?.id ?? null;
+}
+
 /** The resize control is useful only while the dialog is visibly shorter than its height cap. */
 export function canResizeNewIssueDialog({
   dialogHeight,

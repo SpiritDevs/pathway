@@ -22,7 +22,6 @@ import type {
   IssueStatusId,
   ProjectId,
 } from "@spiritdevs/contracts";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import {
   CalendarIcon,
   CalendarRangeIcon,
@@ -84,6 +83,7 @@ import {
   ISSUE_PRIORITY_ORDER,
   issueLabelSelectionState,
 } from "./issuesList.logic";
+import type { IssueProjectOption } from "./useIssueProjectOptions";
 
 /** A null `value` means "clear it": the same sentinel every nullable picker in the tracker uses. */
 const NONE_VALUE = "";
@@ -102,7 +102,7 @@ export interface IssueContextMenuProps {
   readonly onClose: () => void;
   readonly statuses: ReadonlyArray<IssueStatus>;
   readonly labels: ReadonlyArray<IssueLabel>;
-  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projects: ReadonlyArray<IssueProjectOption>;
   /** Every milestone on the tracker; the menu narrows them to the targets' shared project. */
   readonly milestones: ReadonlyArray<IssueMilestone>;
   readonly cycles: ReadonlyArray<IssueCycle>;
@@ -143,7 +143,6 @@ export function IssueContextMenu({
   // A zero-size rect at the pointer: the popup's own collision handling does the rest, which is
   // what keeps a menu opened near the bottom edge from running off the viewport.
   const anchor = useMemo(() => ({ getBoundingClientRect: () => new DOMRect(x, y, 0, 0) }), [x, y]);
-
   if (target === null) return null;
 
   const issues = target.issues;
@@ -156,6 +155,11 @@ export function IssueContextMenu({
     issues.map((issue) => issueAssigneeOptionValue(issue.assignee)),
   );
   const sharedProject = sharedIssueMenuValue(issues.map((issue) => issue.projectId ?? NONE_VALUE));
+  const selectedProject =
+    sharedProject === NONE_VALUE
+      ? NONE_VALUE
+      : (projects.find((project) => project.projectIds.includes(sharedProject as ProjectId))?.id ??
+        sharedProject);
   const sharedMilestone = sharedIssueMenuValue(
     issues.map((issue) => issue.milestoneId ?? NONE_VALUE),
   );
@@ -334,7 +338,7 @@ export function IssueContextMenu({
                 if (next === sharedProject) return;
                 onPatch({ projectId: next === NONE_VALUE ? null : (next as ProjectId) }, "project");
               }}
-              value={sharedProject}
+              value={selectedProject}
             >
               <MenuRadioItem closeOnClick value={NONE_VALUE}>
                 <span className="text-muted-foreground">No project</span>

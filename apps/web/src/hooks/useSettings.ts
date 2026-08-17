@@ -280,10 +280,10 @@ export function useLegacySidebarEnabled(): boolean {
 
 /** Read current settings for one environment, merged with client-local preferences. */
 export function useEnvironmentSettings<T = UnifiedSettings>(
-  environmentId: EnvironmentId,
+  environmentId: EnvironmentId | null,
   selector?: (settings: UnifiedSettings) => T,
 ): T {
-  const serverSettings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
+  const serverSettings = useAtomValue(serverEnvironment.configValueAtom(environmentId))?.settings;
   return useMergedSettings(serverSettings ?? DEFAULT_SERVER_SETTINGS, selector);
 }
 

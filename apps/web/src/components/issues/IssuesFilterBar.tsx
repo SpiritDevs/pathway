@@ -8,7 +8,6 @@
  *
  * @module components/issues/IssuesFilterBar
  */
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   IssueAssignee,
   IssueCycle,
@@ -43,11 +42,11 @@ import {
   issuesFilterValueLabels,
   issuesFilterValues,
   summarizeIssuesFilterValues,
-  toggleIssuesFilterValue,
   withIssuesFilterValues,
   type IssuesFilterField,
   type IssuesListFilter,
 } from "./issuesList.logic";
+import type { IssueProjectOption } from "./useIssueProjectOptions";
 
 /** The three fields whose list can run to dozens of rows; the other five never do. */
 const SEARCHABLE_FIELDS: ReadonlySet<IssuesFilterField> = new Set([
@@ -60,6 +59,7 @@ interface FilterOption {
   readonly value: string;
   readonly label: string;
   readonly icon?: ReactNode;
+  readonly aliases?: ReadonlyArray<string>;
 }
 
 type FilterOptions = Readonly<Record<IssuesFilterField, ReadonlyArray<FilterOption>>>;
@@ -68,7 +68,7 @@ export interface IssuesFilterBarProps {
   readonly filter: IssuesListFilter;
   readonly onChange: (filter: IssuesListFilter) => void;
   readonly statuses: ReadonlyArray<IssueStatus>;
-  readonly projects: ReadonlyArray<EnvironmentProject>;
+  readonly projects: ReadonlyArray<IssueProjectOption>;
   readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestones: ReadonlyArray<IssueMilestone>;
   readonly cycles: ReadonlyArray<IssueCycle>;
@@ -109,14 +109,22 @@ export function IssuesFilterBar({
   const [openField, setOpenField] = useState<IssuesFilterField | null>(null);
 
   const options = useMemo<FilterOptions>(() => {
-    const projectTitles = new Map(projects.map((project) => [project.id as string, project.title]));
+    const projectTitles = new Map(
+      projects.flatMap((project) =>
+        project.projectIds.map((projectId) => [projectId as string, project.title] as const),
+      ),
+    );
     return {
       status: statuses.map((status) => ({
         value: status.id,
         label: status.name,
         icon: <IssueStatusDot status={status} />,
       })),
-      project: projects.map((project) => ({ value: project.id, label: project.title })),
+      project: projects.map((project) => ({
+        value: project.id,
+        label: project.title,
+        aliases: project.projectIds,
+      })),
       label: labels.map((label) => ({
         value: label.id,
         label: label.name,
@@ -262,7 +270,17 @@ function FilterChip({
   const [query, setQuery] = useState("");
   const fieldLabel = ISSUES_FILTER_FIELD_LABELS[field];
   const values = issuesFilterValues(filter, field);
-  const summary = summarizeIssuesFilterValues(issuesFilterValueLabels(values, options));
+  const knownValues = new Set(options.flatMap((option) => option.aliases ?? [option.value]));
+  const selectedLabels = options
+    .filter((option) => (option.aliases ?? [option.value]).some((value) => values.includes(value)))
+    .map((option) => option.label);
+  const summary = summarizeIssuesFilterValues([
+    ...selectedLabels,
+    ...issuesFilterValueLabels(
+      values.filter((value) => !knownValues.has(value)),
+      [],
+    ),
+  ]);
   const searchable = SEARCHABLE_FIELDS.has(field) && options.length > 0;
   const visible = searchable ? filterIssuesFilterOptions(options, query) : options;
 
@@ -306,13 +324,24 @@ function FilterChip({
               </p>
             ) : (
               visible.map((option) => {
-                const checked = values.includes(option.value);
+                const optionValues = option.aliases ?? [option.value];
+                const checked = optionValues.every((value) => values.includes(value));
                 return (
                   <button
                     aria-checked={checked}
                     className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-start text-[13px] outline-none hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
                     key={option.value}
-                    onClick={() => onChange(toggleIssuesFilterValue(filter, field, option.value))}
+                    onClick={() =>
+                      onChange(
+                        withIssuesFilterValues(
+                          filter,
+                          field,
+                          checked
+                            ? values.filter((value) => !optionValues.includes(value))
+                            : [...values, ...optionValues],
+                        ),
+                      )
+                    }
                     role="checkbox"
                     type="button"
                   >

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { canResizeNewIssueDialog, resolveAvailableIssueProjectId } from "./newIssueDialog.logic";
+import {
+  canResizeNewIssueDialog,
+  resolveAvailableIssueProjectId,
+  resolveIssueProjectOptionId,
+} from "./newIssueDialog.logic";
 
 describe("new issue dialog sizing", () => {
   it("offers resizing when the compact dialog is shorter than the 90% viewport cap", () => {
@@ -25,5 +29,16 @@ describe("new issue project selection", () => {
 
   it("drops an environment-local project that is absent from the cloud tracker", () => {
     expect(resolveAvailableIssueProjectId("local-project", projects)).toBeNull();
+  });
+
+  it("maps a physical checkout to its logical project choice", () => {
+    expect(
+      resolveIssueProjectOptionId("remote-pathway", [
+        {
+          id: "cloud-pathway",
+          projectIds: ["local-pathway", "remote-pathway"],
+        },
+      ]),
+    ).toBe("cloud-pathway");
   });
 });

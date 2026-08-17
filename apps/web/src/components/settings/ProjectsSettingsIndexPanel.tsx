@@ -8,9 +8,10 @@
  * @module components/settings/ProjectsSettingsIndexPanel
  */
 import { Link } from "@tanstack/react-router";
-import { ChevronRightIcon, FolderIcon } from "lucide-react";
+import { ChevronRightIcon, FolderIcon, PlusIcon } from "lucide-react";
 import { useMemo } from "react";
 
+import { openCommandPalette } from "../../commandPaletteBus";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useProjectGroups } from "../projects/useProjectGroups";
 import {
@@ -18,6 +19,7 @@ import {
   deriveProjectConnectionMetadata,
   projectConnectionPlatformLabel,
 } from "../projects/projectConnectionMetadata";
+import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -36,10 +38,16 @@ export function ProjectsSettingsIndexPanel() {
       <SettingsSection
         {...searchableSetting("projects")}
         icon={<FolderIcon className="size-3.5" />}
+        headerAction={
+          <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
+            <PlusIcon aria-hidden className="size-4" />
+            Add project
+          </Button>
+        }
       >
         {groups.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground sm:px-4">
-            Add a project from the sidebar and it shows up here.
+            Add a project to configure it here.
           </p>
         ) : (
           groups.map((group) => {
