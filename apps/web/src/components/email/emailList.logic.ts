@@ -175,10 +175,10 @@ export function emailMatchesFilter(
  * The rows the list shows. Returns the input array untouched when nothing is filtering, so an
  * unfiltered inbox never hands the virtualized list a new array identity per render.
  */
-export function filterEmailMessages(
-  messages: ReadonlyArray<CapturedEmailSummary>,
+export function filterEmailMessages<Message extends CapturedEmailSummary>(
+  messages: ReadonlyArray<Message>,
   input: { readonly query: string; readonly filter: EmailListFilter },
-): ReadonlyArray<CapturedEmailSummary> {
+): ReadonlyArray<Message> {
   const terms = emailQueryTerms(input.query);
   const filtering = isEmailListFilterActive(input.filter);
   if (terms.length === 0 && !filtering) return messages;
@@ -308,10 +308,10 @@ export function toggleEmailSelectAll(
   return { ids: next, anchorId: null };
 }
 
-export function selectedEmailMessages(
-  messages: ReadonlyArray<CapturedEmailSummary>,
+export function selectedEmailMessages<Message extends CapturedEmailSummary>(
+  messages: ReadonlyArray<Message>,
   selection: EmailSelection,
-): ReadonlyArray<CapturedEmailSummary> {
+): ReadonlyArray<Message> {
   return messages.filter((message) => selection.ids.has(message.id));
 }
 
@@ -320,11 +320,11 @@ export function selectedEmailMessages(
  * and that row alone otherwise. Right-clicking an unchecked row deliberately does not check it —
  * opening a message and checking it stay separate gestures.
  */
-export function emailActionTargets(
-  messages: ReadonlyArray<CapturedEmailSummary>,
+export function emailActionTargets<Message extends CapturedEmailSummary>(
+  messages: ReadonlyArray<Message>,
   selection: EmailSelection,
-  message: CapturedEmailSummary,
-): ReadonlyArray<CapturedEmailSummary> {
+  message: Message,
+): ReadonlyArray<Message> {
   if (selection.ids.size <= 1 || !selection.ids.has(message.id)) return [message];
   return selectedEmailMessages(messages, selection);
 }
@@ -375,14 +375,6 @@ export interface EmailActionMenuItem {
 }
 
 /**
- * Captured mail has no per-message delete: `email.clearInbox` takes a whole scope and nothing else
- * removes a row. The action is still listed so the answer to "can I delete this?" is on screen
- * instead of missing, and it says where the real way out is.
- */
-const DELETE_UNAVAILABLE_REASON = "This server only clears a whole inbox";
-const ADD_TAG_UNAVAILABLE_REASON = "Captured mail has no tags";
-
-/**
  * One action list, shared by the row's three-dot menu, the right-click menu, and the bulk bar's
  * overflow — so the same rows can never disagree about what is possible.
  *
@@ -428,17 +420,17 @@ export function emailActionMenuItems(input: {
   items.push({
     id: "add-tag",
     label: "Add tag",
-    disabled: true,
+    disabled: false,
     destructive: false,
-    unavailableReason: ADD_TAG_UNAVAILABLE_REASON,
+    unavailableReason: null,
     separatorBefore: true,
   });
   items.push({
     id: "delete",
     label: count === 1 ? "Delete" : `Delete ${count}`,
-    disabled: true,
+    disabled: false,
     destructive: true,
-    unavailableReason: DELETE_UNAVAILABLE_REASON,
+    unavailableReason: null,
     separatorBefore: false,
   });
 

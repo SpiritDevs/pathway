@@ -565,6 +565,66 @@ export default defineSchema({
     .index("by_company_and_environment_and_thread", ["companyId", "environmentId", "threadId"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"]),
 
+  /** Parsed local SMTP captures. Raw source and attachment bytes remain environment-owned. */
+  capturedEmails: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    environmentId: v.string(),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    localProjectId: v.union(v.string(), v.null()),
+    messageId: v.string(),
+    /** `CapturedEmailMessage`; validated at the publisher boundary and again by the mutation. */
+    message: v.any(),
+    /** Company email-tag ids. Optional while older rows are upgraded lazily. */
+    tagIds: v.optional(v.array(domainId)),
+    updatedAt: v.number(),
+    version: v.optional(v.number()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_company_and_environment_and_message", ["companyId", "environmentId", "messageId"])
+    .index("by_company_and_project", ["companyId", "cloudProjectId"]),
+
+  /** Durable delete intent prevents an offline source from republishing removed local mail. */
+  capturedEmailDeletions: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    environmentId: v.string(),
+    messageId: v.string(),
+    deletedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_environment", ["companyId", "environmentId"]),
+
+  /** Flat colour-coded tag catalog shared by captured email in the company. */
+  emailTags: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    name: v.string(),
+    color: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    version: v.optional(v.number()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"]),
+
+  /** Exact From addresses allowed to load remote email assets across the company. */
+  trustedEmailSenders: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    /** Lowercase, trimmed mailbox address. */
+    address: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    version: v.optional(v.number()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_address", ["companyId", "address"]),
+
   // ---------------------------------------------------------------------------
   // Relay control-plane persistence
   // ---------------------------------------------------------------------------

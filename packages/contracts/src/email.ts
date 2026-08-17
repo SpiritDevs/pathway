@@ -1,8 +1,9 @@
 /**
  * Local SMTP capture contracts.
  *
- * Capture is scoped to the primary environment. Messages retain their SMTP and MIME provenance so
- * the Email view can explain routing and parsing without reaching back into the capture service.
+ * Capture is scoped to one source environment. Messages retain their SMTP and MIME provenance so
+ * the Email view can explain routing and parsing without reaching back into the capture service;
+ * the cloud-sync wrapper adds source-environment and logical-project identity when they replicate.
  *
  * @module email
  */
@@ -30,6 +31,7 @@ export const EMAIL_WS_METHODS = {
   triggerFiringsList: "email.triggerFirings.list",
   markRead: "email.markRead",
   markUnread: "email.markUnread",
+  deleteMessages: "email.deleteMessages",
   clearInbox: "email.clearInbox",
   getSettings: "email.getSettings",
   updateSettings: "email.updateSettings",
@@ -41,6 +43,10 @@ const makeEmailEntityId = <Brand extends string>(brand: Brand) =>
 
 export const EmailMessageId = makeEmailEntityId("EmailMessageId");
 export type EmailMessageId = typeof EmailMessageId.Type;
+export const EmailTagId = makeEmailEntityId("EmailTagId");
+export type EmailTagId = typeof EmailTagId.Type;
+export const TrustedEmailSenderId = makeEmailEntityId("TrustedEmailSenderId");
+export type TrustedEmailSenderId = typeof TrustedEmailSenderId.Type;
 export const EmailAttachmentId = makeEmailEntityId("EmailAttachmentId");
 export type EmailAttachmentId = typeof EmailAttachmentId.Type;
 export const EmailTriggerRuleId = makeEmailEntityId("EmailTriggerRuleId");
@@ -92,6 +98,13 @@ export const EmailAddress = Schema.Struct({
   name: Schema.NullOr(Schema.String),
 });
 export type EmailAddress = typeof EmailAddress.Type;
+
+/** One exact From address whose remote images and styles may load automatically. */
+export const TrustedEmailSender = Schema.Struct({
+  id: TrustedEmailSenderId,
+  address: TrimmedNonEmptyString,
+});
+export type TrustedEmailSender = typeof TrustedEmailSender.Type;
 
 export const EmailHeader = Schema.Struct({
   name: TrimmedNonEmptyString,
@@ -230,6 +243,14 @@ export const CapturedEmailSummary = Schema.Struct({
   detectedCode: Schema.NullOr(DetectedEmailCode),
 });
 export type CapturedEmailSummary = typeof CapturedEmailSummary.Type;
+
+/** Company-wide, colour-coded vocabulary assigned to replicated captured mail. */
+export const EmailTag = Schema.Struct({
+  id: EmailTagId,
+  name: TrimmedNonEmptyString,
+  color: TrimmedNonEmptyString,
+});
+export type EmailTag = typeof EmailTag.Type;
 
 export const EmailInboxScope = Schema.Union([
   Schema.Struct({ type: Schema.Literal("all") }),
@@ -604,6 +625,16 @@ export const EmailClearInboxResult = Schema.Struct({
 });
 export type EmailClearInboxResult = typeof EmailClearInboxResult.Type;
 
+export const EmailDeleteMessagesInput = Schema.Struct({
+  messageIds: Schema.Array(EmailMessageId).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+});
+export type EmailDeleteMessagesInput = typeof EmailDeleteMessagesInput.Type;
+export const EmailDeleteMessagesResult = Schema.Struct({
+  deletedMessageIds: Schema.Array(EmailMessageId),
+  inboxes: Schema.Array(EmailInboxSummary),
+});
+export type EmailDeleteMessagesResult = typeof EmailDeleteMessagesResult.Type;
+
 export const EmailSettingsSnapshot = Schema.Struct({
   settings: EmailCaptureSettings,
   listenerStatus: EmailListenerStatus,
@@ -633,6 +664,10 @@ export const EmailStreamEvent = Schema.Union([
   Schema.TaggedStruct("EmailInboxCleared", {
     scope: EmailInboxScope,
     clearedCount: NonNegativeInt,
+    inboxes: Schema.Array(EmailInboxSummary),
+  }),
+  Schema.TaggedStruct("EmailMessagesDeleted", {
+    messageIds: Schema.Array(EmailMessageId),
     inboxes: Schema.Array(EmailInboxSummary),
   }),
   Schema.TaggedStruct("EmailSettingsChanged", { snapshot: EmailSettingsSnapshot }),

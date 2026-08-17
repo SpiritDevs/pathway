@@ -10,7 +10,7 @@
  *
  * @module components/email/EmailSidebar
  */
-import type { EmailInboxScope, ProjectId } from "@spiritdevs/contracts";
+import type { EmailInboxScope, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   BarChart3Icon,
@@ -19,12 +19,15 @@ import {
   FolderIcon,
   InboxIcon,
   MailQuestionIcon,
+  MonitorIcon,
   SettingsIcon,
+  TagsIcon,
 } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
 import {
   ALL_EMAIL_SCOPE,
   emailScopeKey,
@@ -32,6 +35,7 @@ import {
   UNASSIGNED_EMAIL_SCOPE,
   useEmailInboxSummaries,
   useEmailSettings,
+  useEmailTags,
   useUpdateEmailSettings,
 } from "../../state/email";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
@@ -185,12 +189,17 @@ function LocalSmtpInboxes() {
   const search = parseEmailSearch(rawSearch as Record<string, unknown>);
   const onEmail = pathname === "/email";
   const projects = useProjects();
+  const { environments } = useEnvironments();
   const { settings } = useEmailSettings();
   const updateSettings = useUpdateEmailSettings();
+  const tags = useEmailTags();
 
   // The same atom the list pane reads, so the badges never disagree with the rows beside them.
   const scope = emailScopeFromParam(search.inbox);
-  const inboxes = useEmailInboxSummaries(scope);
+  const inboxes = useEmailInboxSummaries(
+    scope,
+    (search.environment ?? null) as EnvironmentId | null,
+  );
   const activeKey = onEmail && search.analytics !== true ? emailScopeKey(scope) : null;
 
   const toggleProjectMute = async (projectId: ProjectId) => {
@@ -233,6 +242,50 @@ function LocalSmtpInboxes() {
 
   return (
     <>
+      <SidebarGroup>
+        <SidebarGroupLabel>Environments</SidebarGroupLabel>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              isActive={onEmail && search.environment === undefined && search.analytics !== true}
+              onClick={() =>
+                navigateWith({
+                  environment: undefined,
+                  message: undefined,
+                  analytics: undefined,
+                  tab: undefined,
+                })
+              }
+            >
+              <MonitorIcon />
+              <span>All environments</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {environments.map((environment) => (
+            <SidebarMenuItem key={environment.environmentId}>
+              <SidebarMenuButton
+                isActive={
+                  onEmail &&
+                  search.environment === environment.environmentId &&
+                  search.analytics !== true
+                }
+                onClick={() =>
+                  navigateWith({
+                    environment: environment.environmentId,
+                    message: undefined,
+                    analytics: undefined,
+                    tab: undefined,
+                  })
+                }
+              >
+                <MonitorIcon />
+                <span className="truncate">{environment.label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
+
       <SidebarGroup>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -294,6 +347,31 @@ function LocalSmtpInboxes() {
         </SidebarMenu>
       </SidebarGroup>
 
+      {tags.length === 0 ? null : (
+        <SidebarGroup>
+          <SidebarGroupLabel>Tags</SidebarGroupLabel>
+          <SidebarMenu>
+            {tags.map((tag) => (
+              <SidebarMenuItem key={tag.id}>
+                <SidebarMenuButton
+                  isActive={onEmail && search.tag === tag.id && search.analytics !== true}
+                  onClick={() =>
+                    navigateWith({
+                      tag: search.tag === tag.id ? undefined : tag.id,
+                      message: undefined,
+                      analytics: undefined,
+                    })
+                  }
+                >
+                  <TagsIcon style={{ color: tag.color }} />
+                  <span className="truncate">{tag.name}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      )}
+
       <SidebarGroup>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -313,7 +391,14 @@ function LocalSmtpInboxes() {
           <SidebarMenuItem>
             <SidebarMenuButton
               isActive={onEmail && search.analytics === true}
-              onClick={() => navigateWith({ analytics: true, message: undefined, tab: undefined })}
+              onClick={() =>
+                navigateWith({
+                  analytics: true,
+                  environment: undefined,
+                  message: undefined,
+                  tab: undefined,
+                })
+              }
             >
               <BarChart3Icon />
               <span>Analytics</span>

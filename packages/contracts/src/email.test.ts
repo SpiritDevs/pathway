@@ -260,6 +260,7 @@ describe("Email waits and WebSocket payloads", () => {
       "email.triggerFirings.list",
       "email.markRead",
       "email.markUnread",
+      "email.deleteMessages",
       "email.clearInbox",
       "email.getSettings",
       "email.updateSettings",

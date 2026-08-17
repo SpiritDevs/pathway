@@ -35,6 +35,9 @@ const READ_PERMISSION: Record<SyncEntityKind, PermissionKey> = {
   environmentBinding: "environments.read",
   environmentCommand: "environments.read",
   agentThread: "projects.read",
+  capturedEmail: "projects.read",
+  emailTag: "projects.read",
+  trustedEmailSender: "projects.read",
   issue: "issues.read",
   issueStatus: "issues.read",
   issueLabel: "issues.read",
@@ -70,6 +73,8 @@ const CATALOG_ENTITY_KINDS: ReadonlySet<SyncEntityKind> = new Set<SyncEntityKind
   "issueLabel",
   "issueCycle",
   "issueMilestone",
+  "emailTag",
+  "trustedEmailSender",
 ]);
 
 /**

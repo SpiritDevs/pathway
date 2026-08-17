@@ -90,6 +90,8 @@ export function EmailCaptureToastHost() {
                   : { type: "project", projectId: message.attribution.projectId },
               ),
               message: message.id,
+              environment: undefined,
+              tag: undefined,
               tab: undefined,
               analytics: undefined,
             },

@@ -42,6 +42,10 @@ const COMPANY_DOMAIN_WALK = [
   "environmentBinding",
   "environmentCommand",
   "cloudProject",
+  "agentThread",
+  "capturedEmail",
+  "emailTag",
+  "trustedEmailSender",
 ] as const;
 
 describe("BOOTSTRAP_ENTITY_ORDER", () => {

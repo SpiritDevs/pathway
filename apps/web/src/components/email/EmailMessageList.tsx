@@ -12,14 +12,16 @@
  * @module components/email/EmailMessageList
  */
 import { LegendList } from "@legendapp/list/react";
-import type { CapturedEmailSummary, EmailMessageId } from "@spiritdevs/contracts";
-import { CheckIcon, KeyRoundIcon, PaperclipIcon } from "lucide-react";
+import type { EmailMessageId, EmailTag, EnvironmentId } from "@spiritdevs/contracts";
+import { CheckIcon, KeyRoundIcon, MonitorIcon, PaperclipIcon } from "lucide-react";
 import { useMemo, type MouseEvent } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
+import type { CapturedEmailListItem } from "~/state/email";
 import { Checkbox } from "../ui/checkbox";
 import { EmailActionMenu } from "./EmailActionMenu";
+import { EmailTagChips } from "./EmailTagChips";
 import {
   emailActionMenuItems,
   emailRowActionCounts,
@@ -29,8 +31,9 @@ import { emailAddressDisplayName, formatEmailTimestamp } from "./emailView.logic
 
 /** Two lines of ~34px plus padding; the rows are uniform, so one estimate covers the list. */
 const ESTIMATED_ROW_HEIGHT = 72;
+const EMPTY_EMAIL_TAGS: ReadonlyArray<EmailTag> = Object.freeze([]);
 
-const keyExtractor = (message: CapturedEmailSummary) => message.id;
+const keyExtractor = (message: CapturedEmailListItem) => `${message.environmentId}:${message.id}`;
 
 export interface EmailMessageListSelection {
   readonly ids: ReadonlySet<EmailMessageId>;
@@ -41,6 +44,8 @@ export interface EmailMessageListSelection {
 
 export function EmailMessageList({
   messages,
+  environmentNames,
+  tags = EMPTY_EMAIL_TAGS,
   selectedMessageId,
   selection,
   onSelect,
@@ -49,14 +54,16 @@ export function EmailMessageList({
   onContextMenu,
   now,
 }: {
-  messages: ReadonlyArray<CapturedEmailSummary>;
+  messages: ReadonlyArray<CapturedEmailListItem>;
+  environmentNames: ReadonlyMap<EnvironmentId, string>;
+  tags?: ReadonlyArray<EmailTag>;
   selectedMessageId: EmailMessageId | null;
   selection: EmailMessageListSelection;
-  onSelect: (message: CapturedEmailSummary) => void;
-  onToggleSelect: (message: CapturedEmailSummary, modifiers: { shiftKey: boolean }) => void;
-  onAction: (message: CapturedEmailSummary, action: EmailMessageAction) => void;
+  onSelect: (message: CapturedEmailListItem) => void;
+  onToggleSelect: (message: CapturedEmailListItem, modifiers: { shiftKey: boolean }) => void;
+  onAction: (message: CapturedEmailListItem, action: EmailMessageAction) => void;
   onContextMenu: (
-    message: CapturedEmailSummary,
+    message: CapturedEmailListItem,
     position: { readonly x: number; readonly y: number },
   ) => void;
   /** Passed in so every row's timestamp is read from one clock per render, never from a timer. */
@@ -73,10 +80,12 @@ export function EmailMessageList({
     }),
     [selectedMessageId, selection.count, selection.ids, selection.unreadCount],
   );
-  const renderItem = ({ item }: { item: CapturedEmailSummary }) => (
+  const renderItem = ({ item }: { item: CapturedEmailListItem }) => (
     <EmailMessageRow
       checked={selection.ids.has(item.id)}
       message={item}
+      environmentName={environmentNames.get(item.environmentId) ?? item.environmentId}
+      tags={tags}
       now={now}
       onAction={onAction}
       onContextMenu={onContextMenu}
@@ -89,7 +98,7 @@ export function EmailMessageList({
   );
 
   return (
-    <LegendList<CapturedEmailSummary>
+    <LegendList<CapturedEmailListItem>
       aria-label="Captured mail"
       className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
       data={messages}
@@ -104,6 +113,8 @@ export function EmailMessageList({
 
 export function EmailMessageRow({
   message,
+  environmentName,
+  tags = EMPTY_EMAIL_TAGS,
   selected,
   checked,
   selectionCount,
@@ -114,16 +125,18 @@ export function EmailMessageRow({
   onContextMenu,
   now,
 }: {
-  message: CapturedEmailSummary;
+  message: CapturedEmailListItem;
+  environmentName: string;
+  tags?: ReadonlyArray<EmailTag>;
   selected: boolean;
   checked: boolean;
   selectionCount: number;
   selectionUnreadCount: number;
-  onSelect: (message: CapturedEmailSummary) => void;
-  onToggleSelect: (message: CapturedEmailSummary, modifiers: { shiftKey: boolean }) => void;
-  onAction: (message: CapturedEmailSummary, action: EmailMessageAction) => void;
+  onSelect: (message: CapturedEmailListItem) => void;
+  onToggleSelect: (message: CapturedEmailListItem, modifiers: { shiftKey: boolean }) => void;
+  onAction: (message: CapturedEmailListItem, action: EmailMessageAction) => void;
   onContextMenu: (
-    message: CapturedEmailSummary,
+    message: CapturedEmailListItem,
     position: { readonly x: number; readonly y: number },
   ) => void;
   now: Date;
@@ -206,6 +219,13 @@ export function EmailMessageRow({
             >
               {sender === undefined ? "Unknown sender" : emailAddressDisplayName(sender)}
             </span>
+            <span
+              className="flex max-w-24 shrink-0 items-center gap-1 truncate rounded bg-muted px-1 py-px text-[10px] font-normal text-muted-foreground"
+              title={`Captured on ${environmentName}`}
+            >
+              <MonitorIcon aria-hidden="true" className="size-2.5 shrink-0" />
+              <span className="truncate">{environmentName}</span>
+            </span>
             {message.attachmentCount > 0 ? (
               <PaperclipIcon
                 aria-label={`${message.attachmentCount} ${message.attachmentCount === 1 ? "attachment" : "attachments"}`}
@@ -238,6 +258,7 @@ export function EmailMessageRow({
             {message.detectedCode === null ? null : (
               <EmailDetectedCodeButton code={message.detectedCode} />
             )}
+            <EmailTagChips limit={1} tagIds={message.tagIds} tags={tags} />
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">
               {message.textPreview}
             </span>

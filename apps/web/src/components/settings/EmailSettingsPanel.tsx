@@ -11,10 +11,13 @@
  *
  * @module components/settings/EmailSettingsPanel
  */
-import type { EmailCaptureSettings, ProjectId } from "@spiritdevs/contracts";
-import { BellIcon, MailIcon, RadioIcon, Trash2Icon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
+import type { EmailCaptureSettings, ProjectId, TrustedEmailSenderId } from "@spiritdevs/contracts";
+import { BellIcon, MailIcon, RadioIcon, ShieldCheckIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useState } from "react";
 
+import { useCapturedEmailAdmin } from "../../cloud/capturedEmailAdmin";
+import { cloudTrustedEmailSendersAtom } from "../../cloud/capturedEmailReadModel";
 import { cn } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
 import { useEmailSettings, useUpdateEmailSettings } from "../../state/email";
@@ -31,6 +34,7 @@ import { EmailTriggerRulesSection } from "../email/EmailTriggerRulesSection";
 import { reportEmailWriteFailure } from "../email/emailWrites";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { Button } from "../ui/button";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
@@ -66,6 +70,7 @@ export function EmailSettingsPanel() {
               "Capture settings live on the machine running the server, so there is nothing to configure until this client is connected to one."}
           </p>
         </SettingsSection>
+        <TrustedEmailSendersSettingsSection />
       </SettingsPageContainer>
     );
   }
@@ -143,6 +148,8 @@ export function EmailSettingsPanel() {
           title="Port"
         />
       </SettingsSection>
+
+      <TrustedEmailSendersSettingsSection />
 
       <SettingsSection
         {...searchableSetting("email-retention")}
@@ -245,5 +252,70 @@ export function EmailSettingsPanel() {
         title={searchableSetting("email-trigger-rules").title}
       />
     </SettingsPageContainer>
+  );
+}
+
+function TrustedEmailSendersSettingsSection() {
+  const senders = useAtomValue(cloudTrustedEmailSendersAtom);
+  const emailAdmin = useCapturedEmailAdmin();
+  const [removingId, setRemovingId] = useState<TrustedEmailSenderId | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const remove = async (id: TrustedEmailSenderId) => {
+    if (emailAdmin === null || removingId !== null) return;
+    setRemovingId(id);
+    setError(null);
+    try {
+      await emailAdmin.removeTrustedSender(id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  return (
+    <SettingsSection
+      {...searchableSetting("email-trusted-senders")}
+      icon={<ShieldCheckIcon className="size-3.5" />}
+    >
+      <SettingsRow
+        description="Clicking Load remote content trusts that exact From address. Trusted senders load images and styles automatically and sync through Convex to every environment in this company."
+        status={
+          error ??
+          (emailAdmin === null
+            ? "Connect and sign in to company sync to change trusted senders."
+            : null)
+        }
+        title="Trusted senders"
+      >
+        <div className="mt-3 overflow-hidden rounded-lg border border-border/60">
+          {senders.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-muted-foreground">No senders are trusted yet.</p>
+          ) : (
+            senders.map((sender) => (
+              <div
+                className="flex min-h-9 items-center gap-3 border-b border-border/50 px-3 last:border-b-0"
+                key={sender.id}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+                  {sender.address}
+                </span>
+                <Button
+                  aria-label={`Stop trusting ${sender.address}`}
+                  disabled={emailAdmin === null || removingId !== null}
+                  onClick={() => void remove(sender.id)}
+                  size="icon-xs"
+                  title="Stop loading remote content automatically"
+                  variant="ghost"
+                >
+                  <XIcon aria-hidden="true" />
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      </SettingsRow>
+    </SettingsSection>
   );
 }

@@ -13,14 +13,24 @@ import type {
   EmailDeliverabilityCheck,
   EmailProjectAttribution,
   EmailRoutingRule,
+  EmailTag,
+  EmailTagId,
 } from "@spiritdevs/contracts";
-import { AlertTriangleIcon, CheckIcon, MailOpenIcon, XIcon } from "lucide-react";
+import {
+  AlertTriangleIcon,
+  CheckIcon,
+  MailOpenIcon,
+  MonitorIcon,
+  TagsIcon,
+  XIcon,
+} from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { EmailPreviewFrame } from "./EmailPreviewFrame";
+import { EmailTagChips } from "./EmailTagChips";
 import {
   buildEmailPreviewDocument,
   EMAIL_READING_TABS,
@@ -29,6 +39,8 @@ import {
   formatEmailBytes,
   formatEmailDurationMs,
   hasRemoteEmailContent,
+  isTrustedEmailSender,
+  trustedEmailSenderAddress,
   type EmailReadingTab,
 } from "./emailView.logic";
 
@@ -45,7 +57,13 @@ export function EmailReadingPane({
   isPending,
   error,
   projectName,
+  environmentName,
+  tags,
+  tagIds,
+  onEditTags,
   onMarkUnread,
+  trustedSenderAddresses,
+  onTrustRemoteSender,
   tab,
   onTab,
 }: {
@@ -54,14 +72,24 @@ export function EmailReadingPane({
   error: string | null;
   /** The attributed project's title, or null for Unassigned and for a project since removed. */
   projectName: string | null;
+  /** Source environment that accepted the SMTP transaction. */
+  environmentName: string | null;
+  tags: ReadonlyArray<EmailTag>;
+  tagIds: ReadonlyArray<EmailTagId>;
+  onEditTags: () => void;
   onMarkUnread: () => void;
+  /** Normalized exact addresses replicated through the active company. */
+  trustedSenderAddresses: ReadonlySet<string>;
+  onTrustRemoteSender: (address: string) => void;
   tab: EmailReadingTab;
   onTab: (tab: EmailReadingTab) => void;
 }) {
-  // Remote content is per message, exactly like a real mail client: moving to the next message
-  // does not carry the last one's permission with it.
+  // The local override makes the current click immediate while its replicated trust write lands.
   const [allowRemoteFor, setAllowRemoteFor] = useState<string | null>(null);
-  const allowRemote = message !== null && allowRemoteFor === message.id;
+  const senderAddress = message === null ? null : trustedEmailSenderAddress(message);
+  const allowRemote =
+    message !== null &&
+    (allowRemoteFor === message.id || isTrustedEmailSender(message, trustedSenderAddresses));
 
   const previewDocument = useMemo(
     () =>
@@ -107,7 +135,20 @@ export function EmailReadingPane({
             {" → "}
             {formatEmailAddressList(message.parsedHeaders.to)}
           </p>
+          {environmentName === null ? null : (
+            <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <MonitorIcon aria-hidden="true" className="size-3" />
+              Captured on {environmentName}
+            </p>
+          )}
+          <div className="mt-1.5">
+            <EmailTagChips tagIds={tagIds} tags={tags} />
+          </div>
         </div>
+        <Button onClick={onEditTags} size="xs" variant="ghost">
+          <TagsIcon aria-hidden="true" />
+          Tags
+        </Button>
         {message.isRead ? (
           <Button onClick={onMarkUnread} size="xs" variant="ghost">
             <MailOpenIcon aria-hidden="true" />
@@ -144,14 +185,21 @@ export function EmailReadingPane({
       {tab === "preview" ? (
         <EmailPreviewFrame
           document={previewDocument}
-          onLoadRemoteContent={() => setAllowRemoteFor(message.id)}
+          onLoadRemoteContent={() => {
+            setAllowRemoteFor(message.id);
+            if (senderAddress !== null) onTrustRemoteSender(senderAddress);
+          }}
           remoteContentBlocked={!allowRemote && hasRemoteEmailContent(message.htmlBody)}
           subject={subject}
         />
       ) : (
         <div className="min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-5">
           {tab === "metadata" ? (
-            <MetadataTab message={message} projectName={projectName} />
+            <MetadataTab
+              environmentName={environmentName}
+              message={message}
+              projectName={projectName}
+            />
           ) : tab === "deliverability" ? (
             <DeliverabilityTab message={message} />
           ) : (
@@ -218,9 +266,11 @@ function routingExplanation(attribution: EmailProjectAttribution, projectName: s
 function MetadataTab({
   message,
   projectName,
+  environmentName,
 }: {
   message: CapturedEmailMessage;
   projectName: string | null;
+  environmentName: string | null;
 }) {
   const metrics = message.deliverability.metrics;
   return (
@@ -228,6 +278,7 @@ function MetadataTab({
       <Section description={routingExplanation(message.attribution, projectName)} title="Routing">
         <Rows
           rows={[
+            ["Environment", environmentName ?? "Unknown"],
             ["Inbox", projectName ?? message.attribution.mailSlug ?? "Unassigned"],
             ["Matched by", message.attribution.matchedBy],
             ["MAIL FROM", message.envelope.mailFrom ?? "<> (empty reverse-path)"],

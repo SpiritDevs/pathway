@@ -16,6 +16,9 @@ const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
+  "../convex/capturedEmails.ts": () => import("../convex/capturedEmails.ts"),
+  "../convex/emailTags.ts": () => import("../convex/emailTags.ts"),
+  "../convex/trustedEmailSenders.ts": () => import("../convex/trustedEmailSenders.ts"),
   "../convex/cloudProjects.ts": () => import("../convex/cloudProjects.ts"),
   "../convex/environments.ts": () => import("../convex/environments.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
@@ -34,6 +37,7 @@ const REGISTRATION_ID = "0198f900-0000-7000-8000-000000000301";
 const REVOKED_REGISTRATION_ID = "0198f900-0000-7000-8000-000000000302";
 const PROJECT_ID = "0198f900-0000-7000-8000-000000000401";
 const BINDING_ID = "0198f900-0000-7000-8000-000000000501";
+const TRUSTED_SENDER_ID = "0198f900-0000-7000-8000-000000000701";
 const THUMBPRINT = "thumbprint-registry-one";
 
 const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") => ({
@@ -643,5 +647,199 @@ describe("environment registry", () => {
         },
       }),
     ).rejects.toThrow("may not contain message text");
+  });
+
+  it("publishes parsed captured mail with source provenance and reconciles retention", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    const message = {
+      id: "email-one",
+      attribution: {
+        projectId: PROJECT_ID,
+        mailSlug: "pathway",
+        matchedBy: "auth-username",
+        matchedValue: "pathway",
+      },
+      envelope: {
+        mailFrom: "sender@example.test",
+        rcptTo: ["pathway@example.test"],
+        authUsername: "pathway",
+        helo: "localhost",
+        remoteAddress: "127.0.0.1",
+      },
+      parsedHeaders: {
+        subject: "Build finished",
+        messageId: "<email-one@example.test>",
+        date: "2026-08-17T00:00:00.000Z",
+        from: [{ address: "sender@example.test", name: "Sender" }],
+        to: [{ address: "pathway@example.test", name: null }],
+        cc: [],
+        bcc: [],
+        replyTo: [],
+        headers: [{ name: "Subject", value: "Build finished" }],
+      },
+      textBody: "The build finished.",
+      htmlBody: "<p>The build finished.</p>",
+      attachments: [],
+      smtpTransactionLog: [],
+      timings: {
+        connectedAt: "2026-08-17T00:00:00.000Z",
+        messageReceivedAt: "2026-08-17T00:00:00.100Z",
+        parsedAt: "2026-08-17T00:00:00.200Z",
+        storedAt: "2026-08-17T00:00:00.300Z",
+        parseDurationMs: 100,
+        totalDurationMs: 300,
+      },
+      sizeBytes: 128,
+      isRead: false,
+      detectedCode: null,
+      deliverability: {
+        version: 1,
+        checks: [],
+        metrics: {
+          subjectLength: 14,
+          imageCount: 0,
+          visibleTextCharacters: 19,
+          imageToTextRatio: 0,
+          trackingPixelCount: 0,
+        },
+        htmlCompatibilityWarnings: [],
+      },
+    };
+
+    await asEnvironment(t).mutation(api.capturedEmails.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      messageId: message.id,
+      localProjectId: PROJECT_ID,
+      message,
+    });
+
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toMatchObject(
+      {
+        id: `${ENVIRONMENT_ID}:${message.id}`,
+        environmentId: ENVIRONMENT_ID,
+        localProjectId: PROJECT_ID,
+        messageId: message.id,
+        message,
+      },
+    );
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      entityId: `${ENVIRONMENT_ID}:${message.id}`,
+      changeKind: "upsert",
+      payload: { environmentId: ENVIRONMENT_ID, message },
+    });
+
+    const tagId = "0198f900-0000-7000-8000-000000000601";
+    await asUser(t, "manager").mutation(api.emailTags.create, {
+      companyId: COMPANY_ID,
+      id: tagId,
+      name: "Authentication",
+      color: "#3b82f6",
+    });
+    await asUser(t, "manager").mutation(api.capturedEmails.setTag, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      messageId: message.id,
+      tagId,
+      present: true,
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toMatchObject(
+      {
+        tagIds: [tagId],
+      },
+    );
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      payload: { tagIds: [tagId] },
+    });
+
+    await asUser(t, "manager").mutation(api.capturedEmails.remove, {
+      companyId: COMPANY_ID,
+      messages: [{ environmentId: ENVIRONMENT_ID, messageId: message.id }],
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toBeNull();
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("capturedEmailDeletions").unique()),
+    ).toMatchObject({ id: `${ENVIRONMENT_ID}:${message.id}` });
+    expect(
+      await asEnvironment(t).mutation(api.capturedEmails.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        messageId: message.id,
+        localProjectId: PROJECT_ID,
+        message,
+      }),
+    ).toBe(false);
+
+    await asEnvironment(t).mutation(api.capturedEmails.reconcile, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      currentMessageIds: [],
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("capturedEmails").unique())).toBeNull();
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "capturedEmail",
+      entityId: `${ENVIRONMENT_ID}:${message.id}`,
+      changeKind: "tombstone",
+      payload: null,
+    });
+  });
+
+  it("replicates exact trusted email senders and removes them everywhere", async () => {
+    const t = harness();
+    await seed(t);
+
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.trust, {
+      companyId: COMPANY_ID,
+      id: TRUSTED_SENDER_ID,
+      address: "  Alerts@Example.TEST ",
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").unique()),
+    ).toMatchObject({ id: TRUSTED_SENDER_ID, address: "alerts@example.test" });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "trustedEmailSender",
+      entityId: TRUSTED_SENDER_ID,
+      changeKind: "upsert",
+      payload: { id: TRUSTED_SENDER_ID, address: "alerts@example.test" },
+    });
+
+    // Trusting the same normalized address from another environment is idempotent.
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.trust, {
+      companyId: COMPANY_ID,
+      id: "0198f900-0000-7000-8000-000000000702",
+      address: "alerts@example.test",
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").collect()),
+    ).toHaveLength(1);
+
+    await asUser(t, "manager").mutation(api.trustedEmailSenders.remove, {
+      companyId: COMPANY_ID,
+      trustedSenderId: TRUSTED_SENDER_ID,
+    });
+    expect(
+      await t.run(async (ctx) => await ctx.db.query("trustedEmailSenders").unique()),
+    ).toBeNull();
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "trustedEmailSender",
+      entityId: TRUSTED_SENDER_ID,
+      changeKind: "tombstone",
+      payload: null,
+    });
   });
 });

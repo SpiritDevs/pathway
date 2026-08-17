@@ -80,6 +80,9 @@ export interface EmailStoreShape {
   readonly clear: (
     scope: EmailInboxScope,
   ) => Effect.Effect<ReadonlyArray<EmailMessageId>, EmailCaptureError>;
+  readonly deleteMessages: (
+    messageIds: ReadonlyArray<EmailMessageId>,
+  ) => Effect.Effect<ReadonlyArray<EmailMessageId>, EmailCaptureError>;
   readonly applyRetention: (input: {
     readonly policy: EmailRetentionPolicy;
     readonly projects: ReadonlyArray<EmailProjectSettings>;
@@ -667,6 +670,7 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
     getMessage,
     list,
     setRead,
+    deleteMessages: deleteIds,
     clear,
     applyRetention,
     allMessages,

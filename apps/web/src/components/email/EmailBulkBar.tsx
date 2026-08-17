@@ -4,7 +4,7 @@
  * `IssuesBulkBar` floats over the bottom of a full-width list; this one is a row in the flow
  * instead, because the same treatment in a 352px pane would sit on top of the messages it is
  * acting on. The read actions are inline and the rest live behind the same overflow menu the rows
- * use, so a disabled action reads identically wherever it is reached from.
+ * use, so each action reads identically wherever it is reached from.
  *
  * @module components/email/EmailBulkBar
  */

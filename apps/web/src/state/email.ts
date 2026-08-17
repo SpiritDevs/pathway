@@ -1,9 +1,9 @@
 /**
  * Local SMTP capture client state — see `docs/plans/local-smtp-capture.md`.
  *
- * Capture belongs to the machine the server runs on, so every atom here is bound to
- * `primaryEnvironmentIdAtom` the way the issue tracker's are (`state/issues.ts:5`) rather than
- * being a per-environment family.
+ * Capture happens on one environment, while parsed messages are replicated through the company
+ * change feed. Local RPC reads remain the freshest answer for the primary environment; replica
+ * rows fill in every other source and keep their environment provenance attached.
  *
  * Unlike the tracker, `email.stream` does not replay the mailbox: the contract says it carries
  * "diffs after the initial list/settings reads", so the snapshot is `email.list` and the stream is
@@ -41,6 +41,9 @@ import {
   type EmailInboxSummary,
   type EmailListenerStatus,
   type EmailMessageId,
+  type EmailTag,
+  type EmailTagId,
+  type EmailReadTarget,
   type EmailSettingsSnapshot,
   type EmailStreamEvent,
   type EmailTriggerFiring,
@@ -48,6 +51,7 @@ import {
   type EnvironmentId,
   type ProjectId,
 } from "@spiritdevs/contracts";
+import type { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -55,8 +59,13 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useEffectEvent } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo } from "react";
 
+import {
+  cloudCapturedEmailsAtom,
+  cloudEmailTagsAtom,
+  cloudProjectBindingsAtom,
+} from "../cloud/capturedEmailReadModel";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
@@ -114,6 +123,7 @@ export function applyEmailStreamEvent(
       };
     case "EmailReadStateChanged":
     case "EmailInboxCleared":
+    case "EmailMessagesDeleted":
       return { ...current, revision: current.revision + 1, inboxes: event.inboxes };
     // Neither of the last two changes which messages exist, so the list query is left alone and
     // only the settings-shaped readers (mutes, the listener card, the loop notice) move.
@@ -294,13 +304,169 @@ const EMPTY_EMAIL_MESSAGES: ReadonlyArray<CapturedEmailSummary> = Object.freeze(
 const EMPTY_EMAIL_INBOXES: ReadonlyArray<EmailInboxSummary> = Object.freeze([]);
 
 export interface EmailInboxView {
-  readonly messages: ReadonlyArray<CapturedEmailSummary>;
+  readonly messages: ReadonlyArray<CapturedEmailListItem>;
   /** Every inbox the server knows about, not just the one in scope. */
   readonly inboxes: ReadonlyArray<EmailInboxSummary>;
   readonly status: EmailStoreStatus;
   readonly isPending: boolean;
   readonly error: string | null;
   readonly refresh: () => void;
+}
+
+/** One row as rendered: the local contract plus the environment that owns its durable files. */
+export interface CapturedEmailListItem extends CapturedEmailSummary {
+  readonly environmentId: EnvironmentId;
+  readonly cloudProjectId: CloudProjectId | null;
+  readonly tagIds: ReadonlyArray<EmailTagId>;
+}
+
+const summaryOfSyncedMessage = (
+  environmentId: EnvironmentId,
+  cloudProjectId: CloudProjectId | null,
+  message: CapturedEmailMessage,
+  tagIds: ReadonlyArray<EmailTagId>,
+): CapturedEmailListItem => ({
+  id: message.id,
+  attribution: message.attribution,
+  from: message.parsedHeaders.from,
+  to: message.parsedHeaders.to,
+  subject: message.parsedHeaders.subject,
+  textPreview: (message.textBody ?? "").replace(/\s+/g, " ").trim().slice(0, 240),
+  receivedAt: message.timings.messageReceivedAt,
+  sizeBytes: message.sizeBytes,
+  attachmentCount: message.attachments.length,
+  isRead: message.isRead,
+  detectedCode: message.detectedCode,
+  environmentId,
+  cloudProjectId,
+  tagIds,
+});
+
+const bindingKey = (environmentId: EnvironmentId, projectId: ProjectId) =>
+  `${environmentId}\0${projectId}`;
+
+function syncedMessageMatchesScope(
+  item: CapturedEmailListItem,
+  scope: EmailInboxScope,
+  primaryEnvironmentId: EnvironmentId | null,
+  bindings: ReadonlyMap<string, CloudProjectId>,
+): boolean {
+  if (scope.type === "all") return true;
+  if (scope.type === "unassigned") return item.cloudProjectId === null;
+  if (primaryEnvironmentId === null) return false;
+  const cloudProjectId = bindings.get(bindingKey(primaryEnvironmentId, scope.projectId));
+  return cloudProjectId === undefined
+    ? item.environmentId === primaryEnvironmentId && item.attribution.projectId === scope.projectId
+    : item.cloudProjectId === cloudProjectId;
+}
+
+export function mergeSyncedMessages(input: {
+  readonly local: ReadonlyArray<CapturedEmailSummary>;
+  readonly synced: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly cloudProjectId: CloudProjectId | null;
+    readonly message: CapturedEmailMessage;
+    readonly tagIds?: ReadonlyArray<EmailTagId>;
+  }>;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly scope: EmailInboxScope;
+  readonly environmentId: EnvironmentId | null;
+  readonly bindings: ReadonlyMap<string, CloudProjectId>;
+}): ReadonlyArray<CapturedEmailListItem> {
+  const rows = new Map<string, CapturedEmailListItem>();
+  if (input.primaryEnvironmentId !== null) {
+    const primaryEnvironmentId = input.primaryEnvironmentId;
+    for (const message of input.local) {
+      if (input.environmentId !== null && input.environmentId !== primaryEnvironmentId) continue;
+      rows.set(`${primaryEnvironmentId}:${message.id}`, {
+        ...message,
+        environmentId: primaryEnvironmentId,
+        cloudProjectId:
+          message.attribution.projectId === null
+            ? null
+            : (input.bindings.get(
+                bindingKey(primaryEnvironmentId, message.attribution.projectId),
+              ) ?? null),
+        tagIds: [],
+      });
+    }
+  }
+  for (const entity of input.synced) {
+    if (input.environmentId !== null && entity.environmentId !== input.environmentId) continue;
+    const item = summaryOfSyncedMessage(
+      entity.environmentId,
+      entity.cloudProjectId,
+      entity.message,
+      entity.tagIds ?? [],
+    );
+    if (!syncedMessageMatchesScope(item, input.scope, input.primaryEnvironmentId, input.bindings)) {
+      continue;
+    }
+    const key = `${entity.environmentId}:${entity.message.id}`;
+    // Local content/read state wins until publication catches up; cloud-owned tag assignments do
+    // not exist in SQLite, so they are always overlaid from the replica.
+    const local = rows.get(key);
+    rows.set(key, local === undefined ? item : { ...local, tagIds: entity.tagIds ?? [] });
+  }
+  return [...rows.values()].sort(
+    (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt),
+  );
+}
+
+export function mergeSyncedInboxSummaries(input: {
+  readonly local: ReadonlyArray<EmailInboxSummary>;
+  readonly synced: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly cloudProjectId: CloudProjectId | null;
+    readonly message: CapturedEmailMessage;
+  }>;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly bindings: ReadonlyMap<string, CloudProjectId>;
+  readonly environmentId?: EnvironmentId | null;
+}): ReadonlyArray<EmailInboxSummary> {
+  const includeLocal =
+    input.environmentId == null || input.environmentId === input.primaryEnvironmentId;
+  const summaries = new Map(
+    (includeLocal ? input.local : []).map((inbox) => [emailScopeKey(inbox.scope), inbox]),
+  );
+  const localProjectByCloud = new Map<CloudProjectId, ProjectId>();
+  if (input.primaryEnvironmentId !== null) {
+    const prefix = `${input.primaryEnvironmentId}\0`;
+    for (const [key, cloudProjectId] of input.bindings) {
+      if (key.startsWith(prefix))
+        localProjectByCloud.set(cloudProjectId, key.slice(prefix.length) as ProjectId);
+    }
+  }
+  const increment = (scope: EmailInboxScope, isRead: boolean) => {
+    const key = emailScopeKey(scope);
+    const current = summaries.get(key);
+    summaries.set(key, {
+      scope,
+      name:
+        current?.name ??
+        (scope.type === "all"
+          ? "All mail"
+          : scope.type === "unassigned"
+            ? "Unassigned"
+            : "Project"),
+      mailSlug: current?.mailSlug ?? null,
+      messageCount: (current?.messageCount ?? 0) + 1,
+      unreadCount: (current?.unreadCount ?? 0) + (isRead ? 0 : 1),
+      toastMuted: current?.toastMuted ?? false,
+    });
+  };
+  for (const entity of input.synced) {
+    if (entity.environmentId === input.primaryEnvironmentId) continue;
+    if (input.environmentId != null && entity.environmentId !== input.environmentId) continue;
+    increment(ALL_EMAIL_SCOPE, entity.message.isRead);
+    if (entity.cloudProjectId === null) {
+      increment(UNASSIGNED_EMAIL_SCOPE, entity.message.isRead);
+      continue;
+    }
+    const projectId = localProjectByCloud.get(entity.cloudProjectId);
+    if (projectId !== undefined) increment({ type: "project", projectId }, entity.message.isRead);
+  }
+  return [...summaries.values()];
 }
 
 /**
@@ -310,13 +476,21 @@ export interface EmailInboxView {
  * atom key would start from an empty result and blank the list for the length of a round trip,
  * where a refresh keeps the rows up while the new ones land.
  */
-export function useEmailInbox(scope: EmailInboxScope): EmailInboxView {
+export function useEmailInbox(
+  scope: EmailInboxScope,
+  environmentFilter: EnvironmentId | null = null,
+): EmailInboxView {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const streamView = useAtomValue(emailStreamViewAtom);
+  const synced = useAtomValue(cloudCapturedEmailsAtom);
+  const bindings = useAtomValue(cloudProjectBindingsAtom);
+  const readsPrimary = environmentFilter === null || environmentFilter === environmentId;
   // The scope is rebuilt from the URL on every render; the family keys on the JSON of its input
   // (`state/runtime.ts:425`), so an equal scope resolves to the same atom without a memo.
   const query = useEnvironmentQuery(
-    environmentId === null ? null : emailListQuery({ environmentId, input: { scope } }),
+    environmentId === null || !readsPrimary
+      ? null
+      : emailListQuery({ environmentId, input: { scope } }),
   );
 
   const revision = streamView.state.revision;
@@ -326,14 +500,45 @@ export function useEmailInbox(scope: EmailInboxScope): EmailInboxView {
     refetch();
   }, [revision]);
 
+  const messages = useMemo(
+    () =>
+      mergeSyncedMessages({
+        local: query.data?.messages ?? EMPTY_EMAIL_MESSAGES,
+        synced,
+        primaryEnvironmentId: environmentId,
+        scope,
+        environmentId: environmentFilter,
+        bindings,
+      }),
+    [bindings, environmentFilter, environmentId, query.data?.messages, scope, synced],
+  );
+  const inboxes = useMemo(
+    () =>
+      mergeSyncedInboxSummaries({
+        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
+        synced,
+        primaryEnvironmentId: environmentId,
+        bindings,
+        environmentId: environmentFilter,
+      }),
+    [
+      bindings,
+      environmentFilter,
+      environmentId,
+      query.data?.inboxes,
+      streamView.state.inboxes,
+      synced,
+    ],
+  );
+
   return {
-    messages: query.data?.messages ?? EMPTY_EMAIL_MESSAGES,
+    messages,
     // The stream's copy is the later of the two whenever there is one, and it arrives without the
     // round trip the list read needs.
-    inboxes: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
-    status: query.error !== null ? "error" : streamView.status,
-    isPending: query.isPending,
-    error: query.error,
+    inboxes,
+    status: query.error !== null && messages.length === 0 ? "error" : streamView.status,
+    isPending: query.isPending && messages.length === 0,
+    error: messages.length === 0 ? query.error : null,
     refresh: query.refresh,
   };
 }
@@ -345,13 +550,38 @@ export function useEmailInbox(scope: EmailInboxScope): EmailInboxView {
  * so the two share one request — but installs no refetch of its own. The view owns that, and it is
  * always mounted whenever this sidebar is.
  */
-export function useEmailInboxSummaries(scope: EmailInboxScope): ReadonlyArray<EmailInboxSummary> {
+export function useEmailInboxSummaries(
+  scope: EmailInboxScope,
+  environmentFilter: EnvironmentId | null = null,
+): ReadonlyArray<EmailInboxSummary> {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const streamView = useAtomValue(emailStreamViewAtom);
+  const synced = useAtomValue(cloudCapturedEmailsAtom);
+  const bindings = useAtomValue(cloudProjectBindingsAtom);
+  const readsPrimary = environmentFilter === null || environmentFilter === environmentId;
   const query = useEnvironmentQuery(
-    environmentId === null ? null : emailListQuery({ environmentId, input: { scope } }),
+    environmentId === null || !readsPrimary
+      ? null
+      : emailListQuery({ environmentId, input: { scope } }),
   );
-  return streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES;
+  return useMemo(
+    () =>
+      mergeSyncedInboxSummaries({
+        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
+        synced,
+        primaryEnvironmentId: environmentId,
+        bindings,
+        environmentId: environmentFilter,
+      }),
+    [
+      bindings,
+      environmentFilter,
+      environmentId,
+      query.data?.inboxes,
+      streamView.state.inboxes,
+      synced,
+    ],
+  );
 }
 
 /**
@@ -507,6 +737,9 @@ export function useEmailTriggerFirings(projectId: ProjectId | null): EmailTrigge
 export interface EmailMessageView {
   /** Null until the first read lands. */
   readonly message: CapturedEmailMessage | null;
+  /** The environment that captured the message and owns its raw/attachment files. */
+  readonly environmentId: EnvironmentId | null;
+  readonly tagIds: ReadonlyArray<EmailTagId>;
   readonly isPending: boolean;
   readonly error: string | null;
   readonly refresh: () => void;
@@ -514,16 +747,32 @@ export interface EmailMessageView {
 
 /** The open message: bodies, attachments, and the SMTP transcript the list row does not carry. */
 export function useEmailMessage(messageId: EmailMessageId | null): EmailMessageView {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
-  const query = useEnvironmentQuery(
-    environmentId === null || messageId === null
-      ? null
-      : emailMessageQuery({ environmentId, input: { messageId } }),
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const synced = useAtomValue(cloudCapturedEmailsAtom);
+  const syncedMessage = useMemo(
+    () =>
+      messageId === null
+        ? null
+        : (synced.find((entity) => entity.message.id === messageId) ?? null),
+    [messageId, synced],
   );
+  // A local read wins for the primary environment because its read state changes immediately.
+  // Other environments are read from the durable replica and do not require their relay online.
+  const readsPrimary =
+    syncedMessage === null || syncedMessage.environmentId === primaryEnvironmentId;
+  const query = useEnvironmentQuery(
+    !readsPrimary || primaryEnvironmentId === null || messageId === null
+      ? null
+      : emailMessageQuery({ environmentId: primaryEnvironmentId, input: { messageId } }),
+  );
+  const replicatedMessage = syncedMessage?.message ?? null;
+  const message = readsPrimary ? (query.data?.message ?? replicatedMessage) : replicatedMessage;
   return {
-    message: query.data?.message ?? null,
-    isPending: query.isPending,
-    error: query.error,
+    message,
+    environmentId: syncedMessage?.environmentId ?? (message === null ? null : primaryEnvironmentId),
+    tagIds: syncedMessage?.tagIds ?? [],
+    isPending: message === null && query.isPending,
+    error: message === null ? query.error : null,
     refresh: query.refresh,
   };
 }
@@ -564,6 +813,11 @@ export const emailCommands = {
     tag: EMAIL_WS_METHODS.clearInbox,
     ...emailWriteOptions,
   }),
+  deleteMessages: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:email:delete-messages",
+    tag: EMAIL_WS_METHODS.deleteMessages,
+    ...emailWriteOptions,
+  }),
   // Settings are a single document: the listener card, the mute toggles, and the retention caps all
   // send the whole thing, so serialising them is what keeps two editors from clobbering each other.
   updateSettings: createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -592,7 +846,7 @@ type EmailCommandInput<C> =
 type EmailCommandSuccess<C> = C extends AtomCommand<infer _W, infer A, infer _E> ? A : never;
 type EmailCommandFailure<C> = C extends AtomCommand<infer _W, infer _A, infer E> ? E : never;
 
-/** Binds a write to the primary environment; captured mail exists nowhere else. */
+/** Binds settings and inbox-wide writes to the primary capture environment. */
 function usePrimaryEmailCommand<
   C extends AtomCommand<
     { readonly environmentId: EnvironmentId; readonly input: never },
@@ -629,11 +883,43 @@ function usePrimaryEmailCommand<
   );
 }
 
-export const useMarkEmailRead = () => usePrimaryEmailCommand(emailCommands.markRead);
-export const useMarkEmailUnread = () => usePrimaryEmailCommand(emailCommands.markUnread);
+export interface EnvironmentEmailReadInput {
+  readonly environmentId: EnvironmentId;
+  readonly target: EmailReadTarget;
+}
+
+function useEnvironmentEmailReadCommand(
+  command: typeof emailCommands.markRead | typeof emailCommands.markUnread,
+) {
+  const run = useAtomCommand(command);
+  return useCallback(
+    (input: EnvironmentEmailReadInput) =>
+      run({
+        environmentId: input.environmentId,
+        input: { target: input.target },
+      }),
+    [run],
+  );
+}
+
+/** Read state is written on the source environment, then republished to every replica. */
+export const useMarkEmailRead = () => useEnvironmentEmailReadCommand(emailCommands.markRead);
+export const useMarkEmailUnread = () => useEnvironmentEmailReadCommand(emailCommands.markUnread);
+export const useDeleteEmailMessages = () => {
+  const run = useAtomCommand(emailCommands.deleteMessages);
+  return useCallback(
+    (input: {
+      readonly environmentId: EnvironmentId;
+      readonly messageIds: ReadonlyArray<EmailMessageId>;
+    }) => run({ environmentId: input.environmentId, input: { messageIds: input.messageIds } }),
+    [run],
+  );
+};
 export const useClearEmailInbox = () => usePrimaryEmailCommand(emailCommands.clearInbox);
 export const useUpdateEmailSettings = () => usePrimaryEmailCommand(emailCommands.updateSettings);
 export const useUpsertEmailTriggerRule = () =>
   usePrimaryEmailCommand(emailCommands.upsertTriggerRule);
 export const useDeleteEmailTriggerRule = () =>
   usePrimaryEmailCommand(emailCommands.deleteTriggerRule);
+
+export const useEmailTags = (): ReadonlyArray<EmailTag> => useAtomValue(cloudEmailTagsAtom);

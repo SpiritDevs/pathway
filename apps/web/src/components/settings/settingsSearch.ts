@@ -421,6 +421,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/email",
   },
   {
+    id: "email-trusted-senders",
+    title: "Trusted email senders",
+    to: "/settings/email",
+  },
+  {
     id: "email-retention",
     title: "Captured mail retention",
     to: "/settings/email",

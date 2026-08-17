@@ -68,6 +68,37 @@ through `issueAttachments.urls`, which rechecks live company membership and `iss
 owning issue. Pending uploads expire after one hour and an hourly Convex cron deletes their
 UploadThing objects and metadata.
 
+### Captured email
+
+Local SMTP remains an environment-owned ingress: the source server parses and retains the raw
+message and attachment files. Its captured-email publisher resolves the local project through the
+active environment binding, then writes one `${environmentId}:${messageId}` `capturedEmail` entity
+containing the parsed message, bodies, delivery analysis, SMTP transaction, and attachment metadata.
+Project team IDs gate the change exactly like Agent Thread metadata; Unassigned messages are
+company-scoped. A project message without an active binding is not published.
+
+The publisher subscribes to new captures and reconciles the bounded local mailbox every 15 seconds.
+That reconciliation republishes read-state changes and tombstones messages removed by retention or
+Clear inbox. It caches the immutable capture identity plus read state rather than hashing every
+message body on every pass. Convex refuses encoded message documents above 700,000 JSON bytes,
+leaving space for the feed envelope below its document/page bounds.
+
+Clients merge the primary environment's RPC snapshot with `capturedEmail` replica entities. The
+local row wins while its publisher catches up; remote rows remain readable while their source relay
+is offline. Read-state commands route to the source environment and converge back through the same
+publisher. `emailTag` catalog entities carry the shared name and colour, while each captured-email
+entity carries its tag IDs so assignment changes are ordinary full-row sync changes.
+`trustedEmailSender` catalog entities carry normalized exact From addresses. Clicking Load remote
+content writes this catalog through Convex; the replica then enables images, styles, and fonts from
+that sender on every environment. Removing the entity disables automatic loading again. The iframe
+sandbox and CSP continue to prohibit scripts, objects, frames, and form posts.
+
+A member delete writes a feed tombstone and a durable `${environmentId}:${messageId}` deletion
+marker. If the source is online, the per-message email RPC removes its SQLite row and files
+immediately. If it is offline, its next publisher upsert is refused by that marker and the publisher
+removes the stale local copy before reconciliation, preventing resurrection. Raw `.eml` and
+attachment bytes do not enter Convex.
+
 For each accepted operation, one serializable Convex mutation:
 
 1. verifies the human or service identity and its current company/team permissions;

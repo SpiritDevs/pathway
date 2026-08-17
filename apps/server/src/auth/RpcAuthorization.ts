@@ -218,6 +218,7 @@ export const RPC_REQUIRED_SCOPES = {
   [EMAIL_WS_METHODS.stream]: AuthOrchestrationReadScope,
   [EMAIL_WS_METHODS.markRead]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.markUnread]: AuthOrchestrationOperateScope,
+  [EMAIL_WS_METHODS.deleteMessages]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.clearInbox]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.triggerRulesUpsert]: AuthOrchestrationOperateScope,
   [EMAIL_WS_METHODS.triggerRulesDelete]: AuthOrchestrationOperateScope,

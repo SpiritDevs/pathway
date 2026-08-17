@@ -1,15 +1,19 @@
 import type {
   CapturedEmailSummary,
+  CapturedEmailMessage,
   EmailInboxSummary,
   EmailMessageId,
   EmailSettingsSnapshot,
+  EmailTagId,
   EmailStreamEvent,
   EmailTriggerFiringId,
   EmailTriggerRuleId,
+  EnvironmentId,
   ProjectId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -20,11 +24,17 @@ import {
   emailScopesEqual,
   EMPTY_EMAIL_STREAM_STATE,
   findEmailInbox,
+  mergeSyncedInboxSummaries,
+  mergeSyncedMessages,
   totalEmailUnreadCount,
   UNASSIGNED_EMAIL_SCOPE,
 } from "./email";
 
 const PROJECT_ID = "prj_1" as ProjectId;
+const REMOTE_PROJECT_ID = "remote_prj_1" as ProjectId;
+const PRIMARY_ENVIRONMENT_ID = "environment-primary" as EnvironmentId;
+const REMOTE_ENVIRONMENT_ID = "environment-remote" as EnvironmentId;
+const CLOUD_PROJECT_ID = "cloud-project-1" as CloudProjectId;
 
 function inbox(unreadCount: number, overrides?: Partial<EmailInboxSummary>): EmailInboxSummary {
   return {
@@ -56,6 +66,60 @@ function summary(id: string): CapturedEmailSummary {
     attachmentCount: 0,
     isRead: false,
     detectedCode: "123456",
+  };
+}
+
+function message(id: string, projectId: ProjectId, subject: string): CapturedEmailMessage {
+  return {
+    ...summary(id),
+    attribution: {
+      projectId,
+      mailSlug: "pathway" as CapturedEmailMessage["attribution"]["mailSlug"],
+      matchedBy: "auth-username",
+      matchedValue: "pathway",
+    },
+    envelope: {
+      mailFrom: "noreply@example.com",
+      rcptTo: ["dev@example.test"],
+      authUsername: "pathway",
+      helo: null,
+      remoteAddress: null,
+    },
+    parsedHeaders: {
+      subject,
+      messageId: null,
+      date: null,
+      from: [{ address: "noreply@example.com", name: null }],
+      to: [{ address: "dev@example.test", name: null }],
+      cc: [],
+      bcc: [],
+      replyTo: [],
+      headers: [],
+    },
+    textBody: "Your code is 123456",
+    htmlBody: null,
+    attachments: [],
+    smtpTransactionLog: [],
+    timings: {
+      connectedAt: "2026-08-12T10:00:00.000Z",
+      messageReceivedAt: "2026-08-12T10:00:00.000Z",
+      parsedAt: "2026-08-12T10:00:00.000Z",
+      storedAt: "2026-08-12T10:00:00.000Z",
+      parseDurationMs: 0,
+      totalDurationMs: 0,
+    },
+    deliverability: {
+      version: 1,
+      checks: [],
+      metrics: {
+        subjectLength: subject.length,
+        imageCount: 0,
+        visibleTextCharacters: 19,
+        imageToTextRatio: 0,
+        trackingPixelCount: 0,
+      },
+      htmlCompatibilityWarnings: [],
+    },
   };
 }
 
@@ -159,6 +223,17 @@ describe("applyEmailStreamEvent", () => {
     expect(findEmailInbox(next.inboxes ?? [], ALL_EMAIL_SCOPE)?.messageCount).toBe(0);
   });
 
+  it("invalidates when specific messages are deleted", () => {
+    const next = applyEmailStreamEvent(EMPTY_EMAIL_STREAM_STATE, {
+      _tag: "EmailMessagesDeleted",
+      messageIds: ["msg_1" as EmailMessageId],
+      inboxes: [inbox(0, { messageCount: 0 })],
+    });
+
+    expect(next.revision).toBe(1);
+    expect(findEmailInbox(next.inboxes ?? [], ALL_EMAIL_SCOPE)?.messageCount).toBe(0);
+  });
+
   it("adopts pushed settings without invalidating the message list", () => {
     const next = applyEmailStreamEvent(EMPTY_EMAIL_STREAM_STATE, {
       _tag: "EmailSettingsChanged",
@@ -213,5 +288,81 @@ describe("findEmailInbox", () => {
     );
     expect(findEmailInbox(inboxes, UNASSIGNED_EMAIL_SCOPE)).toBeNull();
     expect(totalEmailUnreadCount(inboxes)).toBe(3);
+  });
+});
+
+describe("cross-environment captured mail", () => {
+  const bindings = new Map([
+    [`${PRIMARY_ENVIRONMENT_ID}\0${PROJECT_ID}`, CLOUD_PROJECT_ID] as const,
+  ]);
+  const synced = [
+    {
+      environmentId: PRIMARY_ENVIRONMENT_ID,
+      cloudProjectId: CLOUD_PROJECT_ID,
+      message: message("local-one", PROJECT_ID, "Stale replica copy"),
+      tagIds: ["tag-auth" as EmailTagId],
+    },
+    {
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      cloudProjectId: CLOUD_PROJECT_ID,
+      message: message("remote-one", REMOTE_PROJECT_ID, "Remote capture"),
+      tagIds: [],
+    },
+  ];
+
+  it("groups different local project ids through the shared cloud project and keeps local fresh", () => {
+    const local = [
+      {
+        ...summary("local-one"),
+        subject: "Fresh local copy",
+        attribution: {
+          projectId: PROJECT_ID,
+          mailSlug: null,
+          matchedBy: "auth-username" as const,
+          matchedValue: "pathway",
+        },
+      },
+    ];
+    const rows = mergeSyncedMessages({
+      local,
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      scope: { type: "project", projectId: PROJECT_ID },
+      environmentId: null,
+      bindings,
+    });
+
+    expect(rows.map((row) => [row.environmentId, row.subject])).toEqual([
+      [PRIMARY_ENVIRONMENT_ID, "Fresh local copy"],
+      [REMOTE_ENVIRONMENT_ID, "Remote capture"],
+    ]);
+    expect(rows[0]?.tagIds).toEqual(["tag-auth"]);
+  });
+
+  it("filters rows by source environment and adds only remote copies to local inbox counts", () => {
+    const rows = mergeSyncedMessages({
+      local: [],
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      scope: { type: "project", projectId: PROJECT_ID },
+      environmentId: REMOTE_ENVIRONMENT_ID,
+      bindings,
+    });
+    expect(rows.map((row) => row.id)).toEqual(["remote-one"]);
+
+    const summaries = mergeSyncedInboxSummaries({
+      local: [inbox(1, { messageCount: 1 })],
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      bindings,
+    });
+    expect(findEmailInbox(summaries, ALL_EMAIL_SCOPE)).toMatchObject({
+      messageCount: 2,
+      unreadCount: 2,
+    });
+    expect(findEmailInbox(summaries, { type: "project", projectId: PROJECT_ID })).toMatchObject({
+      messageCount: 1,
+      unreadCount: 1,
+    });
   });
 });

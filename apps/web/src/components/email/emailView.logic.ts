@@ -10,7 +10,12 @@
  *
  * @module components/email/emailView.logic
  */
-import type { EmailAddress, EmailInboxScope, ProjectId } from "@spiritdevs/contracts";
+import type {
+  CapturedEmailMessage,
+  EmailAddress,
+  EmailInboxScope,
+  ProjectId,
+} from "@spiritdevs/contracts";
 
 // ── URL ────────────────────────────────────────────────────────────────
 
@@ -32,6 +37,10 @@ export interface EmailSearch {
   /** `all`, `unassigned`, or a project id. Absent means All mail. */
   readonly inbox: string | undefined;
   readonly message: string | undefined;
+  /** Source environment filter. Absent means mail from every environment. */
+  readonly environment: string | undefined;
+  /** Company email-tag filter. */
+  readonly tag: string | undefined;
   readonly tab: EmailReadingTab | undefined;
   /** Absent rather than `false`: the only thing this param ever says is "not the mailbox". */
   readonly analytics: true | undefined;
@@ -40,6 +49,8 @@ export interface EmailSearch {
 export type EmailSearchPatch = Partial<{
   readonly inbox: string | undefined;
   readonly message: string | undefined;
+  readonly environment: string | undefined;
+  readonly tag: string | undefined;
   readonly tab: EmailReadingTab | undefined;
   readonly analytics: true | undefined;
 }>;
@@ -53,6 +64,8 @@ export function parseEmailSearch(raw: Record<string, unknown>): EmailSearch {
   return {
     inbox: optionalParam(raw.inbox),
     message: optionalParam(raw.message),
+    environment: optionalParam(raw.environment),
+    tag: optionalParam(raw.tag),
     tab: EMAIL_READING_TABS.includes(tab as EmailReadingTab) ? (tab as EmailReadingTab) : undefined,
     analytics: raw.analytics === true || raw.analytics === "true" ? true : undefined,
   };
@@ -159,6 +172,27 @@ const REMOTE_REFERENCE = /(?:src|srcset|href|background|url\()\s*=?\s*["'(]?\s*(
  */
 export function hasRemoteEmailContent(html: string | null): boolean {
   return html !== null && REMOTE_REFERENCE.test(html);
+}
+
+/** Canonical exact-address key used by both the replicated allowlist and a message's From header. */
+export function normalizeTrustedEmailSenderAddress(address: string): string {
+  return address.trim().toLowerCase();
+}
+
+/** First parsed From mailbox, matching the sender shown in the message list and reading pane. */
+export function trustedEmailSenderAddress(message: CapturedEmailMessage): string | null {
+  const address = message.parsedHeaders.from[0]?.address;
+  if (address === undefined) return null;
+  const normalized = normalizeTrustedEmailSenderAddress(address);
+  return normalized.length === 0 ? null : normalized;
+}
+
+export function isTrustedEmailSender(
+  message: CapturedEmailMessage,
+  trustedAddresses: ReadonlySet<string>,
+): boolean {
+  const address = trustedEmailSenderAddress(message);
+  return address !== null && trustedAddresses.has(address);
 }
 
 function escapeHtml(value: string): string {

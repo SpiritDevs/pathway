@@ -33,6 +33,9 @@ import {
   SyncEnvironmentRegistrationPayload,
   SyncEnvironmentBindingPayload,
   SyncAgentThreadPayload,
+  SyncCapturedEmailPayload,
+  SyncEmailTagPayload,
+  SyncTrustedEmailSenderPayload,
   SyncMembershipPayload,
   SyncRoleAssignmentPayload,
   SyncRolePayload,
@@ -67,6 +70,9 @@ export const COMPANY_SYNC_ENTITY_KINDS = [
   "cloudProject",
   "environmentBinding",
   "agentThread",
+  "capturedEmail",
+  "emailTag",
+  "trustedEmailSender",
 ] as const satisfies ReadonlyArray<SyncEntityKind>;
 export type CompanySyncEntityKind = (typeof COMPANY_SYNC_ENTITY_KINDS)[number];
 
@@ -154,6 +160,25 @@ export const AgentThreadEntity = Schema.Struct({
 });
 export type AgentThreadEntity = typeof AgentThreadEntity.Type;
 
+/** Parsed captured mail plus source-environment provenance; binary files remain source-owned. */
+export const CapturedEmailEntity = Schema.Struct({
+  entityKind: Schema.Literal("capturedEmail"),
+  ...SyncCapturedEmailPayload.fields,
+});
+export type CapturedEmailEntity = typeof CapturedEmailEntity.Type;
+
+export const EmailTagEntity = Schema.Struct({
+  entityKind: Schema.Literal("emailTag"),
+  ...SyncEmailTagPayload.fields,
+});
+export type EmailTagEntity = typeof EmailTagEntity.Type;
+
+export const TrustedEmailSenderEntity = Schema.Struct({
+  entityKind: Schema.Literal("trustedEmailSender"),
+  ...SyncTrustedEmailSenderPayload.fields,
+});
+export type TrustedEmailSenderEntity = typeof TrustedEmailSenderEntity.Type;
+
 /**
  * A company-owned project identity. Bindings may come and go independently; issues retain this
  * stable id. The wire omits `companyId`, `deletedAt`, and `version` like every other replica row.
@@ -188,6 +213,9 @@ export const CompanySyncEntity = Schema.Union([
   EnvironmentBindingEntity,
   CloudProjectSyncEntity,
   AgentThreadEntity,
+  CapturedEmailEntity,
+  EmailTagEntity,
+  TrustedEmailSenderEntity,
 ]);
 export type CompanySyncEntity = typeof CompanySyncEntity.Type;
 
@@ -246,6 +274,9 @@ export const COMPANY_ENTITY_CODECS: Record<CompanySyncEntityKind, SyncCodec<Comp
   environmentBinding: taggedEntityCodec("environmentBinding", SyncEnvironmentBindingPayload),
   cloudProject: taggedEntityCodec("cloudProject", Schema.Struct(cloudProjectSyncEntityFields)),
   agentThread: taggedEntityCodec("agentThread", SyncAgentThreadPayload),
+  capturedEmail: taggedEntityCodec("capturedEmail", SyncCapturedEmailPayload),
+  emailTag: taggedEntityCodec("emailTag", SyncEmailTagPayload),
+  trustedEmailSender: taggedEntityCodec("trustedEmailSender", SyncTrustedEmailSenderPayload),
 };
 
 /** Codec for one entity kind, or `null` for a kind this domain does not replicate. */

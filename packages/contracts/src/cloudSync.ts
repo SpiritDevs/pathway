@@ -85,6 +85,7 @@ import {
 } from "./issues.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { CapturedEmailMessage, EmailTagId, TrustedEmailSenderId } from "./email.ts";
 import * as Schema from "effect/Schema";
 
 // ---------------------------------------------------------------------------
@@ -251,6 +252,9 @@ export const SYNC_ENTITY_KINDS = [
   "environmentBinding",
   "environmentCommand",
   "agentThread",
+  "capturedEmail",
+  "emailTag",
+  "trustedEmailSender",
   "issue",
   "issueStatus",
   "issueLabel",
@@ -526,6 +530,44 @@ export const SyncAgentThreadPayload = Schema.Struct({
   updatedAt: CloudTimestamp,
 });
 export type SyncAgentThreadPayload = typeof SyncAgentThreadPayload.Type;
+
+/**
+ * One locally captured message replicated for cross-environment reading.
+ *
+ * Parsed content and attachment metadata travel with the record. Raw `.eml` bytes and attachment
+ * bytes remain on the source environment, so the environment id is part of the durable identity
+ * and presentation rather than incidental provenance.
+ */
+export const SyncCapturedEmailPayload = Schema.Struct({
+  /** `${environmentId}:${message.id}`; distinct even if two stores imported the same local id. */
+  id: SyncEntityId,
+  environmentId: EnvironmentId,
+  /** Null only for Unassigned mail. Project mail is published after resolving its active binding. */
+  cloudProjectId: Schema.NullOr(CloudProjectId),
+  message: CapturedEmailMessage,
+  tagIds: Schema.Array(EmailTagId),
+  updatedAt: CloudTimestamp,
+});
+export type SyncCapturedEmailPayload = typeof SyncCapturedEmailPayload.Type;
+
+/** Company-wide email tag definition; assignments travel on captured-email rows. */
+export const SyncEmailTagPayload = Schema.Struct({
+  id: EmailTagId,
+  name: TrimmedNonEmptyString,
+  color: TrimmedNonEmptyString,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncEmailTagPayload = typeof SyncEmailTagPayload.Type;
+
+/** Exact sender address trusted to load remote email content across the company. */
+export const SyncTrustedEmailSenderPayload = Schema.Struct({
+  id: TrustedEmailSenderId,
+  address: TrimmedNonEmptyString,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncTrustedEmailSenderPayload = typeof SyncTrustedEmailSenderPayload.Type;
 
 /**
  * One durable remote-control command as carried by bootstrap and the incremental feed.

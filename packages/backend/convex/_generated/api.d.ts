@@ -10,10 +10,12 @@
 
 import type * as agentThreads from "../agentThreads.js";
 import type * as cloudProjects from "../cloudProjects.js";
+import type * as capturedEmails from "../capturedEmails.js";
 import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
 import type * as crons from "../crons.js";
 import type * as environmentCommands from "../environmentCommands.js";
+import type * as emailTags from "../emailTags.js";
 import type * as environments from "../environments.js";
 import type * as invitations from "../invitations.js";
 import type * as issueAttachments from "../issueAttachments.js";
@@ -32,16 +34,19 @@ import type * as roles from "../roles.js";
 import type * as smoke from "../smoke.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
+import type * as trustedEmailSenders from "../trustedEmailSenders.js";
 
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
   agentThreads: typeof agentThreads;
   cloudProjects: typeof cloudProjects;
+  capturedEmails: typeof capturedEmails;
   companies: typeof companies;
   connectGrants: typeof connectGrants;
   crons: typeof crons;
   environmentCommands: typeof environmentCommands;
+  emailTags: typeof emailTags;
   environments: typeof environments;
   invitations: typeof invitations;
   issueAttachments: typeof issueAttachments;
@@ -60,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   smoke: typeof smoke;
   sync: typeof sync;
   teams: typeof teams;
+  trustedEmailSenders: typeof trustedEmailSenders;
 }>;
 
 /**

@@ -1,7 +1,8 @@
-import type { CapturedEmailSummary, EmailMessageId } from "@spiritdevs/contracts";
+import type { EmailMessageId, EmailTag, EmailTagId, EnvironmentId } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import type { CapturedEmailListItem } from "~/state/email";
 import { EmailDetectedCodeButton, EmailMessageRow } from "./EmailMessageList";
 
 const MESSAGE = {
@@ -21,18 +22,23 @@ const MESSAGE = {
   attachmentCount: 0,
   isRead: false,
   detectedCode: "4JJVYX",
-} as unknown as CapturedEmailSummary;
+  environmentId: "environment-1" as EnvironmentId,
+  cloudProjectId: null,
+} as unknown as CapturedEmailListItem;
+const NO_TAGS: ReadonlyArray<EmailTag> = [];
 
 function renderRow(overrides?: {
-  message?: CapturedEmailSummary;
+  message?: CapturedEmailListItem;
   checked?: boolean;
   selected?: boolean;
   selectionCount?: number;
   selectionUnreadCount?: number;
+  tags?: ReadonlyArray<EmailTag>;
 }) {
   return renderToStaticMarkup(
     <EmailMessageRow
       checked={overrides?.checked ?? false}
+      environmentName="Corey's Mac Studio"
       message={overrides?.message ?? MESSAGE}
       now={new Date("2026-08-13T12:00:00.000Z")}
       onAction={() => {}}
@@ -42,6 +48,7 @@ function renderRow(overrides?: {
       selected={overrides?.selected ?? false}
       selectionCount={overrides?.selectionCount ?? 0}
       selectionUnreadCount={overrides?.selectionUnreadCount ?? 0}
+      tags={overrides?.tags ?? NO_TAGS}
     />,
   );
 }
@@ -82,19 +89,37 @@ describe("EmailMessageRow", () => {
   });
 
   it("labels a subject-less message rather than leaving the controls unnamed", () => {
-    const markup = renderRow({ message: { ...MESSAGE, subject: null } as CapturedEmailSummary });
+    const markup = renderRow({ message: { ...MESSAGE, subject: null } });
 
     expect(markup).toContain('aria-label="Open (no subject)"');
     expect(markup).toContain('aria-label="Select (no subject)"');
   });
 
+  it("shows which environment captured the message", () => {
+    const markup = renderRow();
+
+    expect(markup).toContain("Corey&#x27;s Mac Studio");
+    expect(markup).toContain("Captured on Corey&#x27;s Mac Studio");
+  });
+
   it("still surfaces the detected code and the attachment count", () => {
     const markup = renderRow({
-      message: { ...MESSAGE, attachmentCount: 3 } as CapturedEmailSummary,
+      message: { ...MESSAGE, attachmentCount: 3 },
     });
 
     expect(markup).toContain('aria-label="3 attachments"');
     expect(markup).toContain("4JJVYX");
+  });
+
+  it("shows synchronized tags without adding another row", () => {
+    const tagId = "tag-auth" as EmailTagId;
+    const markup = renderRow({
+      message: { ...MESSAGE, tagIds: [tagId] },
+      tags: [{ id: tagId, name: "Authentication", color: "#5e6ad2" }],
+    });
+
+    expect(markup).toContain("Authentication");
+    expect(markup).toContain("#5e6ad2");
   });
 });
 

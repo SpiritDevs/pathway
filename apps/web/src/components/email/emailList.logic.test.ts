@@ -346,15 +346,16 @@ describe("emailActionMenuItems", () => {
     );
   });
 
-  it("keeps delete and tagging visible but honestly unavailable", () => {
+  it("enables delete and tagging on every message surface", () => {
     const items = emailActionMenuItems({ count: 1, unreadCount: 1, includeOpen: true });
     const remove = items.find((item) => item.id === "delete");
-    expect(remove?.disabled).toBe(true);
+    expect(remove?.disabled).toBe(false);
     expect(remove?.destructive).toBe(true);
-    expect(remove?.unavailableReason).toBe("This server only clears a whole inbox");
-    expect(items.find((item) => item.id === "add-tag")?.unavailableReason).toBe(
-      "Captured mail has no tags",
-    );
+    expect(remove?.unavailableReason).toBeNull();
+    expect(items.find((item) => item.id === "add-tag")).toMatchObject({
+      disabled: false,
+      unavailableReason: null,
+    });
   });
 
   it("offers Open only for a single row", () => {
@@ -367,7 +368,7 @@ describe("emailActionMenuItems", () => {
 });
 
 describe("emailActionContextMenuItems", () => {
-  it("folds the reason into the label, since a native menu has nowhere else to put it", () => {
+  it("folds read-state reasons into native menu labels", () => {
     const items = emailActionContextMenuItems(
       emailActionMenuItems({ count: 1, unreadCount: 0, includeOpen: true }),
     );
@@ -377,14 +378,14 @@ describe("emailActionContextMenuItems", () => {
       { id: "mark-unread", label: "Mark as unread", disabled: false, destructive: false },
       {
         id: "add-tag",
-        label: "Add tag — Captured mail has no tags",
-        disabled: true,
+        label: "Add tag",
+        disabled: false,
         destructive: false,
       },
       {
         id: "delete",
-        label: "Delete — This server only clears a whole inbox",
-        disabled: true,
+        label: "Delete",
+        disabled: false,
         destructive: true,
       },
     ]);

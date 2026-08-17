@@ -73,6 +73,13 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   "cloudProject",
   // Agent Thread metadata joined last. Transcript content is never stored in this table.
   "agentThread",
+  // Captured mail joined after thread discovery. Parsed content is cloud data; binary files stay
+  // on the source environment.
+  "capturedEmail",
+  // Email tags are a company catalog and were introduced with replicated tag assignments.
+  "emailTag",
+  // Remote-content trust joined after tags. Exact sender addresses are a company catalog.
+  "trustedEmailSender",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

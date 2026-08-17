@@ -8,7 +8,8 @@
  *
  * @module components/email/EmailView
  */
-import type { CapturedEmailSummary, EmailMessageId, ProjectId } from "@spiritdevs/contracts";
+import type { EmailMessageId, EmailTagId, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { MailIcon, SearchXIcon } from "lucide-react";
 import {
   useEffect,
@@ -21,18 +22,33 @@ import {
 } from "react";
 
 import { useResizableWidth } from "~/hooks/useResizableWidth";
+import { useCapturedEmailAdmin } from "~/cloud/capturedEmailAdmin";
+import { cloudTrustedEmailSendersAtom } from "~/cloud/capturedEmailReadModel";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import {
   findEmailInbox,
   useEmailInbox,
   useEmailMessage,
+  useEmailTags,
+  useDeleteEmailMessages,
   useMarkEmailRead,
   useMarkEmailUnread,
   type EmailStoreStatus,
+  type CapturedEmailListItem,
 } from "~/state/email";
 import { Button } from "../ui/button";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import {
   Empty,
@@ -44,6 +60,7 @@ import {
 } from "../ui/empty";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -54,6 +71,7 @@ import { EmailListToolbar } from "./EmailListToolbar";
 import { EmailAnalyticsPanel } from "./EmailAnalyticsPanel";
 import { EmailMessageList } from "./EmailMessageList";
 import { EmailReadingPane } from "./EmailReadingPane";
+import { EmailTagDialog } from "./EmailTagDialog";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
   EMPTY_EMAIL_SELECTION,
@@ -86,6 +104,32 @@ const EMAIL_READING_PANE_MIN_WIDTH = 320;
 const EMAIL_MESSAGE_LIST_WIDTH_STORAGE_KEY = "pathway:email-message-list-width";
 const EMAIL_MESSAGE_LIST_KEYBOARD_STEP = 24;
 
+async function forEachWithConcurrency<A>(
+  values: ReadonlyArray<A>,
+  concurrency: number,
+  run: (value: A) => Promise<void>,
+) {
+  let index = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (index < values.length) {
+        const value = values[index++];
+        if (value !== undefined) await run(value);
+      }
+    }),
+  );
+}
+
+function reportCloudEmailFailure(title: string, error: unknown) {
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title,
+      description: error instanceof Error ? error.message : String(error),
+    }),
+  );
+}
+
 export function EmailView({
   search,
   onSearch,
@@ -94,10 +138,17 @@ export function EmailView({
   onSearch: (patch: EmailSearchPatch) => void;
 }) {
   const scope = emailScopeFromParam(search.inbox);
-  const inbox = useEmailInbox(scope);
+  const environmentFilter = (search.environment ?? null) as EnvironmentId | null;
+  const inbox = useEmailInbox(scope, environmentFilter);
   const projects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { environments } = useEnvironments();
   const markRead = useMarkEmailRead();
   const markUnread = useMarkEmailUnread();
+  const deleteLocalMessages = useDeleteEmailMessages();
+  const tags = useEmailTags();
+  const emailAdmin = useCapturedEmailAdmin();
+  const trustedSenders = useAtomValue(cloudTrustedEmailSendersAtom);
   const splitPaneRef = useRef<HTMLDivElement | null>(null);
   const [messageListMaxWidth, setMessageListMaxWidth] = useState(EMAIL_MESSAGE_LIST_MAX_WIDTH);
   // Search and filters are view state, not URL state: they narrow which rows are on screen and
@@ -108,6 +159,9 @@ export function EmailView({
   const [selection, setSelection] = useState(EMPTY_EMAIL_SELECTION);
   const readStateWriteInFlightRef = useRef(false);
   const [isApplyingReadState, setIsApplyingReadState] = useState(false);
+  const [tagTargets, setTagTargets] = useState<ReadonlyArray<CapturedEmailListItem>>([]);
+  const [deleteTargets, setDeleteTargets] = useState<ReadonlyArray<CapturedEmailListItem>>([]);
+  const [isApplyingAction, setIsApplyingAction] = useState(false);
 
   useEffect(() => {
     const splitPane = splitPaneRef.current;
@@ -140,11 +194,23 @@ export function EmailView({
 
   const selectedId = (search.message ?? null) as EmailMessageId | null;
   const detail = useEmailMessage(selectedId);
+  const selectedListMessage = inbox.messages.find((message) => message.id === selectedId) ?? null;
   const tab = emailReadingTab(search);
 
   const projectTitles = useMemo(
     () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
     [projects],
+  );
+  const environmentTitles = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
+  const trustedSenderAddresses = useMemo(
+    () => new Set(trustedSenders.map((sender) => sender.address)),
+    [trustedSenders],
   );
   // Read once rather than tracked: nothing in a message list is worth a midnight timer, and a
   // reconnect or a route change re-reads it. Same trade as the issue list's `today`.
@@ -159,23 +225,28 @@ export function EmailView({
 
   // Opening is what marks a message read, so the write follows the URL rather than the click: a
   // deep link into a message counts as having opened it.
-  const markOpenedRead = useEffectEvent((messageId: EmailMessageId) => {
-    void markRead({ target: { type: "message", messageId } });
-  });
+  const markOpenedRead = useEffectEvent(
+    (messageId: EmailMessageId, environmentId: EnvironmentId) => {
+      void markRead({ environmentId, target: { type: "message", messageId } });
+    },
+  );
+  const selectedEnvironmentId = selectedListMessage?.environmentId ?? detail.environmentId;
   useEffect(() => {
-    if (selectedId === null) return;
-    markOpenedRead(selectedId);
-  }, [selectedId]);
+    if (selectedId === null || selectedEnvironmentId === null) return;
+    markOpenedRead(selectedId, selectedEnvironmentId);
+  }, [selectedEnvironmentId, selectedId]);
 
-  const selectMessage = (message: CapturedEmailSummary) => onSearch({ message: message.id });
+  const selectMessage = (message: CapturedEmailListItem) => onSearch({ message: message.id });
 
   const inboxSummary = findEmailInbox(inbox.inboxes, scope);
   const unreadCount = inboxSummary?.unreadCount ?? 0;
 
-  const visibleMessages = useMemo(
-    () => filterEmailMessages(inbox.messages, { query, filter }),
-    [filter, inbox.messages, query],
-  );
+  const visibleMessages = useMemo(() => {
+    const filtered = filterEmailMessages(inbox.messages, { query, filter });
+    return search.tag === undefined
+      ? filtered
+      : filtered.filter((message) => message.tagIds.includes(search.tag as EmailTagId));
+  }, [filter, inbox.messages, query, search.tag]);
   const visibleIds = useMemo(() => visibleMessages.map((message) => message.id), [visibleMessages]);
 
   // A capture, a retention sweep, a scope change, and a keystroke in the search field all take rows
@@ -187,33 +258,64 @@ export function EmailView({
 
   const selectedMessages = selectedEmailMessages(visibleMessages, selection);
   const selectedUnreadCount = selectedMessages.filter((message) => !message.isRead).length;
+  const currentTagTargets = tagTargets.map(
+    (target) =>
+      inbox.messages.find(
+        (message) => message.id === target.id && message.environmentId === target.environmentId,
+      ) ?? target,
+  );
 
   /**
-   * Read state is per message on the wire, so a bulk press is one call per row that actually
-   * changes — a select-all over an already-read inbox sends nothing. One toast for the batch:
-   * these fail together or not at all.
+   * A selected subset writes only rows that change. Mark-all groups the same logical inbox by
+   * source environment, translating a shared project back to that environment's local project id,
+   * so a full mailbox stays one write per source rather than one write per message.
    */
-  const applyReadState = async (targets: ReadonlyArray<CapturedEmailSummary>, isRead: boolean) => {
+  const applyReadState = async (
+    targets: ReadonlyArray<CapturedEmailListItem>,
+    isRead: boolean,
+    coversInbox = false,
+  ) => {
     if (readStateWriteInFlightRef.current) return;
-    const ids = emailIdsNeedingReadState(targets, isRead);
-    if (ids.length === 0) return;
+    const ids = new Set(emailIdsNeedingReadState(targets, isRead));
+    const changed = targets.filter((message) => ids.has(message.id));
+    if (changed.length === 0) return;
     readStateWriteInFlightRef.current = true;
     setIsApplyingReadState(true);
     const write = isRead ? markRead : markUnread;
     try {
-      // Selecting the entire current inbox can use the server's one-write scope target. Subsets
-      // still use the only supported per-message target, but the in-flight guard prevents a second
-      // press from duplicating that serialized batch over a remote connection.
-      const coversInbox =
-        inboxSummary !== null &&
-        inbox.messages.length === inboxSummary.messageCount &&
-        targets.length === inbox.messages.length &&
-        inbox.messages.every((message) => targets.some((target) => target.id === message.id));
-      const results = coversInbox
-        ? [await write({ target: { type: "inbox", scope } })]
-        : await Promise.all(
-            ids.map((messageId) => write({ target: { type: "message", messageId } })),
+      const writes = [];
+      const individually = new Set(changed);
+      if (coversInbox) {
+        const byEnvironment = new Map<EnvironmentId, CapturedEmailListItem[]>();
+        for (const message of changed) {
+          const group = byEnvironment.get(message.environmentId) ?? [];
+          group.push(message);
+          byEnvironment.set(message.environmentId, group);
+        }
+        for (const [environmentId, messages] of byEnvironment) {
+          const sourceProjectIds = new Set(
+            messages.map((message) => message.attribution.projectId).filter((id) => id !== null),
           );
+          const sourceScope =
+            scope.type !== "project"
+              ? scope
+              : sourceProjectIds.size === 1
+                ? { type: "project" as const, projectId: [...sourceProjectIds][0]! }
+                : null;
+          if (sourceScope === null) continue;
+          writes.push(write({ environmentId, target: { type: "inbox", scope: sourceScope } }));
+          for (const message of messages) individually.delete(message);
+        }
+      }
+      writes.push(
+        ...[...individually].map((message) =>
+          write({
+            environmentId: message.environmentId,
+            target: { type: "message", messageId: message.id },
+          }),
+        ),
+      );
+      const results = await Promise.all(writes);
       const failure = results.find((result) => result._tag === "Failure");
       if (failure !== undefined) {
         reportEmailWriteFailure(
@@ -227,10 +329,93 @@ export function EmailView({
     }
   };
 
+  const applyTag = async (tagId: EmailTagId, present: boolean) => {
+    if (emailAdmin === null || tagTargets.length === 0 || isApplyingAction) return;
+    setIsApplyingAction(true);
+    try {
+      await forEachWithConcurrency(tagTargets, 4, (message) =>
+        emailAdmin.setTag(
+          { environmentId: message.environmentId, messageId: message.id },
+          tagId,
+          present,
+        ),
+      );
+    } catch (error) {
+      reportCloudEmailFailure("Couldn't update email tags", error);
+    } finally {
+      setIsApplyingAction(false);
+    }
+  };
+
+  const createAndApplyTag = async (input: { name: string; color: string }) => {
+    if (emailAdmin === null || isApplyingAction) return;
+    setIsApplyingAction(true);
+    try {
+      const tagId = await emailAdmin.createTag(input);
+      await forEachWithConcurrency(tagTargets, 4, (message) =>
+        emailAdmin.setTag(
+          { environmentId: message.environmentId, messageId: message.id },
+          tagId,
+          true,
+        ),
+      );
+    } catch (error) {
+      reportCloudEmailFailure("Couldn't create the email tag", error);
+    } finally {
+      setIsApplyingAction(false);
+    }
+  };
+
+  const deleteMessages = async () => {
+    if (deleteTargets.length === 0 || isApplyingAction) return;
+    const targets = deleteTargets;
+    setIsApplyingAction(true);
+    try {
+      // Cloud first makes the delete durable while a source is offline. The source RPC then removes
+      // SQLite, raw source, and attachment files immediately wherever that environment is online.
+      if (emailAdmin !== null) {
+        for (let index = 0; index < targets.length; index += 100) {
+          await emailAdmin.deleteMessages(
+            targets.slice(index, index + 100).map((message) => ({
+              environmentId: message.environmentId,
+              messageId: message.id,
+            })),
+          );
+        }
+      }
+      const byEnvironment = new Map<EnvironmentId, EmailMessageId[]>();
+      for (const message of targets) {
+        const ids = byEnvironment.get(message.environmentId) ?? [];
+        ids.push(message.id);
+        byEnvironment.set(message.environmentId, ids);
+      }
+      for (const [environmentId, ids] of byEnvironment) {
+        for (let index = 0; index < ids.length; index += 100) {
+          const result = await deleteLocalMessages({
+            environmentId,
+            messageIds: ids.slice(index, index + 100),
+          });
+          if (result._tag === "Failure") {
+            reportEmailWriteFailure("Couldn't delete captured mail from its source", result);
+          }
+        }
+      }
+      if (selectedId !== null && targets.some((message) => message.id === selectedId)) {
+        onSearch({ message: undefined, tab: undefined });
+      }
+      setSelection(EMPTY_EMAIL_SELECTION);
+      setDeleteTargets([]);
+    } catch (error) {
+      reportCloudEmailFailure("Couldn't delete captured mail", error);
+    } finally {
+      setIsApplyingAction(false);
+    }
+  };
+
   const runAction = (
     action: EmailMessageAction,
-    targets: ReadonlyArray<CapturedEmailSummary>,
-    message: CapturedEmailSummary | null,
+    targets: ReadonlyArray<CapturedEmailListItem>,
+    message: CapturedEmailListItem | null,
   ) => {
     if (action === "open") {
       if (message !== null) selectMessage(message);
@@ -241,7 +426,17 @@ export function EmailView({
       return;
     }
     if (action === "mark-unread") void applyReadState(targets, false);
-    // `add-tag` and `delete` are listed disabled on every surface, so nothing can dispatch them.
+    if (action === "add-tag") {
+      if (emailAdmin === null) {
+        reportCloudEmailFailure(
+          "Tags require company sync",
+          new Error("Connect and sign in to the synced company before tagging captured mail."),
+        );
+        return;
+      }
+      setTagTargets(targets);
+    }
+    if (action === "delete") setDeleteTargets(targets);
   };
 
   /**
@@ -251,7 +446,7 @@ export function EmailView({
    * selection untouched.
    */
   const showRowContextMenu = async (
-    message: CapturedEmailSummary,
+    message: CapturedEmailListItem,
     position: { readonly x: number; readonly y: number },
   ) => {
     const api = readLocalApi();
@@ -289,8 +484,8 @@ export function EmailView({
             inboxName={inboxName}
             isPending={inbox.isPending}
             onFilter={setFilter}
-            /* Clears this inbox's badge in one write; the reading pane carries the way back. */
-            onMarkAllRead={() => void markRead({ target: { type: "inbox", scope } })}
+            /* Routes each unread row to the environment that captured it. */
+            onMarkAllRead={() => void applyReadState(inbox.messages, true, true)}
             onQuery={setQuery}
             onSearchOpen={setSearchOpen}
             onToggleSelectAll={() =>
@@ -321,12 +516,15 @@ export function EmailView({
                 setQuery("");
                 setSearchOpen(false);
                 setFilter(NO_EMAIL_LIST_FILTER);
+                onSearch({ tag: undefined, message: undefined });
               }}
             />
           ) : (
             <div className="min-h-0 flex-1">
               <EmailMessageList
+                environmentNames={environmentTitles}
                 messages={visibleMessages}
+                tags={tags}
                 now={now}
                 onAction={(message, action) =>
                   runAction(
@@ -368,19 +566,96 @@ export function EmailView({
           error={detail.error}
           isPending={detail.isPending}
           message={detail.message}
+          tags={tags}
+          tagIds={detail.tagIds}
+          onEditTags={() => {
+            if (selectedListMessage !== null)
+              runAction("add-tag", [selectedListMessage], selectedListMessage);
+          }}
           onMarkUnread={() => {
-            if (selectedId === null) return;
-            void markUnread({ target: { type: "message", messageId: selectedId } });
+            if (selectedId === null || detail.environmentId === null) return;
+            void markUnread({
+              environmentId: detail.environmentId,
+              target: { type: "message", messageId: selectedId },
+            });
+          }}
+          trustedSenderAddresses={trustedSenderAddresses}
+          onTrustRemoteSender={(address) => {
+            if (emailAdmin === null) {
+              reportCloudEmailFailure(
+                "Couldn't remember this sender",
+                new Error("Connect and sign in to company sync to trust this sender everywhere."),
+              );
+              return;
+            }
+            void emailAdmin
+              .trustSender(address)
+              .catch((error) => reportCloudEmailFailure("Couldn't remember this sender", error));
           }}
           onTab={(next) => onSearch({ tab: next })}
           projectName={
             detail.message === null || detail.message.attribution.projectId === null
               ? null
-              : (projectTitles.get(detail.message.attribution.projectId) ?? null)
+              : detail.environmentId === primaryEnvironmentId
+                ? (projectTitles.get(detail.message.attribution.projectId) ?? null)
+                : scope.type === "project"
+                  ? inboxName
+                  : detail.message.attribution.mailSlug
+          }
+          environmentName={
+            detail.environmentId === null
+              ? null
+              : (environmentTitles.get(detail.environmentId) ?? detail.environmentId)
           }
           tab={tab}
         />
       </div>
+      <EmailTagDialog
+        busy={isApplyingAction}
+        onCreate={(input) => void createAndApplyTag(input)}
+        onOpenChange={(open) => {
+          if (!open) setTagTargets([]);
+        }}
+        onSetTag={(tagId, present) => void applyTag(tagId, present)}
+        open={tagTargets.length > 0}
+        tags={tags}
+        targets={currentTagTargets}
+      />
+      <AlertDialog
+        open={deleteTargets.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !isApplyingAction) setDeleteTargets([]);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete{" "}
+              {deleteTargets.length === 1 ? "this message" : `${deleteTargets.length} messages`}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the captured email, raw source, and attachments from its source
+              environment and every synced view. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={isApplyingAction}
+              render={<Button disabled={isApplyingAction} variant="outline" />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              disabled={isApplyingAction}
+              onClick={() => void deleteMessages()}
+              variant="destructive"
+            >
+              {isApplyingAction ? <Spinner className="size-3.5" /> : null}
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </EmailShell>
   );
 }

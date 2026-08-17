@@ -2572,6 +2572,12 @@ const makeWsRpcLayer = (
             emailCapture.markRead(input.target, false),
             { "rpc.aggregate": "email" },
           ),
+        [EMAIL_WS_METHODS.deleteMessages]: (input) =>
+          observeRpcEffect(
+            EMAIL_WS_METHODS.deleteMessages,
+            emailCapture.deleteMessages(input.messageIds),
+            { "rpc.aggregate": "email" },
+          ),
         [EMAIL_WS_METHODS.clearInbox]: (input) =>
           observeRpcEffect(EMAIL_WS_METHODS.clearInbox, emailCapture.clearInbox(input.scope), {
             "rpc.aggregate": "email",

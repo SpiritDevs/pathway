@@ -307,6 +307,11 @@ const FOREIGN_TABLES_BY_COMPANY = [
   "cloudProjects",
   "environmentBindings",
   "environmentCommands",
+  "agentThreads",
+  "capturedEmails",
+  "capturedEmailDeletions",
+  "emailTags",
+  "trustedEmailSenders",
   "companySettings",
 ] as const;
 

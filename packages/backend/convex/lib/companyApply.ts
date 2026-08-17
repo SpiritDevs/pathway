@@ -56,6 +56,9 @@ export type CompanyEntityKind = Extract<
   | "environmentBinding"
   | "environmentCommand"
   | "agentThread"
+  | "capturedEmail"
+  | "emailTag"
+  | "trustedEmailSender"
 >;
 
 /** The company-domain tables whose rows carry a `version` column this writer stamps. */
@@ -72,6 +75,9 @@ export type CompanyVersionedTable =
   | "environmentBindings"
   | "environmentCommands"
   | "agentThreads"
+  | "capturedEmails"
+  | "emailTags"
+  | "trustedEmailSenders"
   | "issues"
   | "issueStatuses"
   | "issueLabels"
@@ -405,6 +411,40 @@ export async function encodeAgentThread(ctx: QueryCtx, doc: Doc<"agentThreads">)
     environmentId: doc.environmentId,
     cloudProjectId: await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
     shell: doc.shell,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+/** Parsed captured mail. The source environment remains the owner of binary files. */
+export async function encodeCapturedEmail(ctx: QueryCtx, doc: Doc<"capturedEmails">) {
+  return {
+    id: doc.id,
+    environmentId: doc.environmentId,
+    cloudProjectId:
+      doc.cloudProjectId === null
+        ? null
+        : await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
+    message: doc.message,
+    tagIds: doc.tagIds ?? [],
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export function encodeEmailTag(doc: Doc<"emailTags">) {
+  return {
+    id: doc.id,
+    name: doc.name,
+    color: doc.color,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export function encodeTrustedEmailSender(doc: Doc<"trustedEmailSenders">) {
+  return {
+    id: doc.id,
+    address: doc.address,
+    createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
 }

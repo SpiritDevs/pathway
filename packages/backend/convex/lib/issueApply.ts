@@ -79,6 +79,9 @@ import {
   encodeEnvironmentCommand,
   encodeEnvironmentRegistration,
   encodeAgentThread,
+  encodeCapturedEmail,
+  encodeEmailTag,
+  encodeTrustedEmailSender,
   encodeMembership,
   encodeRole,
   encodeRoleAssignment,
@@ -3143,7 +3146,10 @@ type CompanyBootstrapTable =
   | "environmentRegistrations"
   | "environmentBindings"
   | "environmentCommands"
-  | "agentThreads";
+  | "agentThreads"
+  | "capturedEmails"
+  | "emailTags"
+  | "trustedEmailSenders";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3440,5 +3446,32 @@ export async function readBootstrapRows(
       }
       return lifted;
     }
+    case "capturedEmail": {
+      const rows = await pageOf(ctx, "capturedEmails", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted: false,
+          teamIds:
+            row.cloudProjectId === null
+              ? []
+              : await cachedProjectTeams(ctx, company, cache, row.cloudProjectId),
+          ownerMembershipId: null,
+          payload: await encodeCapturedEmail(ctx, row),
+        });
+      }
+      return lifted;
+    }
+    case "emailTag":
+      return liftCompanyRows(await pageOf(ctx, "emailTags", company._id, afterId, limit), (row) =>
+        encodeEmailTag(row),
+      );
+    case "trustedEmailSender":
+      return liftCompanyRows(
+        await pageOf(ctx, "trustedEmailSenders", company._id, afterId, limit),
+        (row) => encodeTrustedEmailSender(row),
+      );
   }
 }

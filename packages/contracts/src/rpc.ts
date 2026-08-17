@@ -10,6 +10,8 @@ import {
   EmailCaptureError,
   EmailClearInboxInput,
   EmailClearInboxResult,
+  EmailDeleteMessagesInput,
+  EmailDeleteMessagesResult,
   EmailGetInput,
   EmailGetResult,
   EmailGetSettingsInput,
@@ -1714,6 +1716,12 @@ export const WsEmailClearInboxRpc = Rpc.make(EMAIL_WS_METHODS.clearInbox, {
   error: EmailRpcError,
 });
 
+export const WsEmailDeleteMessagesRpc = Rpc.make(EMAIL_WS_METHODS.deleteMessages, {
+  payload: EmailDeleteMessagesInput,
+  success: EmailDeleteMessagesResult,
+  error: EmailRpcError,
+});
+
 export const WsEmailGetSettingsRpc = Rpc.make(EMAIL_WS_METHODS.getSettings, {
   payload: EmailGetSettingsInput,
   success: EmailGetSettingsResult,
@@ -1744,6 +1752,7 @@ export const EmailRpcs = RpcGroup.make(
   WsEmailMarkReadRpc,
   WsEmailMarkUnreadRpc,
   WsEmailClearInboxRpc,
+  WsEmailDeleteMessagesRpc,
   WsEmailGetSettingsRpc,
   WsEmailUpdateSettingsRpc,
   WsEmailStreamRpc,

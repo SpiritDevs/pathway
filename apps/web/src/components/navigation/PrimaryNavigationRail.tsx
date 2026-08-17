@@ -548,7 +548,14 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigateToEmail = useCallback(() => {
     void navigate({
       to: "/email",
-      search: { inbox: undefined, message: undefined, tab: undefined, analytics: undefined },
+      search: {
+        inbox: undefined,
+        message: undefined,
+        environment: undefined,
+        tag: undefined,
+        tab: undefined,
+        analytics: undefined,
+      },
     });
   }, [navigate]);
   const navigateToContacts = useCallback(() => {

@@ -1,10 +1,9 @@
 /**
  * The three-dot menu, rendered from the shared action list.
  *
- * A disabled row keeps its reason beside the label rather than being dropped: "Delete" missing
- * altogether reads as an oversight, while "Delete — this server only clears a whole inbox" answers
- * the question. Base UI keeps disabled items focusable and `aria-disabled`, so the reason is
- * reachable by keyboard and spoken rather than being a hover-only hint.
+ * A disabled read-state row keeps its reason beside the label rather than being dropped. Base UI
+ * keeps disabled items focusable and `aria-disabled`, so the reason is reachable by keyboard and
+ * spoken rather than being a hover-only hint.
  *
  * @module components/email/EmailActionMenu
  */

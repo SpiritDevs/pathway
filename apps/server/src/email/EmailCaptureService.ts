@@ -14,6 +14,7 @@ import {
   type EmailCaptureReceipt,
   type EmailCaptureSettings,
   type EmailClearInboxResult,
+  type EmailDeleteMessagesResult,
   type EmailGetResult,
   type EmailInboxScope,
   type EmailInboxSummary,
@@ -87,6 +88,9 @@ export interface EmailCaptureServiceShape {
   readonly clearInbox: (
     scope: EmailInboxScope,
   ) => Effect.Effect<EmailClearInboxResult, EmailCaptureError>;
+  readonly deleteMessages: (
+    messageIds: ReadonlyArray<EmailMessageId>,
+  ) => Effect.Effect<EmailDeleteMessagesResult, EmailCaptureError>;
   readonly getSettings: Effect.Effect<EmailSettingsSnapshot, EmailCaptureError>;
   readonly updateSettings: (
     settings: EmailCaptureSettings,
@@ -651,6 +655,19 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     return { clearedCount: clearedMessageIds.length, inboxes: allInboxes };
   });
 
+  const deleteMessages: EmailCaptureServiceShape["deleteMessages"] = Effect.fn(
+    "EmailCaptureService.deleteMessages",
+  )(function* (messageIds) {
+    const deletedMessageIds = yield* store.deleteMessages(messageIds);
+    const allInboxes = yield* inboxes();
+    yield* PubSub.publish(events, {
+      _tag: "EmailMessagesDeleted",
+      messageIds: deletedMessageIds,
+      inboxes: allInboxes,
+    });
+    return { deletedMessageIds, inboxes: allInboxes };
+  });
+
   const getSettings = Effect.all({
     settings: readSettings(),
     listenerStatus: Ref.get(listenerStatus),
@@ -685,6 +702,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     get,
     analytics: store.analytics,
     markRead,
+    deleteMessages,
     clearInbox,
     getSettings,
     updateSettings,

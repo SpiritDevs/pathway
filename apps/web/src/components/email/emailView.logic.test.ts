@@ -15,16 +15,33 @@ import {
   formatEmailDurationMs,
   formatEmailTimestamp,
   hasRemoteEmailContent,
+  isTrustedEmailSender,
   MAX_EMAIL_PREVIEW_WIDTH,
   MIN_EMAIL_PREVIEW_WIDTH,
   parseEmailSearch,
+  normalizeTrustedEmailSenderAddress,
+  trustedEmailSenderAddress,
 } from "./emailView.logic";
 
 describe("parseEmailSearch", () => {
   it("keeps every param it recognises", () => {
     expect(
-      parseEmailSearch({ inbox: "unassigned", message: "msg_1", tab: "raw", analytics: "true" }),
-    ).toEqual({ inbox: "unassigned", message: "msg_1", tab: "raw", analytics: true });
+      parseEmailSearch({
+        inbox: "unassigned",
+        message: "msg_1",
+        environment: "environment-1",
+        tag: "tag-1",
+        tab: "raw",
+        analytics: "true",
+      }),
+    ).toEqual({
+      inbox: "unassigned",
+      message: "msg_1",
+      environment: "environment-1",
+      tag: "tag-1",
+      tab: "raw",
+      analytics: true,
+    });
   });
 
   it("drops an unknown tab rather than rendering an empty pane", () => {
@@ -35,6 +52,8 @@ describe("parseEmailSearch", () => {
     expect(parseEmailSearch({ inbox: "   ", message: "" })).toEqual({
       inbox: undefined,
       message: undefined,
+      environment: undefined,
+      tag: undefined,
       tab: undefined,
       analytics: undefined,
     });
@@ -166,6 +185,28 @@ describe("hasRemoteEmailContent", () => {
     expect(hasRemoteEmailContent('<img src="data:image/gif;base64,AA==">')).toBe(false);
     expect(hasRemoteEmailContent('<img src="cid:logo">')).toBe(false);
     expect(hasRemoteEmailContent(null)).toBe(false);
+  });
+});
+
+describe("trusted remote-content senders", () => {
+  it("matches exact addresses without case or surrounding whitespace", () => {
+    expect(normalizeTrustedEmailSenderAddress("  Alerts@Example.COM ")).toBe("alerts@example.com");
+  });
+
+  it("uses the first parsed From mailbox and refuses a missing sender", () => {
+    const message = {
+      parsedHeaders: { from: [{ address: "Alerts@Example.COM", name: "Alerts" }] },
+    } as never;
+    expect(trustedEmailSenderAddress(message)).toBe("alerts@example.com");
+    expect(trustedEmailSenderAddress({ parsedHeaders: { from: [] } } as never)).toBeNull();
+  });
+
+  it("trusts one exact address rather than every sender on its domain", () => {
+    const trusted = new Set(["alerts@example.com"]);
+    const messageFrom = (address: string) =>
+      ({ parsedHeaders: { from: [{ address, name: null }] } }) as never;
+    expect(isTrustedEmailSender(messageFrom("Alerts@Example.com"), trusted)).toBe(true);
+    expect(isTrustedEmailSender(messageFrom("billing@example.com"), trusted)).toBe(false);
   });
 });
 

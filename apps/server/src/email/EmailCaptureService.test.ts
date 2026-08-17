@@ -269,6 +269,16 @@ describe("EmailCaptureService SMTP listener", () => {
           yield* capture.markRead({ type: "message", messageId: attachment.messageId }, false);
           expect((yield* store.getMessage(attachment.messageId))?.isRead).toBe(false);
 
+          const deleted = yield* capture.deleteMessages([attachment.messageId]);
+          expect(deleted.deletedMessageIds).toEqual([attachment.messageId]);
+          expect(yield* store.getMessage(attachment.messageId)).toBeNull();
+          expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
+            false,
+          );
+          expect(
+            existsSync(join(directory, "mail", "attachments", attachment.messageId, attachmentId)),
+          ).toBe(false);
+
           const clearReceipts = yield* capture.subscribeReceipts;
           const clearFiber = yield* clearReceipts.pipe(
             Stream.filter((receipt) => receipt._tag === "EmailInboxClearCompleted"),
@@ -278,7 +288,7 @@ describe("EmailCaptureService SMTP listener", () => {
           const cleared = yield* capture.clearInbox({ type: "project", projectId: betaProjectId });
           const clearReceipt = Option.getOrThrow(yield* Fiber.join(clearFiber));
           expect(clearReceipt._tag).toBe("EmailInboxClearCompleted");
-          expect(cleared.clearedCount).toBe(4);
+          expect(cleared.clearedCount).toBe(3);
           expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
             false,
           );
