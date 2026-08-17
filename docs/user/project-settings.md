@@ -1,4 +1,15 @@
-# Customize a project icon
+# Project settings
+
+Open **Settings → Projects** to see every project and how many machine connections it has. Hover
+the connection count to see each environment name, directory, platform, Pathway version, and
+binding status.
+
+Select a project and open **Connections** for the full list. Each connection identifies the
+machine or environment, its attached directory, availability, environment ID, and last-seen time.
+When a project has several active connections, **New-thread default** marks the environment Pathway
+will use automatically.
+
+## Customize a project icon
 
 Pathway selects a project icon automatically. It checks `t3.json`, common favicon and app icon
 paths, and icon links in project HTML files.

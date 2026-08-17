@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ProjectId,
   ServerProvider,
   T3ProjectFileScript,
   ThreadId,
@@ -155,6 +156,56 @@ describe("ThreadDetailsPanel", () => {
       threadId: props.threadId,
       enabled: true,
     });
+  });
+
+  it("shows the target machine when it is the project's only environment", () => {
+    const environmentId = "environment:thread-details" as EnvironmentId;
+    testState.useT3ProjectFileScripts.mockReturnValue([]);
+    const props: ThreadDetailsPanelProps = {
+      mode: "popover",
+      environmentId,
+      environmentConnection: { phase: "connected", error: null, traceId: null },
+      threadId: "thread:thread-details" as ThreadId,
+      draftId: "draft:new-thread" as NonNullable<ThreadDetailsPanelProps["draftId"]>,
+      activeProjectName: "Pathway",
+      activeProjectScripts: [],
+      activeProvider: null,
+      resourcesEnabled: true,
+      preferredScriptId: null,
+      keybindings: [],
+      availableEditors: [],
+      showOpenInPicker: false,
+      gitCwd: "/work/pathway",
+      isGitRepo: true,
+      envLocked: false,
+      availableEnvironments: [
+        {
+          environmentId,
+          projectId: "project:pathway" as ProjectId,
+          label: "Corey's MacBook Pro",
+          isPrimary: true,
+        },
+      ],
+      onEnvironmentChange: vi.fn(),
+      onEnvModeChange: vi.fn(),
+      startFromOrigin: false,
+      onStartFromOriginChange: vi.fn(),
+      onComposerFocusRequest: vi.fn(),
+      onReconnectEnvironment: vi.fn(),
+      onOpenConnectionSettings: vi.fn(),
+      versionMismatch: null,
+      onDismissVersionMismatch: vi.fn(),
+      onRunProjectScript: vi.fn(),
+      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+    };
+
+    const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+
+    expect(html).toContain("Corey&#x27;s MacBook Pro");
+    expect(html).toContain('aria-label="Run on"');
+    expect(html).toContain("max-w-none flex-1 text-left");
   });
 
   it("places the issues section between the runtime controls and version control", () => {

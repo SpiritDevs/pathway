@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { connectionStatusTitle } from "@spiritdevs/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
@@ -24,7 +25,14 @@ import { createModelSelection } from "@spiritdevs/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
 import { useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
-import { ChevronDownIcon, CopyIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  CopyIcon,
+  MonitorIcon,
+  PlusIcon,
+  SettingsIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -56,7 +64,7 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
@@ -66,6 +74,11 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProjectEmailCaptureSection } from "../email/ProjectEmailCaptureSection";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
+import {
+  buildProjectConnectionCatalog,
+  deriveProjectConnectionMetadata,
+  projectConnectionPlatformLabel,
+} from "../projects/projectConnectionMetadata";
 import { useProjectGroups } from "../projects/useProjectGroups";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
@@ -162,6 +175,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
   const companySettings = useCompanySettings();
+  const { presentationById } = useEnvironments();
   const environmentControl = useEnvironmentControl();
   // Captured mail belongs to the machine the listener runs on, so the capture section follows this
   // group's checkout on the primary environment and hides for a group that has none.
@@ -201,6 +215,14 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     group.memberProjects.find((member) => member.environmentId === primaryEnvironmentId)?.id ??
     null;
   const faviconPath = representative.faviconPath ?? null;
+  const connectionCatalog = useMemo(
+    () => buildProjectConnectionCatalog(companySettings.replica?.view.values() ?? []),
+    [companySettings.replica],
+  );
+  const projectConnections = deriveProjectConnectionMetadata({
+    members: group.memberProjects,
+    catalog: connectionCatalog,
+  });
 
   const threadCountByMember = useMemo(() => {
     const counts = new Map<string, number>();
@@ -716,6 +738,58 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               </div>
             }
           />
+        </SettingsSection>
+
+        <SettingsSection title="Connections">
+          <div className="space-y-2 px-3 py-3 sm:px-4">
+            {projectConnections.map((connection) => {
+              const environment = presentationById.get(connection.environmentId);
+              const platformLabel = projectConnectionPlatformLabel(connection.platform);
+              const statusLabel = environment
+                ? connectionStatusTitle(environment.connection)
+                : connection.bindingStatus === null
+                  ? "Local"
+                  : connection.bindingStatus[0]!.toUpperCase() + connection.bindingStatus.slice(1);
+              return (
+                <div
+                  key={`${connection.environmentId}:${connection.localProjectId}`}
+                  className="rounded-xl border border-border/70 bg-muted/15 px-3 py-3"
+                >
+                  <div className="flex min-w-0 items-start gap-3">
+                    <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                      <MonitorIcon className="size-3.5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-sm font-medium text-foreground">
+                          {connection.environmentLabel}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+                        {connection.isPreferred ? (
+                          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                            New-thread default
+                          </span>
+                        ) : null}
+                      </div>
+                      <code className="mt-1 block truncate font-mono text-xs text-muted-foreground">
+                        {connection.directory ?? "No directory attached"}
+                      </code>
+                      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground/80">
+                        {platformLabel ? <span>{platformLabel}</span> : null}
+                        {connection.serverVersion ? (
+                          <span>Pathway {connection.serverVersion}</span>
+                        ) : null}
+                        <span className="font-mono">{connection.environmentId}</span>
+                        {connection.lastSeenAt !== null ? (
+                          <span>Last seen {new Date(connection.lastSeenAt).toLocaleString()}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </SettingsSection>
 
         <SettingsSection title="New threads">

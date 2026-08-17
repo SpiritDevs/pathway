@@ -9,14 +9,27 @@
  */
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon, FolderIcon } from "lucide-react";
+import { useMemo } from "react";
 
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useProjectGroups } from "../projects/useProjectGroups";
+import {
+  buildProjectConnectionCatalog,
+  deriveProjectConnectionMetadata,
+  projectConnectionPlatformLabel,
+} from "../projects/projectConnectionMetadata";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { useCompanySettings } from "./company/useCompanySettings";
 
 export function ProjectsSettingsIndexPanel() {
   const groups = useProjectGroups();
+  const companySettings = useCompanySettings();
+  const connectionCatalog = useMemo(
+    () => buildProjectConnectionCatalog(companySettings.replica?.view.values() ?? []),
+    [companySettings.replica],
+  );
 
   return (
     <SettingsPageContainer className="max-w-3xl">
@@ -29,35 +42,71 @@ export function ProjectsSettingsIndexPanel() {
             Add a project from the sidebar and it shows up here.
           </p>
         ) : (
-          groups.map((group) => (
-            <Link
-              key={group.projectKey}
-              to="/settings/projects/$projectKey"
-              params={{ projectKey: group.projectKey }}
-              className="flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:px-4"
-            >
-              <ProjectFavicon
-                environmentId={group.environmentId}
-                cwd={group.workspaceRoot}
-                faviconPath={group.faviconPath}
-                className="size-4 shrink-0"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium tracking-[-0.005em] text-foreground">
-                  {group.displayName}
+          groups.map((group) => {
+            const connections = deriveProjectConnectionMetadata({
+              members: group.memberProjects,
+              catalog: connectionCatalog,
+            });
+            return (
+              <Link
+                key={group.projectKey}
+                to="/settings/projects/$projectKey"
+                params={{ projectKey: group.projectKey }}
+                className="flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:px-4"
+              >
+                <ProjectFavicon
+                  environmentId={group.environmentId}
+                  cwd={group.workspaceRoot}
+                  faviconPath={group.faviconPath}
+                  className="size-4 shrink-0"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium tracking-[-0.005em] text-foreground">
+                    {group.displayName}
+                  </span>
+                  <span className="block truncate text-[13px] leading-[1.45] text-muted-foreground/80">
+                    {group.workspaceRoot ?? "No directory attached"}
+                  </span>
                 </span>
-                <span className="block truncate text-[13px] leading-[1.45] text-muted-foreground/80">
-                  {group.workspaceRoot ?? "No directory attached"}
-                </span>
-              </span>
-              {group.groupedProjectCount > 1 ? (
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {group.groupedProjectCount} checkouts
-                </span>
-              ) : null}
-              <ChevronRightIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-            </Link>
-          ))
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="shrink-0 rounded-md px-1.5 py-1 text-xs tabular-nums text-muted-foreground hover:bg-accent hover:text-foreground" />
+                    }
+                  >
+                    {connections.length} {connections.length === 1 ? "connection" : "connections"}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top" className="max-w-96">
+                    <div className="space-y-2 py-1 text-left">
+                      {connections.map((connection) => (
+                        <div key={`${connection.environmentId}:${connection.localProjectId}`}>
+                          <div className="font-medium text-foreground">
+                            {connection.environmentLabel}
+                            {connection.isPreferred ? " · Default" : ""}
+                          </div>
+                          <div className="max-w-80 truncate text-muted-foreground">
+                            {connection.directory ?? "No directory attached"}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground/80">
+                            {[
+                              projectConnectionPlatformLabel(connection.platform),
+                              connection.serverVersion
+                                ? `Pathway ${connection.serverVersion}`
+                                : null,
+                              connection.bindingStatus,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </TooltipPopup>
+                </Tooltip>
+                <ChevronRightIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+              </Link>
+            );
+          })
         )}
       </SettingsSection>
     </SettingsPageContainer>

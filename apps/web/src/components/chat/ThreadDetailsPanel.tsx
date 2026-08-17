@@ -248,7 +248,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             ) : null}
 
             <div className="flex flex-col px-2 pb-2.5">
-              {props.availableEnvironments.length > 1 ? (
+              {props.availableEnvironments.length > 0 ? (
                 <BranchToolbarEnvironmentSelector
                   displayMode="panel"
                   envLocked={props.envLocked}

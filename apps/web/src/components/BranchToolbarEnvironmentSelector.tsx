@@ -77,7 +77,11 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         )}
         <span
           data-composer-label
-          className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+          className={
+            displayMode === "panel"
+              ? "min-w-0 max-w-none flex-1 text-left"
+              : "min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+          }
         >
           <span
             data-composer-label-motion
@@ -122,7 +126,11 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         )}
         <span
           data-composer-label
-          className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+          className={
+            displayMode === "panel"
+              ? "min-w-0 max-w-none flex-1 text-left"
+              : "min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+          }
         >
           <span
             data-composer-label-motion

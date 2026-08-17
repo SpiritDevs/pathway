@@ -3,6 +3,10 @@
 Open the thread details menu in a thread header to see workspace actions and live resources for
 that thread's environment.
 
+The **Workspace** area always names the machine or environment that owns the current thread. It is
+also shown before a new thread starts, so you can confirm which machine will receive the thread;
+when the project has several available connections, select that row to choose another one.
+
 ## Choose and arrange action areas
 
 Open **Settings → Appearance**, then select **Action palette** to choose which areas appear and the
