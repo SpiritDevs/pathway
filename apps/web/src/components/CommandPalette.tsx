@@ -2,7 +2,10 @@
 
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { canCreateProjectInEnvironment } from "@spiritdevs/client-runtime/operations/projects";
-import { connectionStatusText } from "@spiritdevs/client-runtime/connection";
+import {
+  connectionStatusText,
+  RelayConnectionRegistration,
+} from "@spiritdevs/client-runtime/connection";
 import { threadSearchMatchKey } from "@spiritdevs/client-runtime/state/thread-search";
 import {
   canPreloadBrowsePath,
@@ -599,6 +602,10 @@ function OpenCommandPaletteDialog(props: {
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, {
     reportFailure: false,
   });
+  const registerEnvironment = useAtomCommand(environmentCatalog.register, {
+    reportFailure: false,
+  });
+  const environmentCatalogState = useAtomValue(environmentCatalog.catalogValueAtom);
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -1323,6 +1330,26 @@ function OpenCommandPaletteDialog(props: {
       }
 
       setPendingAddProjectEnvironmentId(environmentId);
+      const catalogEntry = environmentCatalogState.entries.get(environmentId);
+      if (catalogEntry?.source === "companyRegistry") {
+        const registrationResult = await registerEnvironment(
+          new RelayConnectionRegistration({ target: catalogEntry.target }),
+        );
+        if (registrationResult._tag === "Failure") {
+          setPendingAddProjectEnvironmentId(null);
+          if (!isAtomCommandInterrupted(registrationResult)) {
+            const error = squashAtomCommandFailure(registrationResult);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not connect environment",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          }
+          return;
+        }
+      }
       const result = await retryEnvironment(environmentId);
       if (result._tag === "Failure") {
         setPendingAddProjectEnvironmentId(null);
@@ -1338,7 +1365,13 @@ function OpenCommandPaletteDialog(props: {
         }
       }
     },
-    [environments, openAddProjectSourceSelection, retryEnvironment],
+    [
+      environmentCatalogState.entries,
+      environments,
+      openAddProjectSourceSelection,
+      registerEnvironment,
+      retryEnvironment,
+    ],
   );
 
   useEffect(() => {
@@ -1362,7 +1395,12 @@ function OpenCommandPaletteDialog(props: {
       value: `action:add-project:environment:${option.environmentId}`,
       searchTerms: [option.label, option.environmentId, option.isPrimary ? "this device" : ""],
       title: option.label,
-      description: option.isConnected && option.isPrimary ? "This device" : option.status,
+      description:
+        pendingAddProjectEnvironmentId === option.environmentId
+          ? "Connecting..."
+          : option.isConnected && option.isPrimary
+            ? "This device"
+            : option.status,
       icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
       keepOpen: true,
       run: async () => {

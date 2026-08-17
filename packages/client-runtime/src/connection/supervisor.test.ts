@@ -286,6 +286,22 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
+  it.effect("connects an available environment when retry is requested", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY).pipe(
+        Effect.provide(harness.dependencies),
+      );
+
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("available");
+      yield* supervisor.retryNow;
+      const connected = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+
+      expect(connected.desired).toBe(true);
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+    }),
+  );
+
   it.effect("waits while offline and connects immediately when the network returns", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ networkStatus: "offline" });

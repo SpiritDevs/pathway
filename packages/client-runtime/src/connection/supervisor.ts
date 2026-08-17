@@ -789,7 +789,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.disconnect"),
   );
 
-  const retryNow = Ref.set(resetRetryState, true).pipe(
+  const retryNow = Ref.update(intent, (current) => ({
+    ...current,
+    desired: true,
+  })).pipe(
+    Effect.andThen(Ref.set(resetRetryState, true)),
     Effect.andThen(signal({ _tag: "RetryRequested" })),
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
