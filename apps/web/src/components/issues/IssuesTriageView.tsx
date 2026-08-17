@@ -17,7 +17,6 @@ import { CheckIcon, InboxIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useEffectEvent, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
 import {
   useIssue,
   useIssueLabels,
@@ -144,7 +143,6 @@ export function IssuesTriageView({
   const triageIssues = useTriageIssues();
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
-  const projects = useProjects();
   const issueProjects = useIssueProjectOptions();
   const storeStatus = useIssuesStoreStatus();
   const channelNames = useSlackChannelNames();
@@ -167,8 +165,13 @@ export function IssuesTriageView({
   // and a re-render for an unrelated reason does not shuffle the ages.
   const nowMs = useMemo(() => Date.now(), [triageIssues]);
   const projectTitles = useMemo(
-    () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
-    [projects],
+    () =>
+      new Map<ProjectId, string>(
+        issueProjects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project.title] as const),
+        ),
+      ),
+    [issueProjects],
   );
   const rows = useMemo(
     () =>
@@ -480,7 +483,6 @@ export function IssuesTriageView({
           onSearch({ issue: issue.key });
         }}
         open={acceptOpen}
-        projects={projects}
         statuses={statuses}
       />
 

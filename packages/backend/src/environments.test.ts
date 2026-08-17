@@ -273,6 +273,47 @@ describe("environment registry", () => {
     expect(await feedRows(t)).toHaveLength(versionAfterRelease);
   });
 
+  it("persists the preferred environment binding for future project work", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    await t.run(async (ctx) => {
+      const project = await ctx.db.query("cloudProjects").first();
+      if (project === null) throw new Error("Missing project fixture.");
+      await ctx.db.insert("environmentBindings", {
+        id: BINDING_ID,
+        companyId: project.companyId,
+        cloudProjectId: project._id,
+        environmentId: ENVIRONMENT_TWO,
+        localProjectId: "project-on-second-environment",
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+        lastSeenAt: 1_700_000_000_000,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
+
+    await asUser(t, "manager").mutation(api.cloudProjects.setPreferredEnvironmentBinding, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+      bindingId: BINDING_ID,
+    });
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").first()).toMatchObject({
+        preferredBindingId: BINDING_ID,
+      });
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({ entityKind: "cloudProject" });
+  });
+
   it("publishes a registration to members with environments.read and withholds it without that grant", async () => {
     const t = harness();
     await seedRegistration(t);

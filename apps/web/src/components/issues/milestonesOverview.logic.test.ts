@@ -122,6 +122,25 @@ describe("milestonesOverviewGroups", () => {
     expect(groups.map((group) => group.projectId)).toEqual(["prj_b"]);
   });
 
+  it("groups and filters legacy local project ids under their company project", () => {
+    const logicalProjects = [
+      {
+        ...project("prj_company", "Quotecloud"),
+        projectIds: ["prj_company", "prj_local"].map((id) => ProjectId.make(id)),
+      },
+    ];
+    const localMilestone = milestone("msl_local", "prj_local");
+
+    expect(
+      milestonesOverviewGroups(logicalProjects, [localMilestone], undefined)[0]?.milestones,
+    ).toEqual([localMilestone]);
+    expect(
+      milestonesOverviewGroups(logicalProjects, [localMilestone], "prj_local").map(
+        (group) => group.projectId,
+      ),
+    ).toEqual(["prj_company"]);
+  });
+
   it("drops a milestone whose project the client has not read", () => {
     const groups = milestonesOverviewGroups(projects, [milestone("msl_9", "prj_gone")], undefined);
     expect(groups.flatMap((group) => [...group.milestones])).toEqual([]);

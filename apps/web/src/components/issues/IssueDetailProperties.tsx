@@ -384,7 +384,7 @@ export function IssueDetailProperties({
           <MenuTrigger
             render={
               <button
-                aria-label="Agent environment"
+                aria-label="Default agent environment"
                 className={ROW_CONTROL_CLASS}
                 disabled={!hasProject || environmentOptions.length === 0}
                 type="button"
@@ -399,7 +399,7 @@ export function IssueDetailProperties({
           />
           <MenuPopup align="start" className="min-w-56" side="bottom">
             <MenuGroup>
-              <MenuGroupLabel>Run agents in</MenuGroupLabel>
+              <MenuGroupLabel>Default environment</MenuGroupLabel>
               <MenuRadioGroup onValueChange={onEnvironment} value={environmentValue ?? undefined}>
                 {environmentOptions.map((option) => (
                   <MenuRadioItem disabled={option.disabled} key={option.value} value={option.value}>

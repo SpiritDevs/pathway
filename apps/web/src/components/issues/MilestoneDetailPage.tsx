@@ -37,7 +37,6 @@ import { useMemo, useState, type ReactNode } from "react";
 
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { cn } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
 import {
   todayIssueDate,
   useInvestigatingIssueIds,
@@ -186,7 +185,6 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
   const store = useIssuesStore();
   const statuses = useIssueStatuses();
   const labels = useIssueLabels();
-  const projects = useProjects();
   const issueProjects = useIssueProjectOptions();
   const grouping = useIssuesGrouped("all");
   const progress = useIssueMilestoneProgress().get(milestone.id) ?? { done: 0, total: 0 };
@@ -207,8 +205,13 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
     [statuses],
   );
   const projectTitles = useMemo(
-    () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
-    [projects],
+    () =>
+      new Map<ProjectId, string>(
+        issueProjects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project.title] as const),
+        ),
+      ),
+    [issueProjects],
   );
   const filter = useMemo(
     () => ({ ...NO_ISSUES_LIST_FILTER, milestoneIds: [milestone.id] }),

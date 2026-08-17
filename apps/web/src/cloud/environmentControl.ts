@@ -124,6 +124,14 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     string
   >("cloudProjects:ensureEnvironmentProject"),
+  setPreferredEnvironmentBinding: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly cloudProjectId: string;
+      readonly bindingId: string;
+    },
+    null
+  >("cloudProjects:setPreferredEnvironmentBinding"),
   releaseEnvironmentProject: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -209,6 +217,11 @@ export interface EnvironmentControlClient {
   readonly ensureEnvironmentProject: (args: {
     readonly companyId: CompanyId;
     readonly project: EnvironmentProject;
+  }) => Promise<void>;
+  readonly setPreferredEnvironmentBinding: (args: {
+    readonly companyId: CompanyId;
+    readonly cloudProjectId: string;
+    readonly bindingId: string;
   }) => Promise<void>;
   readonly releaseEnvironmentProject: (args: {
     readonly companyId: CompanyId;
@@ -309,6 +322,8 @@ export function makeEnvironmentControlClient(options: {
         localWorkspaceRoot: project.workspaceRoot,
         name: project.title,
       }),
+    setPreferredEnvironmentBinding: (args) =>
+      mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setPreferredEnvironmentBinding, args),
     releaseEnvironmentProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
     close: () => (ownsClient ? client.close() : Promise.resolve()),

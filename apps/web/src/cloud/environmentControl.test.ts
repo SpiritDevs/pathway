@@ -74,6 +74,7 @@ describe("environment control function references", () => {
       deactivateEnvironment: "environments:deactivate",
       registerEnvironment: "environments:register",
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
+      setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
     });
   });
@@ -262,6 +263,31 @@ describe("environment control function references", () => {
         companyId: COMPANY_ID,
         environmentId: ENVIRONMENT_ID,
         localProjectId: "project-a",
+      },
+    });
+  });
+
+  it("sets the preferred environment binding for future project work", async () => {
+    const fake = fakeClient();
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+    });
+
+    await control.setPreferredEnvironmentBinding({
+      companyId: COMPANY_ID,
+      cloudProjectId: "project-company",
+      bindingId: "binding-environment",
+    });
+
+    expect(fake.calls).toContainEqual({
+      kind: "mutation",
+      name: "cloudProjects:setPreferredEnvironmentBinding",
+      args: {
+        companyId: COMPANY_ID,
+        cloudProjectId: "project-company",
+        bindingId: "binding-environment",
       },
     });
   });

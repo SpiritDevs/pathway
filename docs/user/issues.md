@@ -226,9 +226,11 @@ investigated on import.
 An issue can be assigned to you or to an agent. Assigning an agent records the intent; it does not
 start anything. Model, reasoning, and workspace controls appear beside **Start new thread**, with
 the model constrained to the assigned provider and initially using a compatible project default.
-When a project is available in more than one environment, choose **Environment** directly beneath
-**Project** first. Provider and model choices, Git branches, attachments, and the new thread then
-come from that environment.
+When a project is available in more than one environment, **Environment** directly beneath
+**Project** sets the project's default for future work and automated tasks. Use the second
+**Environment** selector directly above **Model** to override that default for the next thread only.
+Provider and model choices, Git branches, attachments, and the new thread then come from the
+selected environment.
 Choose **Current checkout** to work in the project's main workspace, or **New worktree** and select
 the branch it should start from. Pressing the button creates a fresh thread, sends the
 issue's title, description, todos, links, and images as its first turn, and starts the agent. New

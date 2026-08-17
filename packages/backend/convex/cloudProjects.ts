@@ -187,6 +187,65 @@ export const ensureEnvironmentProject = mutation({
   },
 });
 
+/** Chooses the checkout future issue automation should use for this company project. */
+export const setPreferredEnvironmentBinding = mutation({
+  args: {
+    companyId: domainIdArg,
+    cloudProjectId: domainIdArg,
+    bindingId: domainIdArg,
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "projects.manage");
+    const project = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.cloudProjectId),
+      )
+      .unique();
+    if (project === null || project.deletedAt !== null || project.archivedAt !== null) {
+      throw backendError("entity-not-found", "The project is no longer available.");
+    }
+    const binding = await ctx.db
+      .query("environmentBindings")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.bindingId),
+      )
+      .unique();
+    if (
+      binding === null ||
+      binding.cloudProjectId !== project._id ||
+      binding.status === "revoked"
+    ) {
+      throw backendError(
+        "invalid-arguments",
+        "The selected environment is not connected to this project.",
+      );
+    }
+    if (project.preferredBindingId === binding.id) return null;
+
+    const now = Date.now();
+    await ctx.db.patch(project._id, { preferredBindingId: binding.id, updatedAt: now });
+    const changedProject = await ctx.db.get(project._id);
+    if (changedProject === null) throw backendError("entity-not-found", "The project vanished.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "cloudProject",
+          entityId: changedProject.id,
+          changeKind: "upsert",
+          versionDocId: changedProject._id,
+          payload: encodeCloudProject(changedProject),
+        },
+      ],
+    });
+    return null;
+  },
+});
+
 /** Revokes this machine's binding when its local project is removed. */
 export const releaseEnvironmentProject = mutation({
   args: {

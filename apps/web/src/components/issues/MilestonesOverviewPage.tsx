@@ -34,7 +34,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
 import {
   todayIssueDate,
   useCreateIssueMilestone,
@@ -48,6 +47,7 @@ import {
 } from "~/state/issues";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { duplicateNameError } from "../settings/issues/issuesSettings.logic";
+import { useIssueProjectOptions, type IssueProjectOption } from "./useIssueProjectOptions";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -142,7 +142,7 @@ export function MilestonesOverviewPage({
   search: MilestonesOverviewSearch;
   onSearch: (patch: MilestonesOverviewSearchPatch) => void;
 }) {
-  const projects = useProjects();
+  const projects = useIssueProjectOptions();
   const milestones = useIssueMilestones();
   const progressByMilestone = useIssueMilestoneProgress();
   const categoryCounts = useIssueMilestoneCategoryCounts();
@@ -167,6 +167,17 @@ export function MilestonesOverviewPage({
     () => milestonesOverviewGroups(projects, milestones, search.project),
     [milestones, projects, search.project],
   );
+  const projectById = useMemo(
+    () =>
+      new Map<ProjectId, IssueProjectOption>(
+        projects.flatMap((project) =>
+          project.projectIds.map((projectId) => [projectId, project] as const),
+        ),
+      ),
+    [projects],
+  );
+  const filteredProject =
+    search.project === undefined ? null : (projectById.get(search.project as ProjectId) ?? null);
   const shown = useMemo(
     () => groups.reduce((count, group) => count + group.milestones.length, 0),
     [groups],
@@ -190,8 +201,9 @@ export function MilestonesOverviewPage({
     name: string,
     exceptId?: string,
   ) => {
+    const projectIds = new Set(projectById.get(projectId)?.projectIds ?? [projectId]);
     const error = duplicateNameError(
-      milestones.filter((milestone) => milestone.projectId === projectId),
+      milestones.filter((milestone) => projectIds.has(milestone.projectId)),
       name,
       exceptId,
     );
@@ -211,10 +223,13 @@ export function MilestonesOverviewPage({
   };
 
   const addMilestone = (projectId: ProjectId, raw: string) => {
+    const canonicalProjectId = projectById.get(projectId)?.id ?? projectId;
     const name = raw.trim();
     if (name.length === 0) return;
-    if (rejectDuplicate("New milestone", projectId, name)) return;
-    write("Failed to create the milestone", () => createMilestone({ projectId, name }));
+    if (rejectDuplicate("New milestone", canonicalProjectId, name)) return;
+    write("Failed to create the milestone", () =>
+      createMilestone({ projectId: canonicalProjectId, name }),
+    );
   };
 
   /**
@@ -223,14 +238,18 @@ export function MilestonesOverviewPage({
    * milestone holds anything.
    */
   const moveMilestone = (milestone: IssueMilestone, projectId: ProjectId) => {
-    if (projectId === milestone.projectId) return;
-    if (rejectDuplicate("Move milestone", projectId, milestone.name, milestone.id)) return;
+    const canonicalProjectId = projectById.get(projectId)?.id ?? projectId;
+    const currentProject = projectById.get(milestone.projectId);
+    if (currentProject?.id === canonicalProjectId || canonicalProjectId === milestone.projectId) {
+      return;
+    }
+    if (rejectDuplicate("Move milestone", canonicalProjectId, milestone.name, milestone.id)) return;
     if (heldIssues(milestone) > 0) {
-      setPendingMove({ milestone, projectId });
+      setPendingMove({ milestone, projectId: canonicalProjectId });
       return;
     }
     write("Failed to move the milestone", () =>
-      updateMilestone({ milestoneId: milestone.id, patch: { projectId } }),
+      updateMilestone({ milestoneId: milestone.id, patch: { projectId: canonicalProjectId } }),
     );
   };
 
@@ -290,15 +309,10 @@ export function MilestonesOverviewPage({
                   project: typeof value !== "string" || value === ALL_PROJECTS ? undefined : value,
                 });
               }}
-              value={search.project ?? ALL_PROJECTS}
+              value={filteredProject?.id ?? ALL_PROJECTS}
             >
               <SelectTrigger aria-label="Filter by project" size="sm" variant="ghost">
-                <SelectValue>
-                  {search.project === undefined
-                    ? "All projects"
-                    : (projects.find((project) => project.id === search.project)?.title ??
-                      "All projects")}
-                </SelectValue>
+                <SelectValue>{filteredProject?.title ?? "All projects"}</SelectValue>
               </SelectTrigger>
               <SelectPopup alignItemWithTrigger={false}>
                 <SelectItem value={ALL_PROJECTS}>All projects</SelectItem>
@@ -539,7 +553,11 @@ function MilestoneRow({
   milestone: IssueMilestone;
   progress: IssueProgress;
   counts: ReadonlyMap<IssueStatusCategory, number>;
-  projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>;
+  projects: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly projectIds: ReadonlyArray<ProjectId>;
+  }>;
   today: IssueDate;
   renaming: boolean;
   onStartRename: () => void;
@@ -609,7 +627,10 @@ function MilestoneRow({
             <MenuSubPopup className="min-w-44">
               <MenuRadioGroup
                 onValueChange={(value) => onMove(value as ProjectId)}
-                value={milestone.projectId}
+                value={
+                  projects.find((project) => project.projectIds.includes(milestone.projectId))
+                    ?.id ?? milestone.projectId
+                }
               >
                 {projects.map((project) => (
                   <MenuRadioItem key={project.id} value={project.id}>

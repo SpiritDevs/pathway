@@ -1,4 +1,7 @@
-import type { CloudProjectSyncEntity } from "@spiritdevs/client-runtime/sync";
+import type {
+  CloudProjectSyncEntity,
+  EnvironmentBindingEntity,
+} from "@spiritdevs/client-runtime/sync";
 import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -30,12 +33,32 @@ function group(
   } as unknown as SidebarProjectSnapshot;
 }
 
-function cloudProject(id: string, name: string): CloudProjectSyncEntity {
+function cloudProject(
+  id: string,
+  name: string,
+  preferredBindingId: string | null = null,
+): CloudProjectSyncEntity {
   return {
     id,
     name,
+    preferredBindingId,
     archivedAt: null,
   } as CloudProjectSyncEntity;
+}
+
+function binding(
+  id: string,
+  cloudProjectId: string,
+  environmentId: string,
+  localProjectId: string,
+): EnvironmentBindingEntity {
+  return {
+    id,
+    cloudProjectId,
+    environmentId,
+    localProjectId,
+    status: "active",
+  } as EnvironmentBindingEntity;
 }
 
 describe("buildIssueProjectOptions", () => {
@@ -49,6 +72,7 @@ describe("buildIssueProjectOptions", () => {
         cloudProject("pathway-local", "Pathway"),
         cloudProject("pathway-remote", "Pathway"),
       ],
+      environmentBindings: [],
     });
 
     expect(options.map((project) => project.title)).toEqual(["Pathway", "personal-site"]);
@@ -64,6 +88,7 @@ describe("buildIssueProjectOptions", () => {
     const options = buildIssueProjectOptions({
       groups: [],
       cloudProjects: [cloudProject("offline", "Offline project")],
+      environmentBindings: [],
     });
 
     expect(options).toMatchObject([
@@ -81,6 +106,7 @@ describe("buildIssueProjectOptions", () => {
     const projects = buildIssueProjectOptions({
       groups: [group("Pathway", "pathway-local", "pathway-local", "pathway-remote")],
       cloudProjects: [],
+      environmentBindings: [],
     });
 
     expect(
@@ -113,6 +139,7 @@ describe("buildIssueProjectOptions", () => {
         ),
       ],
       cloudProjects: [],
+      environmentBindings: [],
     });
     const project = projects[0]!;
     const duplicateEnvironmentProject = {
@@ -129,5 +156,64 @@ describe("buildIssueProjectOptions", () => {
         ],
       }).map((member) => member.id),
     ).toEqual(["pathway-local", "pathway-remote"]);
+  });
+
+  it("joins a company project to its local checkout through the environment binding", () => {
+    const options = buildIssueProjectOptions({
+      groups: [group("quotecloud-v2", "quotecloud-local", "quotecloud-local")],
+      cloudProjects: [cloudProject("quotecloud-company", "quotecloud-v2", "binding-quotecloud")],
+      environmentBindings: [
+        binding("binding-quotecloud", "quotecloud-company", "local", "quotecloud-local"),
+      ],
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      id: "quotecloud-company",
+      projectIds: ["quotecloud-local", "quotecloud-company"],
+      companyProject: { id: "quotecloud-company" },
+    });
+  });
+
+  it("shows one company project when local grouping keeps its bound checkouts separate", () => {
+    const options = buildIssueProjectOptions({
+      groups: [
+        group("quotecloud-v2", "quotecloud-local", "quotecloud-local"),
+        group("quotecloud-v2", "quotecloud-remote", "quotecloud-remote"),
+      ],
+      cloudProjects: [cloudProject("quotecloud-company", "quotecloud-v2")],
+      environmentBindings: [
+        binding("binding-local", "quotecloud-company", "local", "quotecloud-local"),
+        binding("binding-remote", "quotecloud-company", "local", "quotecloud-remote"),
+      ],
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]?.projectIds).toEqual([
+      "quotecloud-local",
+      "quotecloud-company",
+      "quotecloud-remote",
+    ]);
+    expect(options[0]?.environmentProjects).toHaveLength(2);
+  });
+
+  it("uses the company project's preferred binding before the client's primary environment", () => {
+    const projects = buildIssueProjectOptions({
+      groups: [group("Pathway", "pathway-local", "pathway-local", "pathway-remote")],
+      cloudProjects: [cloudProject("pathway-company", "Pathway", "binding-remote")],
+      environmentBindings: [
+        binding("binding-local", "pathway-company", "local", "pathway-local"),
+        binding("binding-remote", "pathway-company", "remote-1", "pathway-remote"),
+      ],
+    });
+
+    expect(
+      resolveIssueEnvironmentProject({
+        issueProjectId: ProjectId.make("pathway-company"),
+        projects,
+        selectedPhysicalProjectKey: null,
+        preferredEnvironmentId: EnvironmentId.make("local"),
+      })?.id,
+    ).toBe("pathway-remote");
   });
 });

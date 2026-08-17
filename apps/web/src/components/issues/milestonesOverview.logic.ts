@@ -99,7 +99,11 @@ function compareMilestoneOrder(left: IssueMilestone, right: IssueMilestone): num
  * read, and it comes back as soon as that read lands.
  */
 export function milestonesOverviewGroups(
-  projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>,
+  projects: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly projectIds?: ReadonlyArray<ProjectId>;
+  }>,
   milestones: ReadonlyArray<IssueMilestone>,
   projectFilter: string | undefined,
 ): ReadonlyArray<MilestonesOverviewGroup> {
@@ -112,11 +116,14 @@ export function milestonesOverviewGroups(
 
   const groups: Array<MilestonesOverviewGroup> = [];
   for (const project of projects) {
-    if (projectFilter !== undefined && project.id !== projectFilter) continue;
+    const projectIds = new Set(project.projectIds ?? [project.id]);
+    if (projectFilter !== undefined && !projectIds.has(projectFilter as ProjectId)) continue;
     groups.push({
       projectId: project.id,
       title: project.title,
-      milestones: (byProject.get(project.id) ?? []).sort(compareMilestoneOrder),
+      milestones: [...projectIds]
+        .flatMap((projectId) => byProject.get(projectId) ?? [])
+        .sort(compareMilestoneOrder),
     });
   }
   return groups;

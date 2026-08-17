@@ -9,11 +9,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import {
+  EnvironmentBindingEntity,
   syncedIssueDetailById,
   syncedIssueDomainFromReplica,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
 import type { IssueId } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
 import { activeCompanyReplicaRoutingAtom } from "./activeCompany";
@@ -40,6 +42,11 @@ export const syncedIssueDomainAtom = Atom.make(
 export const cloudProjectsAtom = Atom.make((get) => get(syncedIssueDomainAtom).cloudProjects).pipe(
   Atom.withLabel("cloud-sync:cloud-projects"),
 );
+const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
+export const environmentBindingsAtom = Atom.make((get) => {
+  const replica = get(activeCompanyReplicaAtom);
+  return replica === null ? [] : [...replica.view.values()].filter(isEnvironmentBinding);
+}).pipe(Atom.withLabel("cloud-sync:environment-bindings"));
 export const syncedIssuesAtom = Atom.make((get) => get(syncedIssueDomainAtom).issues).pipe(
   Atom.withLabel("cloud-sync:issues"),
 );
@@ -67,6 +74,10 @@ export const syncedIssueDetailAtomFamily = Atom.family((issueId: IssueId) =>
 
 export function useSyncedCloudProjects() {
   return useAtomValue(cloudProjectsAtom);
+}
+
+export function useSyncedEnvironmentBindings() {
+  return useAtomValue(environmentBindingsAtom);
 }
 
 export function useSyncedIssues() {

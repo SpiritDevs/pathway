@@ -22,6 +22,7 @@ import {
   FolderIcon,
   GitBranchIcon,
   MessageSquareIcon,
+  MonitorIcon,
   PlayIcon,
   XIcon,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import {
   type IssueStartWorkWorkspaceMode,
 } from "./issueStartWork.logic";
 import { IssuePullRequestChip } from "./IssuePullRequestChip";
+import type { IssueEnvironmentOption } from "./IssueDetailProperties";
 
 const ignorePromptChange = (_prompt: string): void => undefined;
 
@@ -65,6 +67,9 @@ function IssueStartWorkLauncher({
   branchRefs,
   branchesPending,
   newWorktreeBlockReason,
+  environmentOptions,
+  environmentValue,
+  onEnvironment,
   onStartWork,
   onCreatePendingThread,
 }: {
@@ -78,6 +83,9 @@ function IssueStartWorkLauncher({
   branchRefs: ReadonlyArray<VcsRef>;
   branchesPending: boolean;
   newWorktreeBlockReason: string | null;
+  environmentOptions: ReadonlyArray<IssueEnvironmentOption>;
+  environmentValue: string | null;
+  onEnvironment: (physicalProjectKey: string) => void;
   onStartWork: (
     modelSelection: ModelSelection,
     workspaceMode: IssueStartWorkWorkspaceMode,
@@ -132,133 +140,164 @@ function IssueStartWorkLauncher({
 
   return (
     <div className="flex flex-col gap-2">
-      {modelSelection === null || activeEntry === null ? null : (
-        <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
-          <span className="text-[11px] text-muted-foreground">Model</span>
-          <ProviderModelPicker
-            activeInstanceId={modelSelection.instanceId}
-            disabled={starting}
-            instanceEntries={instanceEntries}
-            lockedProvider={activeEntry.driverKind}
-            model={modelSelection.model}
-            modelOptionsByInstance={modelOptionsByInstance}
-            onInstanceModelChange={(instanceId, model) => {
-              setModelSelection(createModelSelection(instanceId, model));
-            }}
-            triggerAriaLabel={`Model for starting work on ${issue.key}`}
-            triggerClassName="w-full max-w-none shrink text-foreground/90 hover:text-foreground"
-            triggerVariant="outline"
-          />
-
-          {hasTraits ? (
-            <>
-              <span className="text-[11px] text-muted-foreground">Reasoning</span>
-              <div aria-label={`Reasoning and model options for ${issue.key}`}>
-                <TraitsPicker
-                  allowPromptInjectedEffort={false}
-                  model={modelSelection.model}
-                  modelOptions={modelSelection.options}
-                  models={activeEntry.models}
-                  onModelOptionsChange={(nextOptions) => {
-                    setModelSelection((current) =>
-                      current === null
-                        ? null
-                        : createModelSelection(current.instanceId, current.model, nextOptions),
-                    );
-                  }}
-                  onPromptChange={ignorePromptChange}
-                  prompt=""
-                  provider={activeEntry.driverKind}
-                  triggerClassName="w-full max-w-none shrink justify-between text-foreground/90 hover:text-foreground"
-                  triggerVariant="outline"
-                />
-              </div>
-            </>
-          ) : null}
-
-          <span className="text-[11px] text-muted-foreground">Workspace</span>
-          <Select
-            disabled={starting}
-            onValueChange={(value) => setWorkspaceMode(value as IssueStartWorkWorkspaceMode)}
-            value={workspaceMode}
+      <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+        <span className="text-[11px] text-muted-foreground">Environment</span>
+        <Select
+          disabled={starting || environmentOptions.length === 0}
+          onValueChange={(value) => onEnvironment(String(value))}
+          value={environmentValue}
+        >
+          <SelectTrigger
+            aria-label={`Environment for starting work on ${issue.key}`}
+            className="w-full min-w-0 text-foreground/90"
+            size="sm"
           >
-            <SelectTrigger
-              aria-label={`Workspace for starting work on ${issue.key}`}
-              className="w-full min-w-0 text-foreground/90"
-              size="sm"
-            >
-              <SelectValue>{issueStartWorkWorkspaceModeLabel(workspaceMode)}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup className="w-72">
-              <SelectItem value="current_checkout">
-                <span className="flex items-start gap-2">
-                  <FolderIcon className="mt-0.5 size-4" />
-                  <span className="flex min-w-0 flex-col">
-                    <span>
-                      Current checkout{currentBranch === null ? "" : ` (${currentBranch})`}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Start a new thread in the project's main workspace.
-                    </span>
-                  </span>
+            <SelectValue>
+              {environmentOptions.find((option) => option.value === environmentValue)?.label ??
+                "No environment"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup className="w-72">
+            {environmentOptions.map((option) => (
+              <SelectItem disabled={option.disabled} key={option.value} value={option.value}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <MonitorIcon className="size-4" />
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{option.status}</span>
                 </span>
               </SelectItem>
-              <SelectItem
-                disabled={newWorktreeBlockReason !== null}
-                title={newWorktreeBlockReason ?? undefined}
-                value="new_worktree"
-              >
-                <span className="flex items-start gap-2">
-                  <GitBranchIcon className="mt-0.5 size-4" />
-                  <span className="flex min-w-0 flex-col">
-                    <span>{issueStartWorkWorkspaceModeLabel("new_worktree")}</span>
-                    <span className="text-xs text-muted-foreground">
-                      Branch from a ref you choose and run its setup tasks.
-                    </span>
-                  </span>
-                </span>
-              </SelectItem>
-            </SelectPopup>
-          </Select>
+            ))}
+          </SelectPopup>
+        </Select>
 
-          {workspaceMode === "new_worktree" ? (
-            <>
-              <span className="text-[11px] text-muted-foreground">From branch</span>
-              <Select
-                disabled={starting || branchRefs.length === 0}
-                onValueChange={(value) => setSelectedBaseBranch(value)}
-                value={selectedBaseBranch}
+        {modelSelection === null || activeEntry === null ? null : (
+          <>
+            <span className="text-[11px] text-muted-foreground">Model</span>
+            <ProviderModelPicker
+              activeInstanceId={modelSelection.instanceId}
+              disabled={starting}
+              instanceEntries={instanceEntries}
+              lockedProvider={activeEntry.driverKind}
+              model={modelSelection.model}
+              modelOptionsByInstance={modelOptionsByInstance}
+              onInstanceModelChange={(instanceId, model) => {
+                setModelSelection(createModelSelection(instanceId, model));
+              }}
+              triggerAriaLabel={`Model for starting work on ${issue.key}`}
+              triggerClassName="w-full max-w-none shrink text-foreground/90 hover:text-foreground"
+              triggerVariant="outline"
+            />
+
+            {hasTraits ? (
+              <>
+                <span className="text-[11px] text-muted-foreground">Reasoning</span>
+                <div aria-label={`Reasoning and model options for ${issue.key}`}>
+                  <TraitsPicker
+                    allowPromptInjectedEffort={false}
+                    model={modelSelection.model}
+                    modelOptions={modelSelection.options}
+                    models={activeEntry.models}
+                    onModelOptionsChange={(nextOptions) => {
+                      setModelSelection((current) =>
+                        current === null
+                          ? null
+                          : createModelSelection(current.instanceId, current.model, nextOptions),
+                      );
+                    }}
+                    onPromptChange={ignorePromptChange}
+                    prompt=""
+                    provider={activeEntry.driverKind}
+                    triggerClassName="w-full max-w-none shrink justify-between text-foreground/90 hover:text-foreground"
+                    triggerVariant="outline"
+                  />
+                </div>
+              </>
+            ) : null}
+
+            <span className="text-[11px] text-muted-foreground">Workspace</span>
+            <Select
+              disabled={starting}
+              onValueChange={(value) => setWorkspaceMode(value as IssueStartWorkWorkspaceMode)}
+              value={workspaceMode}
+            >
+              <SelectTrigger
+                aria-label={`Workspace for starting work on ${issue.key}`}
+                className="w-full min-w-0 text-foreground/90"
+                size="sm"
               >
-                <SelectTrigger
-                  aria-label={`Base branch for starting work on ${issue.key}`}
-                  className="w-full min-w-0 text-foreground/90"
-                  size="sm"
-                >
-                  <SelectValue>
-                    {selectedBaseBranch ??
-                      (branchesPending ? "Loading branches…" : "Choose branch")}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup className="w-72">
-                  {branchRefs.map((ref) => (
-                    <SelectItem key={ref.name} value={ref.name}>
-                      <span className="flex min-w-0 items-center gap-2">
-                        <GitBranchIcon className="size-4" />
-                        <span className="min-w-0 flex-1 truncate">{ref.name}</span>
-                        {ref.current || ref.isDefault || ref.isRemote ? (
-                          <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                            {ref.current ? "current" : ref.isDefault ? "default" : "remote"}
-                          </span>
-                        ) : null}
+                <SelectValue>{issueStartWorkWorkspaceModeLabel(workspaceMode)}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup className="w-72">
+                <SelectItem value="current_checkout">
+                  <span className="flex items-start gap-2">
+                    <FolderIcon className="mt-0.5 size-4" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>
+                        Current checkout{currentBranch === null ? "" : ` (${currentBranch})`}
                       </span>
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </>
-          ) : null}
-        </div>
-      )}
+                      <span className="text-xs text-muted-foreground">
+                        Start a new thread in the project's main workspace.
+                      </span>
+                    </span>
+                  </span>
+                </SelectItem>
+                <SelectItem
+                  disabled={newWorktreeBlockReason !== null}
+                  title={newWorktreeBlockReason ?? undefined}
+                  value="new_worktree"
+                >
+                  <span className="flex items-start gap-2">
+                    <GitBranchIcon className="mt-0.5 size-4" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{issueStartWorkWorkspaceModeLabel("new_worktree")}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Branch from a ref you choose and run its setup tasks.
+                      </span>
+                    </span>
+                  </span>
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+
+            {workspaceMode === "new_worktree" ? (
+              <>
+                <span className="text-[11px] text-muted-foreground">From branch</span>
+                <Select
+                  disabled={starting || branchRefs.length === 0}
+                  onValueChange={(value) => setSelectedBaseBranch(value)}
+                  value={selectedBaseBranch}
+                >
+                  <SelectTrigger
+                    aria-label={`Base branch for starting work on ${issue.key}`}
+                    className="w-full min-w-0 text-foreground/90"
+                    size="sm"
+                  >
+                    <SelectValue>
+                      {selectedBaseBranch ??
+                        (branchesPending ? "Loading branches…" : "Choose branch")}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup className="w-72">
+                    {branchRefs.map((ref) => (
+                      <SelectItem key={ref.name} value={ref.name}>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <GitBranchIcon className="size-4" />
+                          <span className="min-w-0 flex-1 truncate">{ref.name}</span>
+                          {ref.current || ref.isDefault || ref.isRemote ? (
+                            <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                              {ref.current ? "current" : ref.isDefault ? "default" : "remote"}
+                            </span>
+                          ) : null}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </>
+            ) : null}
+          </>
+        )}
+      </div>
 
       <ButtonGroup className="w-full">
         <Button
@@ -327,6 +366,9 @@ export function IssueAgentSection({
   branchRefs,
   branchesPending,
   newWorktreeBlockReason,
+  environmentOptions,
+  environmentValue,
+  onEnvironment,
   onStartWork,
   onCreatePendingThread,
   onOpenThread,
@@ -348,6 +390,9 @@ export function IssueAgentSection({
   branchesPending: boolean;
   /** Null when a branch can be created; otherwise shown on the disabled workspace option. */
   newWorktreeBlockReason: string | null;
+  environmentOptions: ReadonlyArray<IssueEnvironmentOption>;
+  environmentValue: string | null;
+  onEnvironment: (physicalProjectKey: string) => void;
   onStartWork: (
     modelSelection: ModelSelection,
     workspaceMode: IssueStartWorkWorkspaceMode,
@@ -376,8 +421,11 @@ export function IssueAgentSection({
           currentBranch={currentBranch}
           branchRefs={branchRefs}
           branchesPending={branchesPending}
+          environmentOptions={environmentOptions}
+          environmentValue={environmentValue}
           newWorktreeBlockReason={newWorktreeBlockReason}
           onCreatePendingThread={onCreatePendingThread}
+          onEnvironment={onEnvironment}
           onStartWork={onStartWork}
           starting={starting}
           startWorkBlockReason={startWorkBlockReason}

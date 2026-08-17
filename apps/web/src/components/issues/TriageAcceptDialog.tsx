@@ -11,7 +11,6 @@
  *
  * @module components/issues/TriageAcceptDialog
  */
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type {
   Issue,
   IssueAssignee,
@@ -73,7 +72,6 @@ export function TriageAcceptDialog({
   onOpenChange,
   issues,
   statuses,
-  projects,
   onAccepted,
   onStartTask,
 }: {
@@ -82,7 +80,6 @@ export function TriageAcceptDialog({
   /** One row's issue, or the whole selection. Empty closes the dialog rather than rendering it. */
   issues: ReadonlyArray<Issue>;
   statuses: ReadonlyArray<IssueStatus>;
-  projects: ReadonlyArray<EnvironmentProject>;
   /** Fired once, after every write in a bulk accept has come back. */
   onAccepted?: () => void;
   /** Fired after a single eligible issue is accepted and ready for its assigned agent. */
@@ -106,9 +103,13 @@ export function TriageAcceptDialog({
   const workspaceRoots = useMemo(
     () =>
       new Map<string, string | null>(
-        projects.map((project) => [project.id, project.workspaceRoot]),
+        issueProjects.flatMap((project) =>
+          project.projectIds.map(
+            (projectId) => [projectId, project.localProject?.workspaceRoot ?? null] as const,
+          ),
+        ),
       ),
-    [projects],
+    [issueProjects],
   );
 
   const singleIssue = issues.length === 1 ? (issues[0] ?? null) : null;

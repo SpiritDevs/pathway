@@ -67,6 +67,8 @@ import {
 } from "react";
 
 import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
+import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
+import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -161,6 +163,7 @@ import { isNewIssueAttachmentRecord } from "./newIssueAttachments";
 import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 import { useIssueImageAttachmentDrafts } from "./useIssueImageAttachmentDrafts";
 import {
+  issueProjectEnvironmentBinding,
   issueProjectEnvironmentProjects,
   resolveIssueEnvironmentProject,
   useIssueProjectOptions,
@@ -555,7 +558,10 @@ function IssueDetailBody({
   const childRollup = useIssueChildRollup(issue.id);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { presentationById } = useEnvironments();
-  const [selectedPhysicalProjectKey, setSelectedPhysicalProjectKey] = useState<string | null>(null);
+  const companyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const environmentControl = useEnvironmentControl();
+  const [defaultPhysicalProjectKey, setDefaultPhysicalProjectKey] = useState<string | null>(null);
+  const [launchPhysicalProjectKey, setLaunchPhysicalProjectKey] = useState<string | null>(null);
   // Both agent tails are read whenever a sheet opens, like the change log and the detail beside
   // them: the header has to know whether an investigation has ever run, and the rail has to list
   // the threads. Two small reads on a local socket, patched live by the stream afterwards.
@@ -649,15 +655,32 @@ function IssueDetailBody({
             candidate.id === issueProjectId || candidate.projectIds.includes(issueProjectId),
         ) ?? null);
   }, [issue.projectId, issueProjects]);
+  const defaultProject = useMemo(
+    () =>
+      resolveIssueEnvironmentProject({
+        issueProjectId: issue.projectId,
+        projects: issueProjects,
+        selectedPhysicalProjectKey: defaultPhysicalProjectKey,
+        preferredEnvironmentId: primaryEnvironmentId,
+      }),
+    [defaultPhysicalProjectKey, issue.projectId, issueProjects, primaryEnvironmentId],
+  );
   const project = useMemo(
     () =>
       resolveIssueEnvironmentProject({
         issueProjectId: issue.projectId,
         projects: issueProjects,
-        selectedPhysicalProjectKey,
+        selectedPhysicalProjectKey:
+          launchPhysicalProjectKey ?? defaultProject?.physicalProjectKey ?? null,
         preferredEnvironmentId: primaryEnvironmentId,
       }),
-    [issue.projectId, issueProjects, primaryEnvironmentId, selectedPhysicalProjectKey],
+    [
+      defaultProject?.physicalProjectKey,
+      issue.projectId,
+      issueProjects,
+      launchPhysicalProjectKey,
+      primaryEnvironmentId,
+    ],
   );
   const agentEnvironmentId = project?.environmentId ?? primaryEnvironmentId;
   const primarySettings = usePrimarySettings();
@@ -688,6 +711,68 @@ function IssueDetailBody({
             };
           }),
     [issueProject, presentationById, primaryEnvironmentId],
+  );
+  const [savingDefaultEnvironment, setSavingDefaultEnvironment] = useState(false);
+  const defaultEnvironmentOptions = useMemo(
+    () =>
+      environmentOptions.map((option) => ({
+        ...option,
+        disabled:
+          savingDefaultEnvironment ||
+          issueProject === null ||
+          issueProjectEnvironmentBinding(issueProject, option.value) === null,
+      })),
+    [environmentOptions, issueProject, savingDefaultEnvironment],
+  );
+  const handleDefaultEnvironment = useCallback(
+    (physicalProjectKey: string) => {
+      if (savingDefaultEnvironment || issueProject === null) return;
+      const binding = issueProjectEnvironmentBinding(issueProject, physicalProjectKey);
+      const cloudProject = issueProject.companyProject;
+      if (binding === null || cloudProject === null || companyId === null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the default environment",
+          description: "This project is not connected to that environment.",
+        });
+        return;
+      }
+      if (environmentControl === null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the default environment",
+          description: "Sign in to update company project defaults.",
+        });
+        return;
+      }
+      const previous = defaultProject?.physicalProjectKey ?? null;
+      setDefaultPhysicalProjectKey(physicalProjectKey);
+      setSavingDefaultEnvironment(true);
+      void environmentControl
+        .setPreferredEnvironmentBinding({
+          companyId,
+          cloudProjectId: cloudProject.id,
+          bindingId: binding.id,
+        })
+        .catch((error) => {
+          setDefaultPhysicalProjectKey(previous);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not save the default environment",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        })
+        .finally(() => setSavingDefaultEnvironment(false));
+    },
+    [
+      companyId,
+      defaultProject?.physicalProjectKey,
+      environmentControl,
+      issueProject,
+      savingDefaultEnvironment,
+    ],
   );
   const selectedEnvironmentOption =
     environmentOptions.find((option) => option.value === project?.physicalProjectKey) ?? null;
@@ -1258,6 +1343,7 @@ function IssueDetailBody({
               origin: "start-work",
             }),
           );
+          setLaunchPhysicalProjectKey(null);
         } catch (error) {
           toastManager.add(
             stackedThreadToast({
@@ -1317,6 +1403,7 @@ function IssueDetailBody({
                 }) satisfies ComposerImageAttachment,
             ),
           );
+          setLaunchPhysicalProjectKey(null);
         } catch (error) {
           toastManager.add(
             stackedThreadToast({
@@ -1753,8 +1840,8 @@ function IssueDetailBody({
               <IssuePropertiesResizeHandle maxWidth={propertiesMaxWidth} size={propertiesSize} />
               <IssueDetailProperties
                 cycles={cycles}
-                environmentOptions={environmentOptions}
-                environmentValue={project?.physicalProjectKey ?? null}
+                environmentOptions={defaultEnvironmentOptions}
+                environmentValue={defaultProject?.physicalProjectKey ?? null}
                 issue={issue}
                 issues={store.issuesById}
                 labels={labels}
@@ -1766,7 +1853,7 @@ function IssueDetailBody({
                 onCreateMilestone={handleCreateMilestone}
                 onCycle={(cycleId: IssueCycleId | null) => write(issueCyclePatch(issue, cycleId))}
                 onDueDate={(value: string) => write(issueDueDatePatch(issue, value))}
-                onEnvironment={setSelectedPhysicalProjectKey}
+                onEnvironment={handleDefaultEnvironment}
                 onMilestone={(milestoneId: IssueMilestoneId | null) =>
                   write(issueMilestonePatch(issue, milestoneId))
                 }
@@ -1789,6 +1876,8 @@ function IssueDetailBody({
 
               <IssueAgentSection
                 key={project?.physicalProjectKey ?? "no-project"}
+                environmentOptions={environmentOptions}
+                environmentValue={project?.physicalProjectKey ?? null}
                 initialModelSelection={initialStartWorkModelSelection}
                 instanceEntries={startWorkInstanceEntries}
                 issue={issue}
@@ -1799,6 +1888,7 @@ function IssueDetailBody({
                 branchesPending={startWorkBranches.isPending && startWorkBranches.data === null}
                 newWorktreeBlockReason={newWorktreeBlockReason}
                 onCreatePendingThread={handleCreatePendingThread}
+                onEnvironment={setLaunchPhysicalProjectKey}
                 onOpenThread={handleOpenThread}
                 onStartWork={handleStartWork}
                 onUnlinkThread={handleUnlinkThread}
