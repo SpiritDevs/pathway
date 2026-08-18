@@ -1,5 +1,4 @@
 import {
-  ISSUE_IMPORT_ENTITY_KINDS,
   isPristineIssueImportTarget,
   IssueImportRpcError,
   type IssueImportExecuteResult,
@@ -16,8 +15,14 @@ import * as Stream from "effect/Stream";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "../environmentKeys.ts";
 import { makeSyncSqliteExecutor } from "../syncSqliteExecutor.ts";
-import { readCloudSyncLink, resolveCloudSyncConfig } from "../syncDaemon.ts";
+import {
+  discoverCloudSyncCompanyIds,
+  makeCloudSyncTokenProvider,
+  readCloudSyncLink,
+  resolveCloudSyncConfig,
+} from "../syncDaemon.ts";
 import {
   IssueImportAttachmentError,
   IssueImportBackendError,
@@ -183,7 +188,22 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const environmentLinked = (yield* readCloudSyncLink(secrets)) !== null;
     const cloudSyncConfigured = config._tag === "Configured";
-    const companyMatches = cloudSyncConfigured && config.settings.companyId === companyId;
+    const companyIds =
+      cloudSyncConfigured && environmentLinked
+        ? yield* Effect.gen(function* () {
+            const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets);
+            const tokens = yield* makeCloudSyncTokenProvider({
+              environmentId,
+              secrets,
+              dpopKeys,
+            });
+            return yield* discoverCloudSyncCompanyIds({
+              convexUrl: config.settings.convexUrl,
+              tokens,
+            });
+          }).pipe(Effect.orElseSucceed(() => []))
+        : [];
+    const companyMatches = companyIds.includes(companyId);
 
     let bootstrapReady = false;
     let targetCompanyEmpty: boolean | null = null;
@@ -223,10 +243,10 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
         code: "cloud-sync-not-configured",
         message: "Cloud sync is not fully configured on this server.",
       });
-    else if (!companyMatches)
+    else if (environmentLinked && !companyMatches)
       reasons.push({
         code: "company-mismatch",
-        message: "The selected company is not this server's configured cloud company.",
+        message: "The selected company is not registered to this environment.",
       });
     if (!environmentLinked)
       reasons.push({

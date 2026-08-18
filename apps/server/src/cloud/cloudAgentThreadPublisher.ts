@@ -34,8 +34,10 @@ import {
   awaitCloudSyncLink,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
   resolveCloudSyncConfig,
+  superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
 
 export const DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL = Duration.seconds(15);
@@ -217,7 +219,7 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
   },
 );
 
-/** Default-off publisher sharing the cloud sync link, company, and proof-bound environment id. */
+/** Keeps one publisher running for every company registered to this linked environment. */
 export const cloudAgentThreadPublisherLayer = (): Layer.Layer<
   never,
   never,
@@ -249,11 +251,20 @@ export const cloudAgentThreadPublisherLayer = (): Layer.Layer<
             secrets,
             dpopKeys,
           });
-          yield* runCloudAgentThreadPublisher({
-            companyId: config.settings.companyId,
-            environmentId,
-            convexUrl: config.settings.convexUrl,
-            tokens,
+          yield* superviseCloudSyncCompanies({
+            discover: () =>
+              discoverCloudSyncCompanyIds({
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            runCompany: (companyId) =>
+              runCloudAgentThreadPublisher({
+                companyId,
+                environmentId,
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            workerLabel: "cloud-agent-thread-publisher",
           });
         }).pipe(
           Effect.catchCause((cause) =>

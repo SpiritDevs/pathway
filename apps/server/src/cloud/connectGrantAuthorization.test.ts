@@ -16,14 +16,17 @@ import {
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { requireCloudMintConnectGrantAuthorization } from "./http.ts";
 import {
   authorizeConnectGrantFromLocalReplica,
   isConnectGrantAuthorizedByReplica,
   resolveConnectGrantActorFromLocalReplica,
   resolveConnectGrantActorFromReplica,
+  resolveConnectGrantActorFromReplicas,
 } from "./connectGrantAuthorization.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-connect-target");
@@ -180,6 +183,23 @@ describe("cloud mint connect-grant authorization", () => {
     ).toBeNull();
   });
 
+  it("scans registered replicas without falling back to the first one", () => {
+    expect(
+      resolveConnectGrantActorFromReplicas({
+        environmentId: ENVIRONMENT_ID,
+        connectGrant: connectGrant(),
+        replicas: [EMPTY_STORED_SYNC_STATE, replica()],
+      }),
+    ).toBe("cloud-user-connect");
+    expect(
+      resolveConnectGrantActorFromReplicas({
+        environmentId: ENVIRONMENT_ID,
+        connectGrant: connectGrant(),
+        replicas: [replica(), replica()],
+      }),
+    ).toBeNull();
+  });
+
   it.effect("accepts a grant when the replica has an active membership with the permission", () =>
     requireCloudMintConnectGrantAuthorization(
       authorizeAgainst(replica()),
@@ -259,6 +279,16 @@ describe("cloud mint connect-grant authorization", () => {
           Layer.succeed(
             SqlClient.SqlClient,
             SqlClient.SqlClient.of({} as Parameters<typeof SqlClient.SqlClient.of>[0]),
+          ),
+          Layer.succeed(
+            ServerSecretStore.ServerSecretStore,
+            ServerSecretStore.ServerSecretStore.of(
+              {} as Parameters<typeof ServerSecretStore.ServerSecretStore.of>[0],
+            ),
+          ),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.HttpClient.of({} as Parameters<typeof HttpClient.HttpClient.of>[0]),
           ),
         ),
       ),

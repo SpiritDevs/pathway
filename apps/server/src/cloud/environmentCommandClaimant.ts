@@ -3,12 +3,12 @@
 /**
  * Durable target-side execution for Convex environment commands.
  *
- * The claimant uses `environmentCommands.claim` as both discovery and lease acquisition. That
- * mutation is environment-scoped, orders work by creation time, and returns an existing live claim
- * unchanged, so no member-oriented list query is needed. The same authenticated call refreshes the
- * company registration at a backend-throttled 30-second cadence, avoiding a second polling loop.
- * A command is renewed once before any local side effect and then periodically while it runs;
- * losing that fence interrupts local work and suppresses the terminal report.
+ * Convex discovery supervises one claimant for every company that registered this environment.
+ * Within each company, `environmentCommands.claim` is both command discovery and lease acquisition:
+ * it orders work by creation time and returns an existing live claim unchanged. The same
+ * authenticated call refreshes that company's registration at a backend-throttled 30-second
+ * cadence. A command is renewed once before any local side effect and then periodically while it
+ * runs; losing that fence interrupts local work and suppresses the terminal report.
  *
  * @module cloud/environmentCommandClaimant
  */
@@ -57,10 +57,16 @@ import * as ServerSettings from "../serverSettings.ts";
 import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import { convexHttpClientLike, type ConvexClientLike } from "./convexSyncTransport.ts";
 import {
+  awaitCloudSyncLink,
+  DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
+  DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
   readCloudSyncLink,
   resolveCloudSyncConfig,
+  superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 
 export const ENVIRONMENT_COMMAND_CLAIM_LIMIT = 2;
@@ -620,20 +626,12 @@ export interface EnvironmentCommandClaimantOptions {
 
 /** The shared cloud-sync configuration/link gate, kept separate for a hermetic fail-closed test. */
 export const resolveEnvironmentCommandClaimantActivation: Effect.Effect<
-  { readonly companyId: CompanyId; readonly convexUrl: string } | null,
-  never,
-  ServerSecretStore.ServerSecretStore
+  { readonly convexUrl: string } | null,
+  never
 > = Effect.gen(function* () {
   const config = yield* resolveCloudSyncConfig;
   if (config._tag !== "Configured") {
     yield* Effect.logDebug("Environment command claimant not started", { reason: config.reason });
-    return null;
-  }
-  const secrets = yield* ServerSecretStore.ServerSecretStore;
-  if ((yield* readCloudSyncLink(secrets)) === null) {
-    yield* Effect.logDebug("Environment command claimant not started", {
-      reason: "environment-not-linked",
-    });
     return null;
   }
   return config.settings;
@@ -651,58 +649,76 @@ export const startEnvironmentCommandClaimant = Effect.fn(
   if (activation === null) return null;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
-  const backend =
-    options.backend ??
-    (yield* makeCloudSyncTokenProvider({ environmentId, secrets }).pipe(
-      Effect.flatMap((tokens) =>
-        makeEnvironmentCommandBackend({ convexUrl: activation.convexUrl, tokens }),
-      ),
-    ));
-
-  const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
-  const isBootstrapped =
-    options.isBootstrapped ??
-    Effect.all([store.service.read(activation.companyId), readCloudSyncLink(secrets)]).pipe(
-      Effect.map(
-        ([state, currentLink]) => state.checkpoint?.bootstrapped === true && currentLink !== null,
-      ),
-    );
   const launcher = yield* ThreadLaunch.ThreadLaunchService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
   const settings = yield* ServerSettings.ServerSettingsService;
-  const executor =
-    options.executor ??
-    makeLiveExecutor({
-      companyId: activation.companyId,
-      environmentId,
-      backend,
-      launcher,
-      threads,
-      projects,
-      settings,
-    });
 
-  const runtime = {
-    companyId: activation.companyId,
-    environmentId,
-    backend,
-    executor,
-    isBootstrapped,
-    ...(options.timing === undefined ? {} : { timing: options.timing }),
-  } satisfies EnvironmentCommandClaimantRuntime;
-
-  yield* Effect.logInfo("Environment command claimant started", {
-    companyId: activation.companyId,
+  yield* Effect.logInfo("Environment command claimant supervisor started", {
     environmentId,
     concurrency: ENVIRONMENT_COMMAND_CLAIM_LIMIT,
   });
   return yield* forkParkedFiber(
-    runEnvironmentCommandClaimant(runtime).pipe(
+    Effect.gen(function* () {
+      const link = yield* awaitCloudSyncLink({
+        secrets,
+        interval: DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+        attempts: DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
+      });
+      if (link === null) return;
+      const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets).pipe(
+        Effect.orDie,
+      );
+      const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+      const backend =
+        options.backend ??
+        (yield* makeEnvironmentCommandBackend({ convexUrl: activation.convexUrl, tokens }));
+      const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
+      const runCompany = (companyId: CompanyId) => {
+        const isBootstrapped =
+          options.isBootstrapped ??
+          Effect.all([store.service.read(companyId), readCloudSyncLink(secrets)]).pipe(
+            Effect.map(
+              ([state, currentLink]) =>
+                state.checkpoint?.bootstrapped === true && currentLink !== null,
+            ),
+          );
+        const executor =
+          options.executor ??
+          makeLiveExecutor({
+            companyId,
+            environmentId,
+            backend,
+            launcher,
+            threads,
+            projects,
+            settings,
+          });
+        const runtime = {
+          companyId,
+          environmentId,
+          backend,
+          executor,
+          isBootstrapped,
+          ...(options.timing === undefined ? {} : { timing: options.timing }),
+        } satisfies EnvironmentCommandClaimantRuntime;
+        return runEnvironmentCommandClaimant(runtime);
+      };
+
+      yield* superviseCloudSyncCompanies({
+        discover: () =>
+          discoverCloudSyncCompanyIds({
+            convexUrl: activation.convexUrl,
+            tokens,
+          }),
+        runCompany,
+        workerLabel: "environment-command-claimant",
+      });
+    }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterrupts(cause)
           ? Effect.void
-          : Effect.logWarning("Environment command claimant stopped", { cause }),
+          : Effect.logWarning("Environment command claimant supervisor stopped", { cause }),
       ),
     ),
   );

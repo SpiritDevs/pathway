@@ -32,8 +32,10 @@ import {
   awaitCloudSyncLink,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
   resolveCloudSyncConfig,
+  superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
 
 export const DEFAULT_CAPTURED_EMAIL_RECONCILE_INTERVAL = Duration.seconds(15);
@@ -215,7 +217,7 @@ export const runCapturedEmailPublisher = Effect.fn("cloud.captured_email_publish
   );
 });
 
-/** Default-off publisher sharing the company link and proof-bound environment identity. */
+/** Keeps one publisher running for every company registered to this linked environment. */
 export const capturedEmailPublisherLayer = (): Layer.Layer<
   never,
   never,
@@ -247,11 +249,20 @@ export const capturedEmailPublisherLayer = (): Layer.Layer<
             secrets,
             dpopKeys,
           });
-          yield* runCapturedEmailPublisher({
-            companyId: config.settings.companyId,
-            environmentId,
-            convexUrl: config.settings.convexUrl,
-            tokens,
+          yield* superviseCloudSyncCompanies({
+            discover: () =>
+              discoverCloudSyncCompanyIds({
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            runCompany: (companyId) =>
+              runCapturedEmailPublisher({
+                companyId,
+                environmentId,
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            workerLabel: "captured-email-publisher",
           });
         }).pipe(
           Effect.catchCause((cause) =>

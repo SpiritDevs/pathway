@@ -1,5 +1,5 @@
 // @effect-diagnostics anyUnknownInErrorContext:off unknownInEffectCatch:off
-/** Company Slack polling runtime. Convex owns all state; this environment only executes a lease. */
+/** Company Slack polling runtimes. Convex owns company discovery and state; this environment only executes leases. */
 import { api } from "@spiritdevs/backend/convexApi";
 import {
   CommandId,
@@ -20,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -47,16 +46,24 @@ import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import {
   markCompanyAutomationAuthorityResolved,
   markCompanyIntegrationAuthorityResolved,
+  removeCompanyOwnedSlackWorkspaces,
   replaceCompanyOwnedSlackWorkspaces,
+  setExpectedCompanyAutomationIds,
+  setExpectedCompanyIntegrationIds,
   setCompanyAutomationActive,
 } from "./companyIntegrationActivation.ts";
 import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import { convexHttpClientLike, type ConvexClientLike } from "./convexSyncTransport.ts";
 import {
+  awaitCloudSyncLink,
+  DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
+  DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
-  readCloudSyncLink,
   resolveCloudSyncConfig,
+  superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 
 export const COMPANY_SLACK_POLL_INTERVAL_MS = 30_000;
 const MAX_HISTORY_PAGES = 10;
@@ -841,8 +848,10 @@ const runCompanyAutomationCycle = Effect.fn("cloud.company_automation.cycle")(fu
   runtime: CompanySlackRuntime,
 ) {
   const automation = yield* runtime.backend.automationSettings(runtime.companyId);
-  setCompanyAutomationActive(automation !== null && automation.activatedAt !== null);
-  markCompanyAutomationAuthorityResolved();
+  setCompanyAutomationActive(
+    runtime.companyId,
+    automation !== null && automation.activatedAt !== null,
+  );
   if (automation?.enabled === true) yield* runAutomationJobs(runtime);
 });
 
@@ -864,8 +873,7 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
     runtime.backend.listIntegrations(runtime.companyId),
     runtime.backend.ownedWorkspaceIds(runtime.companyId),
   ]);
-  replaceCompanyOwnedSlackWorkspaces(ownedWorkspaceIds);
-  markCompanyIntegrationAuthorityResolved();
+  replaceCompanyOwnedSlackWorkspaces(runtime.companyId, ownedWorkspaceIds);
 
   for (const integration of integrations) {
     if (integration.state !== "active") continue;
@@ -1204,14 +1212,7 @@ export const startCompanySlackCoordinator = Effect.fn("cloud.company_slack.start
     return null;
   }
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  if ((yield* readCloudSyncLink(secrets)) === null) {
-    markCompanyIntegrationAuthorityResolved();
-    markCompanyAutomationAuthorityResolved();
-    return null;
-  }
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
-  const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets });
-  const backend = yield* makeCompanySlackBackend({ convexUrl: config.settings.convexUrl, tokens });
   const slack = yield* SlackApiClient;
   const automation = yield* makeCompanyAutomationExecutor();
   const providerRegistry = yield* ProviderInstanceRegistry;
@@ -1231,39 +1232,103 @@ export const startCompanySlackCoordinator = Effect.fn("cloud.company_slack.start
         ),
       ),
     );
-  const runtime: CompanySlackRuntime = {
-    companyId: config.settings.companyId,
-    environmentId,
-    backend,
-    slack,
-    now: Date.now,
-    automation,
-    readProviders,
-  };
-  return yield* Effect.all([
-    forkParkedFiber(
-      runCompanySlackCycle(runtime).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.void
-            : Effect.logWarning("Company Slack coordinator cycle failed", { cause }),
-        ),
-        Effect.andThen(Effect.sleep(Duration.millis(COMPANY_SLACK_POLL_INTERVAL_MS))),
-        Effect.forever,
-      ),
+  return yield* forkParkedFiber(
+    Effect.gen(function* () {
+      const link = yield* awaitCloudSyncLink({
+        secrets,
+        interval: DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+        attempts: DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
+      });
+      if (link === null) {
+        markCompanyIntegrationAuthorityResolved();
+        markCompanyAutomationAuthorityResolved();
+        return;
+      }
+      const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets).pipe(
+        Effect.orDie,
+      );
+      const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+      const backend = yield* makeCompanySlackBackend({
+        convexUrl: config.settings.convexUrl,
+        tokens,
+      });
+      const runCompany = (companyId: CompanyId) => {
+        const runtime: CompanySlackRuntime = {
+          companyId,
+          environmentId,
+          backend,
+          slack,
+          now: Date.now,
+          automation,
+          readProviders,
+        };
+        return Effect.all(
+          [
+            runCompanySlackCycle(runtime).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("Company Slack coordinator cycle failed", {
+                      companyId,
+                      cause,
+                    }),
+              ),
+              Effect.andThen(Effect.sleep(Duration.millis(COMPANY_SLACK_POLL_INTERVAL_MS))),
+              Effect.forever,
+            ),
+            runCompanyAutomationCycle(runtime).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.logWarning("Company automation cycle failed", {
+                      companyId,
+                      cause,
+                    }),
+              ),
+              Effect.andThen(Effect.sleep(Duration.millis(COMPANY_SLACK_POLL_INTERVAL_MS))),
+              Effect.forever,
+            ),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              removeCompanyOwnedSlackWorkspaces(companyId);
+              setCompanyAutomationActive(companyId, false);
+            }),
+          ),
+        );
+      };
+      yield* superviseCloudSyncCompanies({
+        discover: () =>
+          discoverCloudSyncCompanyIds({
+            convexUrl: config.settings.convexUrl,
+            tokens,
+          }).pipe(
+            Effect.tap((companyIds) =>
+              Effect.sync(() => {
+                setExpectedCompanyIntegrationIds(companyIds);
+                setExpectedCompanyAutomationIds(companyIds);
+              }),
+            ),
+          ),
+        runCompany,
+        workerLabel: "company-slack-coordinator",
+      });
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterrupts(cause)) return Effect.void;
+        return Effect.sync(() => {
+          markCompanyIntegrationAuthorityResolved();
+          markCompanyAutomationAuthorityResolved();
+        }).pipe(
+          Effect.andThen(
+            Effect.logWarning("Company Slack coordinator supervisor stopped", { cause }),
+          ),
+        );
+      }),
     ),
-    forkParkedFiber(
-      runCompanyAutomationCycle(runtime).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.void
-            : Effect.logWarning("Company automation cycle failed", { cause }),
-        ),
-        Effect.andThen(Effect.sleep(Duration.millis(COMPANY_SLACK_POLL_INTERVAL_MS))),
-        Effect.forever,
-      ),
-    ),
-  ]);
+  );
 });
 
 export const companySlackCoordinatorLayer = () =>

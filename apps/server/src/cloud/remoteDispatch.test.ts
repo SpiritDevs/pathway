@@ -1,5 +1,11 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import { type RpcSession } from "@spiritdevs/client-runtime/rpc";
+import {
+  EMPTY_STORED_SYNC_STATE,
+  SYNC_BOOTSTRAP_GENERATION,
+  SYNC_DOCUMENT_SCHEMA_VERSION,
+  type StoredSyncState,
+} from "@spiritdevs/client-runtime/sync";
 import {
   CloudProjectId,
   EnvironmentCommandId,
@@ -10,6 +16,8 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
+import { AuthorizationEpoch, CompanyVersion, SyncEntityId } from "@spiritdevs/contracts/cloudSync";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -17,7 +25,8 @@ import * as Schema from "effect/Schema";
 import {
   EnvironmentCommandIssueUnavailableError,
   EnvironmentCommandIssuer,
-  make,
+  makeRemoteDispatch,
+  resolveRemoteDispatchCompanyFromReplicas,
   RemoteDispatchUnavailableError,
 } from "./remoteDispatch.ts";
 import {
@@ -31,6 +40,44 @@ const TARGET_PROJECT_ID = ProjectId.make("project:remote-target");
 const CLOUD_PROJECT_ID = CloudProjectId.make("cloud-project:remote-target");
 const COMMAND_ID = EnvironmentCommandId.make("environment-command:delegate-1");
 const THREAD_ID = ThreadId.make("thread:remote-target");
+const COMPANY_ID = CompanyId.make("company:remote-target");
+const OTHER_COMPANY_ID = CompanyId.make("company:remote-other");
+
+function companyReplica(
+  companyId: CompanyId,
+  cloudProjectId = CLOUD_PROJECT_ID,
+  localProjectId = TARGET_PROJECT_ID,
+): StoredSyncState {
+  return {
+    ...EMPTY_STORED_SYNC_STATE,
+    checkpoint: {
+      schemaVersion: SYNC_DOCUMENT_SCHEMA_VERSION,
+      bootstrapGeneration: SYNC_BOOTSTRAP_GENERATION,
+      companyId,
+      cursor: CompanyVersion.make(1),
+      authorizationEpoch: AuthorizationEpoch.make(1),
+      bootstrapped: true,
+    },
+    entities: [
+      {
+        entityKind: "environmentBinding",
+        entityId: SyncEntityId.make(`binding:${companyId}`),
+        version: CompanyVersion.make(1),
+        payload: {
+          id: `binding:${companyId}`,
+          cloudProjectId,
+          environmentId: TARGET_ENVIRONMENT_ID,
+          localProjectId,
+          localWorkspaceRoot: "/workspace",
+          status: "active",
+          lastSeenAt: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    ],
+  };
+}
 
 class TestRpcReplyLostError extends Schema.TaggedErrorClass<TestRpcReplyLostError>()(
   "TestRpcReplyLostError",
@@ -77,7 +124,7 @@ const makeHarness = Effect.fn("RemoteDispatchTest.makeHarness")(function* (input
   readonly connect: PeerEnvironments["Service"]["connect"];
   readonly issue: EnvironmentCommandIssuer["Service"]["issue"];
 }) {
-  return yield* make.pipe(
+  return yield* makeRemoteDispatch({ resolveCompany: () => Effect.succeed(COMPANY_ID) }).pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(PeerEnvironments, PeerEnvironments.of({ connect: input.connect })),
@@ -91,6 +138,36 @@ const makeHarness = Effect.fn("RemoteDispatchTest.makeHarness")(function* (input
 });
 
 describe("RemoteDispatch", () => {
+  it("derives only one exact company/project binding", () => {
+    expect(
+      resolveRemoteDispatchCompanyFromReplicas(commandInput(), [
+        { companyId: COMPANY_ID, replica: companyReplica(COMPANY_ID) },
+        {
+          companyId: OTHER_COMPANY_ID,
+          replica: companyReplica(OTHER_COMPANY_ID, CloudProjectId.make("cloud-project:unrelated")),
+        },
+      ]),
+    ).toBe(COMPANY_ID);
+    expect(
+      resolveRemoteDispatchCompanyFromReplicas(commandInput(), [
+        { companyId: COMPANY_ID, replica: companyReplica(COMPANY_ID) },
+        { companyId: OTHER_COMPANY_ID, replica: companyReplica(OTHER_COMPANY_ID) },
+      ]),
+    ).toBeNull();
+    expect(
+      resolveRemoteDispatchCompanyFromReplicas(commandInput(), [
+        {
+          companyId: COMPANY_ID,
+          replica: companyReplica(
+            COMPANY_ID,
+            CLOUD_PROJECT_ID,
+            ProjectId.make("project:remote-unrelated"),
+          ),
+        },
+      ]),
+    ).toBeNull();
+  });
+
   it.effect("uses the direct RPC path and carries the environment command id", () =>
     Effect.gen(function* () {
       const directCommandIds: string[] = [];
@@ -183,6 +260,61 @@ describe("RemoteDispatch", () => {
       assert.deepEqual(error.missing, ["connect-grant", "cloud-sync"]);
       assert.include(error.message, "connect-grant");
       assert.include(error.message, "cloud-sync");
+    }),
+  );
+
+  it.effect("does not enqueue a deferred command without a unique company route", () =>
+    Effect.gen(function* () {
+      let issuerCalls = 0;
+      const remote = yield* makeRemoteDispatch({ resolveCompany: () => Effect.succeed(null) }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(
+              PeerEnvironments,
+              PeerEnvironments.of({
+                connect: () => Effect.die("direct must not be attempted without a grant"),
+              }),
+            ),
+            Layer.succeed(
+              EnvironmentCommandIssuer,
+              EnvironmentCommandIssuer.of({
+                issue: () =>
+                  Effect.sync(() => {
+                    issuerCalls += 1;
+                  }),
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const error = yield* remote.dispatch(commandInput()).pipe(Effect.flip);
+
+      assert.instanceOf(error, RemoteDispatchUnavailableError);
+      assert.deepEqual(error.missing, ["connect-grant", "cloud-sync"]);
+      assert.equal(issuerCalls, 0);
+    }),
+  );
+
+  it.effect("does not enqueue a deferred start-thread command without a cloud project", () =>
+    Effect.gen(function* () {
+      let issuerCalls = 0;
+      const remote = yield* makeHarness({
+        connect: () => Effect.die("direct must not be attempted without a grant"),
+        issue: () =>
+          Effect.sync(() => {
+            issuerCalls += 1;
+          }),
+      });
+
+      const input = commandInput();
+      const { cloudProjectId: _cloudProjectId, ...withoutCloudProject } = input;
+      const error = yield* remote.dispatch(withoutCloudProject).pipe(Effect.flip);
+
+      assert.instanceOf(error, RemoteDispatchUnavailableError);
+      assert.deepEqual(error.missing, ["connect-grant", "cloud-sync"]);
+      assert.include(error.deferredFailure, "cloud project binding");
+      assert.equal(issuerCalls, 0);
     }),
   );
 

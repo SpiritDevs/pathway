@@ -1,9 +1,9 @@
 /**
- * Read-only access to the configured company's durable issue replica.
+ * Pure decoders for one company's durable issue replica plus the legacy RPC's fail-closed reader.
  *
- * The sync daemon owns transport and writes, but it does not publish a process-wide store handle.
- * Both it and this reader open the same idempotent `cloud_sync_*` store over the ambient server
- * SqlClient. A replica becomes routable only after the exact bootstrap generation completes.
+ * The sync daemon may own several company replicas. Decoding a caller-selected snapshot remains
+ * useful, but the process-wide legacy issue RPC has no company dimension and therefore never
+ * chooses one implicitly.
  *
  * @module issues/IssueReplicaReader
  */
@@ -11,7 +11,6 @@ import {
   decodeOutbox,
   decodeConfirmedEntities,
   makeIssueSyncAdapter,
-  makeSqliteSyncStore,
   overlay,
   syncedIssueDomainFromEntities,
   SYNC_BOOTSTRAP_GENERATION,
@@ -21,9 +20,6 @@ import {
 import type { IssueMemberActor } from "@spiritdevs/contracts";
 import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
-
-import { resolveCloudSyncConfig } from "../cloud/syncDaemon.ts";
-import { makeSyncSqliteExecutor } from "../cloud/syncSqliteExecutor.ts";
 
 export interface IssueReplicaReader {
   /** Null when this environment has no configured company route. */
@@ -130,36 +126,9 @@ const unavailableReader: IssueReplicaReader = {
 };
 
 /**
- * Opens the same durable store as the daemon when a company route is configured.
- *
- * Read failures degrade to legacy with one warning. That matches the bootstrap rule: until the
- * local replica is complete and readable, it is not a source at all.
+ * The legacy issue RPC has no company scope, so it must not guess among the environment's current
+ * company replicas. Cloud issue reads and writes are routed explicitly by the client; this
+ * process-wide service remains on the environment-local repository until its RPC boundary carries
+ * a company id.
  */
-export const makeIssueReplicaReader = Effect.gen(function* () {
-  const configured = yield* resolveCloudSyncConfig;
-  if (configured._tag !== "Configured") return unavailableReader;
-
-  const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
-  const companyId = configured.settings.companyId;
-  const read = store.service.read(companyId).pipe(
-    Effect.map(issueReadModelFromStoredReplica),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Failed to read the company issue replica; using legacy issue reads", {
-        companyId,
-        cause,
-      }).pipe(Effect.as(null)),
-    ),
-  );
-  const memberActorForCloudUserId = (cloudUserId: string) =>
-    store.service.read(companyId).pipe(
-      Effect.map((stored) => issueMemberActorFromStoredReplica(stored, cloudUserId)),
-      Effect.catchCause(() => Effect.succeed(null)),
-    );
-  return { companyId, read, memberActorForCloudUserId };
-}).pipe(
-  Effect.catchCause((cause) =>
-    Effect.logWarning("Failed to open the company issue replica; using legacy issue reads", {
-      cause,
-    }).pipe(Effect.as(unavailableReader)),
-  ),
-);
+export const makeIssueReplicaReader = Effect.succeed(unavailableReader);

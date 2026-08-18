@@ -1,22 +1,19 @@
 /**
- * The Pathway server's cloud-sync daemon: one long-lived {@link makeSyncEngine} for one company,
- * assembled out of the pieces the earlier phases landed and forked as a background root.
+ * The Pathway server's cloud-sync daemon: one long-lived {@link makeSyncEngine} for every company
+ * that registered this environment, assembled and reconciled as background roots.
  * This module is the single place where the parts are joined
  * — the server's SQLite replica (`./syncSqliteExecutor.ts`), the Convex transport over a
  * relay-minted service token (`./convexSyncTransport.ts`), and the issue domain adapter — and it is
  * also the single place that decides whether its required configuration is available:
  *
- * 1. `PATHWAY_CLOUD_SYNC_COMPANY_ID` names the company to replicate. Interim: nothing in the
- *    environment's link state carries a company today (the relay link is keyed by environment, and
- *    `RelayManagedEndpointRuntimeConfig` has no company field), so the company is configuration
- *    rather than something derived. When link state grows a company this gate moves there.
- * 2. `PATHWAY_CONVEX_URL` (or the build-time value) resolves to a deployment origin.
- * 3. The environment is linked: a relay URL, an environment credential, and the environment's link
+ * 1. `PATHWAY_CONVEX_URL` (or the build-time value) resolves to a deployment origin.
+ * 2. The environment is linked: a relay URL, an environment credential, and the environment's link
  *    key pair are all in the secret store.
+ * 3. Convex discovers every active company registration for the environment and its proof key.
  *
- * The first two are *configuration*: they are fixed for the life of the process, so they are read
- * once, at layer build. The fourth is *state* — the secret store is rewritten while the server runs
- * — so it is never snapshotted:
+ * Only the Convex URL is fixed configuration and is read once at layer build. The link and company
+ * registrations are mutable state: token exchange re-reads link secrets, and the company
+ * supervisor periodically re-reads Convex's registration listing rather than snapshotting either:
  *
  * - `applyCloudRelayConfig` (`./http.ts`) mints and stores a **new** environment credential on
  *   every relink, and the startup relink runs *after* this layer is built, so a credential captured
@@ -29,6 +26,8 @@
  * - A link that arrives *after* boot (`pathway connect link` against a running server, or the
  *   startup relink of a desired link) is picked up: the parked daemon re-checks for one on a
  *   bounded schedule before it gives up and asks for a restart.
+ * - A company registration added or revoked while the process is running starts or interrupts that
+ *   company's worker on the next reconciliation without disturbing the other companies.
  * - A deployment that answers `upgrade-required`, or that refuses this environment for good, ends
  *   the daemon rather than being asked again every restart interval: the supervisor reads *why*
  *   the engine stopped off its published state and only restarts for reasons another run could
@@ -39,6 +38,7 @@
  *
  * @module cloud/syncDaemon
  */
+import { api } from "@spiritdevs/backend/convexApi";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
@@ -48,20 +48,19 @@ import {
   makeSyncEngine,
   SyncStore,
   SyncTransport,
-  type SyncTransportError,
+  SyncTransportError,
 } from "@spiritdevs/client-runtime/sync";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import type * as Fiber from "effect/Fiber";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as Config from "effect/Config";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -71,13 +70,21 @@ import { forkParkedFiber } from "../serverActivation.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
 import {
   ConvexServiceTokenError,
-  generateDpopKeyPair,
   makeConvexServiceTokenProvider,
   type ConvexServiceTokenProvider,
   type DpopKeyPair,
 } from "./convexServiceToken.ts";
-import { makeConvexSyncTransport } from "./convexSyncTransport.ts";
-import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
+import {
+  classifyConvexFailure,
+  convexHttpClientLike,
+  makeConvexSyncTransport,
+  type ConvexClientLike,
+} from "./convexSyncTransport.ts";
+import {
+  CloudSyncEngineRegistry,
+  makeCloudSyncEngineRegistry,
+  type CloudSyncEngineRegistryShape,
+} from "./CloudSyncEngineRegistry.ts";
 import {
   getOrCreateCloudSyncDpopKeyPairFromSecretStore,
   getOrCreateEnvironmentKeyPairFromSecretStore,
@@ -88,9 +95,6 @@ import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 // --------------------------------------------------------------------------
 // Gates
 // --------------------------------------------------------------------------
-
-/** Interim: the company to replicate is configuration until the link state carries one. */
-export const CLOUD_SYNC_COMPANY_ID_ENV = "PATHWAY_CLOUD_SYNC_COMPANY_ID";
 
 /**
  * How long a stopped engine waits before resubscribing.
@@ -139,14 +143,13 @@ export const DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS = 24;
  */
 export const DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS = 3;
 
-const companyIdConfig = Config.string(CLOUD_SYNC_COMPANY_ID_ENV).pipe(
-  Config.withDefault(""),
-  Config.map((value) => value.trim()),
-);
+/** How often the server asks Convex for registration additions and revocations. */
+export const DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL = Duration.seconds(15);
+/** Bounded recovery attempts after a per-company worker returns or fails unexpectedly. */
+export const DEFAULT_CLOUD_COMPANY_WORKER_RESTARTS = 3;
 
 /** The configuration half of the gates: fixed for the life of the process. */
 export interface CloudSyncDaemonSettings {
-  readonly companyId: CompanyId;
   readonly convexUrl: string;
 }
 
@@ -169,10 +172,7 @@ export interface CloudSyncLink {
  * Which gate stopped the daemon. Reported rather than thrown, because "not configured" is the
  * expected state of every server that has not opted in.
  */
-export type CloudSyncDaemonDisabledReason =
-  | "company-not-configured"
-  | "convex-url-unavailable"
-  | "environment-not-linked";
+export type CloudSyncDaemonDisabledReason = "convex-url-unavailable" | "environment-not-linked";
 
 export interface CloudSyncDaemonDisabled {
   readonly _tag: "Disabled";
@@ -208,9 +208,6 @@ const disabled = (
  */
 export const resolveCloudSyncConfig: Effect.Effect<CloudSyncConfigResolution> = Effect.gen(
   function* () {
-    const companyId = yield* companyIdConfig.pipe(Effect.orElseSucceed(() => ""));
-    if (companyId.length === 0) return disabled("company-not-configured");
-
     const convexUrl = yield* convexUrlConfig.pipe(
       Effect.map((url) => ({ url, detail: undefined as string | undefined })),
       Effect.catch((error) => Effect.succeed({ url: undefined, detail: error.message })),
@@ -221,7 +218,7 @@ export const resolveCloudSyncConfig: Effect.Effect<CloudSyncConfigResolution> = 
 
     return {
       _tag: "Configured",
-      settings: { companyId: CompanyId.make(companyId), convexUrl: convexUrl.url },
+      settings: { convexUrl: convexUrl.url },
     };
   },
 );
@@ -317,8 +314,8 @@ const sameLink = (left: CloudSyncLink, right: CloudSyncLink): boolean =>
 export interface CloudSyncTokenProviderInput {
   readonly environmentId: EnvironmentId;
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
-  /** Defaults to a fresh per-process pair; separable so a test can pin the thumbprint. */
-  readonly dpopKeys?: DpopKeyPair;
+  /** The durable proof identity named by this environment's Convex registration. */
+  readonly dpopKeys: DpopKeyPair;
 }
 
 /**
@@ -336,7 +333,7 @@ export const makeCloudSyncTokenProvider = Effect.fn("cloud.sync_daemon.token_pro
   input: CloudSyncTokenProviderInput,
 ) {
   const httpClient = yield* HttpClient.HttpClient;
-  const dpopKeys = input.dpopKeys ?? (yield* Effect.sync(generateDpopKeyPair));
+  const dpopKeys = input.dpopKeys;
   const current = yield* Ref.make<{
     readonly link: CloudSyncLink;
     readonly provider: ConvexServiceTokenProvider;
@@ -391,15 +388,75 @@ export const makeCloudSyncTokenProvider = Effect.fn("cloud.sync_daemon.token_pro
   return { token, invalidate } satisfies ConvexServiceTokenProvider;
 });
 
+export interface DiscoverCloudSyncCompanyIdsInput {
+  readonly convexUrl: string;
+  readonly tokens: ConvexServiceTokenProvider;
+  /** Test seam; production builds one authenticated HTTP client for this discovery call. */
+  readonly client?: ConvexClientLike;
+}
+
+/**
+ * Asks Convex which active companies registered this authenticated environment and proof key.
+ *
+ * This is the server's company-routing boundary. Callers must not infer a company from local
+ * configuration or from stale SQLite rows: Convex owns registration and revocation state.
+ */
+export const discoverCloudSyncCompanyIds = Effect.fn("cloud.sync_daemon.discover_companies")(
+  function* (input: DiscoverCloudSyncCompanyIdsInput) {
+    const client = input.client ?? convexHttpClientLike(input.convexUrl);
+    const call = (token: string) =>
+      Effect.tryPromise({
+        try: () => {
+          client.setAuth(token);
+          return client.query(api.environments.listRegisteredCompanies, {});
+        },
+        catch: (cause) =>
+          new SyncTransportError({
+            reason: classifyConvexFailure(cause),
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      });
+
+    const token = yield* input.tokens.token.pipe(
+      Effect.mapError(
+        (error) => new SyncTransportError({ reason: error.reason, message: error.message }),
+      ),
+    );
+    const companyIds = yield* call(token).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "unauthorized",
+        () =>
+          input.tokens.invalidate(token).pipe(
+            Effect.andThen(input.tokens.token),
+            Effect.mapError(
+              (error) => new SyncTransportError({ reason: error.reason, message: error.message }),
+            ),
+            Effect.flatMap(call),
+          ),
+      ),
+    );
+    return companyIds.map((companyId) => CompanyId.make(companyId));
+  },
+);
+
 // --------------------------------------------------------------------------
 // Daemon
 // --------------------------------------------------------------------------
 
 export interface CloudSyncTransportInput {
   readonly settings: CloudSyncDaemonSettings;
+  readonly companyId: CompanyId;
   readonly environmentId: EnvironmentId;
   /** The secret store itself, so the transport's tokens follow the link rather than snapshot it. */
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
+  readonly tokens: ConvexServiceTokenProvider;
+}
+
+export interface CloudSyncCompanyDiscoveryInput {
+  readonly settings: CloudSyncDaemonSettings;
+  readonly environmentId: EnvironmentId;
+  readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
+  readonly tokens: ConvexServiceTokenProvider;
 }
 
 export interface CloudSyncDaemonOptions {
@@ -421,6 +478,12 @@ export interface CloudSyncDaemonOptions {
    * stop terminal on the first answer, the way the web runtime treats it.
    */
   readonly unauthorizedRestarts?: number;
+  /** Test seam for the Convex-owned environment registration listing. */
+  readonly discoverCompanies?: (
+    input: CloudSyncCompanyDiscoveryInput,
+  ) => Effect.Effect<ReadonlyArray<CompanyId>, SyncTransportError>;
+  /** Defaults to {@link DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL}. */
+  readonly companyReconcileInterval?: Duration.Input;
 }
 
 /**
@@ -455,18 +518,8 @@ export function isRetryableSyncStop(error: SyncTransportError | null): boolean {
  */
 const defaultCloudSyncTransport = (
   input: CloudSyncTransportInput,
-): Effect.Effect<SyncTransport["Service"], never, HttpClient.HttpClient> =>
-  Effect.gen(function* () {
-    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(input.secrets).pipe(
-      Effect.orDie,
-    );
-    const tokens = yield* makeCloudSyncTokenProvider({
-      environmentId: input.environmentId,
-      secrets: input.secrets,
-      dpopKeys,
-    });
-    return yield* makeConvexSyncTransport({ convexUrl: input.settings.convexUrl, tokens });
-  });
+): Effect.Effect<SyncTransport["Service"], never> =>
+  makeConvexSyncTransport({ convexUrl: input.settings.convexUrl, tokens: input.tokens });
 
 /**
  * The link, waited for rather than demanded: the first check is immediate and the rest are the
@@ -485,12 +538,219 @@ export const awaitCloudSyncLink = (input: {
     }),
   );
 
+export interface CloudSyncCompanySupervisorOptions<DiscoveryError, WorkerError, R> {
+  readonly discover: () => Effect.Effect<ReadonlyArray<CompanyId>, DiscoveryError>;
+  readonly runCompany: (companyId: CompanyId) => Effect.Effect<void, WorkerError, R>;
+  readonly workerLabel: string;
+  readonly reconcileInterval?: Duration.Input;
+  readonly workerRestartDelay?: Duration.Input;
+  readonly workerRestarts?: number;
+}
+
+/**
+ * Reconciles long-lived server workers against Convex-owned environment registrations.
+ *
+ * A failed listing leaves existing workers alone: an offline deployment is not evidence that an
+ * environment was revoked. A successful listing is authoritative, so removed companies are
+ * interrupted and newly registered companies start without a server restart. A worker failure is
+ * isolated to that company and receives a bounded restart budget, allowing a later credential or
+ * deployment recovery without turning a permanent refusal into a tight loop. Once that budget is
+ * exhausted, the worker completes; a later successful registration listing may start a fresh
+ * bounded run at the ordinary reconciliation interval.
+ */
+export function superviseCloudSyncCompanies<DiscoveryError, WorkerError, R>(
+  options: CloudSyncCompanySupervisorOptions<DiscoveryError, WorkerError, R>,
+): Effect.Effect<void, never, R> {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const running = new Map<CompanyId, Fiber.Fiber<void, never>>();
+      const interval = options.reconcileInterval ?? DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL;
+      const workerRestartDelay = options.workerRestartDelay ?? interval;
+      const workerRestarts = Math.max(
+        0,
+        options.workerRestarts ?? DEFAULT_CLOUD_COMPANY_WORKER_RESTARTS,
+      );
+
+      const reconcile = (companyIds: ReadonlyArray<CompanyId>) =>
+        Effect.gen(function* () {
+          const desired = new Set(companyIds);
+          for (const [companyId, worker] of running) {
+            if (desired.has(companyId)) continue;
+            running.delete(companyId);
+            yield* Fiber.interrupt(worker);
+            yield* Effect.logInfo("Cloud company worker stopped after registration removal", {
+              companyId,
+              worker: options.workerLabel,
+            });
+          }
+          for (const companyId of desired) {
+            const held = running.get(companyId);
+            if (held !== undefined && held.pollUnsafe() === undefined) continue;
+            if (held !== undefined) {
+              running.delete(companyId);
+              yield* Fiber.interrupt(held);
+            }
+            const reportWorkerStop = (cause: unknown) =>
+              Effect.logWarning("Cloud company worker stopped; retrying within its budget", {
+                companyId,
+                worker: options.workerLabel,
+                cause,
+              });
+            const runOnce = Effect.scoped(options.runCompany(companyId)).pipe(
+              Effect.catch(reportWorkerStop),
+              Effect.catchDefect(reportWorkerStop),
+            );
+            const worker = runOnce.pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced(workerRestartDelay),
+                times: workerRestarts,
+              }),
+              Effect.andThen(
+                Effect.logWarning("Cloud company worker exhausted its restart budget", {
+                  companyId,
+                  worker: options.workerLabel,
+                  restarts: workerRestarts,
+                }),
+              ),
+            );
+            running.set(companyId, yield* Effect.forkScoped(worker));
+          }
+        });
+
+      const discoverAndReconcile = options.discover().pipe(
+        Effect.flatMap(reconcile),
+        Effect.catch((error) =>
+          Effect.logWarning("Cloud company discovery failed; keeping current workers", {
+            worker: options.workerLabel,
+            error,
+          }),
+        ),
+        Effect.catchDefect((cause) =>
+          Effect.logWarning("Cloud company discovery failed; keeping current workers", {
+            worker: options.workerLabel,
+            cause,
+          }),
+        ),
+      );
+
+      yield* discoverAndReconcile.pipe(
+        Effect.repeat({ schedule: Schedule.spaced(interval) }),
+        Effect.asVoid,
+      );
+    }),
+  );
+}
+
 /**
  * Builds the engine and parks it at the activation boundary, or logs why it did not.
  *
  * Returns the supervisor fiber — the caller's handle on a daemon that otherwise lives and dies
  * with the scope — or `null` when a configuration gate refused.
  */
+const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function* (input: {
+  readonly companyId: CompanyId;
+  readonly settings: CloudSyncDaemonSettings;
+  readonly environmentId: EnvironmentId;
+  readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
+  readonly tokens: ConvexServiceTokenProvider;
+  readonly store: SyncStore["Service"];
+  readonly engineRegistry: CloudSyncEngineRegistryShape;
+  readonly transport: NonNullable<CloudSyncDaemonOptions["transport"]>;
+  readonly restartDelay: Duration.Input;
+  readonly unauthorizedRestarts: number;
+}) {
+  const transport = yield* input.transport({
+    settings: input.settings,
+    companyId: input.companyId,
+    environmentId: input.environmentId,
+    secrets: input.secrets,
+    tokens: input.tokens,
+  });
+  const clock = yield* Clock.clockWith(Effect.succeed);
+  const engine = yield* makeSyncEngine({
+    companyId: input.companyId,
+    clientId: cloudSyncClientId(input.environmentId),
+    actor: cloudSyncActor(input.environmentId),
+    environmentId: input.environmentId,
+    adapter: makeIssueSyncAdapter({
+      actor: cloudSyncActor(input.environmentId),
+      now: () => clock.currentTimeMillisUnsafe(),
+    }),
+  }).pipe(
+    Effect.provideService(SyncStore, input.store),
+    Effect.provideService(SyncTransport, transport),
+  );
+  const supervise = Effect.gen(function* () {
+    yield* Effect.logInfo("Cloud sync company engine started", {
+      companyId: input.companyId,
+      environmentId: input.environmentId,
+      convexUrl: input.settings.convexUrl,
+    });
+    const runEngine = engine.run.pipe(
+      Effect.andThen(SubscriptionRef.get(engine.state)),
+      Effect.map(
+        ({ lastError }) =>
+          ({
+            retryable: isRetryableSyncStop(lastError),
+            error: lastError,
+          }) satisfies CloudSyncEngineStop,
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("Cloud sync engine stopped; restarting", {
+              companyId: input.companyId,
+              cause,
+            }).pipe(Effect.as({ retryable: true, error: null } satisfies CloudSyncEngineStop)),
+      ),
+    );
+    const refusals = yield* Ref.make(0);
+    const turn = Effect.gen(function* () {
+      const stop = yield* runEngine;
+      if ((yield* readCloudSyncLink(input.secrets)) === null) {
+        yield* Effect.logWarning("Cloud sync stopped: this environment is no longer linked", {
+          companyId: input.companyId,
+        });
+        return false;
+      }
+      if (stop.retryable) {
+        yield* Ref.set(refusals, 0);
+        return true;
+      }
+      if (stop.error?.reason === "unauthorized") {
+        const attempt = yield* Ref.updateAndGet(refusals, (count) => count + 1);
+        if (attempt <= input.unauthorizedRestarts) {
+          yield* Effect.logWarning("Cloud sync was refused; retrying with a fresh service token", {
+            companyId: input.companyId,
+            attempt,
+            of: input.unauthorizedRestarts,
+            reason: stop.error.reason,
+            message: stop.error.message,
+          });
+          return true;
+        }
+      }
+      yield* Effect.logWarning(
+        "Cloud sync stopped and will not restart; re-link this environment or update this server",
+        {
+          companyId: input.companyId,
+          reason: stop.error?.reason,
+          message: stop.error?.message,
+        },
+      );
+      return false;
+    });
+    yield* turn.pipe(
+      Effect.repeat({ schedule: Schedule.spaced(input.restartDelay), while: (again) => again }),
+      Effect.asVoid,
+    );
+  });
+  yield* input.engineRegistry.withIssueEngine(
+    { environmentId: input.environmentId, engine },
+    supervise,
+  );
+});
+
 export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(function* (
   options: CloudSyncDaemonOptions = {},
 ) {
@@ -503,16 +763,13 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
     return null;
   }
   const settings = config.settings;
-
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const environmentId = yield* serverEnvironment.getEnvironmentId;
+  const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const engineRegistry =
     Option.match(yield* Effect.serviceOption(CloudSyncEngineRegistry), {
       onNone: () => null,
       onSome: (registry) => registry,
     }) ?? (yield* makeCloudSyncEngineRegistry);
-
   const restartDelay = options.restartDelay ?? DEFAULT_SYNC_DAEMON_RESTART_DELAY;
   const linkWaitInterval = options.linkWaitInterval ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL;
   const linkWaitAttempts = options.linkWaitAttempts ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS;
@@ -522,169 +779,59 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
   );
 
   const daemon = Effect.gen(function* () {
-    // Everything below the activation boundary, because everything below it can be written by the
-    // boot that is still finishing: the startup relink mints this environment's credential after
-    // this fiber parks, and `pathway connect link` can write the first one minutes later.
-    const link = yield* awaitCloudSyncLink({
-      secrets,
-      interval: linkWaitInterval,
-      attempts: linkWaitAttempts,
-    });
-    if (link === null) {
+    if (
+      (yield* awaitCloudSyncLink({
+        secrets,
+        interval: linkWaitInterval,
+        attempts: linkWaitAttempts,
+      })) === null
+    ) {
       yield* Effect.logWarning(
         "Cloud sync is enabled but this environment is not linked; link it, then restart the server",
-        {
-          companyId: settings.companyId,
-          reason: "environment-not-linked" satisfies CloudSyncDaemonDisabledReason,
-        },
+        { reason: "environment-not-linked" satisfies CloudSyncDaemonDisabledReason },
       );
       return;
     }
 
-    // The replica lands in the server's own database file: one `SqlClient`, one set of
-    // `cloud_sync_*` tables, created here and only here — a server that never enables sync never
-    // runs this migration.
-    const executor = yield* makeSyncSqliteExecutor;
-    const store = yield* makeSqliteSyncStore(executor);
-    const transport = yield* (options.transport ?? defaultCloudSyncTransport)({
-      settings,
-      environmentId,
-      secrets,
-    });
-
-    const clock = yield* Clock.clockWith(Effect.succeed);
-    const engine = yield* makeSyncEngine({
-      companyId: settings.companyId,
-      clientId: cloudSyncClientId(environmentId),
-      actor: cloudSyncActor(environmentId),
-      environmentId,
-      // The same actor the engine reports must be the one optimistic rows are stamped with, should
-      // server code ever originate writes through this adapter.
-      adapter: makeIssueSyncAdapter({
-        actor: cloudSyncActor(environmentId),
-        now: () => clock.currentTimeMillisUnsafe(),
-      }),
-    }).pipe(
-      Effect.provideService(SyncStore, store.service),
-      Effect.provideService(SyncTransport, transport),
+    const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
+    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets).pipe(
+      Effect.orDie,
     );
-    yield* engineRegistry.registerIssueEngine({ environmentId, engine });
+    const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+    const discoveryInput = { settings, environmentId, secrets, tokens };
+    const discover =
+      options.discoverCompanies ??
+      ((input: CloudSyncCompanyDiscoveryInput) =>
+        discoverCloudSyncCompanyIds({ convexUrl: input.settings.convexUrl, tokens: input.tokens }));
 
-    yield* Effect.logInfo("Cloud sync daemon started", {
-      companyId: settings.companyId,
-      environmentId,
-      convexUrl: settings.convexUrl,
+    yield* superviseCloudSyncCompanies({
+      discover: () => discover(discoveryInput),
+      runCompany: (companyId) =>
+        runCloudSyncCompany({
+          companyId,
+          settings,
+          environmentId,
+          secrets,
+          tokens,
+          store: store.service,
+          engineRegistry,
+          transport: options.transport ?? defaultCloudSyncTransport,
+          restartDelay,
+          unauthorizedRestarts,
+        }),
+      workerLabel: "sync-engine",
+      ...(options.companyReconcileInterval === undefined
+        ? {}
+        : { reconcileInterval: options.companyReconcileInterval }),
     });
-
-    /**
-     * One run of the engine, to a stop, with the reason it stopped.
-     *
-     * `run` returns *normally* when the head subscription fails — it records the transport reason
-     * as a phase and ends — so the reason lives on the engine's state, not in an error channel.
-     */
-    const runEngine = engine.run.pipe(
-      Effect.andThen(SubscriptionRef.get(engine.state)),
-      Effect.map(
-        ({ lastError }) =>
-          ({
-            retryable: isRetryableSyncStop(lastError),
-            error: lastError,
-          }) satisfies CloudSyncEngineStop,
-      ),
-      Effect.catchCause((cause) =>
-        // Interruption is the scope closing and has to pass through. Everything else — the store
-        // failure `run` declares, and any defect raised under it — is a warning and another turn
-        // of the loop, because a fiber that dies here is cloud sync gone for the process lifetime
-        // with nothing in the log to say so. Neither is a verdict from the deployment, so both are
-        // retryable: the local replica is what broke, and it can come back.
-        Cause.hasInterrupts(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("Cloud sync engine stopped; restarting", {
-              companyId: settings.companyId,
-              cause,
-            }).pipe(Effect.as({ retryable: true, error: null } satisfies CloudSyncEngineStop)),
-      ),
-    );
-
-    const refusals = yield* Ref.make(0);
-
-    /**
-     * One turn of the supervisor: run the engine, then decide whether there is any point running
-     * it again. `true` schedules another turn; `false` ends the daemon for the life of the process.
-     *
-     * The unlink check comes first and is unchanged: an unlink makes the token exchange fail
-     * `unauthorized` before a request leaves the process, and "this environment is no longer
-     * linked" is the accurate thing to tell an operator about that, not "the cloud refused us".
-     *
-     * After it, a stop the transport classified as terminal ends the daemon rather than being
-     * re-tried every restart interval until the process dies — which would hide the one thing
-     * the operator needs to see behind a log line repeated forever, and would keep asking a
-     * deployment that answered `upgrade-required` a question it has already answered.
-     * `unauthorized` gets a bounded budget first; see
-     * {@link DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS} for why the server differs from the web
-     * runtime here.
-     */
-    const turn = Effect.gen(function* () {
-      const stop = yield* runEngine;
-
-      // The link is re-read between runs, so an unlink ends the daemon instead of leaving it to
-      // retry forever against a cloud this environment left.
-      const current = yield* readCloudSyncLink(secrets);
-      if (current === null) {
-        yield* Effect.logWarning("Cloud sync stopped: this environment is no longer linked", {
-          companyId: settings.companyId,
-        });
-        return false;
-      }
-
-      if (stop.retryable) {
-        // A run that ended on the pipe rather than on a verdict clears the refusal budget: the
-        // next `unauthorized` is a new episode, not the continuation of an old one.
-        yield* Ref.set(refusals, 0);
-        return true;
-      }
-
-      if (stop.error?.reason === "unauthorized") {
-        const attempt = yield* Ref.updateAndGet(refusals, (count) => count + 1);
-        if (attempt <= unauthorizedRestarts) {
-          yield* Effect.logWarning("Cloud sync was refused; retrying with a fresh service token", {
-            companyId: settings.companyId,
-            attempt,
-            of: unauthorizedRestarts,
-            reason: stop.error.reason,
-            message: stop.error.message,
-          });
-          return true;
-        }
-      }
-
-      yield* Effect.logWarning(
-        "Cloud sync stopped and will not restart; re-link this environment or update this server",
-        {
-          companyId: settings.companyId,
-          reason: stop.error?.reason,
-          message: stop.error?.message,
-        },
-      );
-      return false;
-    });
-
-    yield* turn.pipe(
-      Effect.repeat({ schedule: Schedule.spaced(restartDelay), while: (again) => again }),
-      Effect.asVoid,
-    );
   });
 
   return yield* forkParkedFiber(
     daemon.pipe(
-      // The daemon is an addition to a server that worked without it: a replica that will not
-      // migrate, or an engine that will not build, must degrade to "no cloud sync" rather than to
-      // a fiber that vanishes without a word.
       Effect.catchCause((cause) =>
         Cause.hasInterrupts(cause)
           ? Effect.void
           : Effect.logWarning("Cloud sync daemon stopped; continuing without cloud sync", {
-              companyId: settings.companyId,
               cause,
             }),
       ),

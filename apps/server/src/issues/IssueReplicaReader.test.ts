@@ -29,6 +29,7 @@ import * as Option from "effect/Option";
 import {
   issueMemberActorFromStoredReplica,
   issueReadModelFromStoredReplica,
+  makeIssueReplicaReader,
   routeReplicaIssueRead,
 } from "./IssueReplicaReader.ts";
 
@@ -219,6 +220,15 @@ describe("issueMemberActorFromStoredReplica", () => {
 });
 
 describe("routeReplicaIssueRead", () => {
+  it.effect("keeps the company-less legacy RPC on local storage", () =>
+    Effect.gen(function* () {
+      const reader = yield* makeIssueReplicaReader;
+      expect(reader.companyId).toBeNull();
+      expect(yield* reader.read).toBeNull();
+      expect(yield* reader.memberActorForCloudUserId("cloud-user")).toBeNull();
+    }),
+  );
+
   it.effect("uses a ready replica without evaluating the legacy read", () =>
     Effect.gen(function* () {
       const readModel = issueReadModelFromStoredReplica(replica())!;

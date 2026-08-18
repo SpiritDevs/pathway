@@ -229,6 +229,55 @@ export const get = query({
 });
 
 /**
+ * Discovers every active company registration owned by the authenticated environment identity.
+ *
+ * Unlike company-scoped reads, this is the bootstrap boundary that tells an environment which
+ * company replicas to start. Each row is still proof-key-bound independently: sharing an
+ * environment id does not reveal a company whose registration names a different key.
+ */
+export const listRegisteredCompanies = query({
+  args: {},
+  returns: v.array(domainIdArg),
+  handler: async (ctx) => {
+    const identity = await requireIdentity(ctx);
+    if (!isEnvironmentIdentity(identity)) {
+      throw backendError(
+        "permission-denied",
+        "Only an environment can discover its company registrations.",
+      );
+    }
+
+    const tokenThumbprint = tokenProofKeyThumbprint(identity);
+    const rows = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_environment", (q) => q.eq("environmentId", identity.subject))
+      .take(REGISTRY_MAX_ROWS + 1);
+    if (rows.length > REGISTRY_MAX_ROWS) {
+      throw backendError(
+        "registry-too-large",
+        `This environment has more than ${REGISTRY_MAX_ROWS} company registrations.`,
+      );
+    }
+    const companyIds: string[] = [];
+    for (const row of rows) {
+      if (
+        row.state !== "active" ||
+        !isRegisteredProofKey({
+          tokenThumbprint,
+          registeredThumbprint: row.publicKeyThumbprint,
+        })
+      ) {
+        continue;
+      }
+      const company = await ctx.db.get(row.companyId);
+      if (company === null || company.lifecycleState !== "active") continue;
+      companyIds.push(company.id);
+    }
+    return companyIds.sort((left, right) => left.localeCompare(right));
+  },
+});
+
+/**
  * Creates/administers a company binding as a manager, or publishes an existing environment's own
  * discovery record after the standard relay issuer + registered proof-key check.
  */

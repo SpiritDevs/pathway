@@ -29,11 +29,18 @@ import {
   SYNC_BOOTSTRAP_GENERATION,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { resolveCloudSyncConfig } from "./syncDaemon.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  discoverCloudSyncCompanyIds,
+  makeCloudSyncTokenProvider,
+  resolveCloudSyncConfig,
+} from "./syncDaemon.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 
 const decodeCompany = Schema.decodeUnknownOption(SyncCompanyPayload);
@@ -64,6 +71,27 @@ export function isConnectGrantAuthorizedByReplica(input: {
   readonly replica: StoredSyncState;
 }): boolean {
   return resolveConnectGrantActorFromReplica(input) !== null;
+}
+
+/**
+ * Resolves a grant against the environment's currently registered company replicas.
+ *
+ * Membership ids are globally unique, but duplicate authorization is still treated as ambiguous
+ * so corrupted or crossed replicas cannot silently choose an authority boundary.
+ */
+export function resolveConnectGrantActorFromReplicas(input: {
+  readonly environmentId: EnvironmentId;
+  readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  readonly replicas: ReadonlyArray<StoredSyncState>;
+}): CloudUserId | null {
+  let resolved: CloudUserId | null = null;
+  for (const replica of input.replicas) {
+    const actor = resolveConnectGrantActorFromReplica({ ...input, replica });
+    if (actor === null) continue;
+    if (resolved !== null) return null;
+    resolved = actor;
+  }
+  return resolved;
 }
 
 /**
@@ -127,27 +155,10 @@ export function resolveConnectGrantActorFromReplica(input: {
 }
 
 /**
- * Reads the configured company's replica. Configuration, storage, and decoding failures all
- * collapse to the same refusal so the mint endpoint cannot disclose target authorization state.
+ * Resolves the grant's acting user by scanning only companies Convex currently registers for this
+ * environment. Configuration, discovery, storage, and decoding failures all collapse to the same
+ * refusal so the mint endpoint cannot disclose target authorization state.
  */
-export const authorizeConnectGrantFromLocalReplica = Effect.fn(
-  "environment.cloud.authorizeConnectGrant",
-)(
-  function* (input: {
-    readonly environmentId: EnvironmentId;
-    readonly connectGrant: RelayValidatedConnectGrantIdentity;
-  }) {
-    const configured = yield* resolveCloudSyncConfig;
-    if (configured._tag !== "Configured") return false;
-
-    const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
-    const replica = yield* store.service.read(configured.settings.companyId);
-    return resolveConnectGrantActorFromReplica({ ...input, replica }) !== null;
-  },
-  Effect.catchCause(() => Effect.succeed(false)),
-);
-
-/** Resolves the grant's acting user from the same fail-closed replica authorization path. */
 export const resolveConnectGrantActorFromLocalReplica = Effect.fn(
   "environment.cloud.resolveConnectGrantActor",
 )(
@@ -158,9 +169,34 @@ export const resolveConnectGrantActorFromLocalReplica = Effect.fn(
     const configured = yield* resolveCloudSyncConfig;
     if (configured._tag !== "Configured") return null;
 
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets);
+    const tokens = yield* makeCloudSyncTokenProvider({
+      environmentId: input.environmentId,
+      secrets,
+      dpopKeys,
+    });
+    const companyIds = yield* discoverCloudSyncCompanyIds({
+      convexUrl: configured.settings.convexUrl,
+      tokens,
+    });
     const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
-    const replica = yield* store.service.read(configured.settings.companyId);
-    return resolveConnectGrantActorFromReplica({ ...input, replica });
+    const replicas = yield* Effect.forEach(companyIds, store.service.read, { concurrency: 4 });
+    return resolveConnectGrantActorFromReplicas({ ...input, replicas });
   },
-  Effect.catchCause(() => Effect.succeed(null)),
+  Effect.catchCause((cause) =>
+    Cause.hasInterrupts(cause)
+      ? Effect.failCause(cause as Cause.Cause<never>)
+      : Effect.succeed(null),
+  ),
+);
+
+/** Boolean authorization verdict over the same fail-closed multi-company replica scan. */
+export const authorizeConnectGrantFromLocalReplica = Effect.fn(
+  "environment.cloud.authorizeConnectGrant",
+)(
+  (input: {
+    readonly environmentId: EnvironmentId;
+    readonly connectGrant: RelayValidatedConnectGrantIdentity;
+  }) => resolveConnectGrantActorFromLocalReplica(input).pipe(Effect.map((actor) => actor !== null)),
 );

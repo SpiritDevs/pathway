@@ -40,7 +40,9 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import type { IssueTrackerRepositoryError } from "../../persistence/Errors.ts";
 import { convexErrorCode, type ConvexServiceTokenProvider } from "../convexServiceToken.ts";
 import { type ConvexClientLike } from "../convexSyncTransport.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "../environmentKeys.ts";
 import {
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
   readCloudSyncLink,
   resolveCloudSyncConfig,
@@ -849,8 +851,8 @@ export const runIssueImportExecutor = Effect.fn("cloud.issue_import.execute")(fu
 });
 
 /**
- * Production runner. It fails before snapshot/project reads unless config, link, environment
- * identity, and the matching generation-3 bootstrap checkpoint are all present.
+ * Production runner. It fails before snapshot/project reads unless config, link, the requested
+ * Convex registration, environment identity, and the matching bootstrap checkpoint are present.
  */
 export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_configured")(
   function* (input: {
@@ -868,12 +870,6 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
         message: "Cloud sync must be fully configured before an issue import can run.",
       });
     }
-    if (config.settings.companyId !== input.companyId) {
-      return yield* new IssueImportPreflightError({
-        reason: "company-mismatch",
-        message: "The requested import company is not this server's configured cloud company.",
-      });
-    }
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     if ((yield* readCloudSyncLink(secrets)) === null) {
       return yield* new IssueImportPreflightError({
@@ -882,6 +878,34 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
       });
     }
     const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets).pipe(
+      Effect.mapError(
+        () =>
+          new IssueImportPreflightError({
+            reason: "company-mismatch",
+            message: "The registered cloud-sync proof key could not be loaded.",
+          }),
+      ),
+    );
+    const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+    const companyIds = yield* discoverCloudSyncCompanyIds({
+      convexUrl: config.settings.convexUrl,
+      tokens,
+    }).pipe(
+      Effect.mapError(
+        () =>
+          new IssueImportPreflightError({
+            reason: "company-mismatch",
+            message: "The requested import company's registration could not be verified.",
+          }),
+      ),
+    );
+    if (!companyIds.includes(input.companyId)) {
+      return yield* new IssueImportPreflightError({
+        reason: "company-mismatch",
+        message: "The requested import company is not registered to this environment.",
+      });
+    }
     const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
     const replica = yield* store.service.read(input.companyId);
     if (
@@ -892,10 +916,9 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
     ) {
       return yield* new IssueImportPreflightError({
         reason: "bootstrap-identity-missing",
-        message: "The configured company's cloud bootstrap identity is not ready for import.",
+        message: "The requested company's cloud bootstrap identity is not ready for import.",
       });
     }
-    const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets });
     const backend = yield* makeIssueImportBackend({
       convexUrl: config.settings.convexUrl,
       tokens,

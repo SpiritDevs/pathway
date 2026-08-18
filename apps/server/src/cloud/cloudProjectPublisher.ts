@@ -27,8 +27,10 @@ import {
   awaitCloudSyncLink,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS,
   DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL,
+  discoverCloudSyncCompanyIds,
   makeCloudSyncTokenProvider,
   resolveCloudSyncConfig,
+  superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 
@@ -184,7 +186,7 @@ export const runCloudProjectPublisher = Effect.fn("cloud.project_publisher.run")
   });
 });
 
-/** Default-off server layer; it shares the cloud-sync gates and durable environment identity. */
+/** Keeps one publisher running for every company registered to this linked environment. */
 export const cloudProjectPublisherLayer = (): Layer.Layer<
   never,
   never,
@@ -217,11 +219,20 @@ export const cloudProjectPublisherLayer = (): Layer.Layer<
             secrets,
             dpopKeys,
           });
-          yield* runCloudProjectPublisher({
-            companyId: config.settings.companyId,
-            environmentId,
-            convexUrl: config.settings.convexUrl,
-            tokens,
+          yield* superviseCloudSyncCompanies({
+            discover: () =>
+              discoverCloudSyncCompanyIds({
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            runCompany: (companyId) =>
+              runCloudProjectPublisher({
+                companyId,
+                environmentId,
+                convexUrl: config.settings.convexUrl,
+                tokens,
+              }),
+            workerLabel: "cloud-project-publisher",
           });
         }).pipe(
           Effect.catchCause((cause) =>

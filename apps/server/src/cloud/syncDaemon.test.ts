@@ -35,7 +35,6 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -52,8 +51,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
 import { CloudSyncEngineRegistry, makeCloudSyncEngineRegistry } from "./CloudSyncEngineRegistry.ts";
+import { generateDpopKeyPair } from "./convexServiceToken.ts";
 import {
-  CLOUD_SYNC_COMPANY_ID_ENV,
   cloudSyncActor,
   cloudSyncClientId,
   cloudSyncDaemonLayer,
@@ -70,12 +69,14 @@ const ENVIRONMENT_ID = EnvironmentId.make("env-daemon");
 const CONVEX_URL = "https://daemon.convex.cloud";
 const RELAY_URL = "https://relay.example.test";
 const ENVIRONMENT_CREDENTIAL = "environment-credential";
+const DPOP_KEYS = generateDpopKeyPair();
 
 /** Every gate satisfied. Individual tests drop one key to exercise a refusal. */
 const ENABLED_ENV = {
-  [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
   PATHWAY_CONVEX_URL: CONVEX_URL,
 } as const;
+
+const discoverCompany = () => Effect.succeed([COMPANY_ID]);
 
 // --------------------------------------------------------------------------
 // Fakes
@@ -375,30 +376,21 @@ describe("cloud sync daemon gates", () => {
       }),
     );
 
-  it.effect("reports missing company configuration", () =>
+  it.effect("reports missing deployment configuration", () =>
     Effect.gen(function* () {
-      expect(yield* resolveWith({ env: {} })).toEqual({
+      expect(yield* resolveWith({ env: {} })).toMatchObject({
         _tag: "Disabled",
-        reason: "company-not-configured",
+        reason: "convex-url-unavailable",
       });
     }),
   );
 
-  it.effect("requires a company and a deployment", () =>
+  it.effect("requires a deployment", () =>
     Effect.gen(function* () {
-      expect(yield* resolveWith({ env: {} })).toEqual({
+      expect(yield* resolveWith({ env: {} })).toMatchObject({
         _tag: "Disabled",
-        reason: "company-not-configured",
+        reason: "convex-url-unavailable",
       });
-
-      // A company but no deployment to reach.
-      expect(
-        yield* resolveWith({
-          env: {
-            [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
-          },
-        }),
-      ).toMatchObject({ reason: "convex-url-unavailable" });
 
       // A deployment that is not an origin is the same *answer* as no deployment, but it is not
       // the same refusal: the operator typo'd something and the detail has to say so.
@@ -429,7 +421,7 @@ describe("cloud sync daemon gates", () => {
       const resolution = yield* resolveWith({ env: ENABLED_ENV });
       expect(resolution).toEqual({
         _tag: "Enabled",
-        settings: { companyId: COMPANY_ID, convexUrl: CONVEX_URL },
+        settings: { convexUrl: CONVEX_URL },
       });
     }),
   );
@@ -469,7 +461,7 @@ describe("cloud sync daemon gates", () => {
   );
 
   it.effect("names the client and the actor after the environment", () =>
-    Effect.gen(function* () {
+    Effect.sync(() => {
       expect(cloudSyncClientId(ENVIRONMENT_ID)).toBe("pathway-environment-env-daemon");
       expect(cloudSyncActor(ENVIRONMENT_ID)).toEqual({
         kind: "environment",
@@ -492,6 +484,7 @@ describe("cloud sync service tokens", () => {
       const tokens = yield* makeCloudSyncTokenProvider({
         environmentId: ENVIRONMENT_ID,
         secrets: store,
+        dpopKeys: DPOP_KEYS,
       }).pipe(Effect.provide(makeTokenExchangeLayer(exchanges)));
 
       const refused = yield* Effect.flip(tokens.token);
@@ -517,6 +510,7 @@ describe("cloud sync service tokens", () => {
       const tokens = yield* makeCloudSyncTokenProvider({
         environmentId: ENVIRONMENT_ID,
         secrets: store,
+        dpopKeys: DPOP_KEYS,
       }).pipe(Effect.provide(makeTokenExchangeLayer(exchanges)));
 
       yield* Effect.flip(tokens.token);
@@ -553,7 +547,7 @@ layer("cloud sync daemon layer", (it) => {
       expect([...values.keys()].sort()).toEqual(
         [RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET].sort(),
       );
-      expect(logs.find("Warn", "company-not-configured")).toBeDefined();
+      expect(logs.find("Warn", "convex-url-unavailable")).toBeDefined();
     }),
   );
 
@@ -588,12 +582,7 @@ layer("cloud sync daemon layer", (it) => {
 
       yield* Effect.scoped(
         Layer.build(cloudSyncDaemonLayer({ transport: forbiddenTransport })).pipe(
-          provideDaemon({
-            env: {
-              [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
-            },
-            secrets: store,
-          }),
+          provideDaemon({ env: {}, secrets: store }),
         ),
       );
 
@@ -664,17 +653,21 @@ layer("cloud sync daemon", (it) => {
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* startCloudSyncDaemon({ transport: () => Effect.succeed(server.transport) });
+          yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
+            transport: () => Effect.succeed(server.transport),
+          });
           yield* Deferred.await(server.secondCycleStarted);
+          const shared = yield* registry.issueEngine(COMPANY_ID);
+          expect(shared).not.toBeNull();
+          expect(shared?.environmentId).toBe(ENVIRONMENT_ID);
         }),
       ).pipe(
         provideDaemon({ env: ENABLED_ENV, secrets }),
         Effect.provideService(CloudSyncEngineRegistry, registry),
       );
 
-      const shared = yield* registry.issueEngine(COMPANY_ID);
-      expect(shared).not.toBeNull();
-      expect(shared?.environmentId).toBe(ENVIRONMENT_ID);
+      expect(yield* registry.issueEngine(COMPANY_ID)).toBeNull();
 
       // Outbound: the pending operation was submitted exactly as it was stored.
       const submitted = yield* Ref.get(server.submissions);
@@ -706,6 +699,7 @@ layer("cloud sync daemon", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: (input) =>
               Effect.sync(() => {
                 seen = input;
@@ -718,7 +712,8 @@ layer("cloud sync daemon", (it) => {
 
       const input = seen as CloudSyncTransportInput | null;
       expect(input?.secrets).toBe(secrets);
-      expect(input?.settings).toEqual({ companyId: COMPANY_ID, convexUrl: CONVEX_URL });
+      expect(input?.settings).toEqual({ convexUrl: CONVEX_URL });
+      expect(input?.companyId).toBe(COMPANY_ID);
     }),
   );
 });
@@ -733,13 +728,6 @@ liveLayer("cloud sync daemon supervision", (it) => {
 
   const refusedHead = (reason: "unauthorized" | "upgrade-required", message: string) => () =>
     Stream.fail(new SyncTransportError({ reason, message }));
-
-  /** Runs a daemon to its own end, or fails the test if it never ends. */
-  const awaitDaemonEnd = (fiber: Fiber.Fiber<void>) =>
-    Fiber.await(fiber).pipe(
-      Effect.timeoutOption(Duration.seconds(5)),
-      Effect.map(Option.getOrUndefined),
-    );
 
   it.effect("restarts the engine after a defect, not just after a store failure", () =>
     Effect.gen(function* () {
@@ -759,6 +747,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () => Effect.succeed(transport),
             restartDelay: Duration.millis(1),
             linkWaitAttempts: 0,
@@ -787,6 +776,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () => Effect.succeed(transport),
             restartDelay: Duration.millis(1),
             linkWaitAttempts: 0,
@@ -801,12 +791,10 @@ liveLayer("cloud sync daemon supervision", (it) => {
           yield* secrets.remove(RELAY_ENVIRONMENT_CREDENTIAL_SECRET);
           yield* secrets.remove(RELAY_URL_SECRET);
 
-          const exit = yield* Fiber.await(fiber).pipe(
-            Effect.timeoutOption(Duration.seconds(5)),
-            Effect.map(Option.getOrUndefined),
+          yield* awaitUntil(
+            () => logs.find("Warn", "no longer linked") !== undefined,
+            "the company engine to stop after unlink",
           );
-          expect(exit).toBeDefined();
-          expect(exit === undefined ? false : Exit.isSuccess(exit)).toBe(true);
 
           // And it stays stopped: nothing resubscribes after the daemon reported it was over.
           const settled = subscriptions;
@@ -835,6 +823,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () => Effect.succeed(transport),
             restartDelay: Duration.millis(1),
             linkWaitAttempts: 0,
@@ -842,9 +831,10 @@ liveLayer("cloud sync daemon supervision", (it) => {
           expect(fiber).not.toBeNull();
           if (fiber === null) return;
 
-          const exit = yield* awaitDaemonEnd(fiber);
-          expect(exit).toBeDefined();
-          expect(exit === undefined ? false : Exit.isSuccess(exit)).toBe(true);
+          yield* awaitUntil(
+            () => logs.find("Warn", "will not restart") !== undefined,
+            "the terminal company refusal",
+          );
 
           // Once, and never again: the restart delay is a millisecond here, so a loop that ignored
           // the reason would have run dozens of times by the end of this sleep.
@@ -881,6 +871,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () => Effect.succeed(transport),
             restartDelay: Duration.millis(1),
             linkWaitAttempts: 0,
@@ -889,9 +880,10 @@ liveLayer("cloud sync daemon supervision", (it) => {
           expect(fiber).not.toBeNull();
           if (fiber === null) return;
 
-          const exit = yield* awaitDaemonEnd(fiber);
-          expect(exit).toBeDefined();
-          expect(exit === undefined ? false : Exit.isSuccess(exit)).toBe(true);
+          yield* awaitUntil(
+            () => logs.find("Warn", "will not restart") !== undefined,
+            "the bounded company refusal",
+          );
 
           // The first run plus the two the budget paid for, and nothing after that.
           expect(subscriptions).toBe(3);
@@ -928,6 +920,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const fiber = yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () => Effect.succeed(transport),
             restartDelay: Duration.millis(1),
             linkWaitAttempts: 0,
@@ -960,6 +953,7 @@ liveLayer("cloud sync daemon supervision", (it) => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           yield* startCloudSyncDaemon({
+            discoverCompanies: discoverCompany,
             transport: () =>
               Effect.sync(() => {
                 transportBuilds += 1;

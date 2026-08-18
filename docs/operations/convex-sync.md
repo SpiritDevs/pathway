@@ -15,19 +15,18 @@ explicit recovery decision, but import is not a normal deployment step.
 Cloud sync is required for online Pathway deployments. Configure each process for the same Convex
 deployment; similar names are deliberately not interchangeable.
 
-| Owner             | Configuration                                                     | Purpose                                                                                                    |
-| ----------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Convex deployment | `CLERK_JWT_ISSUER_DOMAIN`                                         | Clerk issuer used for member JWTs. The Clerk JWT template's application id is `convex`.                    |
-| Convex deployment | `PATHWAY_RELAY_JWT_ISSUER`                                        | Relay origin accepted as the environment-service JWT issuer.                                               |
-| Convex deployment | `PATHWAY_RELAY_JWKS_URL`                                          | Relay ES256 public keys, normally `https://<relay>/.well-known/jwks.json`.                                 |
-| Convex deployment | `UPLOADTHING_TOKEN`                                               | UploadThing API token used to prepare uploads and delete abandoned objects.                                |
-| Relay Worker      | `CONVEX_URL`                                                      | Convex client URL ending in `.convex.cloud`; this is not an HTTP Actions URL or deploy key.                |
-| Relay Worker      | `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWT_AUDIENCE` | Clerk configuration for the relay.                                                                         |
-| Web build         | `VITE_PATHWAY_CONVEX_URL`                                         | Convex client URL used by the browser.                                                                     |
-| Web build         | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`           | Clerk client and the JWT template used to authenticate to Convex.                                          |
-| Mobile build      | `PATHWAY_CONVEX_URL`                                              | Convex client URL embedded in Expo public config for onboarding workspace provisioning.                    |
-| Pathway server    | `PATHWAY_CLOUD_SYNC_COMPANY_ID`                                   | Company replicated by this environment. This is still explicit configuration, not derived from link state. |
-| Pathway server    | `PATHWAY_CONVEX_URL`                                              | Runtime Convex URL. It overrides the `PATHWAY_CONVEX_URL` embedded when the server bundle was built.       |
+| Owner             | Configuration                                                     | Purpose                                                                                              |
+| ----------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Convex deployment | `CLERK_JWT_ISSUER_DOMAIN`                                         | Clerk issuer used for member JWTs. The Clerk JWT template's application id is `convex`.              |
+| Convex deployment | `PATHWAY_RELAY_JWT_ISSUER`                                        | Relay origin accepted as the environment-service JWT issuer.                                         |
+| Convex deployment | `PATHWAY_RELAY_JWKS_URL`                                          | Relay ES256 public keys, normally `https://<relay>/.well-known/jwks.json`.                           |
+| Convex deployment | `UPLOADTHING_TOKEN`                                               | UploadThing API token used to prepare uploads and delete abandoned objects.                          |
+| Relay Worker      | `CONVEX_URL`                                                      | Convex client URL ending in `.convex.cloud`; this is not an HTTP Actions URL or deploy key.          |
+| Relay Worker      | `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWT_AUDIENCE` | Clerk configuration for the relay.                                                                   |
+| Web build         | `VITE_PATHWAY_CONVEX_URL`                                         | Convex client URL used by the browser.                                                               |
+| Web build         | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`           | Clerk client and the JWT template used to authenticate to Convex.                                    |
+| Mobile build      | `PATHWAY_CONVEX_URL`                                              | Convex client URL embedded in Expo public config for onboarding workspace provisioning.              |
+| Pathway server    | `PATHWAY_CONVEX_URL`                                              | Runtime Convex URL. It overrides the `PATHWAY_CONVEX_URL` embedded when the server bundle was built. |
 
 The relay and server use `PATHWAY_*`/unprefixed names because they run outside the browser. The web
 bundle uses the `VITE_*` names. Repository release tooling maps the shared public configuration into
@@ -358,11 +357,10 @@ For relay request failures, token exchange, Worker spans, and Axiom queries, use
 4. Deploy the production relay from `infra/relay/.env.prod.local` and verify
    `https://relay.spiritdevs.com/.well-known/jwks.json` plus a relay health request.
 5. Point the relay's `CONVEX_URL`, web build's `VITE_PATHWAY_CONVEX_URL`, mobile build's
-   `PATHWAY_CONVEX_URL`, and server's `PATHWAY_CONVEX_URL` at the same production deployment. Configure
-   `PATHWAY_CLOUD_SYNC_COMPANY_ID` on each server environment.
-6. Create/select the empty production company, link the environment, and verify bootstrap, one issue
-   round trip, a reconnect, and attachment prepare/finalize/delete. Do not run `smoke:seed` against
-   the production company.
+   `PATHWAY_CONVEX_URL`, and server's `PATHWAY_CONVEX_URL` at the same production deployment.
+6. Create or select each empty production company, link the environment in Convex, and verify
+   bootstrap, one issue round trip, a reconnect, and attachment prepare/finalize/delete. Do not run
+   `smoke:seed` against a production company.
 7. Release the generation-4 client/server build. A replica from an older bootstrap generation
    automatically performs one full reseed on first connect; its outbox survives.
 8. Confirm the header and Settings sync surfaces are live and the Convex feed/receipt rows advance.

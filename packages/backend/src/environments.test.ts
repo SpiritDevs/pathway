@@ -10,6 +10,7 @@ import schema from "../convex/schema.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -24,6 +25,8 @@ const modules = {
 };
 
 const COMPANY_ID = "0198f900-0000-7000-8000-000000000001";
+const COMPANY_TWO_ID = "0198f900-0000-7000-8000-000000000002";
+const COMPANY_THREE_ID = "0198f900-0000-7000-8000-000000000003";
 const MANAGER_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000101";
 const READER_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000102";
 const BLIND_MEMBERSHIP_ID = "0198f900-0000-7000-8000-000000000103";
@@ -369,6 +372,138 @@ describe("environment registry", () => {
     await expect(
       asUser(t, "blind").query(api.environments.list, { companyId: COMPANY_ID }),
     ).rejects.toThrow("Missing permission environments.read");
+  });
+
+  it("lets an environment discover every active proof-key-bound company registration", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const insertCompany = async (
+        id: string,
+        name: string,
+        lifecycleState: "active" | "deletionScheduled",
+      ) =>
+        await ctx.db.insert("companies", {
+          id,
+          name,
+          issueKeyPrefix: name.slice(0, 3).toUpperCase(),
+          nextIssueNumber: 1,
+          lifecycleState,
+          deletionScheduledAt: lifecycleState === "active" ? null : 1_700_000_000_000,
+          purgeAfter: lifecycleState === "active" ? null : 1_700_086_400_000,
+          authorizationEpoch: 1,
+          syncVersion: 0,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+        });
+      const insertRegistration = async (input: {
+        companyId: Awaited<ReturnType<typeof insertCompany>>;
+        id: string;
+        publicKeyThumbprint: string;
+        state?: "active" | "revoked";
+      }) => {
+        const state = input.state ?? "active";
+        await ctx.db.insert("environmentRegistrations", {
+          id: input.id,
+          companyId: input.companyId,
+          environmentId: ENVIRONMENT_ID,
+          publicKeyThumbprint: input.publicKeyThumbprint,
+          descriptor: descriptor(ENVIRONMENT_ID, input.id),
+          relayLinkState: state === "active" ? "linked" : "revoked",
+          managedEndpointAvailable: state === "active",
+          lastSeenAt: null,
+          serviceRoleIds: [],
+          teamIds: [],
+          state,
+          registeredByMembershipId: null,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000,
+        });
+      };
+
+      const companyTwo = await insertCompany(COMPANY_TWO_ID, "Second Company", "active");
+      await insertRegistration({
+        companyId: companyTwo,
+        id: "0198f900-0000-7000-8000-000000000303",
+        publicKeyThumbprint: THUMBPRINT,
+      });
+      const companyThree = await insertCompany(
+        COMPANY_THREE_ID,
+        "Deleting Company",
+        "deletionScheduled",
+      );
+      await insertRegistration({
+        companyId: companyThree,
+        id: "0198f900-0000-7000-8000-000000000304",
+        publicKeyThumbprint: THUMBPRINT,
+      });
+      const wrongKeyCompany = await insertCompany(
+        "0198f900-0000-7000-8000-000000000004",
+        "Wrong Key Company",
+        "active",
+      );
+      await insertRegistration({
+        companyId: wrongKeyCompany,
+        id: "0198f900-0000-7000-8000-000000000305",
+        publicKeyThumbprint: "somebody-elses-thumbprint",
+      });
+      const revokedCompany = await insertCompany(
+        "0198f900-0000-7000-8000-000000000005",
+        "Revoked Company",
+        "active",
+      );
+      await insertRegistration({
+        companyId: revokedCompany,
+        id: "0198f900-0000-7000-8000-000000000306",
+        publicKeyThumbprint: THUMBPRINT,
+        state: "revoked",
+      });
+    });
+
+    await expect(
+      asEnvironment(t).query(api.environments.listRegisteredCompanies, {}),
+    ).resolves.toEqual([COMPANY_ID, COMPANY_TWO_ID]);
+  });
+
+  it("refuses company-registration discovery to humans and unauthenticated callers", async () => {
+    const t = harness();
+    await seedRegistration(t);
+
+    await expect(
+      asUser(t, "reader").query(api.environments.listRegisteredCompanies, {}),
+    ).rejects.toThrow("Only an environment can discover its company registrations");
+    await expect(t.query(api.environments.listRegisteredCompanies, {})).rejects.toThrow(
+      "authenticated identity",
+    );
+  });
+
+  it("refuses discovery rather than silently truncating an oversized environment registry", async () => {
+    const t = harness();
+    const seeded = await seedRegistration(t);
+    await t.run(async (ctx) => {
+      for (let index = 1; index <= 2_000; index += 1) {
+        await ctx.db.insert("environmentRegistrations", {
+          id: `0198f901-0000-7000-8000-${String(index).padStart(12, "0")}`,
+          companyId: seeded.companyDocId,
+          environmentId: ENVIRONMENT_ID,
+          publicKeyThumbprint: THUMBPRINT,
+          descriptor: descriptor(ENVIRONMENT_ID, `Registry machine ${index}`),
+          relayLinkState: "linked",
+          managedEndpointAvailable: true,
+          lastSeenAt: null,
+          serviceRoleIds: [],
+          teamIds: [],
+          state: "active",
+          registeredByMembershipId: null,
+          createdAt: seeded.now,
+          updatedAt: seeded.now,
+        });
+      }
+    });
+
+    await expect(
+      asEnvironment(t).query(api.environments.listRegisteredCompanies, {}),
+    ).rejects.toThrow("more than 2000 company registrations");
   });
 
   it("delivers environment bindings through the environments.read feed gate", async () => {

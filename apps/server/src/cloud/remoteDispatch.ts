@@ -2,6 +2,11 @@
 import * as NodeCrypto from "node:crypto";
 
 import {
+  makeSqliteSyncStore,
+  SYNC_BOOTSTRAP_GENERATION,
+  type StoredSyncState,
+} from "@spiritdevs/client-runtime/sync";
+import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -21,19 +26,36 @@ import {
   type ServerConfig,
   type ThreadId,
 } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
+import {
+  SyncEnvironmentBindingPayload,
+  SyncEnvironmentRegistrationPayload,
+} from "@spiritdevs/contracts/cloudSync";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import {
   PeerEnvironmentConnectionError,
   PeerEnvironments,
   type PeerEnvironmentGrantConsumption,
 } from "./peerEnvironments.ts";
-import { readCloudSyncLink, resolveCloudSyncConfig } from "./syncDaemon.ts";
+import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  discoverCloudSyncCompanyIds,
+  makeCloudSyncTokenProvider,
+  readCloudSyncLink,
+  resolveCloudSyncConfig,
+} from "./syncDaemon.ts";
+import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 
 export const REMOTE_ENVIRONMENT_COMMAND_TTL_MS = 60 * 60 * 1_000;
 
@@ -87,6 +109,62 @@ export interface RemoteDispatchInput {
   readonly args: EnvironmentCommandArgs;
   readonly idempotencyId: EnvironmentCommandId;
   readonly connectGrantToken?: string;
+}
+
+export interface RemoteDispatchCompanyReplica {
+  readonly companyId: CompanyId;
+  readonly replica: StoredSyncState;
+}
+
+const decodeEnvironmentRegistration = Schema.decodeUnknownOption(
+  SyncEnvironmentRegistrationPayload,
+);
+const decodeEnvironmentBinding = Schema.decodeUnknownOption(SyncEnvironmentBindingPayload);
+
+/**
+ * Derives the deferred-command company from the target environment and, when supplied, its exact
+ * project binding. More than one match is ambiguous and no match is never replaced by a default.
+ */
+export function resolveRemoteDispatchCompanyFromReplicas(
+  input: Pick<RemoteDispatchInput, "targetEnvironmentId" | "targetProjectId" | "cloudProjectId">,
+  replicas: ReadonlyArray<RemoteDispatchCompanyReplica>,
+): CompanyId | null {
+  const matches: CompanyId[] = [];
+  for (const { companyId, replica } of replicas) {
+    const checkpoint = replica.checkpoint;
+    if (
+      checkpoint === null ||
+      !checkpoint.bootstrapped ||
+      checkpoint.bootstrapGeneration !== SYNC_BOOTSTRAP_GENERATION ||
+      checkpoint.companyId !== companyId ||
+      replica.quarantined.length > 0
+    ) {
+      continue;
+    }
+    const matched = replica.entities.some((row) => {
+      if (input.cloudProjectId !== undefined) {
+        if (row.entityKind !== "environmentBinding") return false;
+        const binding = decodeEnvironmentBinding(row.payload);
+        return (
+          Option.isSome(binding) &&
+          binding.value.status === "active" &&
+          binding.value.environmentId === input.targetEnvironmentId &&
+          binding.value.cloudProjectId === input.cloudProjectId &&
+          (input.targetProjectId === undefined ||
+            binding.value.localProjectId === input.targetProjectId)
+        );
+      }
+      if (row.entityKind !== "environmentRegistration") return false;
+      const environment = decodeEnvironmentRegistration(row.payload);
+      return (
+        Option.isSome(environment) &&
+        environment.value.state === "active" &&
+        environment.value.environmentId === input.targetEnvironmentId
+      );
+    });
+    if (matched) matches.push(companyId);
+  }
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 export type RemoteDispatchResult =
@@ -383,96 +461,164 @@ function missingForIssueError(
   }
 }
 
-export const make = Effect.gen(function* () {
-  const peers = yield* PeerEnvironments;
-  const issuer = yield* EnvironmentCommandIssuer;
-  const spentGrants = yield* Ref.make<ReadonlySet<string>>(new Set());
+export type RemoteDispatchCompanyResolver = (
+  input: Pick<RemoteDispatchInput, "targetEnvironmentId" | "targetProjectId" | "cloudProjectId">,
+) => Effect.Effect<CompanyId | null>;
 
-  const dispatch = Effect.fn("cloud.remote_dispatch.dispatch")(function* (
-    input: RemoteDispatchInput,
+const resolveRemoteDispatchCompanyFromCloud = Effect.fn("cloud.remote_dispatch.resolve_company")(
+  function* (
+    input: Pick<RemoteDispatchInput, "targetEnvironmentId" | "targetProjectId" | "cloudProjectId">,
   ) {
-    if (input.kind !== input.args.kind) {
-      return yield* new RemoteDispatchInvalidCommandError({
-        id: input.idempotencyId,
-        message: "The remote command kind must match its arguments.",
-      });
-    }
+    const config = yield* resolveCloudSyncConfig;
+    if (config._tag !== "Configured") return null;
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    if ((yield* readCloudSyncLink(secrets)) === null) return null;
+    const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+    const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets);
+    const tokens = yield* makeCloudSyncTokenProvider({ environmentId, secrets, dpopKeys });
+    const companyIds = yield* discoverCloudSyncCompanyIds({
+      convexUrl: config.settings.convexUrl,
+      tokens,
+    });
+    const store = yield* makeSqliteSyncStore(yield* makeSyncSqliteExecutor);
+    const replicas = yield* Effect.forEach(
+      companyIds,
+      (companyId) =>
+        store.service.read(companyId).pipe(Effect.map((replica) => ({ companyId, replica }))),
+      { concurrency: 4 },
+    );
+    return resolveRemoteDispatchCompanyFromReplicas(input, replicas);
+  },
+  Effect.catchCause((cause) =>
+    Cause.hasInterrupts(cause)
+      ? Effect.failCause(cause as Cause.Cause<never>)
+      : Effect.succeed(null),
+  ),
+);
 
-    let directFailure: PeerEnvironmentConnectionError | RemoteDirectExecutionError | undefined;
-    const fingerprint =
-      input.connectGrantToken === undefined ? undefined : tokenFingerprint(input.connectGrantToken);
-    const reserved =
-      fingerprint === undefined
-        ? false
-        : yield* Ref.modify(spentGrants, (spent) =>
-            spent.has(fingerprint)
-              ? [false, spent]
-              : ([true, new Set([...spent, fingerprint])] as const),
-          );
-    if (reserved) {
-      const direct = yield* executeDirect(input, peers).pipe(Effect.result);
-      if (direct._tag === "Success") {
-        return {
-          delivery: "direct",
+export function makeRemoteDispatch(options: {
+  readonly resolveCompany: RemoteDispatchCompanyResolver;
+}) {
+  return Effect.gen(function* () {
+    const peers = yield* PeerEnvironments;
+    const issuer = yield* EnvironmentCommandIssuer;
+    const spentGrants = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const resolveCompany = options.resolveCompany;
+
+    const dispatch = Effect.fn("cloud.remote_dispatch.dispatch")(function* (
+      input: RemoteDispatchInput,
+    ) {
+      if (input.kind !== input.args.kind) {
+        return yield* new RemoteDispatchInvalidCommandError({
           id: input.idempotencyId,
-          result: direct.success!.result,
-          projection: direct.success!.projection,
-        } as const;
-      }
-      directFailure = direct.failure;
-      if (peerGrantConsumption(direct.failure) === "not-consumed") {
-        yield* Ref.update(spentGrants, (spent) => {
-          const next = new Set(spent);
-          next.delete(fingerprint!);
-          return next;
+          message: "The remote command kind must match its arguments.",
         });
       }
-    }
 
-    const config = yield* resolveCloudSyncConfig;
-    const companyId = config._tag === "Configured" ? config.settings.companyId : "";
-    const deferred = yield* issuer
-      .issue({
-        companyId,
-        id: input.idempotencyId,
+      let directFailure: PeerEnvironmentConnectionError | RemoteDirectExecutionError | undefined;
+      const fingerprint =
+        input.connectGrantToken === undefined
+          ? undefined
+          : tokenFingerprint(input.connectGrantToken);
+      const reserved =
+        fingerprint === undefined
+          ? false
+          : yield* Ref.modify(spentGrants, (spent) =>
+              spent.has(fingerprint)
+                ? [false, spent]
+                : ([true, new Set([...spent, fingerprint])] as const),
+            );
+      if (reserved) {
+        const direct = yield* executeDirect(input, peers).pipe(Effect.result);
+        if (direct._tag === "Success") {
+          return {
+            delivery: "direct",
+            id: input.idempotencyId,
+            result: direct.success!.result,
+            projection: direct.success!.projection,
+          } as const;
+        }
+        directFailure = direct.failure;
+        if (peerGrantConsumption(direct.failure) === "not-consumed") {
+          yield* Ref.update(spentGrants, (spent) => {
+            const next = new Set(spent);
+            next.delete(fingerprint!);
+            return next;
+          });
+        }
+      }
+
+      const deferred = yield* Effect.gen(function* () {
+        if (input.kind === "startThread" && input.cloudProjectId === undefined) {
+          return yield* new EnvironmentCommandIssueUnavailableError({
+            reason: "cloud-sync-unavailable",
+            message: "Deferred start-thread delivery needs a cloud project binding.",
+          });
+        }
+        const companyId = yield* resolveCompany(input);
+        if (companyId === null) {
+          return yield* new EnvironmentCommandIssueUnavailableError({
+            reason: "cloud-sync-unavailable",
+            message: "No unique company route exists for this remote command.",
+          });
+        }
+        yield* issuer.issue({
+          companyId,
+          id: input.idempotencyId,
+          targetEnvironmentId: input.targetEnvironmentId,
+          cloudProjectId: input.cloudProjectId ?? null,
+          kind: input.kind,
+          args: input.args,
+          ttlMs: REMOTE_ENVIRONMENT_COMMAND_TTL_MS,
+        });
+      }).pipe(Effect.result);
+      if (deferred._tag === "Success") {
+        return {
+          delivery: "deferred",
+          id: input.idempotencyId,
+          result: null,
+          projection: null,
+        } as const;
+      }
+
+      const missing: RemoteDispatchMissingCapability[] = [];
+      if (
+        input.connectGrantToken === undefined ||
+        (fingerprint !== undefined && !reserved) ||
+        (directFailure !== undefined && peerGrantConsumption(directFailure) !== "not-consumed")
+      ) {
+        missing.push("connect-grant");
+      }
+      if (input.kind === "startThread" && input.targetProjectId === undefined) {
+        missing.push("target-project");
+      }
+      missing.push(missingForIssueError(deferred.failure));
+      return yield* new RemoteDispatchUnavailableError({
         targetEnvironmentId: input.targetEnvironmentId,
-        cloudProjectId: input.cloudProjectId ?? null,
-        kind: input.kind,
-        args: input.args,
-        ttlMs: REMOTE_ENVIRONMENT_COMMAND_TTL_MS,
-      })
-      .pipe(Effect.result);
-    if (deferred._tag === "Success") {
-      return {
-        delivery: "deferred",
         id: input.idempotencyId,
-        result: null,
-        projection: null,
-      } as const;
-    }
-
-    const missing: RemoteDispatchMissingCapability[] = [];
-    if (
-      input.connectGrantToken === undefined ||
-      (fingerprint !== undefined && !reserved) ||
-      (directFailure !== undefined && peerGrantConsumption(directFailure) !== "not-consumed")
-    ) {
-      missing.push("connect-grant");
-    }
-    if (input.kind === "startThread" && input.targetProjectId === undefined) {
-      missing.push("target-project");
-    }
-    missing.push(missingForIssueError(deferred.failure));
-    return yield* new RemoteDispatchUnavailableError({
-      targetEnvironmentId: input.targetEnvironmentId,
-      id: input.idempotencyId,
-      missing: [...new Set(missing)],
-      ...(directFailure === undefined ? {} : { directFailure: directFailure.message }),
-      deferredFailure: deferred.failure.message,
+        missing: [...new Set(missing)],
+        ...(directFailure === undefined ? {} : { directFailure: directFailure.message }),
+        deferredFailure: deferred.failure.message,
+      });
     });
-  });
 
-  return RemoteDispatch.of({ dispatch });
+    return RemoteDispatch.of({ dispatch });
+  });
+}
+
+export const make = Effect.gen(function* () {
+  const httpClient = yield* HttpClient.HttpClient;
+  const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const sqlClient = yield* SqlClient.SqlClient;
+  const resolveCompany: RemoteDispatchCompanyResolver = (input) =>
+    resolveRemoteDispatchCompanyFromCloud(input).pipe(
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(ServerEnvironment.ServerEnvironment, serverEnvironment),
+      Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+      Effect.provideService(SqlClient.SqlClient, sqlClient),
+    );
+  return yield* makeRemoteDispatch({ resolveCompany });
 });
 
 const environmentCommandIssuerLayer = Layer.effect(

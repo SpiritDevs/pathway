@@ -381,15 +381,25 @@ export interface CloudHttpDependencies {
 }
 
 const cloudHttpDependencies = Effect.gen(function* () {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const httpClient = yield* HttpClient.HttpClient;
   return {
-    secrets: yield* ServerSecretStore.ServerSecretStore,
+    secrets,
     environment: yield* ServerEnvironment.ServerEnvironment,
     endpointRuntime: yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime,
     environmentAuth: yield* EnvironmentAuth.EnvironmentAuth,
     cliTokenManager: yield* CliTokenManager.CloudCliTokenManager,
-    httpClient: yield* HttpClient.HttpClient,
-    authorizeConnectGrant: authorizeConnectGrantFromLocalReplica,
-    resolveConnectGrantActor: resolveConnectGrantActorFromLocalReplica,
+    httpClient,
+    authorizeConnectGrant: (input) =>
+      authorizeConnectGrantFromLocalReplica(input).pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      ),
+    resolveConnectGrantActor: (input) =>
+      resolveConnectGrantActorFromLocalReplica(input).pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      ),
   } satisfies CloudHttpDependencies;
 });
 

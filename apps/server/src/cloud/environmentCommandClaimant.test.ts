@@ -16,12 +16,8 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { CLOUD_SYNC_COMPANY_ID_ENV } from "./syncDaemon.ts";
 import {
   executeClaimedEnvironmentCommand,
   makeLocalEnvironmentCommandExecutor,
@@ -140,9 +136,10 @@ function runtime(input: {
   readonly backend: EnvironmentCommandBackend;
   readonly executor: EnvironmentCommandExecutor;
   readonly bootstrapped?: boolean;
+  readonly companyId?: CompanyId;
 }): EnvironmentCommandClaimantRuntime {
   return {
-    companyId: COMPANY_ID,
+    companyId: input.companyId ?? COMPANY_ID,
     environmentId: ENVIRONMENT_ID,
     backend: input.backend,
     executor: input.executor,
@@ -204,6 +201,32 @@ const runHappy = (claimed: ClaimedEnvironmentCommand, projectionValue = projecti
   });
 
 describe("environment command claimant", () => {
+  it.effect("keeps claim routing separate for every registered company", () =>
+    Effect.gen(function* () {
+      const convex = backendHarness({ claim: () => Effect.succeed([]) });
+      const executor = { execute: () => Effect.die("must not execute") };
+      const companyA = CompanyId.make("company-a");
+      const companyB = CompanyId.make("company-b");
+
+      yield* Effect.all(
+        [
+          runEnvironmentCommandClaimCycle(
+            runtime({ backend: convex.backend, executor, companyId: companyA }),
+          ),
+          runEnvironmentCommandClaimCycle(
+            runtime({ backend: convex.backend, executor, companyId: companyB }),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      expect(convex.claimCalls.map(({ companyId }) => companyId).toSorted()).toEqual([
+        companyA,
+        companyB,
+      ]);
+    }),
+  );
+
   it.effect("claims, starts a thread, and reports its pointer under the same command id", () =>
     Effect.gen(function* () {
       const claimed = command("startThread", {
@@ -504,39 +527,21 @@ describe("environment command claimant", () => {
     ),
   );
 
-  it.effect("does not activate when cloud sync is configured but the environment is unlinked", () =>
-    Effect.gen(function* () {
-      let secretReads = 0;
-      const secrets = ServerSecretStore.ServerSecretStore.of({
-        get: () =>
-          Effect.sync(() => {
-            secretReads += 1;
-            return Option.none<Uint8Array>();
+  it.effect("activates from the Convex URL without a legacy company setting", () =>
+    resolveEnvironmentCommandClaimantActivation.pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { PATHWAY_CONVEX_URL: "https://claimant.convex.cloud" },
           }),
-        set: () => Effect.die("must not write"),
-        create: () => Effect.die("must not write"),
-        getOrCreateRandom: () => Effect.die("must not write"),
-        remove: () => Effect.die("must not write"),
-      });
-      const result = yield* resolveEnvironmentCommandClaimantActivation.pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            Layer.succeed(ServerSecretStore.ServerSecretStore, secrets),
-            ConfigProvider.layer(
-              ConfigProvider.fromEnv({
-                env: {
-                  [CLOUD_SYNC_COMPANY_ID_ENV]: COMPANY_ID,
-                  PATHWAY_CONVEX_URL: "https://claimant.convex.cloud",
-                },
-              }),
-            ),
-          ),
         ),
-      );
-
-      expect(result).toBeNull();
-      expect(secretReads).toBeGreaterThan(0);
-    }),
+      ),
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result).toEqual({ convexUrl: "https://claimant.convex.cloud" });
+        }),
+      ),
+    ),
   );
 
   it.effect("does not claim before the local cloud replica has bootstrapped", () =>

@@ -473,6 +473,8 @@ describe("IssueTrackerService", () => {
       };
       const registry = CloudSyncEngineRegistry.of({
         registerIssueEngine: () => Effect.void,
+        unregisterIssueEngine: () => Effect.void,
+        withIssueEngine: (_input, use) => use,
         issueEngine: () => Effect.succeed(handle),
       } satisfies CloudSyncEngineRegistryShape);
       const replicaReader: IssueReplicaReader = {
