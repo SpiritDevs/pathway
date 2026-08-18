@@ -32,10 +32,19 @@ export function createRelayEnvironmentDiscoveryAtoms<R, E>(
         Effect.flatMap((discovery) => discovery.refresh),
       ),
   });
+  const verify = createRuntimeCommand(runtime, {
+    label: "relay-environment-discovery:verify",
+    concurrency: { mode: "singleFlight", key: (environmentId: string) => environmentId },
+    execute: (environmentId: string) =>
+      RelayEnvironmentDiscovery.RelayEnvironmentDiscovery.pipe(
+        Effect.flatMap((discovery) => discovery.verify(environmentId)),
+      ),
+  });
 
   return {
     stateAtom,
     stateValueAtom,
     refresh,
+    verify,
   };
 }

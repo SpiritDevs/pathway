@@ -171,6 +171,25 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
 });
 
 describe("RelayEnvironmentDiscovery", () => {
+  it("preserves settled availability while refreshing known environments", () => {
+    const known = environments[0]!;
+    const previous = new Map([
+      [
+        known.environmentId,
+        {
+          environment: known,
+          availability: "online" as const,
+          status: Option.some(status(known, "online")),
+          error: Option.none(),
+        },
+      ],
+    ]);
+
+    const refreshing = RelayEnvironmentDiscovery.refreshingEnvironmentMap(environments, previous);
+    expect(refreshing.get(known.environmentId)?.availability).toBe("online");
+    expect(refreshing.get(environments[1]!.environmentId)?.availability).toBe("checking");
+  });
+
   it.effect("publishes each environment status as soon as that lookup completes", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -216,6 +235,28 @@ describe("RelayEnvironmentDiscovery", () => {
           "offline",
         );
         expect(complete.refreshing).toBe(false);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("revalidates an environment before reporting action-time availability", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* Effect.gen(function* () {
+        const discovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
+        const requests = yield* Ref.get(harness.statusRequests);
+        for (const environment of environments) {
+          yield* Deferred.succeed(
+            requests.get(environment.environmentId)!,
+            status(
+              environment,
+              environment.environmentId === environments[0]!.environmentId ? "online" : "offline",
+            ),
+          );
+        }
+
+        expect(yield* discovery.verify(environments[0]!.environmentId)).toBe("online");
+        expect(yield* discovery.verify("missing-environment")).toBe("unknown");
       }).pipe(Effect.provide(harness.layer));
     }),
   );

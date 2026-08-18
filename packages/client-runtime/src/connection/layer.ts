@@ -7,7 +7,9 @@ import * as ConnectionDriver from "./driver.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionOnboarding from "./onboarding.ts";
 import * as PlatformConnectionSource from "../platform/source.ts";
+import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as RelayEnvironmentDiscovery from "../relay/discovery.ts";
+import * as RelayEnvironmentDiscoveryLifecycle from "../relay/discoveryLifecycle.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 
@@ -33,11 +35,17 @@ const connectionStartupLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const platformSource = yield* PlatformConnectionSource.PlatformConnectionSource;
+    const applicationActivity = yield* ClientCapabilities.ApplicationActivity;
+    const relayDiscovery = yield* RelayEnvironmentDiscovery.RelayEnvironmentDiscovery;
     yield* registry.start;
     yield* platformSource.registrations.pipe(
       Stream.runForEach(registry.reconcilePlatform),
       Effect.forkScoped,
     );
+    yield* RelayEnvironmentDiscoveryLifecycle.run({
+      activity: applicationActivity,
+      refresh: relayDiscovery.refresh,
+    }).pipe(Effect.forkScoped);
   }).pipe(Effect.withSpan("clientRuntime.connection.application.start")),
 );
 

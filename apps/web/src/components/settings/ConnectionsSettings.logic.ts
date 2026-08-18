@@ -1,4 +1,9 @@
-import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@spiritdevs/contracts";
+import type {
+  AdvertisedEndpoint,
+  DesktopBridge,
+  DesktopWslState,
+  EnvironmentId,
+} from "@spiritdevs/contracts";
 
 const ACTIVE_ENVIRONMENT_CONNECTION_PHASES = new Set(["connected", "connecting", "reconnecting"]);
 
@@ -39,6 +44,21 @@ export function partitionClientSessionsByConnection<
   }
 
   return { connected, disconnected };
+}
+
+export function excludeRegisteredEnvironmentClientSessions<
+  T extends { readonly initiatingEnvironmentId?: EnvironmentId },
+>(
+  sessions: ReadonlyArray<T>,
+  registeredEnvironmentIds?: ReadonlySet<EnvironmentId>,
+): ReadonlyArray<T> {
+  if (registeredEnvironmentIds === undefined || registeredEnvironmentIds.size === 0)
+    return sessions;
+  return sessions.filter(
+    ({ initiatingEnvironmentId }) =>
+      initiatingEnvironmentId === undefined ||
+      !registeredEnvironmentIds.has(initiatingEnvironmentId),
+  );
 }
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;

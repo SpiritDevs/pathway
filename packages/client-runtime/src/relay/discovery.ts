@@ -44,6 +44,9 @@ export class RelayEnvironmentDiscovery extends Context.Service<
   {
     readonly state: SubscriptionRef.SubscriptionRef<RelayEnvironmentDiscoveryState>;
     readonly refresh: Effect.Effect<void>;
+    readonly verify: (
+      environmentId: string,
+    ) => Effect.Effect<RelayEnvironmentAvailability | "unknown">;
   }
 >()("@spiritdevs/client-runtime/relay/discovery/RelayEnvironmentDiscovery") {}
 
@@ -53,6 +56,28 @@ export const EMPTY_RELAY_ENVIRONMENT_DISCOVERY_STATE: RelayEnvironmentDiscoveryS
   offline: false,
   error: Option.none(),
 };
+
+export function refreshingEnvironmentMap(
+  environments: ReadonlyArray<RelayClientEnvironmentRecord>,
+  previous: ReadonlyMap<string, RelayDiscoveredEnvironment>,
+): ReadonlyMap<string, RelayDiscoveredEnvironment> {
+  return new Map(
+    environments.map((environment) => {
+      const existing = previous.get(environment.environmentId);
+      return [
+        environment.environmentId,
+        existing === undefined
+          ? {
+              environment,
+              availability: "checking" as const,
+              status: Option.none(),
+              error: Option.none(),
+            }
+          : { ...existing, environment },
+      ];
+    }),
+  );
+}
 
 function validateStatus(
   environment: RelayClientEnvironmentRecord,
@@ -215,12 +240,12 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
 
       let generation = yield* Ref.get(accountGeneration);
       yield* Ref.set(refreshGeneration, generation);
-      yield* SubscriptionRef.set(state, {
-        environments: new Map(),
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
         refreshing: true,
         offline: false,
         error: Option.none(),
-      });
+      }));
 
       // Signed out is the idle state, not a failure: the proactive refresh on
       // credentials-changed also runs on sign-out and must settle back to a
@@ -254,6 +279,10 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       ) {
         generation = yield* Ref.updateAndGet(accountGeneration, (current) => current + 1);
         yield* Ref.set(refreshGeneration, generation);
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          environments: new Map(),
+        }));
       }
       yield* Ref.set(activeAccountId, accountId);
 
@@ -263,18 +292,9 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       if ((yield* Ref.get(accountGeneration)) !== generation) {
         return;
       }
-      const next = new Map<string, RelayDiscoveredEnvironment>();
-      for (const environment of environments) {
-        next.set(environment.environmentId, {
-          environment,
-          availability: "checking",
-          status: Option.none(),
-          error: Option.none(),
-        });
-      }
       yield* SubscriptionRef.update(state, (current) => ({
         ...current,
-        environments: next,
+        environments: refreshingEnvironmentMap(environments, current.environments),
       }));
 
       yield* Effect.forEach(
@@ -301,6 +321,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
           }
           yield* SubscriptionRef.update(state, (current) => ({
             ...current,
+            environments: new Map(),
             refreshing: false,
             error: Option.some(error),
           }));
@@ -343,7 +364,14 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
     Effect.forkScoped,
   );
 
-  return RelayEnvironmentDiscovery.of({ state, refresh });
+  const verify = Effect.fn("RelayEnvironmentDiscovery.verify")(function* (environmentId: string) {
+    yield* refresh;
+    return (
+      (yield* SubscriptionRef.get(state)).environments.get(environmentId)?.availability ?? "unknown"
+    );
+  });
+
+  return RelayEnvironmentDiscovery.of({ state, refresh, verify });
 });
 
 export const layer = Layer.effect(RelayEnvironmentDiscovery, make());

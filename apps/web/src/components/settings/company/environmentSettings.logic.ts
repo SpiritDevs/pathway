@@ -35,6 +35,28 @@ export interface CompanyEnvironmentRow {
 
 export type PathwayConnectStatus = "active" | "connecting" | "failed";
 
+export function remoteCommandDeliveryCopy(
+  status: PathwayConnectStatus,
+  environmentLabel: string,
+): { readonly description: string; readonly queueing: boolean } {
+  if (status === "active") {
+    return {
+      description: `${environmentLabel} is online. Commands are available to claim immediately and expire after 24 hours.`,
+      queueing: false,
+    };
+  }
+  if (status === "connecting") {
+    return {
+      description: `${environmentLabel} is being checked. Commands will queue until it is online and expire after 24 hours.`,
+      queueing: true,
+    };
+  }
+  return {
+    description: `${environmentLabel} is offline. Commands will queue until it reconnects and expire after 24 hours.`,
+    queueing: true,
+  };
+}
+
 export function completeRemoteRelayAvailability(input: {
   readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
   readonly reported: ReadonlyMap<EnvironmentId, Discovery.RelayEnvironmentAvailability>;

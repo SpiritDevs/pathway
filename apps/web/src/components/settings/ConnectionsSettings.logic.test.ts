@@ -1,7 +1,8 @@
-import type { AdvertisedEndpoint, DesktopWslState } from "@spiritdevs/contracts";
+import type { AdvertisedEndpoint, DesktopWslState, EnvironmentId } from "@spiritdevs/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
+  excludeRegisteredEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
   partitionEnvironmentsByConnection,
@@ -43,6 +44,29 @@ describe("partitionClientSessionsByConnection", () => {
       connected: [current, live],
       disconnected: [offline],
     });
+  });
+});
+
+describe("excludeRegisteredEnvironmentClientSessions", () => {
+  it("keeps client-only access and hides sessions represented by registered environments", () => {
+    type Session = { readonly id: string; readonly initiatingEnvironmentId?: EnvironmentId };
+    const webPortal: Session = { id: "web" };
+    const mobile: Session = { id: "mobile" };
+    const registeredDesktop: Session = {
+      id: "desktop",
+      initiatingEnvironmentId: "environment-studio" as EnvironmentId,
+    };
+    const unregisteredDesktop: Session = {
+      id: "old-desktop",
+      initiatingEnvironmentId: "environment-removed" as EnvironmentId,
+    };
+
+    expect(
+      excludeRegisteredEnvironmentClientSessions(
+        [webPortal, mobile, registeredDesktop, unregisteredDesktop],
+        new Set(["environment-studio" as EnvironmentId]),
+      ),
+    ).toEqual([webPortal, mobile, unregisteredDesktop]);
   });
 });
 

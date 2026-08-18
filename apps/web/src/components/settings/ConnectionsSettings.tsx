@@ -42,6 +42,7 @@ import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestam
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
   applyWslEnableSelection,
+  excludeRegisteredEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
   partitionEnvironmentsByConnection,
@@ -1822,6 +1823,10 @@ export function EnvironmentConnectionSettings({
       ),
     );
   }, [authAccessChanges.data]);
+  const visibleDesktopClientSessions = useMemo(
+    () => excludeRegisteredEnvironmentClientSessions(desktopClientSessions, excludeEnvironmentIds),
+    [desktopClientSessions, excludeEnvironmentIds],
+  );
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
     : currentAuthPolicy === "remote-reachable";
@@ -2687,7 +2692,7 @@ export function EnvironmentConnectionSettings({
         presentation={presentation}
         isLoading={isLoadingDesktopAccessManagement}
         pairingLinks={visibleDesktopPairingLinks}
-        clientSessions={desktopClientSessions}
+        clientSessions={visibleDesktopClientSessions}
         revokingPairingLinkId={revokingDesktopPairingLinkId}
         revokingClientSessionId={revokingDesktopClientSessionId}
         isRevokingDisconnectedClients={isRevokingDisconnectedDesktopClients}

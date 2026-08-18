@@ -1,4 +1,5 @@
 import {
+  ApplicationActivity,
   ClientPresentation,
   CloudSession,
   EnvironmentOwnedDataCleanup,
@@ -117,6 +118,19 @@ const wakeupsLayer = Wakeups.layer({
 const capabilitiesLayer = Layer.effectContext(
   Effect.gen(function* () {
     const storage = yield* MobileStorage.MobileStorage;
+    const applicationActivity = ApplicationActivity.of({
+      status: Effect.sync(() => (AppState.currentState === "active" ? "active" : "inactive")),
+      changes: Stream.callback((queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() =>
+            AppState.addEventListener("change", (state) => {
+              Queue.offerUnsafe(queue, state === "active" ? "active" : "inactive");
+            }),
+          ),
+          (subscription) => Effect.sync(() => subscription.remove()),
+        ).pipe(Effect.asVoid),
+      ),
+    });
     return Context.make(
       CloudSession,
       CloudSession.of({
@@ -147,6 +161,7 @@ const capabilitiesLayer = Layer.effectContext(
         }),
       }),
     ).pipe(
+      Context.add(ApplicationActivity, applicationActivity),
       Context.add(
         PrimaryEnvironmentAuth,
         PrimaryEnvironmentAuth.of({ bearerToken: Effect.succeed(Option.none()) }),

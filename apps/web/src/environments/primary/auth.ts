@@ -6,6 +6,7 @@ import type {
   ServerAuthSessionMethod,
   AuthSessionId,
   AuthSessionState,
+  EnvironmentId,
 } from "@spiritdevs/contracts";
 import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@spiritdevs/contracts";
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@spiritdevs/contracts";
@@ -130,6 +131,7 @@ export interface ServerPairingLinkRecord {
 export interface ServerClientSessionRecord {
   readonly sessionId: AuthSessionId;
   readonly subject: string;
+  readonly initiatingEnvironmentId?: EnvironmentId;
   readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
   readonly method: ServerAuthSessionMethod;
   readonly client: AuthClientMetadata;

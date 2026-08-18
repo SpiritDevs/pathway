@@ -19,6 +19,7 @@ import {
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
   partitionCompanyEnvironmentRowsByConnection,
+  remoteCommandDeliveryCopy,
   resolveDeleteConfirmationClick,
 } from "./environmentSettings.logic";
 
@@ -296,6 +297,24 @@ describe("environment settings derivation", () => {
         }),
       ),
     ).toBe("Thread is idle");
+  });
+
+  it("distinguishes immediate command delivery from an offline queue", () => {
+    expect(remoteCommandDeliveryCopy("active", "Studio")).toEqual({
+      description:
+        "Studio is online. Commands are available to claim immediately and expire after 24 hours.",
+      queueing: false,
+    });
+    expect(remoteCommandDeliveryCopy("failed", "Studio")).toEqual({
+      description:
+        "Studio is offline. Commands will queue until it reconnects and expire after 24 hours.",
+      queueing: true,
+    });
+    expect(remoteCommandDeliveryCopy("connecting", "Studio")).toEqual({
+      description:
+        "Studio is being checked. Commands will queue until it is online and expire after 24 hours.",
+      queueing: true,
+    });
   });
 
   it("requires a second delete click within the five-second confirmation window", () => {

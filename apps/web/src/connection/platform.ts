@@ -1,4 +1,5 @@
 import {
+  ApplicationActivity,
   ClientPresentation,
   CloudSession,
   EnvironmentOwnedDataCleanup,
@@ -175,6 +176,26 @@ export const provisionDesktopSshEnvironment = Effect.fn(
 
 const capabilitiesLayer = Layer.effectContext(
   Effect.sync(() => {
+    const applicationActivity = ApplicationActivity.of({
+      status: Effect.sync(() => (document.visibilityState === "visible" ? "active" : "inactive")),
+      changes: Stream.callback((queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const listener = () =>
+              Queue.offerUnsafe(
+                queue,
+                document.visibilityState === "visible" ? "active" : "inactive",
+              );
+            document.addEventListener("visibilitychange", listener);
+            return listener;
+          }),
+          (listener) =>
+            Effect.sync(() => {
+              document.removeEventListener("visibilitychange", listener);
+            }),
+        ).pipe(Effect.asVoid),
+      ),
+    });
     const presentation = ClientPresentation.of({
       metadata: clientMetadata(),
       scopes: AuthStandardClientScopes,
@@ -278,6 +299,7 @@ const capabilitiesLayer = Layer.effectContext(
     });
 
     return Context.make(CloudSession, cloudSession).pipe(
+      Context.add(ApplicationActivity, applicationActivity),
       Context.add(PrimaryEnvironmentAuth, primaryAuth),
       Context.add(RelayDeviceIdentity, identity),
       Context.add(ClientPresentation, presentation),

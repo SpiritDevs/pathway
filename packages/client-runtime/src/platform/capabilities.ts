@@ -8,6 +8,7 @@ import {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
+import type * as Stream from "effect/Stream";
 
 import type { ConnectionAttemptError } from "../connection/model.ts";
 
@@ -27,6 +28,21 @@ export class CloudSession extends Context.Service<
     readonly clerkToken: Effect.Effect<string, ConnectionAttemptError>;
   }
 >()("@spiritdevs/client-runtime/platform/capabilities/CloudSession") {}
+
+export type ApplicationActivityState = "active" | "inactive";
+
+/**
+ * Platform-owned application foreground state. Shared services use this to
+ * keep global data fresh without polling while a browser tab or mobile app is
+ * backgrounded.
+ */
+export class ApplicationActivity extends Context.Service<
+  ApplicationActivity,
+  {
+    readonly status: Effect.Effect<ApplicationActivityState>;
+    readonly changes: Stream.Stream<ApplicationActivityState>;
+  }
+>()("@spiritdevs/client-runtime/platform/capabilities/ApplicationActivity") {}
 
 export class RelayDeviceIdentity extends Context.Service<
   RelayDeviceIdentity,

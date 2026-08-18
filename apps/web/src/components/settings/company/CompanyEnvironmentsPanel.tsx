@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import { ThreadId } from "@spiritdevs/contracts";
 import {
@@ -88,6 +89,7 @@ import {
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
   partitionCompanyEnvironmentRowsByConnection,
+  remoteCommandDeliveryCopy,
   resolveDeleteConfirmationClick,
   type CompanyEnvironmentRow,
   type PathwayConnectStatus,
@@ -104,8 +106,6 @@ const COMMAND_KINDS: ReadonlyArray<{
   { kind: "interrupt", label: "Interrupt" },
   { kind: "statusQuery", label: "Check status" },
 ];
-
-const RELAY_HEALTH_REFRESH_INTERVAL_MS = 15_000;
 
 function relativeTimestamp(timestamp: number | null): string {
   return timestamp === null
@@ -471,6 +471,7 @@ function GrantReveal({
 
 function RemoteCommandForm({
   environment,
+  pathwayConnectStatus,
   issuePending,
   actionBlocked,
   controlAvailable,
@@ -480,6 +481,7 @@ function RemoteCommandForm({
   onIssue,
 }: {
   readonly environment: CompanyEnvironmentRow;
+  readonly pathwayConnectStatus: PathwayConnectStatus;
   readonly issuePending: boolean;
   readonly actionBlocked: boolean;
   readonly controlAvailable: boolean;
@@ -506,15 +508,14 @@ function RemoteCommandForm({
     environmentCommandPermission(kind) === "environments.read" ? readGate : controlGate;
   const enabled = controlAvailable && dispatchGate.enabled && kindGate.enabled;
   const tooltip = dispatchGate.tooltip ?? kindGate.tooltip;
+  const delivery = remoteCommandDeliveryCopy(pathwayConnectStatus, environment.label);
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-sm font-medium">Durable remote command</p>
-          <p className="text-xs text-muted-foreground">
-            Commands remain pending while {environment.label} is offline and expire after 24 hours.
-          </p>
+          <p className="text-xs text-muted-foreground">{delivery.description}</p>
         </div>
         <Select
           value={kind}
@@ -577,7 +578,9 @@ function RemoteCommandForm({
           ) : (
             <SendIcon className="size-3.5" />
           )}
-          {issuePending ? "Issuing…" : COMMAND_KINDS.find((option) => option.kind === kind)?.label}
+          {issuePending
+            ? "Issuing…"
+            : `${delivery.queueing ? "Queue" : "Run"} ${COMMAND_KINDS.find((option) => option.kind === kind)?.label?.toLowerCase()}`}
         </Button>
       </PermissionTooltip>
       {needsThread ? (
@@ -680,7 +683,7 @@ export function CompanyEnvironmentsPanel() {
   const primaryCloudLinkState = usePrimaryCloudLinkState();
   const cloudLinkStatus = useAlwaysOnCloudLinkStatus();
   const relayDiscovery = useRelayEnvironmentDiscovery();
-  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+  const verifyRelayEnvironment = useAtomCommand(relayEnvironmentDiscovery.verify, {
     reportFailure: false,
   });
   const reportedRemoteRelayAvailability = useMemo(
@@ -749,21 +752,6 @@ export function CompanyEnvironmentsPanel() {
   const [loadingCommands, setLoadingCommands] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [grant, setGrant] = useState<IssuedConnectGrant | null>(null);
-
-  useEffect(() => {
-    if (!settings.isSignedIn) return;
-    const refreshWhileVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      void refreshRelayEnvironments();
-    };
-    refreshWhileVisible();
-    const interval = window.setInterval(refreshWhileVisible, RELAY_HEALTH_REFRESH_INTERVAL_MS);
-    document.addEventListener("visibilitychange", refreshWhileVisible);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", refreshWhileVisible);
-    };
-  }, [refreshRelayEnvironments, settings.isSignedIn]);
 
   useEffect(() => {
     if (
@@ -1111,6 +1099,7 @@ export function CompanyEnvironmentsPanel() {
                   <RemoteCommandForm
                     key={selected.environmentId}
                     environment={selected}
+                    pathwayConnectStatus={selectedPathwayConnectStatus ?? "connecting"}
                     issuePending={pendingAction === "issue"}
                     actionBlocked={pendingAction !== null}
                     controlAvailable={control !== null}
@@ -1173,11 +1162,25 @@ export function CompanyEnvironmentsPanel() {
                           size="sm"
                           variant="outline"
                           disabled={
-                            !controlGate.enabled || control === null || pendingAction !== null
+                            !controlGate.enabled ||
+                            control === null ||
+                            pendingAction !== null ||
+                            selectedPathwayConnectStatus !== "active"
                           }
                           onClick={() => {
                             if (control === null) return;
                             void runAction("grant", async () => {
+                              const verification = await verifyRelayEnvironment(
+                                selected.environmentId,
+                              );
+                              if (verification._tag === "Failure") {
+                                throw squashAtomCommandFailure(verification);
+                              }
+                              if (verification.value !== "online") {
+                                throw new Error(
+                                  `${selected.label} is not currently reachable through Pathway Connect.`,
+                                );
+                              }
                               const issued = await control.issueConnectGrant({
                                 companyId,
                                 environmentId: selected.environmentId,
@@ -1192,6 +1195,12 @@ export function CompanyEnvironmentsPanel() {
                         </Button>
                       </PermissionTooltip>
                     )}
+                    {selectedPathwayConnectStatus !== "active" ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        This environment must be online before Pathway can mint a usable direct
+                        connection grant.
+                      </p>
+                    ) : null}
                   </div>
                 </>
               )}
