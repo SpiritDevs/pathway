@@ -44,6 +44,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -779,6 +780,27 @@ function OpenCommandPaletteDialog(props: {
       ),
     [environments],
   );
+  const projectEnvironmentLocationById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => {
+          const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+          const isLocal = isPrimary || isDesktopLocalConnectionTarget(environment.entry.target);
+          return [
+            environment.environmentId,
+            {
+              kind: isLocal ? "local" : "remote",
+              label: isPrimary
+                ? "Local"
+                : isLocal
+                  ? `${environment.label} (Local)`
+                  : environment.label,
+            },
+          ] as const;
+        }),
+      ),
+    [environments],
+  );
   const orderedProjects = useMemo(
     () =>
       orderItemsByPreferredIds({
@@ -1155,12 +1177,32 @@ function OpenCommandPaletteDialog(props: {
           valuePrefix: "new-thread-in",
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
-            return (
-              group?.memberProjects.flatMap((member) =>
+            const location = projectEnvironmentLocationById.get(project.environmentId);
+            return [
+              ...(group?.memberProjects.flatMap((member) =>
                 member.workspaceRoot === null
                   ? [member.title]
                   : [member.title, member.workspaceRoot],
-              ) ?? []
+              ) ?? []),
+              ...(location ? [location.label] : []),
+            ];
+          },
+          renderDescription: (project) => {
+            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+              kind: "remote",
+              label: "Remote",
+            };
+            return (
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  {location.kind === "remote" ? (
+                    <ServerIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
+                  ) : null}
+                  <span className="truncate">{location.label}</span>
+                </span>
+                <span className="shrink-0 text-muted-foreground/50">·</span>
+                <span className="truncate">{project.workspaceRoot ?? "No local folder"}</span>
+              </span>
             );
           },
           icon: projectFaviconIcon,
@@ -1195,6 +1237,7 @@ function OpenCommandPaletteDialog(props: {
       handleNewThread,
       openCheckoutlessProject,
       pickerProjects,
+      projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],
   );
