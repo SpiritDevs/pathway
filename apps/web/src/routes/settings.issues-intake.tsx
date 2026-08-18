@@ -1,7 +1,18 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { IntakeSettingsPanel } from "../components/settings/issues/IntakeSettingsPanel";
+export function integrationsAnchorForLegacyIntakeHash(hash: string): string {
+  const anchor = hash.replace(/^#/, "");
+  return anchor === "slack-bot-token" || anchor === "slack-watched-channels"
+    ? "issue-intake"
+    : anchor;
+}
 
 export const Route = createFileRoute("/settings/issues-intake")({
-  component: IntakeSettingsPanel,
+  beforeLoad: ({ location }) => {
+    throw redirect({
+      to: "/settings/integrations",
+      hash: integrationsAnchorForLegacyIntakeHash(location.hash),
+      replace: true,
+    });
+  },
 });

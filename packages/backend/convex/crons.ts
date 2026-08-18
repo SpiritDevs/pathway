@@ -10,4 +10,17 @@ crons.hourly(
   internal.issueAttachments.gcPending,
 );
 
+crons.daily(
+  "prune completed issue automation jobs",
+  { hourUTC: 3, minuteUTC: 23 },
+  internal.issueAutomation.pruneCompleted,
+);
+
+crons.interval(
+  "recover blocked issue automation jobs",
+  { minutes: 1 },
+  internal.issueAutomation.recoverBlocked,
+  {},
+);
+
 export default crons;

@@ -117,6 +117,11 @@ export function slackSourceChip(
   };
 }
 
+/** Historical Slack sources predate company integration identity and cannot safely sync replies. */
+export function isLegacySlackSource(source: IssueSlackSource): boolean {
+  return source.integrationId === undefined || source.workspaceId === undefined;
+}
+
 // ── Rows ───────────────────────────────────────────────────────────────
 
 export interface TriageRowPresentation {

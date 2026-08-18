@@ -77,9 +77,10 @@ offline. Every successful authorization refreshes the local access grant.
 
 ### Services and coordination
 
-One environment holds the company integration coordinator lease at a time. The lease has a 90-second
-TTL and renews every 30 seconds. Side-effect claims include the lease generation; losing the lease
-prevents new side effects, and transactional, idempotent claims recover after expiry.
+Integration coordination is specified by [0010](0010-company-integrations-and-durable-automation.md).
+Coordination is per Slack workspace rather than one company-wide coordinator: each workspace has a
+90-second lease renewed every 30 seconds. Event-driven issue automation is scheduled directly by
+Convex as durable targeted jobs and does not use an integration controller pool.
 
 Pathway servers do not authenticate to Convex as human users. The relay exchanges an environment's
 existing DPoP-bound credential and proof for a short-lived service JWT with

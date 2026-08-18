@@ -88,6 +88,8 @@ import {
   encodeTeam,
   encodeTeamMembership,
 } from "./companyApply.ts";
+import { scheduleReviewAuditsForTransition } from "./automationJobs.ts";
+import { scheduleSlackOutbound } from "./slackOutbound.ts";
 import { syncOperationActorRecord, type CompanyActor } from "./identity.ts";
 
 type FeedActor = ReturnType<typeof syncOperationActorRecord>;
@@ -1074,6 +1076,30 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
 
   await ctx.db.patch(issue._id, { ...patch, updatedAt: now });
   const doc = await mustGet(ctx, issue._id);
+  await scheduleReviewAuditsForTransition(
+    ctx,
+    company,
+    doc,
+    issue.statusId,
+    operation.operationId,
+    now,
+  );
+  if (
+    args.statusId !== undefined &&
+    issue.statusId !== doc.statusId &&
+    !(operation.actor.kind === "system" && operation.actor.source === "slack")
+  ) {
+    const status = await liveRow(ctx, "issueStatuses", company._id, doc.statusId);
+    await scheduleSlackOutbound(
+      ctx,
+      company,
+      doc,
+      operation.operationId,
+      "status",
+      `Status changed to ${status?.name ?? doc.statusId}`,
+      now,
+    );
+  }
   return applied(
     upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
     await appendAuditEvent(
@@ -2630,6 +2656,17 @@ const issueCommentCreate: EnvApply = async ({ ctx, actor, company, feedActor, op
     version: 0,
   });
   const doc = await mustGet(ctx, docId);
+  if (!(operation.actor.kind === "system" && operation.actor.source === "slack")) {
+    await scheduleSlackOutbound(
+      ctx,
+      company,
+      issue,
+      operation.operationId,
+      "comment",
+      args.body,
+      now,
+    );
+  }
   return applied(
     upsert("issueComment", doc.id, issue.teamIds, docId, encodeIssueComment(company, doc)),
     ...(await bindCommentAttachments(ctx, company, issue.teamIds, doc.id, resolved.value, [], now)),

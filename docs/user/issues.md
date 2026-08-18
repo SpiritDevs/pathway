@@ -368,10 +368,12 @@ Pathway can watch Slack channels, turn messages into issues, and post back into 
 
 Add the scopes under **OAuth & Permissions**, then reinstall the Slack app to the workspace so the
 new permissions reach the bot token. Invite the bot to each channel (for example, with Slack's
-`/invite @bot-name` command), then paste the token into **Settings → Issues → Triage & Intake**.
-Saving verifies the token; opening the channel picker and the first poll verify the channel scopes.
-The token is stored on the machine running Pathway and is never sent back to the app, which is why
-the field stays empty afterwards.
+`/invite @bot-name` command), then open **Settings → Integrations** to connect it. Saving verifies
+the token; opening the channel
+picker and the first poll verify the channel scopes. Personal workspaces keep the token on the
+environment. Organisation workspaces encrypt it in company storage and release it only to the
+current controller; in either case the field stays empty afterwards. See [Integrations](./integrations.md)
+for controller priority, failover, migration, and credential details.
 
 ### Watched channels and triggers
 
@@ -396,8 +398,8 @@ Turning every trigger off pauses a channel without removing it.
 
 ### Automatic assignment and review
 
-Turn on **Auto-assign worker** for the channels that should use automatic routing. At the bottom of
-**Triage & Intake**, configure:
+Turn on **Auto-assign worker** for the channels that should use automatic routing. In the
+**Issue automation** sheet under **Settings → Integrations**, configure:
 
 - the routing model, ordered worker rules, and an optional fallback worker;
 - audit rules, each with one or more independent auditor models;

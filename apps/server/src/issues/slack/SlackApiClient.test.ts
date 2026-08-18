@@ -44,14 +44,23 @@ const param = (request: HttpClientRequest.HttpClientRequest, name: string): stri
 describe("SlackApiClient", () => {
   it.effect("reads the workspace and the bot's own ids off auth.test", () => {
     const { execute, layer } = makeLayer(() =>
-      Response.json({ ok: true, team: "Pathway HQ", user_id: "U0BOT", bot_id: "B0BOT" }),
+      Response.json({
+        ok: true,
+        team: "Pathway HQ",
+        team_id: "T0PATHWAY",
+        url: "https://pathway.slack.com/",
+        user_id: "U0BOT",
+        bot_id: "B0BOT",
+      }),
     );
     return Effect.gen(function* () {
       const client = yield* SlackApiClient;
       const identity = yield* client.authTest({ token: "xoxb-1" });
 
       expect(identity).toEqual({
+        workspaceId: "T0PATHWAY",
         workspaceName: "Pathway HQ",
+        workspaceDomain: "pathway",
         botUserId: "U0BOT",
         botId: "B0BOT",
       });

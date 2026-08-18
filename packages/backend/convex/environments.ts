@@ -464,6 +464,41 @@ export const deactivate = mutation({
       relayLinkState: "revoked",
       updatedAt: now,
     });
+    const heldLeases = await ctx.db
+      .query("slackCoordinatorLeases")
+      .withIndex("by_holder_and_expiry", (q) =>
+        q.eq("holderEnvironmentId", registration.environmentId),
+      )
+      .collect();
+    for (const lease of heldLeases) {
+      await ctx.db.patch(lease._id, {
+        holderEnvironmentId: null,
+        generation: lease.generation + 1,
+        expiresAt: null,
+        preferredHealthyHeartbeats: 0,
+        updatedAt: now,
+      });
+    }
+    for (const state of ["claimed", "running"] as const) {
+      const jobs = await ctx.db
+        .query("issueAutomationJobs")
+        .withIndex("by_target_and_state", (q) =>
+          q.eq("targetEnvironmentId", registration.environmentId).eq("state", state),
+        )
+        .collect();
+      for (const job of jobs) {
+        await ctx.db.patch(job._id, {
+          state: "blocked",
+          blockCode: "authorization-revoked",
+          diagnostic: "The target environment registration was revoked.",
+          claimHolderEnvironmentId: null,
+          claimGeneration: job.claimGeneration + 1,
+          claimExpiresAt: null,
+          nextRetryAt: null,
+          updatedAt: now,
+        });
+      }
+    }
     await appendCompanyChanges(ctx, {
       companyId: actor.company._id,
       actor: actorRecord(actor),

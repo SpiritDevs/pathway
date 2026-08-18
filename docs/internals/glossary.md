@@ -13,6 +13,7 @@ This is a living glossary for Pathway. It explains what common terms mean in thi
 - [Model Context Protocol](#model-context-protocol)
 - [Checkpointing](#checkpointing)
 - [Issue tracker](#issue-tracker)
+- [Company integrations](#company-integrations)
 - [Identity and onboarding](#identity-and-onboarding)
 
 ## Concepts
@@ -244,6 +245,54 @@ which is where reading resumed from, and from the **outbound registry**
 - If you see `receipt`, think "async milestone signal, for tests".
 - If you see `checkpoint`, think "workspace snapshot for diff/restore".
 - If you see `quiesced`, think "all relevant follow-up work has gone idle".
+
+### Company integrations
+
+#### Integration
+
+A company-owned connection to an external service, including its redacted configuration, health,
+and operational state. Environments execute an integration but do not own its configuration.
+
+#### Slack integration
+
+One Slack workspace connected to one Pathway company. It owns the encrypted bot credential,
+watched channels, controller order, shared cursors, deduplication ledger, and outbound deliveries.
+
+#### Controller pool
+
+The explicitly ordered environments eligible to run one Slack integration: one preferred
+environment and up to ten backups. It is not a general company worker pool.
+
+#### Controller lease
+
+The 90-second generation-fenced right for one environment to poll and deliver for one Slack
+integration. A stale generation cannot commit intake, cursors, health, or outbound delivery state.
+
+#### Contender
+
+An eligible controller-pool environment publishing a 30-second health heartbeat for one Slack
+integration. Contenders outside the configured pool are ignored.
+
+#### Operational ledger
+
+Central Convex state needed to recover external Slack work: channel cursors, processed and ignored
+messages, canonical issue/comment links, delivery claims, resulting Slack timestamps, and health.
+
+#### Automation job
+
+A durable, uniquely triggered unit of issue automation created by Convex with an immutable
+configuration snapshot and a specific project or thread execution target.
+
+#### Blocked job
+
+An automation job whose intent is retained but whose prerequisite is unavailable, such as an
+offline environment, missing binding, disabled provider, or unavailable model. It is re-evaluated
+when prerequisites change and by the recovery sweep.
+
+#### Provider capability snapshot
+
+A bounded, non-secret environment advertisement containing provider instance IDs, driver kinds,
+enabled/available state, model IDs, and a revision. It is readiness data, not credentials.
 
 ### Identity and onboarding
 

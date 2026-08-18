@@ -321,11 +321,18 @@ function AuditRuleCard({
   );
 }
 
-export function IssueAutomationSettingsSection() {
+export function IssueAutomationSettingsSection({
+  automation: externalAutomation,
+  onSave,
+}: {
+  readonly automation?: IssueAutomationSettings | undefined;
+  readonly onSave?: ((settings: IssueAutomationSettings) => void) | undefined;
+} = {}) {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const automation = settings.issueAutomation;
-  const save = (next: IssueAutomationSettings) => updateSettings({ issueAutomation: next });
+  const automation = externalAutomation ?? settings.issueAutomation;
+  const save = (next: IssueAutomationSettings) =>
+    onSave === undefined ? updateSettings({ issueAutomation: next }) : onSave(next);
   const patch = (next: Partial<IssueAutomationSettings>) => save({ ...automation, ...next });
   const moveRoutingRule = (from: number, to: number) => {
     const routingRules = [...automation.routingRules];

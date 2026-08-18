@@ -56,4 +56,4 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - Providers: [Codex](./providers/codex.md), [Claude](./providers/claude.md),
   [Cursor](./providers/cursor.md)
 - [Reference](./reference/encyclopedia.md)
-- [User guides](./user/keybindings.md)
+- User guides: [Keybindings](./user/keybindings.md), [Integrations](./user/integrations.md)

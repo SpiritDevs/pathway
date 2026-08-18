@@ -45,6 +45,7 @@ const ROUTE_LABELS: Readonly<Record<string, string>> = {
   "/settings/issues-enrichment": "Issue enrichment settings",
   "/settings/issues-import": "Issue import settings",
   "/settings/issues-intake": "Issue intake settings",
+  "/settings/integrations": "Integration settings",
   "/settings/issues-labels": "Issue label settings",
   "/settings/issues-milestones": "Issue milestone settings",
   "/settings/issues-statuses": "Issue status settings",

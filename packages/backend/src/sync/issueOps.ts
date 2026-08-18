@@ -212,16 +212,32 @@ export interface IssueSlackSource {
   readonly issueId: string;
   readonly channelId: string;
   readonly messageTs: string;
+  readonly integrationId?: string | undefined;
+  readonly workspaceId?: string | undefined;
+  readonly workspaceDomain?: string | undefined;
   readonly permalink: string | null;
   readonly authorName: string | null;
 }
 
 function slackSource(value: unknown, label: string): IssueSlackSource {
   const source = record(value, label);
+  const integrationId = field(source, "integrationId");
+  const workspaceId = field(source, "workspaceId");
+  const workspaceDomain = field(source, "workspaceDomain");
   return {
     issueId: domainId(field(source, "issueId"), `${label}.issueId`),
     channelId: trimmedNonEmpty(field(source, "channelId"), `${label}.channelId`, 256),
     messageTs: trimmedNonEmpty(field(source, "messageTs"), `${label}.messageTs`, 256),
+    integrationId:
+      integrationId === undefined ? undefined : domainId(integrationId, `${label}.integrationId`),
+    workspaceId:
+      workspaceId === undefined
+        ? undefined
+        : trimmedNonEmpty(workspaceId, `${label}.workspaceId`, 256),
+    workspaceDomain:
+      workspaceDomain === undefined
+        ? undefined
+        : trimmedNonEmpty(workspaceDomain, `${label}.workspaceDomain`, 256),
     permalink: nullable(field(source, "permalink"), (inner) =>
       trimmedNonEmpty(inner, `${label}.permalink`, 8_192),
     ),

@@ -549,6 +549,293 @@ export default defineSchema({
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
 
+  // ---------------------------------------------------------------------------
+  // Company-owned integrations and durable automation
+  // ---------------------------------------------------------------------------
+
+  /** One Slack workspace connected to one company. Credentials live in the split table below. */
+  slackIntegrations: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    workspaceId: v.string(),
+    workspaceName: v.string(),
+    workspaceDomain: v.union(v.string(), v.null()),
+    botUserId: v.union(v.string(), v.null()),
+    botId: v.union(v.string(), v.null()),
+    state: v.union(v.literal("draft"), v.literal("active"), v.literal("disconnected")),
+    /** Once active, legacy local polling stays fenced even while this integration is disconnected. */
+    activatedAt: v.optional(v.union(v.number(), v.null())),
+    credentialPresent: v.boolean(),
+    preferredEnvironmentId: v.union(v.string(), v.null()),
+    backupEnvironmentIds: v.array(v.string()),
+    configurationRevision: v.number(),
+    lastPollAt: v.union(v.number(), v.null()),
+    currentError: v.union(v.string(), v.null()),
+    blockedReason: v.union(v.string(), v.null()),
+    healthHistory: v.optional(
+      v.array(
+        v.object({
+          at: v.number(),
+          state: v.union(v.literal("healthy"), v.literal("error")),
+          error: v.union(v.string(), v.null()),
+        }),
+      ),
+    ),
+    watchCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_workspace", ["companyId", "workspaceId"])
+    .index("by_company_and_state", ["companyId", "state"]),
+
+  /** AES-256-GCM material only. Public functions never return rows from this table. */
+  slackIntegrationCredentials: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    workspaceId: v.string(),
+    keyId: v.string(),
+    iv: v.string(),
+    ciphertext: v.string(),
+    authenticationTag: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_integration", ["integrationId"])
+    .index("by_key_id", ["keyId"]),
+
+  /** Minimal durable ownership marker so removal can never revive a legacy local poller. */
+  slackIntegrationTombstones: defineTable({
+    companyId: v.id("companies"),
+    workspaceId: v.string(),
+    removedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_workspace", ["companyId", "workspaceId"]),
+
+  slackChannelWatches: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    channelId: v.string(),
+    channelName: v.string(),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    cycleId: v.union(domainId, v.null()),
+    autoInvestigate: v.boolean(),
+    autoAssign: v.boolean(),
+    trigger: v.any(),
+    revision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_and_channel", ["integrationId", "channelId"]),
+
+  /** A lease row is stable; generation increases whenever ownership is acquired or fenced. */
+  slackCoordinatorLeases: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    holderEnvironmentId: v.union(v.string(), v.null()),
+    generation: v.number(),
+    expiresAt: v.union(v.number(), v.null()),
+    preferredHealthyHeartbeats: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_integration", ["integrationId"])
+    .index("by_holder_and_expiry", ["holderEnvironmentId", "expiresAt"])
+    .index("by_expiry", ["expiresAt"]),
+
+  slackCoordinatorContenders: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    environmentId: v.string(),
+    healthy: v.boolean(),
+    capabilityRevision: v.number(),
+    lastHeartbeatAt: v.number(),
+  })
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_and_environment", ["integrationId", "environmentId"])
+    .index("by_environment", ["environmentId"]),
+
+  slackChannelCursors: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    channelId: v.string(),
+    messageCursor: v.union(v.string(), v.null()),
+    reactionCursor: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+  })
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_and_channel", ["integrationId", "channelId"]),
+
+  /** Permanent origin ledger: the compound index is the cross-environment dedupe boundary. */
+  slackProcessedMessages: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    workspaceId: v.string(),
+    channelId: v.string(),
+    messageTs: v.string(),
+    rootMessageTs: v.string(),
+    disposition: v.union(v.literal("created"), v.literal("commented"), v.literal("ignored")),
+    issueId: v.union(domainId, v.null()),
+    commentId: v.union(domainId, v.null()),
+    reason: v.union(v.string(), v.null()),
+    /** Root issue threads are revisited in ascending scan order for new Slack replies. */
+    lastReplyScanAt: v.optional(v.number()),
+    processedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_channel_disposition_and_reply_scan", [
+      "integrationId",
+      "channelId",
+      "disposition",
+      "lastReplyScanAt",
+    ])
+    .index("by_integration_channel_and_message", ["integrationId", "channelId", "messageTs"])
+    .index("by_issue", ["companyId", "issueId"]),
+
+  slackOutboundDeliveries: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    deliveryId: domainId,
+    channelId: v.string(),
+    threadTs: v.string(),
+    kind: v.union(v.literal("confirmation"), v.literal("comment"), v.literal("status")),
+    /** Present on centrally scheduled comment/status delivery intents. */
+    issueId: v.optional(domainId),
+    text: v.optional(v.string()),
+    state: v.union(v.literal("pending"), v.literal("claimed"), v.literal("succeeded")),
+    claimedByEnvironmentId: v.union(v.string(), v.null()),
+    claimGeneration: v.number(),
+    claimExpiresAt: v.union(v.number(), v.null()),
+    slackMessageTs: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_and_delivery", ["integrationId", "deliveryId"])
+    .index("by_integration_and_state", ["integrationId", "state"]),
+
+  issueAutomationSettings: defineTable({
+    companyId: v.id("companies"),
+    enabled: v.boolean(),
+    /** Once activated, pausing never re-enables legacy environment-local automation. */
+    activatedAt: v.optional(v.union(v.number(), v.null())),
+    revision: v.number(),
+    settings: v.any(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_company", ["companyId"]),
+
+  issueAutomationJobs: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    issueId: domainId,
+    kind: v.union(
+      v.literal("slack-investigation"),
+      v.literal("automatic-assignment"),
+      v.literal("audit-execution"),
+      v.literal("audit-outcome-reduction"),
+      v.literal("remediation-dispatch"),
+    ),
+    triggerKey: v.string(),
+    settingsRevision: v.number(),
+    modelSelection: v.union(v.any(), v.null()),
+    ruleId: v.union(v.string(), v.null()),
+    ruleSnapshot: v.union(v.string(), v.null()),
+    targetKind: v.union(v.literal("project"), v.literal("thread")),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    threadId: v.union(v.string(), v.null()),
+    targetEnvironmentId: v.union(v.string(), v.null()),
+    requiredProviderInstanceId: v.union(v.string(), v.null()),
+    requiredModel: v.union(v.string(), v.null()),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("blocked"),
+      v.literal("claimed"),
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+      v.literal("canceled"),
+    ),
+    blockCode: v.union(
+      v.literal("environment-offline"),
+      v.literal("project-binding-missing"),
+      v.literal("thread-environment-offline"),
+      v.literal("provider-instance-missing"),
+      v.literal("provider-disabled"),
+      v.literal("model-unavailable"),
+      v.literal("configuration-changed"),
+      v.literal("authorization-revoked"),
+      v.null(),
+    ),
+    diagnostic: v.union(v.string(), v.null()),
+    claimHolderEnvironmentId: v.union(v.string(), v.null()),
+    claimGeneration: v.number(),
+    claimExpiresAt: v.union(v.number(), v.null()),
+    attempts: v.number(),
+    nextRetryAt: v.union(v.number(), v.null()),
+    result: v.union(
+      v.object({ kind: v.literal("investigation"), summary: v.string() }),
+      v.object({
+        kind: v.literal("assignment"),
+        routingRuleId: v.union(v.string(), v.null()),
+        auditRuleIds: v.array(v.string()),
+        rationale: v.string(),
+        modelSelection: v.any(),
+        driverKind: v.string(),
+      }),
+      v.object({
+        kind: v.literal("audit"),
+        outcome: v.union(v.literal("passed"), v.literal("changes-requested")),
+        summary: v.string(),
+        findings: v.array(v.string()),
+      }),
+      v.object({
+        kind: v.literal("reduction"),
+        outcome: v.union(v.literal("passed"), v.literal("changes-requested")),
+      }),
+      v.object({ kind: v.literal("remediation"), dispatched: v.boolean() }),
+      v.null(),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.union(v.number(), v.null()),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_state", ["companyId", "state"])
+    .index("by_target_and_state", ["targetEnvironmentId", "state"])
+    .index("by_company_and_issue", ["companyId", "issueId"])
+    .index("by_state_and_retry", ["state", "nextRetryAt"])
+    .index("by_company_and_trigger", ["companyId", "triggerKey"]),
+
+  environmentProviderCapabilities: defineTable({
+    companyId: v.id("companies"),
+    environmentId: v.string(),
+    revision: v.number(),
+    supportsSlackCoordination: v.boolean(),
+    supportsAutomationJobs: v.boolean(),
+    providers: v.array(
+      v.object({
+        instanceId: v.string(),
+        driverKind: v.string(),
+        enabled: v.boolean(),
+        available: v.boolean(),
+        modelIds: v.array(v.string()),
+      }),
+    ),
+    publishedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_environment", ["environmentId"]),
+
   /** Durable Agent Thread metadata. `shell` omits message text and other rich thread content. */
   agentThreads: defineTable({
     id: domainId,

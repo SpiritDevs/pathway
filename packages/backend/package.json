@@ -19,6 +19,10 @@
       "types": "./src/invitations.ts",
       "import": "./src/invitations.ts"
     },
+    "./integrationCredentials": {
+      "types": "./src/integrationCredentials.ts",
+      "import": "./src/integrationCredentials.ts"
+    },
     "./issueKeys": {
       "types": "./src/issueKeys.ts",
       "import": "./src/issueKeys.ts"

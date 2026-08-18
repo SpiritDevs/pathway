@@ -428,6 +428,11 @@ export const IssueSlackSource = Schema.Struct({
   issueId: IssueId,
   channelId: SlackChannelId,
   messageTs: SlackMessageTs,
+  /** Present for company-owned integrations; absent means a historical local Slack link. */
+  integrationId: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Slack's canonical team/workspace id. Required for newly-created company issues. */
+  workspaceId: Schema.optionalKey(TrimmedNonEmptyString),
+  workspaceDomain: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null until Slack answers with one; a permalink is a nicety, not a requirement to file. */
   permalink: Schema.NullOr(TrimmedNonEmptyString),
   /** The display name of whoever wrote the source message, for the attribution on the issue. */

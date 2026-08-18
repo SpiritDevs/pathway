@@ -530,6 +530,42 @@ describe("environment registry", () => {
     const t = harness();
     await seedRegistration(t);
     await publish(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      const integrationId = await ctx.db.insert("slackIntegrations", {
+        id: "0198f900-0000-7000-8000-000000000801",
+        companyId: company!._id,
+        workspaceId: "T-REVOKE",
+        workspaceName: "Revocation test",
+        workspaceDomain: null,
+        botUserId: null,
+        botId: null,
+        state: "active",
+        credentialPresent: true,
+        preferredEnvironmentId: ENVIRONMENT_ID,
+        backupEnvironmentIds: [],
+        configurationRevision: 1,
+        lastPollAt: null,
+        currentError: null,
+        blockedReason: null,
+        healthHistory: [],
+        watchCount: 0,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+      await ctx.db.insert("slackCoordinatorLeases", {
+        companyId: company!._id,
+        integrationId,
+        holderEnvironmentId: ENVIRONMENT_ID,
+        generation: 4,
+        expiresAt: 1_900_000_000_000,
+        preferredHealthyHeartbeats: 2,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
     await asUser(t, "manager").mutation(api.environments.deactivate, {
       companyId: COMPANY_ID,
       environmentId: ENVIRONMENT_ID,
@@ -556,6 +592,14 @@ describe("environment registry", () => {
         environmentId: ENVIRONMENT_ID,
       }),
     ).resolves.toBeNull();
+    await t.run(async (ctx) => {
+      const lease = await ctx.db.query("slackCoordinatorLeases").first();
+      expect(lease).toMatchObject({
+        holderEnvironmentId: null,
+        generation: 5,
+        expiresAt: null,
+      });
+    });
   });
 
   it("bootstraps active registrations before environment bindings and skips revoked registrations", async () => {

@@ -22,6 +22,7 @@ import {
   issueHasCompletedInvestigation,
   sharedTriageProjectId,
   slackSourceChip,
+  isLegacySlackSource,
   triageAcceptDefaults,
   triageAcceptInput,
   triageAcceptLabel,
@@ -194,6 +195,17 @@ describe("slackSourceChip", () => {
     const chip = slackSourceChip(slackSource({ authorName: null, permalink: null }), CHANNEL_NAMES);
     expect(chip.label).toBe("#design");
     expect(chip.permalink).toBeNull();
+  });
+});
+
+describe("isLegacySlackSource", () => {
+  it("recognizes historical sources without company integration identity", () => {
+    expect(isLegacySlackSource(slackSource())).toBe(true);
+    expect(
+      isLegacySlackSource(
+        slackSource({ integrationId: "integration-1" as never, workspaceId: "T1" as never }),
+      ),
+    ).toBe(false);
   });
 });
 

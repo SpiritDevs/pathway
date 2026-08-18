@@ -168,7 +168,6 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-statuses",
       "/settings/issues-labels",
       "/settings/issues-milestones",
-      "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ]);
@@ -181,6 +180,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/company-teams",
       "/settings/company-roles",
       "/settings/environments",
+      "/settings/integrations",
     ]);
     expect(searchSettings("members and invitations")[0]).toMatchObject({
       id: "company-members",
@@ -205,6 +205,11 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(searchSettings("workspace environments")[0]).toMatchObject({
       id: "company-environments",
       to: "/settings/environments",
+    });
+    expect(searchSettings("Slack bot token")[0]).toMatchObject({
+      id: "slack-bot-token",
+      to: "/settings/integrations",
+      targetId: "issue-intake",
     });
     expect(searchSettings("add environment")[0]).toMatchObject({
       id: "add-environment",

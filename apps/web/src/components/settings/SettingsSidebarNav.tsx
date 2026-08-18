@@ -18,11 +18,11 @@ import {
   CalendarClockIcon,
   FolderIcon,
   GitBranchIcon,
-  InboxIcon,
   KeyboardIcon,
   MailIcon,
   MilestoneIcon,
   PaletteIcon,
+  PlugZapIcon,
   SearchIcon,
   ServerIcon,
   Settings2Icon,
@@ -51,6 +51,8 @@ import {
 } from "../ui/sidebar";
 import { PathwayConnectSidebarSignIn } from "../clerk/PathwayConnectSidebarSignIn";
 import { useCompanySettings } from "./company/useCompanySettings";
+import { permissionGate } from "./company/companySettings.logic";
+import { useCompanyIntegrationsClient } from "~/cloud/useCompanyIntegrationsClient";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -75,6 +77,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/company-teams": UsersRoundIcon,
   "/settings/company-roles": ShieldIcon,
   "/settings/environments": ServerIcon,
+  "/settings/integrations": PlugZapIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
@@ -83,7 +86,6 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/issues-labels": TagsIcon,
   "/settings/issues-milestones": MilestoneIcon,
   "/settings/issues-import": FileUpIcon,
-  "/settings/issues-intake": InboxIcon,
   "/settings/issues-enrichment": WandSparklesIcon,
   "/settings/email": MailIcon,
   "/settings/archived": ArchiveIcon,
@@ -97,10 +99,42 @@ function SettingsSectionIcon({ to }: { to: SettingsSearchPath }) {
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const companySettings = useCompanySettings();
+  const integrationsClient = useCompanyIntegrationsClient();
+  const [integrationsAttentionCount, setIntegrationsAttentionCount] = useState(0);
   const workspaceKind =
     companySettings.activeCompany?.workspaceKind ??
     companySettings.directory.company?.workspaceKind ??
     "personal";
+  const integrationsRead = permissionGate(companySettings.permissions, "integrations.read").enabled;
+  useEffect(() => {
+    if (
+      workspaceKind !== "organization" ||
+      companySettings.companyId === null ||
+      integrationsClient === null ||
+      !integrationsRead
+    ) {
+      setIntegrationsAttentionCount(0);
+      return;
+    }
+    let active = true;
+    const load = () => {
+      void integrationsClient
+        .attentionCount(companySettings.companyId!)
+        .then((count) => {
+          if (!active) return;
+          setIntegrationsAttentionCount(count);
+        })
+        .catch(() => {
+          if (active) setIntegrationsAttentionCount(0);
+        });
+    };
+    load();
+    const refresh = window.setInterval(load, 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(refresh);
+    };
+  }, [companySettings.companyId, integrationsClient, integrationsRead, workspaceKind]);
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
   const canGoBack = useCanGoBack();
@@ -335,6 +369,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                           >
                             <Icon />
                             <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
+                            {to === "/settings/integrations" && integrationsAttentionCount > 0 ? (
+                              <span className="ms-auto flex min-w-4 items-center justify-center rounded-full bg-warning/15 px-1 text-[10px] font-medium text-warning-foreground">
+                                {integrationsAttentionCount}
+                              </span>
+                            ) : null}
                           </SidebarMenuButton>
                         </SidebarMenuItem>
                       );

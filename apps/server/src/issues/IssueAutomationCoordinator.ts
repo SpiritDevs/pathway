@@ -35,6 +35,10 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { IssueTrackerService } from "./IssueTrackerService.ts";
 import {
+  isCompanyAutomationActive,
+  shouldDeferLocalIssueAutomation,
+} from "../cloud/companyIntegrationActivation.ts";
+import {
   buildIssueAutomationAuditPrompt,
   buildIssueAutomationClassificationPrompt,
   buildIssueAutomationRemediationPrompt,
@@ -151,6 +155,7 @@ export const makeHandler = Effect.gen(function* () {
 
   const routeIssue = (issue: Issue) =>
     Effect.gen(function* () {
+      if (issue.slackSource?.integrationId !== undefined) return;
       if ((issue.workModelSelection ?? null) !== null || issue.slackSource === null) return;
       const watch = (yield* Ref.get(watches)).get(issue.slackSource.channelId);
       if (watch?.autoAssign !== true) return;
@@ -485,11 +490,13 @@ export const makeHandler = Effect.gen(function* () {
   const handleIssueEvent = Effect.fn("IssueAutomationCoordinator.handleIssueEvent")(function* (
     event: IssuesStreamEvent,
   ) {
+    if (shouldDeferLocalIssueAutomation() || isCompanyAutomationActive()) return;
     switch (event._tag) {
       case "SlackWatchesChanged":
         yield* Ref.set(watches, new Map(event.watches.map((watch) => [watch.channelId, watch])));
         return;
       case "IssueUpserted": {
+        if (event.issue.slackSource?.integrationId !== undefined) return;
         const previous = (yield* Ref.get(issues)).get(event.issue.id);
         yield* Ref.update(issues, (current) => new Map(current).set(event.issue.id, event.issue));
         yield* Effect.forkChild(

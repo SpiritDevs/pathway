@@ -68,6 +68,10 @@ export interface ConvexClientLike {
     reference: Reference,
     args: FunctionArgs<Reference>,
   ) => Promise<FunctionReturnType<Reference>>;
+  readonly action?: <Reference extends FunctionReference<"action">>(
+    reference: Reference,
+    args: FunctionArgs<Reference>,
+  ) => Promise<FunctionReturnType<Reference>>;
 }
 
 /** Wraps a real `ConvexHttpClient` as a {@link ConvexClientLike}. The only place one is built. */
@@ -79,6 +83,7 @@ export function convexHttpClientLike(convexUrl: string): ConvexClientLike {
     },
     query: (reference, args) => client.query(reference, args),
     mutation: (reference, args) => client.mutation(reference, args),
+    action: (reference, args) => client.action(reference, args),
   };
 }
 

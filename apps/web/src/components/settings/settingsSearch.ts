@@ -8,6 +8,7 @@ export type SettingsPath =
   | "/settings/company-teams"
   | "/settings/company-roles"
   | "/settings/environments"
+  | "/settings/integrations"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
@@ -15,7 +16,6 @@ export type SettingsPath =
   | "/settings/issues-statuses"
   | "/settings/issues-labels"
   | "/settings/issues-milestones"
-  | "/settings/issues-intake"
   | "/settings/issues-import"
   | "/settings/issues-enrichment"
   | "/settings/email"
@@ -59,6 +59,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-teams": "Teams",
   "/settings/company-roles": "Roles",
   "/settings/environments": "Environments",
+  "/settings/integrations": "Integrations",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -66,7 +67,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
   "/settings/issues-milestones": "Milestones",
-  "/settings/issues-intake": "Triage & Intake",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
   "/settings/email": "Capture",
@@ -101,6 +101,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/company-teams",
       "/settings/company-roles",
       "/settings/environments",
+      "/settings/integrations",
     ],
   },
   {
@@ -118,7 +119,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-statuses",
       "/settings/issues-labels",
       "/settings/issues-milestones",
-      "/settings/issues-intake",
       "/settings/issues-import",
       "/settings/issues-enrichment",
     ],
@@ -400,22 +400,24 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "issue-intake",
     title: "Slack intake",
-    to: "/settings/issues-intake",
+    to: "/settings/integrations",
   },
   {
     id: "slack-bot-token",
     title: "Slack bot token",
-    to: "/settings/issues-intake",
+    to: "/settings/integrations",
+    targetId: "issue-intake",
   },
   {
     id: "slack-watched-channels",
     title: "Watched Slack channels",
-    to: "/settings/issues-intake",
+    to: "/settings/integrations",
+    targetId: "issue-intake",
   },
   {
     id: "issue-intake-automation",
     title: "Issue auto-assignment and audits",
-    to: "/settings/issues-intake",
+    to: "/settings/integrations",
   },
   {
     id: "issue-enrichment",

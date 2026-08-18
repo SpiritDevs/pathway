@@ -73,6 +73,11 @@ import {
   truncateForSlack,
 } from "./slackMrkdwn.ts";
 import { readSlackBotToken } from "./slackToken.ts";
+import {
+  hasCompanyOwnedSlackWorkspaces,
+  isCompanySlackWorkspaceOwned,
+  shouldDeferLocalSlackPolling,
+} from "../../cloud/companyIntegrationActivation.ts";
 
 /** Decision 0006's number. One history call per watched channel per interval, forever. */
 export const SLACK_POLL_INTERVAL_MS = 30_000;
@@ -280,6 +285,8 @@ interface OutboundIssueState {
   readonly statusId: string;
   readonly channelId: string | null;
   readonly threadTs: string | null;
+  readonly workspaceId: string | null;
+  readonly legacySlackLink: boolean;
 }
 
 export const make = Effect.gen(function* () {
@@ -791,6 +798,10 @@ export const make = Effect.gen(function* () {
     );
 
   const pollOnce: SlackIntakePollerShape["pollOnce"] = Effect.gen(function* () {
+    // On startup, central ownership is resolved before a legacy local token is allowed to touch
+    // Slack. An unavailable company authority therefore pauses intake instead of reopening the
+    // exact duplicate-polling path activation was designed to close.
+    if (shouldDeferLocalSlackPolling()) return;
     const token = yield* readSlackBotToken(secretStore);
     if (Option.isNone(token)) return;
 
@@ -812,6 +823,9 @@ export const make = Effect.gen(function* () {
       yield* recordPoll(identity.failure.message);
       return;
     }
+    // Company activation is a one-way ownership handoff. Once this workspace is centrally active,
+    // the untouched local rows stay inert rather than becoming an accidental fallback poller.
+    if (isCompanySlackWorkspaceOwned(identity.success.workspaceId)) return;
 
     let firstError: string | null = null;
     const noteFailure = (watch: SlackChannelWatch, detail: string) =>
@@ -903,6 +917,9 @@ export const make = Effect.gen(function* () {
         statusId: issue.statusId,
         channelId: issue.slackSource?.channelId ?? null,
         threadTs: issue.slackSource?.messageTs ?? null,
+        workspaceId: issue.slackSource?.workspaceId ?? null,
+        legacySlackLink:
+          issue.slackSource !== null && issue.slackSource.integrationId === undefined,
       };
       yield* Ref.update(issueStates, (current) => new Map(current).set(issue.id, next));
 
@@ -910,6 +927,9 @@ export const make = Effect.gen(function* () {
       // and the replay would otherwise post the entire tracker into Slack on every restart.
       if (previous === undefined || previous.statusId === issue.statusId) return;
       if (next.channelId === null || next.threadTs === null) return;
+      if (issue.slackSource?.integrationId === undefined && hasCompanyOwnedSlackWorkspaces())
+        return;
+      if (next.workspaceId !== null && isCompanySlackWorkspaceOwned(next.workspaceId)) return;
       if (issue.deletedAt !== null) return;
 
       const event = yield* lastStatusChange(issue.id);
@@ -940,6 +960,8 @@ export const make = Effect.gen(function* () {
 
       const state = (yield* Ref.get(issueStates)).get(comment.issueId);
       if (state === undefined || state.channelId === null || state.threadTs === null) return;
+      if (state.legacySlackLink && hasCompanyOwnedSlackWorkspaces()) return;
+      if (state.workspaceId !== null && isCompanySlackWorkspaceOwned(state.workspaceId)) return;
 
       yield* post({
         channelId: state.channelId,

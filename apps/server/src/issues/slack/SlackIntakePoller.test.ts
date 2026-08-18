@@ -101,7 +101,13 @@ function makeFakeSlack(): {
   readonly client: SlackApiClientShape;
 } {
   const state: FakeSlackState = {
-    identity: { workspaceName: "Pathway HQ", botUserId: BOT_USER_ID, botId: "B0BOT" },
+    identity: {
+      workspaceId: "T0PATHWAY",
+      workspaceName: "Pathway HQ",
+      workspaceDomain: "pathway",
+      botUserId: BOT_USER_ID,
+      botId: "B0BOT",
+    },
     history: new Map(),
     names: new Map(),
     permalinks: new Map(),

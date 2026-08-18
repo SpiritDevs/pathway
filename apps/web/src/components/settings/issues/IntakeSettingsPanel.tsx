@@ -534,7 +534,11 @@ function AddChannelPopover({
   );
 }
 
-export function IntakeSettingsPanel() {
+export function IntakeSettingsPanel({
+  includeAutomation = true,
+}: {
+  readonly includeAutomation?: boolean;
+} = {}) {
   const storeStatus = useIssuesStoreStatus();
   const status = useSlackStatus();
   const watches = useSlackWatches();
@@ -892,7 +896,7 @@ export function IntakeSettingsPanel() {
           )}
         </SettingsSection>
 
-        <IssueAutomationSettingsSection />
+        {includeAutomation ? <IssueAutomationSettingsSection /> : null}
       </SettingsPageContainer>
 
       <AlertDialog

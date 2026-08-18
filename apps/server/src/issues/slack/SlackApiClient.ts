@@ -135,6 +135,7 @@ const AuthTestResponse = Schema.Struct({
   team_id: Schema.optional(Schema.String),
   user_id: Schema.optional(Schema.String),
   bot_id: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
 });
 
 const ConversationsListResponse = Schema.Struct({
@@ -186,6 +187,12 @@ const SlackMessageSchema = Schema.Struct({
   reply_count: Schema.optional(Schema.Number),
   reactions: Schema.optional(Schema.Array(SlackReactionSchema)),
   files: Schema.optional(Schema.Array(SlackFileSchema)),
+  metadata: Schema.optional(
+    Schema.Struct({
+      event_type: Schema.String,
+      event_payload: Schema.Record(Schema.String, Schema.Unknown),
+    }),
+  ),
 });
 export type SlackMessage = typeof SlackMessageSchema.Type;
 
@@ -237,7 +244,10 @@ const UsersInfoResponse = Schema.Struct({
 
 /** Who the token is, read once per token and then remembered for the mention trigger. */
 export interface SlackIdentity {
+  /** Slack's canonical `team_id`; this, not the display name, is workspace identity. */
+  readonly workspaceId: string;
   readonly workspaceName: string;
+  readonly workspaceDomain: string | null;
   /** `U…`. A bot-mention trigger is a search for `<@thisId>` in a message. */
   readonly botUserId: string | null;
   /** `B…`. Every message carrying it is one this app posted, which is belt to the ledger's braces. */
@@ -297,6 +307,7 @@ export interface SlackApiClientShape {
     readonly channelId: string;
     readonly threadTs: string;
     readonly oldest?: string | null | undefined;
+    readonly includeAllMetadata?: boolean | undefined;
   }) => Effect.Effect<ReadonlyArray<SlackMessage>, SlackApiError>;
 
   /** `chat.postMessage`, always into a thread, answering with the ts the echo registry needs. */
@@ -305,6 +316,12 @@ export interface SlackApiClientShape {
     readonly channelId: string;
     readonly threadTs: string;
     readonly text: string;
+    readonly metadata?:
+      | {
+          readonly eventType: string;
+          readonly eventPayload: Readonly<Record<string, string>>;
+        }
+      | undefined;
   }) => Effect.Effect<{ readonly messageTs: string }, SlackApiError>;
 
   /** `chat.getPermalink`. A nicety: null rather than a failure when Slack will not give one. */
@@ -520,7 +537,7 @@ export const make = (
     const post = <S extends Schema.Top>(
       operation: string,
       token: string,
-      body: Record<string, string>,
+      body: Record<string, unknown>,
       schema: S,
     ): Effect.Effect<S["Type"], SlackApiError, S["DecodingServices"]> =>
       execute(
@@ -535,7 +552,17 @@ export const make = (
     const authTest: SlackApiClientShape["authTest"] = (input) =>
       get("auth.test", input.token, {}, AuthTestResponse).pipe(
         Effect.map((body) => ({
+          workspaceId: trimToNull(body.team_id) ?? "unknown",
           workspaceName: trimToNull(body.team) ?? trimToNull(body.team_id) ?? "Slack",
+          workspaceDomain: (() => {
+            const url = trimToNull(body.url);
+            if (url === null) return null;
+            try {
+              return new URL(url).hostname.replace(/\.slack\.com$/u, "") || null;
+            } catch {
+              return null;
+            }
+          })(),
           botUserId: trimToNull(body.user_id),
           botId: trimToNull(body.bot_id),
         })),
@@ -602,6 +629,7 @@ export const make = (
           ts: input.threadTs,
           limit: String(SLACK_HISTORY_PAGE_SIZE),
           ...(input.oldest === undefined || input.oldest === null ? {} : { oldest: input.oldest }),
+          ...(input.includeAllMetadata === true ? { include_all_metadata: "true" } : {}),
         },
         ConversationsHistoryResponse,
       ).pipe(Effect.map((body) => body.messages ?? []));
@@ -614,6 +642,14 @@ export const make = (
           channel: input.channelId,
           thread_ts: input.threadTs,
           text: input.text,
+          ...(input.metadata === undefined
+            ? {}
+            : {
+                metadata: {
+                  event_type: input.metadata.eventType,
+                  event_payload: input.metadata.eventPayload,
+                },
+              }),
         },
         ChatPostMessageResponse,
       ).pipe(

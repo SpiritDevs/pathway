@@ -66,7 +66,7 @@ import {
 import { IssueLabelsPicker } from "./IssueLabelsPicker";
 import { IssuePriorityMenu, IssueProjectMenu, IssueStatusMenu } from "./IssuePropertyMenus";
 import { IssueSlackSourceChip } from "./IssueSlackSourceChip";
-import { slackSourceChip } from "./triage.logic";
+import { isLegacySlackSource, slackSourceChip } from "./triage.logic";
 import {
   issueAssigneeOptionValue,
   issueAssigneeOptions,
@@ -483,8 +483,15 @@ export function IssueDetailProperties({
           here, and the thread the bot posts its updates into is keyed on it. */}
       {issue.slackSource === null ? null : (
         <PropertyRow label="Source">
-          <div className={cn(ROW_CONTROL_CLASS, "hover:bg-transparent")}>
-            <IssueSlackSourceChip chip={slackSourceChip(issue.slackSource, channelNames)} />
+          <div className="min-w-0">
+            <div className={cn(ROW_CONTROL_CLASS, "hover:bg-transparent")}>
+              <IssueSlackSourceChip chip={slackSourceChip(issue.slackSource, channelNames)} />
+            </div>
+            {isLegacySlackSource(issue.slackSource) ? (
+              <p className="px-1.5 text-[11px] leading-snug text-warning-foreground">
+                Legacy Slack link—two-way replies unavailable
+              </p>
+            ) : null}
           </div>
         </PropertyRow>
       )}

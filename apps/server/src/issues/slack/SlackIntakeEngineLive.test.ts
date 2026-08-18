@@ -21,7 +21,13 @@ const makeClient = (overrides: Partial<SlackApiClientShape> = {}): SlackApiClien
   authTest: ({ token }) =>
     Effect.sync(() => {
       tokensSeen.push(token);
-      return { workspaceName: "Pathway HQ", botUserId: "U0BOT", botId: "B0BOT" };
+      return {
+        workspaceId: "T0PATHWAY",
+        workspaceName: "Pathway HQ",
+        workspaceDomain: "pathway",
+        botUserId: "U0BOT",
+        botId: "B0BOT",
+      };
     }),
   listChannels: ({ token }) =>
     Effect.sync(() => {

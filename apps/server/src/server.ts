@@ -112,6 +112,7 @@ import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
+import { companySlackCoordinatorLayer } from "./cloud/companySlackCoordinator.ts";
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
 import { cloudProjectPublisherLayer } from "./cloud/cloudProjectPublisher.ts";
 import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublisher.ts";
@@ -748,6 +749,7 @@ export const makeServerLayer = Layer.unwrap(
       cloudAgentThreadPublisherLayer(),
       capturedEmailPublisherLayer(),
       environmentCommandClaimantLayer(),
+      companySlackCoordinatorLayer(),
     );
 
     return serverApplicationLayer.pipe(
