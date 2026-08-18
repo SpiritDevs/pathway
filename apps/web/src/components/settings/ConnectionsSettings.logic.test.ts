@@ -49,15 +49,37 @@ describe("partitionClientSessionsByConnection", () => {
 
 describe("excludeRegisteredEnvironmentClientSessions", () => {
   it("keeps client-only access and hides sessions represented by registered environments", () => {
-    type Session = { readonly id: string; readonly initiatingEnvironmentId?: EnvironmentId };
-    const webPortal: Session = { id: "web" };
-    const mobile: Session = { id: "mobile" };
+    type Session = {
+      readonly id: string;
+      readonly subject: string;
+      readonly current: boolean;
+      readonly client: { readonly deviceType: string; readonly browser?: string };
+      readonly initiatingEnvironmentId?: EnvironmentId;
+    };
+    const webPortal: Session = {
+      id: "web",
+      subject: "one-time-token",
+      current: true,
+      client: { deviceType: "desktop", browser: "Chrome" },
+    };
+    const mobile: Session = {
+      id: "mobile",
+      subject: "one-time-token",
+      current: false,
+      client: { deviceType: "mobile" },
+    };
     const registeredDesktop: Session = {
       id: "desktop",
+      subject: "cloud-connect",
+      current: false,
+      client: { deviceType: "desktop", browser: "Electron" },
       initiatingEnvironmentId: "environment-studio" as EnvironmentId,
     };
     const unregisteredDesktop: Session = {
       id: "old-desktop",
+      subject: "cloud-connect",
+      current: false,
+      client: { deviceType: "desktop", browser: "Electron" },
       initiatingEnvironmentId: "environment-removed" as EnvironmentId,
     };
 
@@ -67,6 +89,69 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
         new Set(["environment-studio" as EnvironmentId]),
       ),
     ).toEqual([webPortal, mobile, unregisteredDesktop]);
+  });
+
+  it("hides the desktop's current bootstrap session when its environment is registered", () => {
+    const currentDesktop = {
+      id: "desktop-current",
+      subject: "desktop-bootstrap",
+      current: true,
+      client: { deviceType: "desktop" },
+    };
+    const webPortal = {
+      id: "web",
+      subject: "one-time-token",
+      current: false,
+      client: { deviceType: "desktop", browser: "Chrome" },
+    };
+
+    expect(
+      excludeRegisteredEnvironmentClientSessions(
+        [currentDesktop, webPortal],
+        new Set<EnvironmentId>(),
+        true,
+      ),
+    ).toEqual([webPortal]);
+  });
+
+  it("keeps the current session visible on clients that do not host an environment", () => {
+    const currentWebPortal = {
+      id: "web-current",
+      subject: "cloud-connect",
+      current: true,
+      client: { deviceType: "desktop", browser: "Chrome" },
+    };
+
+    expect(
+      excludeRegisteredEnvironmentClientSessions(
+        [currentWebPortal],
+        new Set<EnvironmentId>(),
+        false,
+      ),
+    ).toEqual([currentWebPortal]);
+  });
+
+  it("hides legacy Electron relay sessions that predate environment attribution", () => {
+    const legacyDesktop = {
+      id: "legacy-desktop",
+      subject: "cloud-connect",
+      current: false,
+      client: { deviceType: "desktop", browser: "Electron" },
+    };
+    const webPortal = {
+      id: "web",
+      subject: "cloud-connect",
+      current: false,
+      client: { deviceType: "desktop", browser: "Chrome" },
+    };
+
+    expect(
+      excludeRegisteredEnvironmentClientSessions(
+        [legacyDesktop, webPortal],
+        new Set<EnvironmentId>(),
+        true,
+      ),
+    ).toEqual([webPortal]);
   });
 });
 

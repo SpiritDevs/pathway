@@ -280,6 +280,7 @@ export class ManagedRelayClient extends Context.Service<
       readonly clerkToken: string;
       readonly scopes: ReadonlyArray<RelayDpopAccessTokenScope>;
       readonly environmentId: RelayClientEnvironmentRecord["environmentId"];
+      readonly clientEnvironmentId?: RelayClientEnvironmentRecord["environmentId"];
       readonly deviceId?: string;
     }) => Effect.Effect<RelayEnvironmentConnectResponse, ManagedRelayClientError>;
     readonly registerDevice: (input: {
@@ -805,6 +806,9 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
           },
           (authorization) => {
             const payload: RelayEnvironmentConnectRequest = {
+              ...(input.clientEnvironmentId
+                ? { clientEnvironmentId: input.clientEnvironmentId }
+                : {}),
               ...(input.deviceId ? { deviceId: input.deviceId } : {}),
               clientKeyThumbprint: authorization.thumbprint,
             };

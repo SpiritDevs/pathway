@@ -171,6 +171,18 @@ const makeHarness = Effect.fn("RelayDiscoveryTest.makeHarness")(function* () {
 });
 
 describe("RelayEnvironmentDiscovery", () => {
+  it("keeps a live environment online when a relay health probe is stale", () => {
+    expect(RelayEnvironmentDiscovery.effectiveRelayEnvironmentAvailability("offline", true)).toBe(
+      "online",
+    );
+    expect(RelayEnvironmentDiscovery.effectiveRelayEnvironmentAvailability("error", true)).toBe(
+      "online",
+    );
+    expect(RelayEnvironmentDiscovery.effectiveRelayEnvironmentAvailability("offline", false)).toBe(
+      "offline",
+    );
+  });
+
   it("preserves settled availability while refreshing known environments", () => {
     const known = environments[0]!;
     const previous = new Map([

@@ -158,6 +158,7 @@ describe("cloud mint credential handler", () => {
 
   interface MintHarnessOptions {
     readonly environmentSubject?: boolean;
+    readonly clientEnvironmentId?: EnvironmentId;
     readonly includeConnectGrant?: boolean;
     readonly resolvedActor?: string | null;
   }
@@ -251,6 +252,7 @@ describe("cloud mint credential handler", () => {
       exp: nowSeconds + 120,
       environmentId: TARGET_ENVIRONMENT_ID,
       ...(environmentSubject ? { initiatingEnvironmentId: INITIATING_ENVIRONMENT_ID } : {}),
+      ...(options.clientEnvironmentId ? { clientEnvironmentId: options.clientEnvironmentId } : {}),
       clientProofKeyThumbprint: "client-proof-thumbprint",
       cnf: { jkt: "client-proof-thumbprint" },
       ...(includeConnectGrant ? { connectGrant } : {}),
@@ -337,6 +339,20 @@ describe("cloud mint credential handler", () => {
       expect(harness.pairingInputs[0]?.subject).toBe("cloud-connect");
       expect(harness.pairingInputs[0]?.initiatingEnvironmentId).toBeUndefined();
       expect(harness.secretReads).toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect("attributes a user-subject desktop credential to its hosted environment", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeMintHarness({
+        clientEnvironmentId: INITIATING_ENVIRONMENT_ID,
+      });
+      yield* harness.run;
+
+      expect(harness.pairingInputs[0]).toMatchObject({
+        subject: "cloud-connect",
+        initiatingEnvironmentId: INITIATING_ENVIRONMENT_ID,
+      });
     }),
   );
 });

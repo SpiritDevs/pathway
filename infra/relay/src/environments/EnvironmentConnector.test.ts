@@ -665,6 +665,7 @@ describe("EnvironmentConnector", () => {
       const result = yield* connector.connect({
         userId: "user_123",
         environmentId: "env-connector-test",
+        clientEnvironmentId: "env-client" as never,
         clientProofKeyThumbprint: "client-proof-key-thumbprint",
         deviceId: "device-123",
       });
@@ -675,6 +676,7 @@ describe("EnvironmentConnector", () => {
         aud: "pathway-env:env-connector-test",
         sub: "user_123",
         environmentId: "env-connector-test",
+        clientEnvironmentId: "env-client",
         clientProofKeyThumbprint: "client-proof-key-thumbprint",
         cnf: { jkt: "client-proof-key-thumbprint" },
         deviceId: "device-123",

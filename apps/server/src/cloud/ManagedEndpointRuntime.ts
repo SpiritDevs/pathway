@@ -1,6 +1,7 @@
 import type { RelayManagedEndpointRuntimeConfig } from "@spiritdevs/contracts/relay";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -62,6 +63,18 @@ export class CloudManagedEndpointRuntime extends Context.Service<
 >()("@spiritdevs/pathway/cloud/ManagedEndpointRuntime/CloudManagedEndpointRuntime") {}
 
 export const MAX_AUTOMATIC_CONNECTOR_ATTEMPTS = 5;
+export const CONNECTOR_RETRY_BACKOFF = Duration.seconds(30);
+export const MAX_CONNECTOR_RETRY_BACKOFF = Duration.minutes(15);
+
+export function connectorRetryBackoff(restartAttempt: number): Duration.Duration {
+  const exponent = Math.max(0, restartAttempt - MAX_AUTOMATIC_CONNECTOR_ATTEMPTS);
+  return Duration.millis(
+    Math.min(
+      Duration.toMillis(CONNECTOR_RETRY_BACKOFF) * 2 ** exponent,
+      Duration.toMillis(MAX_CONNECTOR_RETRY_BACKOFF),
+    ),
+  );
+}
 
 interface ActiveConnector {
   readonly child: ChildProcessSpawner.ChildProcessHandle;
@@ -116,17 +129,35 @@ export const make = Effect.gen(function* () {
     yield* stopConnector(active);
   });
 
+  const restartConnectorIfDesired = Effect.fn(
+    "CloudManagedEndpointRuntime.restartConnectorIfDesired",
+  )(function* (configKey: string) {
+    yield* reconcileSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const desiredConfig = yield* Ref.get(desiredConfigRef);
+        if (
+          !desiredConfig ||
+          desiredConfig.providerKind !== "cloudflare_tunnel" ||
+          runtimeConfigKey(desiredConfig) !== configKey
+        ) {
+          return;
+        }
+        yield* reconcileConfig(desiredConfig);
+      }),
+    );
+  });
+
   const superviseConnector = (connector: ActiveConnector) =>
     Effect.gen(function* () {
       const result = yield* Effect.result(connector.child.exitCode);
-      yield* reconcileSemaphore.withPermits(1)(
+      const retryBackoff = yield* reconcileSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const active = yield* Ref.get(activeRef);
           if (
             active?.child.pid !== connector.child.pid ||
             active.configKey !== connector.configKey
           ) {
-            return;
+            return null;
           }
           yield* Ref.set(activeRef, null);
 
@@ -136,25 +167,28 @@ export const make = Effect.gen(function* () {
             desiredConfig.providerKind !== "cloudflare_tunnel" ||
             runtimeConfigKey(desiredConfig) !== connector.configKey
           ) {
-            return;
+            return null;
           }
 
-          const restartAttempt = yield* Ref.updateAndGet(restartAttemptsRef, (attempts) =>
-            Math.min(attempts + 1, MAX_AUTOMATIC_CONNECTOR_ATTEMPTS),
+          const restartAttempt = yield* Ref.updateAndGet(
+            restartAttemptsRef,
+            (attempts) => attempts + 1,
           );
 
           if (restartAttempt >= MAX_AUTOMATIC_CONNECTOR_ATTEMPTS) {
-            yield* Effect.logWarning("Relay client exited; automatic restarts exhausted", {
+            const retryBackoff = connectorRetryBackoff(restartAttempt);
+            yield* Effect.logWarning("Relay client exited repeatedly; retrying after backoff", {
               pid: Number(connector.child.pid),
               ...(Result.isSuccess(result)
                 ? { exitCode: Number(result.success) }
                 : { cause: result.failure }),
               restartAttempt,
+              retryBackoffMillis: Duration.toMillis(retryBackoff),
               tunnelId: connector.config.tunnelId,
               tunnelName: connector.config.tunnelName,
             });
             yield* stopConnector(connector);
-            return;
+            return retryBackoff;
           }
 
           yield* Effect.logWarning("Relay client exited; restarting", {
@@ -167,9 +201,14 @@ export const make = Effect.gen(function* () {
             tunnelName: connector.config.tunnelName,
           });
           yield* stopConnector(connector);
-          yield* reconcileConfig(desiredConfig);
+          return Duration.zero;
         }),
       );
+      if (retryBackoff === null) return;
+      if (!Duration.isZero(retryBackoff)) {
+        yield* Effect.sleep(retryBackoff);
+      }
+      yield* restartConnectorIfDesired(connector.configKey);
     }).pipe(
       Effect.catchCause((cause) => Effect.logWarning("Relay client supervisor failed", { cause })),
     );

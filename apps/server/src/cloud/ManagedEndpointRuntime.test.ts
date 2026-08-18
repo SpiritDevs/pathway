@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -8,6 +9,7 @@ import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
 
@@ -80,6 +82,26 @@ function makeHandle(input: {
 }
 
 describe("CloudManagedEndpointRuntime", () => {
+  it("backs off exponentially and caps persistent connector retries", () => {
+    expect(
+      Duration.toMillis(
+        ManagedEndpointRuntime.connectorRetryBackoff(
+          ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS,
+        ),
+      ),
+    ).toBe(Duration.toMillis(Duration.seconds(30)));
+    expect(
+      Duration.toMillis(
+        ManagedEndpointRuntime.connectorRetryBackoff(
+          ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS + 2,
+        ),
+      ),
+    ).toBe(Duration.toMillis(Duration.minutes(2)));
+    expect(
+      Duration.toMillis(ManagedEndpointRuntime.connectorRetryBackoff(Number.MAX_SAFE_INTEGER)),
+    ).toBe(Duration.toMillis(ManagedEndpointRuntime.MAX_CONNECTOR_RETRY_BACKOFF));
+  });
+
   it("classifies Cloudflare connection and warning output", () => {
     expect(
       ManagedEndpointRuntime.classifyRelayClientOutput(
@@ -283,7 +305,7 @@ describe("CloudManagedEndpointRuntime", () => {
     }),
   );
 
-  it.effect("caps automatic connector attempts and allows an explicit retry", () =>
+  it.effect("backs off after repeated exits and keeps retrying automatically", () =>
     Effect.gen(function* () {
       const spawned: Array<number> = [];
       const killed: Array<number> = [];
@@ -297,7 +319,6 @@ describe("CloudManagedEndpointRuntime", () => {
           Deferred.make<void>(),
         ),
       );
-      const exhausted = yield* Deferred.make<void>();
       const spawner = ChildProcessSpawner.make(() =>
         Effect.gen(function* () {
           const index = spawned.length;
@@ -311,9 +332,6 @@ describe("CloudManagedEndpointRuntime", () => {
               : (Effect.never as Effect.Effect<ChildProcessSpawner.ExitCode>),
             onKill: () => {
               killed.push(pid);
-              if (index === ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1) {
-                Deferred.doneUnsafe(exhausted, Effect.void);
-              }
             },
           });
           yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
@@ -334,14 +352,14 @@ describe("CloudManagedEndpointRuntime", () => {
           yield* Deferred.await(spawnSignals[index + 1]!);
         }
       }
-      yield* Deferred.await(exhausted);
 
       expect(spawned).toHaveLength(ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS);
-
-      const retried = yield* runtime.applyConfig(config);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.seconds(29));
+      expect(spawned).toHaveLength(ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS);
+      yield* TestClock.adjust(Duration.seconds(1));
       yield* Deferred.await(spawnSignals[ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS]!);
 
-      expect(retried).toMatchObject({ status: "running", pid: 605 });
       expect(spawned).toHaveLength(ManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS + 1);
     }),
   );

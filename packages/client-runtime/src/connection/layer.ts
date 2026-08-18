@@ -25,9 +25,13 @@ const registryLayer = EnvironmentRegistry.layer.pipe(Layer.provide(driverLayer))
 
 const onboardingLayer = ConnectionOnboarding.layer.pipe(Layer.provide(registryLayer));
 
+const relayEnvironmentDiscoveryLayer = RelayEnvironmentDiscovery.layer.pipe(
+  Layer.provide(registryLayer),
+);
+
 const connectionServicesLayer = Layer.mergeAll(
   registryLayer,
-  RelayEnvironmentDiscovery.layer,
+  relayEnvironmentDiscoveryLayer,
   onboardingLayer,
 );
 

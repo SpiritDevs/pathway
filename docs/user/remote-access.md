@@ -39,19 +39,22 @@ The desktop app enables network access automatically. To pair another device:
 2. The settings panel shows the reachable endpoints for this environment.
 3. Use **Create Link** to generate a pairing link you can share with another device.
 
-Under **Devices with access**, currently connected devices remain visible. Disconnected devices are
-grouped under a collapsed **Disconnected** section, where you can revoke one device or revoke all
-disconnected devices at once. Relaunching the desktop app replaces its previous internal session
-instead of creating another device entry. Revoked devices need a new pairing link before they can
-reconnect.
+Under **Devices with access**, connected web, mobile, and separately paired clients remain visible.
+Signed-in desktop environments appear in the **Environments** list instead of being duplicated as
+devices. Disconnected devices are grouped under a collapsed **Disconnected** section, where you can
+revoke one device or revoke all disconnected devices at once. Relaunching a client replaces its
+previous session instead of creating another entry. Revoked devices need a new pairing link before
+they can reconnect.
 
 Connected environments stay visible in the **Environments** list. Saved environments that are not
 currently reachable through Pathway Connect are grouped under the collapsed **Disconnected** section.
-The screen refreshes live relay health while it is open, so closing or reopening a host is reflected
-without changing its workspace registration. You can reconnect one environment, remove it, or remove
-all disconnected environments at once. For locally saved environments, removal only changes this
-client's catalog. In a company workspace, removal deactivates the workspace registration. Neither
-action deletes the environment's server, projects, or other data.
+Pathway refreshes relay health for the lifetime of the signed-in client, so closing or reopening a
+host is reflected throughout the app without changing its workspace registration. You can reconnect
+one environment, remove it, or remove all disconnected environments at once. For locally saved
+environments, removal only changes this client's catalog. In a company workspace, removal deactivates
+the workspace registration. Neither action deletes the environment's server, projects, or other data.
+After an app update changes the configured Pathway Connect service, the desktop app automatically
+relinks its local environment so the server and client use the same relay deployment.
 
 The default endpoint controls the QR code and primary copy action for pairing links. You can change it from the expanded endpoint list. The preference is stored by endpoint type, so choosing the local LAN endpoint survives normal IP address changes when you move between networks.
 

@@ -455,6 +455,9 @@ export async function listServerClientSessions(): Promise<
     return clientSessions.map((clientSession) => ({
       sessionId: clientSession.sessionId,
       subject: clientSession.subject,
+      ...(clientSession.initiatingEnvironmentId !== undefined
+        ? { initiatingEnvironmentId: clientSession.initiatingEnvironmentId }
+        : {}),
       scopes: clientSession.scopes,
       method: clientSession.method,
       client: clientSession.client,

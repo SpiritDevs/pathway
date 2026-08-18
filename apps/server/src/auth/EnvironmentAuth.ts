@@ -726,11 +726,16 @@ export const make = Effect.gen(function* () {
                 ...(grant.label ? { label: grant.label } : {}),
               },
             });
-            if (grant.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT) {
+            if (
+              grant.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT ||
+              grant.initiatingEnvironmentId !== undefined
+            ) {
               const superseded = (yield* sessions.listActive()).filter(
                 (candidate) =>
                   candidate.sessionId !== session.sessionId &&
-                  candidate.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT,
+                  (grant.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
+                    ? candidate.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
+                    : candidate.initiatingEnvironmentId === grant.initiatingEnvironmentId),
               );
               yield* Effect.forEach(
                 superseded,

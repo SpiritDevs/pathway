@@ -1824,8 +1824,13 @@ export function EnvironmentConnectionSettings({
     );
   }, [authAccessChanges.data]);
   const visibleDesktopClientSessions = useMemo(
-    () => excludeRegisteredEnvironmentClientSessions(desktopClientSessions, excludeEnvironmentIds),
-    [desktopClientSessions, excludeEnvironmentIds],
+    () =>
+      excludeRegisteredEnvironmentClientSessions(
+        desktopClientSessions,
+        excludeEnvironmentIds,
+        desktopBridge !== undefined,
+      ),
+    [desktopBridge, desktopClientSessions, excludeEnvironmentIds],
   );
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"

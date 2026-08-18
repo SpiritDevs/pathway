@@ -5,6 +5,7 @@ import {
   AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
   automaticCloudRetryDelayMs,
   isAlwaysOnCloudLinkState,
+  shouldRelinkCloudEnvironment,
   shouldScheduleAutomaticCloudRetry,
 } from "./useCloudLinkController";
 
@@ -16,13 +17,40 @@ describe("always-on Pathway Connect state", () => {
         linked: true,
         managedTunnelActive: true,
         publishAgentActivity: true,
+        linkedRelayUrl: "https://relay.example.test/",
+        configuredRelayUrl: "https://relay.example.test",
       }),
     ).toBe(true);
 
     for (const state of [
-      { linked: false, managedTunnelActive: true, publishAgentActivity: true },
-      { linked: true, managedTunnelActive: false, publishAgentActivity: true },
-      { linked: true, managedTunnelActive: true, publishAgentActivity: false },
+      {
+        linked: false,
+        managedTunnelActive: true,
+        publishAgentActivity: true,
+        linkedRelayUrl: "https://relay.example.test",
+        configuredRelayUrl: "https://relay.example.test",
+      },
+      {
+        linked: true,
+        managedTunnelActive: false,
+        publishAgentActivity: true,
+        linkedRelayUrl: "https://relay.example.test",
+        configuredRelayUrl: "https://relay.example.test",
+      },
+      {
+        linked: true,
+        managedTunnelActive: true,
+        publishAgentActivity: false,
+        linkedRelayUrl: "https://relay.example.test",
+        configuredRelayUrl: "https://relay.example.test",
+      },
+      {
+        linked: true,
+        managedTunnelActive: true,
+        publishAgentActivity: true,
+        linkedRelayUrl: "https://relay-dev.example.test",
+        configuredRelayUrl: "https://relay.example.test",
+      },
     ]) {
       expect(isAlwaysOnCloudLinkState(state)).toBe(false);
     }
@@ -32,6 +60,27 @@ describe("always-on Pathway Connect state", () => {
     expect([0, 1, 2, 3, 4, 20].map(automaticCloudRetryDelayMs)).toEqual([
       1_000, 2_000, 5_000, 10_000, 10_000, 10_000,
     ]);
+  });
+
+  it("relinks an environment when the installed relay deployment changed", () => {
+    expect(
+      shouldRelinkCloudEnvironment({
+        linked: true,
+        managedTunnelActive: true,
+        desiredManagedTunnel: true,
+        linkedRelayUrl: "https://relay-dev.example.test",
+        configuredRelayUrl: "https://relay.example.test",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRelinkCloudEnvironment({
+        linked: true,
+        managedTunnelActive: true,
+        desiredManagedTunnel: true,
+        linkedRelayUrl: "https://relay.example.test/",
+        configuredRelayUrl: "https://relay.example.test",
+      }),
+    ).toBe(false);
   });
 
   it("stops automatic reconnection after five attempts", () => {

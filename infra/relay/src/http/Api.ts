@@ -1008,6 +1008,7 @@ export const authorizeEnvironmentConnectPrincipal = Effect.fn(
 )(function* (input: {
   readonly subject: RelayClientPrincipal["Service"]["subject"];
   readonly targetEnvironmentId: string;
+  readonly clientEnvironmentId?: EnvironmentId;
   readonly connectGrant?: string;
 }) {
   if (input.subject._tag === "Environment") {
@@ -1041,6 +1042,7 @@ export const authorizeEnvironmentConnectPrincipal = Effect.fn(
   });
   return {
     userId: input.subject.userId,
+    ...(input.clientEnvironmentId ? { clientEnvironmentId: input.clientEnvironmentId } : {}),
     ...(connectGrant ? { connectGrant } : {}),
   } as const;
 });
@@ -1050,6 +1052,7 @@ export const dpopClientApi = HttpApiBuilder.group(
   "dpopClient",
   Effect.fnUntraced(function* (handlers) {
     const connector = yield* EnvironmentConnector.EnvironmentConnector;
+    const environmentLinks = yield* EnvironmentLinks.EnvironmentLinks;
     const dpopProofs = yield* DpopProofs.DpopProofReplay;
     return handlers
       .handle(
@@ -1068,9 +1071,23 @@ export const dpopClientApi = HttpApiBuilder.group(
             const clientProofKeyThumbprint = yield* requireDpopThumbprint(proofKeyThumbprint, {
               expectedAccessToken: token,
             }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
+            const clientEnvironmentId =
+              principal.subject._tag === "User" && payload.clientEnvironmentId
+                ? yield* environmentLinks
+                    .getForUser({
+                      userId: principal.subject.userId,
+                      environmentId: payload.clientEnvironmentId,
+                    })
+                    .pipe(
+                      Effect.map((link) =>
+                        link === null ? undefined : payload.clientEnvironmentId,
+                      ),
+                    )
+                : undefined;
             const connectIdentity = yield* authorizeEnvironmentConnectPrincipal({
               subject: principal.subject,
               targetEnvironmentId: params.environmentId,
+              ...(clientEnvironmentId ? { clientEnvironmentId } : {}),
               ...(payload.connectGrant ? { connectGrant: payload.connectGrant } : {}),
             });
             return yield* connector.connect({

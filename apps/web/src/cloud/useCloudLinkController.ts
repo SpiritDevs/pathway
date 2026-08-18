@@ -1,5 +1,6 @@
 import { useAuth } from "@clerk/react";
 import { findErrorTraceId } from "@spiritdevs/client-runtime/errors";
+import { normalizeSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -16,7 +17,11 @@ import {
   updatePrimaryEnvironmentPreferences as updatePrimaryEnvironmentPreferencesAtom,
 } from "./linkEnvironmentAtoms";
 import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
-import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "./publicConfig";
+import {
+  hasCloudPublicConfig,
+  resolveCloudPublicConfig,
+  resolveRelayClerkTokenOptions,
+} from "./publicConfig";
 
 export interface CloudLinkDesiredState {
   readonly managedTunnel: boolean;
@@ -94,8 +99,31 @@ export function isAlwaysOnCloudLinkState(input: {
   readonly linked: boolean;
   readonly managedTunnelActive: boolean;
   readonly publishAgentActivity: boolean;
+  readonly linkedRelayUrl: string | null;
+  readonly configuredRelayUrl: string | null;
 }): boolean {
-  return input.linked && input.managedTunnelActive && input.publishAgentActivity;
+  return (
+    input.linked &&
+    input.managedTunnelActive &&
+    input.publishAgentActivity &&
+    input.configuredRelayUrl !== null &&
+    normalizeSecureRelayUrl(input.linkedRelayUrl ?? "") === input.configuredRelayUrl
+  );
+}
+
+export function shouldRelinkCloudEnvironment(input: {
+  readonly linked: boolean;
+  readonly managedTunnelActive: boolean;
+  readonly desiredManagedTunnel: boolean;
+  readonly linkedRelayUrl: string | null;
+  readonly configuredRelayUrl: string | null;
+}): boolean {
+  return (
+    !input.linked ||
+    input.managedTunnelActive !== input.desiredManagedTunnel ||
+    input.configuredRelayUrl === null ||
+    normalizeSecureRelayUrl(input.linkedRelayUrl ?? "") !== input.configuredRelayUrl
+  );
 }
 
 /**
@@ -161,6 +189,8 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
     primaryCloudLinkState.data?.managedTunnelActive ?? primaryCloudLinkState.data?.linked ?? false;
   const publishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
   const linked = primaryCloudLinkState.data?.linked ?? false;
+  const linkedRelayUrl = primaryCloudLinkState.data?.relayUrl ?? null;
+  const configuredRelayUrl = resolveCloudPublicConfig().relayUrl;
 
   const reconcileCloudState = async (
     desired: CloudLinkDesiredState,
@@ -208,7 +238,15 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
           error: reportUpdateFailure(new Error("Sign in to Pathway Connect before enabling this.")),
         };
       }
-      if (!linked || managedTunnelActive !== desired.managedTunnel) {
+      if (
+        shouldRelinkCloudEnvironment({
+          linked,
+          managedTunnelActive,
+          desiredManagedTunnel: desired.managedTunnel,
+          linkedRelayUrl,
+          configuredRelayUrl,
+        })
+      ) {
         const linkResult = await linkPrimaryEnvironment({
           target,
           clerkToken,
@@ -291,6 +329,8 @@ export function useAlwaysOnCloudLink(): void {
     linked: controller.linked,
     managedTunnelActive: controller.managedTunnelActive,
     publishAgentActivity: controller.publishAgentActivity,
+    linkedRelayUrl: controller.linkState.data?.relayUrl ?? null,
+    configuredRelayUrl: resolveCloudPublicConfig().relayUrl,
   });
 
   const eligible =

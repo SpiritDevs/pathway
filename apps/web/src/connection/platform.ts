@@ -49,6 +49,10 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
+  readPrimaryEnvironmentDescriptor,
+  resolveInitialPrimaryEnvironmentDescriptor,
+} from "../environments/primary/context";
+import {
   readPrimaryEnvironmentTarget,
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
@@ -229,6 +233,22 @@ const capabilitiesLayer = Layer.effectContext(
     });
     const identity = RelayDeviceIdentity.of({
       deviceId: Effect.succeed(Option.none()),
+      environmentId:
+        window.desktopBridge === undefined
+          ? Effect.succeed(Option.none())
+          : Effect.tryPromise({
+              try: resolveInitialPrimaryEnvironmentDescriptor,
+              catch: (cause) =>
+                new ConnectionTransientError({
+                  reason: "remote-unavailable",
+                  detail: `Could not resolve this desktop environment identity: ${String(cause)}`,
+                }),
+            }).pipe(
+              Effect.map((descriptor) => Option.some(descriptor.environmentId)),
+              Effect.orElseSucceed(() =>
+                Option.fromNullishOr(readPrimaryEnvironmentDescriptor()?.environmentId),
+              ),
+            ),
     });
     const primaryAuth = PrimaryEnvironmentAuth.of({
       bearerToken: Effect.tryPromise({

@@ -1,5 +1,8 @@
 import { EnvironmentId } from "@spiritdevs/contracts";
-import { RelayEnvironmentStatusScope } from "@spiritdevs/contracts/relay";
+import {
+  RelayEnvironmentConnectScope,
+  RelayEnvironmentStatusScope,
+} from "@spiritdevs/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -458,6 +461,48 @@ describe("ManagedRelayClient", () => {
       expect(error).toMatchObject({
         _tag: "ManagedRelayRequestFailedError",
         traceId: "trace-managed-relay",
+      });
+    }).pipe(Effect.provide(managedRelayTestLayer(fetchFn)));
+  });
+
+  it.effect("identifies the desktop environment when connecting through the relay", () => {
+    let connectPayload: unknown;
+    const fetchFn = (async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/v1/client/dpop-token")) {
+        return Response.json({
+          access_token: "relay-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "DPoP",
+          expires_in: 1_800,
+          scope: RelayEnvironmentConnectScope,
+        });
+      }
+      connectPayload = await request.json();
+      return Response.json({
+        environmentId: "env-target",
+        endpoint: {
+          httpBaseUrl: "https://desktop.example.test/",
+          wsBaseUrl: "wss://desktop.example.test/ws",
+          providerKind: "cloudflare_tunnel",
+        },
+        credential: "environment-credential",
+        expiresAt: "2026-06-05T20:30:00.000Z",
+      });
+    }) satisfies typeof globalThis.fetch;
+
+    return Effect.gen(function* () {
+      const relayClient = yield* ManagedRelay.ManagedRelayClient;
+      yield* relayClient.connectEnvironment({
+        clerkToken: clerkToken("user-1", "session-1"),
+        scopes: [RelayEnvironmentConnectScope],
+        environmentId: EnvironmentId.make("env-target"),
+        clientEnvironmentId: EnvironmentId.make("env-client"),
+      });
+
+      expect(connectPayload).toMatchObject({
+        clientEnvironmentId: "env-client",
+        clientKeyThumbprint: "client-thumbprint",
       });
     }).pipe(Effect.provide(managedRelayTestLayer(fetchFn)));
   });

@@ -136,7 +136,11 @@ export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 10_000;
 const ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS = 60 * 1_000;
 
 type EnvironmentConnectIdentity =
-  | { readonly userId: string; readonly initiatingEnvironmentId?: never }
+  | {
+      readonly userId: string;
+      readonly clientEnvironmentId?: RelayCloudMintCredentialProofPayload["environmentId"];
+      readonly initiatingEnvironmentId?: never;
+    }
   | {
       readonly userId?: never;
       readonly initiatingEnvironmentId: RelayCloudMintCredentialProofPayload["environmentId"];
@@ -680,6 +684,9 @@ const make = Effect.gen(function* () {
         environmentId: link.environmentId,
         ...(input.initiatingEnvironmentId
           ? { initiatingEnvironmentId: input.initiatingEnvironmentId }
+          : {}),
+        ...("clientEnvironmentId" in input && input.clientEnvironmentId
+          ? { clientEnvironmentId: input.clientEnvironmentId }
           : {}),
         clientProofKeyThumbprint: input.clientProofKeyThumbprint,
         cnf: { jkt: input.clientProofKeyThumbprint },

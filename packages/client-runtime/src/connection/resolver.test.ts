@@ -178,6 +178,7 @@ const makeDependencies = Effect.fn("TestConnectionResolver.makeDependencies")((o
       ClientCapabilities.RelayDeviceIdentity,
       ClientCapabilities.RelayDeviceIdentity.of({
         deviceId: Effect.succeed(Option.some("device-1")),
+        environmentId: Effect.succeed(Option.some(ENVIRONMENT_ID)),
       }),
     ),
     Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, remote),
@@ -305,6 +306,7 @@ describe("ConnectionResolver", () => {
         ReadonlyArray<{
           readonly clerkToken: string;
           readonly scopes: ReadonlyArray<string>;
+          readonly clientEnvironmentId?: string;
           readonly deviceId?: string;
         }>
       >([]);
@@ -320,6 +322,9 @@ describe("ConnectionResolver", () => {
             {
               clerkToken: input.clerkToken,
               scopes: input.scopes,
+              ...(input.clientEnvironmentId
+                ? { clientEnvironmentId: input.clientEnvironmentId }
+                : {}),
               ...(input.deviceId ? { deviceId: input.deviceId } : {}),
             },
           ]).pipe(
@@ -354,6 +359,7 @@ describe("ConnectionResolver", () => {
         {
           clerkToken: "clerk-session",
           scopes: [RelayEnvironmentConnectScope],
+          clientEnvironmentId: ENVIRONMENT_ID,
           deviceId: "device-1",
         },
       ]);

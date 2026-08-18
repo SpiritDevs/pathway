@@ -47,17 +47,35 @@ export function partitionClientSessionsByConnection<
 }
 
 export function excludeRegisteredEnvironmentClientSessions<
-  T extends { readonly initiatingEnvironmentId?: EnvironmentId },
+  T extends {
+    readonly subject: string;
+    readonly initiatingEnvironmentId?: EnvironmentId;
+    readonly current: boolean;
+    readonly client: { readonly deviceType: string; readonly browser?: string };
+  },
 >(
   sessions: ReadonlyArray<T>,
   registeredEnvironmentIds?: ReadonlySet<EnvironmentId>,
+  hideCurrentDesktopSession = false,
 ): ReadonlyArray<T> {
-  if (registeredEnvironmentIds === undefined || registeredEnvironmentIds.size === 0)
+  if (
+    !hideCurrentDesktopSession &&
+    (registeredEnvironmentIds === undefined || registeredEnvironmentIds.size === 0)
+  )
     return sessions;
   return sessions.filter(
-    ({ initiatingEnvironmentId }) =>
-      initiatingEnvironmentId === undefined ||
-      !registeredEnvironmentIds.has(initiatingEnvironmentId),
+    ({ client, current, initiatingEnvironmentId, subject }) =>
+      !(hideCurrentDesktopSession && current) &&
+      !(
+        hideCurrentDesktopSession &&
+        initiatingEnvironmentId === undefined &&
+        subject === "cloud-connect" &&
+        client.deviceType === "desktop" &&
+        client.browser === "Electron"
+      ) &&
+      (initiatingEnvironmentId === undefined ||
+        registeredEnvironmentIds === undefined ||
+        !registeredEnvironmentIds.has(initiatingEnvironmentId)),
   );
 }
 

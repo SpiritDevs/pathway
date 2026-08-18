@@ -19,6 +19,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ManagedRelay from "./managedRelay.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as Connectivity from "../connection/connectivity.ts";
+import * as EnvironmentRegistry from "../connection/registry.ts";
 import { mapManagedRelayError } from "../connection/errors.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "../connection/model.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
@@ -56,6 +57,13 @@ export const EMPTY_RELAY_ENVIRONMENT_DISCOVERY_STATE: RelayEnvironmentDiscoveryS
   offline: false,
   error: Option.none(),
 };
+
+export function effectiveRelayEnvironmentAvailability(
+  relayAvailability: Exclude<RelayEnvironmentAvailability, "checking">,
+  hasLiveConnection: boolean,
+): Exclude<RelayEnvironmentAvailability, "checking"> {
+  return hasLiveConnection ? "online" : relayAvailability;
+}
 
 export function refreshingEnvironmentMap(
   environments: ReadonlyArray<RelayClientEnvironmentRecord>,
@@ -132,6 +140,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
   const session = yield* ClientCapabilities.CloudSession;
   const connectivity = yield* Connectivity.Connectivity;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const environmentRegistry = yield* Effect.serviceOption(EnvironmentRegistry.EnvironmentRegistry);
   const state = yield* SubscriptionRef.make(EMPTY_RELAY_ENVIRONMENT_DISCOVERY_STATE);
   const refreshLock = yield* Semaphore.make(1);
   const hasRefreshed = yield* Ref.make(false);
@@ -172,6 +181,18 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
     });
   });
 
+  const hasLiveConnection = Effect.fn("RelayEnvironmentDiscovery.hasLiveConnection")(function* (
+    environmentId: RelayClientEnvironmentRecord["environmentId"],
+  ) {
+    if (Option.isNone(environmentRegistry)) {
+      return false;
+    }
+    return yield* environmentRegistry.value.state(environmentId).pipe(
+      Effect.map((connectionState) => connectionState.phase === "connected"),
+      Effect.orElseSucceed(() => false),
+    );
+  });
+
   const refreshStatus = Effect.fn("RelayEnvironmentDiscovery.refreshStatus")(function* (
     generation: number,
     clerkToken: string,
@@ -190,7 +211,12 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       );
 
     if (result._tag === "Success") {
-      if (result.success.status === "offline") {
+      const liveConnection = yield* hasLiveConnection(environment.environmentId);
+      const availability = effectiveRelayEnvironmentAvailability(
+        result.success.status,
+        liveConnection,
+      );
+      if (result.success.status === "offline" && !liveConnection) {
         const fingerprint = `${result.success.endpoint.httpBaseUrl}\n${result.success.error ?? ""}`;
         const shouldReport = yield* Ref.modify(offlineReportFingerprints, (current) => {
           if (current.get(environment.environmentId) === fingerprint) {
@@ -211,7 +237,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       }
       yield* updateEnvironment(generation, environment.environmentId, (current) => ({
         ...current,
-        availability: result.success.status,
+        availability,
         status: Option.some(result.success),
         error: Option.none(),
       }));
@@ -219,9 +245,10 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
     }
 
     yield* clearOfflineReport(environment.environmentId);
+    const liveConnection = yield* hasLiveConnection(environment.environmentId);
     yield* updateEnvironment(generation, environment.environmentId, (current) => ({
       ...current,
-      availability: "error",
+      availability: effectiveRelayEnvironmentAvailability("error", liveConnection),
       error: Option.some(result.failure),
     }));
   });

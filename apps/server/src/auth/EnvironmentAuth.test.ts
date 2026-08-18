@@ -225,6 +225,44 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     ),
   );
 
+  it.effect("retires the previous session when an environment-backed client reconnects", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const initiatingEnvironmentId = EnvironmentId.make("environment-client");
+
+      const firstGrant = yield* serverAuth.createPairingLink({
+        subject: "cloud-connect",
+        initiatingEnvironmentId,
+      });
+      const first = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        firstGrant.credential,
+        undefined,
+        requestMetadata,
+      );
+      const secondGrant = yield* serverAuth.createPairingLink({
+        subject: "cloud-connect",
+        initiatingEnvironmentId,
+      });
+      const second = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        secondGrant.credential,
+        undefined,
+        requestMetadata,
+      );
+
+      const active = yield* sessions.listActive();
+      const retired = yield* serverAuth
+        .authenticateHttpRequest(makeBearerRequest(first.access_token))
+        .pipe(Effect.flip);
+
+      expect(
+        active.filter((session) => session.initiatingEnvironmentId === initiatingEnvironmentId),
+      ).toHaveLength(1);
+      expect(retired._tag).toBe("ServerAuthInvalidCredentialError");
+      expect(second.access_token).not.toBe(first.access_token);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
   it.effect("keeps user-issued administrative pairing links manageable", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

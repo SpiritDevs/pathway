@@ -155,11 +155,17 @@ const makeRelayBroker = Effect.fn("clientRuntime.connection.broker.makeRelay")(f
           const deviceId = yield* identity.deviceId.pipe(
             Effect.withSpan("relay.connection.deviceIdentity.resolve"),
           );
+          const clientEnvironmentId = yield* identity.environmentId.pipe(
+            Effect.withSpan("relay.connection.environmentIdentity.resolve"),
+          );
           const connected = yield* relay
             .connectEnvironment({
               clerkToken,
               scopes: [RelayEnvironmentConnectScope],
               environmentId: target.environmentId,
+              ...(Option.isSome(clientEnvironmentId)
+                ? { clientEnvironmentId: clientEnvironmentId.value }
+                : {}),
               ...(Option.isSome(deviceId) ? { deviceId: deviceId.value } : {}),
             })
             .pipe(Effect.mapError(mapManagedRelayError));

@@ -204,6 +204,28 @@ describe("relay environment connect grants", () => {
     ),
   );
 
+  it.effect("preserves a verified desktop environment identity for user connects", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* authorizeEnvironmentConnectPrincipal({
+          subject: { _tag: "User", userId: "user-1" },
+          targetEnvironmentId: "environment-2",
+          clientEnvironmentId: EnvironmentId.make("environment-1"),
+        }),
+      ).toEqual({
+        userId: "user-1",
+        clientEnvironmentId: "environment-1",
+      });
+    }).pipe(
+      Effect.provideService(
+        ConvexConnectGrants.ConvexConnectGrants,
+        ConvexConnectGrants.ConvexConnectGrants.of({
+          validateConnectGrant: () => Effect.die("grant validation must not run"),
+        }),
+      ),
+    ),
+  );
+
   it.effect("requires a connect grant for environment-subject connects", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(

@@ -179,6 +179,7 @@ const capabilitiesLayer = Layer.effectContext(
             ),
             Effect.map(Option.some),
           ),
+          environmentId: Effect.succeed(Option.none()),
         }),
       ),
       Context.add(

@@ -48,6 +48,8 @@ export class RelayDeviceIdentity extends Context.Service<
   RelayDeviceIdentity,
   {
     readonly deviceId: Effect.Effect<Option.Option<string>, ConnectionAttemptError>;
+    /** Environment hosted by this client, absent for web and mobile-only clients. */
+    readonly environmentId: Effect.Effect<Option.Option<EnvironmentId>, ConnectionAttemptError>;
   }
 >()("@spiritdevs/client-runtime/platform/capabilities/RelayDeviceIdentity") {}
 

@@ -644,6 +644,12 @@ export const RelayConvexConnectGrant = TrimmedNonEmptyString;
 export type RelayConvexConnectGrant = typeof RelayConvexConnectGrant.Type;
 
 export const RelayEnvironmentConnectRequest = Schema.Struct({
+  clientEnvironmentId: Schema.optional(
+    EnvironmentId.annotate({
+      description:
+        "Environment hosted by the requesting client, used to correlate replacement desktop sessions.",
+    }),
+  ),
   deviceId: Schema.optional(
     TrimmedNonEmptyString.annotate({
       description: "Optional client device identifier requesting the connection.",
@@ -950,6 +956,7 @@ export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
   environmentId: EnvironmentId,
   initiatingEnvironmentId: Schema.optional(EnvironmentId),
+  clientEnvironmentId: Schema.optional(EnvironmentId),
   clientProofKeyThumbprint: TrimmedNonEmptyString,
   cnf: Schema.Struct({
     jkt: TrimmedNonEmptyString,

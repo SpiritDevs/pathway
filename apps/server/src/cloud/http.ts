@@ -1070,10 +1070,19 @@ export const cloudMintCredentialHandler = Effect.fn("environment.cloud.mintCrede
             });
           }
           yield* requireCloudMintConnectGrantAuthorization(dependencies, proof, environmentId);
-          return { subject: "cloud-connect" } as const;
+          return {
+            subject: "cloud-connect",
+            ...(proof.clientEnvironmentId
+              ? { initiatingEnvironmentId: proof.clientEnvironmentId }
+              : {}),
+          } as const;
         })
       : Effect.gen(function* () {
-          if (proof.sub !== proof.initiatingEnvironmentId || proof.connectGrant === undefined) {
+          if (
+            proof.clientEnvironmentId !== undefined ||
+            proof.sub !== proof.initiatingEnvironmentId ||
+            proof.connectGrant === undefined
+          ) {
             return yield* new EnvironmentHttpUnauthorizedError({
               message: "Invalid cloud mint request.",
             });
