@@ -138,6 +138,12 @@ const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   "azure-devops": "Open on Azure DevOps",
 };
 
+const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
+  merge: "Merge",
+  squash: "Squash",
+  rebase: "Rebase",
+};
+
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
@@ -690,6 +696,7 @@ export function PullRequestDetailPanel({
 
   const allowedMergeMethods = allowedPullRequestMergeMethods(detail);
   const selectedMergeMethod = resolveSelectedMergeMethod(allowedMergeMethods, mergeMethod);
+  const selectedMergeMethodLabel = MERGE_METHOD_LABELS[selectedMergeMethod];
   const conflicting = isPullRequestConflicting(detail);
   // A host that cannot produce a patch has no Code tab to open. The tabs themselves stay hidden
   // until the detail arrives, so the loading ghost is the panel's only unfinished UI.
@@ -906,7 +913,7 @@ export function PullRequestDetailPanel({
                                     icon and the label need their own row to share a line. */}
                                 <span className="flex min-w-0 items-center gap-2">
                                   <GitMergeIcon className="size-3.5" />
-                                  <span className="capitalize">{method}</span>
+                                  <span>{MERGE_METHOD_LABELS[method]}</span>
                                 </span>
                               </MenuRadioItem>
                             ))}
@@ -1011,7 +1018,7 @@ export function PullRequestDetailPanel({
                   disabled={actionPending}
                   onClick={() => setConfirmAction("merge")}
                 >
-                  {actionPending ? "Merging..." : "Merge"}
+                  {actionPending ? "Merging..." : selectedMergeMethodLabel}
                 </Button>
               ) : null}
             </>
@@ -1450,7 +1457,7 @@ export function PullRequestDetailPanel({
                 if (action === "close") void perform("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              {confirmAction === "merge" ? selectedMergeMethodLabel : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
