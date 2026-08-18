@@ -196,12 +196,12 @@ export function emailMessageCountLabel(visible: number, total: number): string {
 // ── Selection ──────────────────────────────────────────────────────────
 
 export interface EmailSelection {
-  readonly ids: ReadonlySet<EmailMessageId>;
+  readonly ids: ReadonlySet<string>;
   /** Where a shift-click measures from; the last row checked without shift. */
-  readonly anchorId: EmailMessageId | null;
+  readonly anchorId: string | null;
 }
 
-const EMPTY_SELECTED_EMAIL_IDS: ReadonlySet<EmailMessageId> = new Set();
+const EMPTY_SELECTED_EMAIL_IDS: ReadonlySet<string> = new Set();
 
 export const EMPTY_EMAIL_SELECTION: EmailSelection = Object.freeze({
   ids: EMPTY_SELECTED_EMAIL_IDS,
@@ -218,10 +218,10 @@ export function emailSelectModeForModifiers(input: {
 
 /** Inclusive slice of the display order between two rows, either way round. */
 export function emailRangeIds(
-  ids: ReadonlyArray<EmailMessageId>,
-  fromId: EmailMessageId,
-  toId: EmailMessageId,
-): ReadonlyArray<EmailMessageId> {
+  ids: ReadonlyArray<string>,
+  fromId: string,
+  toId: string,
+): ReadonlyArray<string> {
   const from = ids.indexOf(fromId);
   const to = ids.indexOf(toId);
   if (from === -1 || to === -1) return to === -1 ? [] : [toId];
@@ -238,8 +238,8 @@ export function emailRangeIds(
 export function selectEmailRow(
   selection: EmailSelection,
   input: {
-    readonly ids: ReadonlyArray<EmailMessageId>;
-    readonly messageId: EmailMessageId;
+    readonly ids: ReadonlyArray<string>;
+    readonly messageId: string;
     readonly mode: EmailSelectMode;
   },
 ): EmailSelection {
@@ -266,11 +266,11 @@ export function selectEmailRow(
  */
 export function pruneEmailSelection(
   selection: EmailSelection,
-  ids: ReadonlyArray<EmailMessageId>,
+  ids: ReadonlyArray<string>,
 ): EmailSelection {
   const visible = new Set(ids);
   let changed = false;
-  const next = new Set<EmailMessageId>();
+  const next = new Set<string>();
   for (const id of selection.ids) {
     if (visible.has(id)) next.add(id);
     else changed = true;
@@ -285,7 +285,7 @@ export type EmailSelectAllState = "none" | "partial" | "all";
 
 export function emailSelectAllState(
   selection: EmailSelection,
-  visibleIds: ReadonlyArray<EmailMessageId>,
+  visibleIds: ReadonlyArray<string>,
 ): EmailSelectAllState {
   if (visibleIds.length === 0) return "none";
   let selected = 0;
@@ -297,7 +297,7 @@ export function emailSelectAllState(
 /** Select-all covers what the list is showing, so a filtered select-all never reaches a hidden row. */
 export function toggleEmailSelectAll(
   selection: EmailSelection,
-  visibleIds: ReadonlyArray<EmailMessageId>,
+  visibleIds: ReadonlyArray<string>,
 ): EmailSelection {
   const clearing = emailSelectAllState(selection, visibleIds) === "all";
   const next = new Set(selection.ids);
@@ -308,11 +308,24 @@ export function toggleEmailSelectAll(
   return { ids: next, anchorId: null };
 }
 
-export function selectedEmailMessages<Message extends CapturedEmailSummary>(
-  messages: ReadonlyArray<Message>,
-  selection: EmailSelection,
-): ReadonlyArray<Message> {
-  return messages.filter((message) => selection.ids.has(message.id));
+export function emailMessageSelectionId(
+  message: CapturedEmailSummary & {
+    readonly companyId?: string | null;
+    readonly environmentId?: string;
+  },
+): string {
+  return message.environmentId === undefined
+    ? message.id
+    : `${message.companyId ?? "local"}\0${message.environmentId}\0${message.id}`;
+}
+
+export function selectedEmailMessages<
+  Message extends CapturedEmailSummary & {
+    readonly companyId?: string | null;
+    readonly environmentId?: string;
+  },
+>(messages: ReadonlyArray<Message>, selection: EmailSelection): ReadonlyArray<Message> {
+  return messages.filter((message) => selection.ids.has(emailMessageSelectionId(message)));
 }
 
 /**
@@ -320,12 +333,18 @@ export function selectedEmailMessages<Message extends CapturedEmailSummary>(
  * and that row alone otherwise. Right-clicking an unchecked row deliberately does not check it —
  * opening a message and checking it stay separate gestures.
  */
-export function emailActionTargets<Message extends CapturedEmailSummary>(
+export function emailActionTargets<
+  Message extends CapturedEmailSummary & {
+    readonly companyId?: string | null;
+    readonly environmentId?: string;
+  },
+>(
   messages: ReadonlyArray<Message>,
   selection: EmailSelection,
   message: Message,
 ): ReadonlyArray<Message> {
-  if (selection.ids.size <= 1 || !selection.ids.has(message.id)) return [message];
+  if (selection.ids.size <= 1 || !selection.ids.has(emailMessageSelectionId(message)))
+    return [message];
   return selectedEmailMessages(messages, selection);
 }
 

@@ -1,4 +1,5 @@
 import { RotateCcwIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import {
   Outlet,
   createFileRoute,
@@ -11,8 +12,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
+import { settingsLocationIsVisibleForWorkspace } from "../components/settings/settingsSearch";
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
+import { companyListAtom } from "../cloud/activeCompany";
+import {
+  isExplicitSettingsCompanyScope,
+  resolveSettingsCompanyId,
+  settingsCompanyScopeAtom,
+} from "../cloud/settingsCompany";
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
@@ -37,6 +45,21 @@ function SettingsContentLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
+  const companies = useAtomValue(companyListAtom);
+  const settingsCompanyScope = useAtomValue(settingsCompanyScopeAtom);
+  const settingsCompanyId = resolveSettingsCompanyId({
+    companies,
+    scope: settingsCompanyScope,
+  });
+  const settingsWorkspaceKind =
+    companies.find((company) => company.id === settingsCompanyId)?.workspaceKind ?? "profile";
+  // A newly created company can be selected before its first replica arrives. Keep only an
+  // explicit company destination mounted while it bootstraps; Auto may already mean Profile.
+  const settingsCompanyIsBootstrapping =
+    isExplicitSettingsCompanyScope(settingsCompanyScope) && settingsCompanyId === null;
+  const settingsSectionIsVisible =
+    settingsCompanyIsBootstrapping ||
+    settingsLocationIsVisibleForWorkspace(location.pathname, settingsWorkspaceKind);
   const [restoreSignal, setRestoreSignal] = useState(0);
   const showRestoreDefaults = location.pathname === "/settings/general";
   const handleRestored = () => setRestoreSignal((value) => value + 1);
@@ -47,6 +70,11 @@ function SettingsContentLayout() {
     }
     void navigate({ to: "/" });
   }, [canGoBack, navigate]);
+
+  useEffect(() => {
+    if (settingsSectionIsVisible) return;
+    void navigate({ to: "/settings/general", replace: true });
+  }, [navigate, settingsSectionIsVisible]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -68,6 +96,8 @@ function SettingsContentLayout() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [navigateBackWithinApp]);
+
+  if (!settingsSectionIsVisible) return null;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">

@@ -135,17 +135,19 @@ function ConfiguredPathwayConnectProfileButton() {
                 <span>Company</span>
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                {companyChoices.length > 1 ? (
+                {companies.length > 1 ? (
                   <>
-                    <DropdownMenuItem
-                      onClick={() => {
+                    <DropdownMenuCheckboxItem
+                      checked={activeCompanyId === null}
+                      onCheckedChange={(checked) => {
+                        if (!checked) return;
+                        setActiveCompanyId(null);
                         setSettingsCompanyScope(SETTINGS_PROFILE_SCOPE);
-                        void navigate({ to: "/settings/general" });
                       }}
                     >
                       <Building2Icon />
                       <span>All companies</span>
-                    </DropdownMenuItem>
+                    </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
                   </>
                 ) : null}

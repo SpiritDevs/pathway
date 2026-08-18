@@ -19,12 +19,8 @@ import { reportIssueWriteFailure as reportFailure } from "../../issues/issueWrit
 import {
   useCreateIssueStatus,
   useDeleteIssueStatus,
-  useIssueStatuses,
-  useIssueTrackerConfig,
-  useIssuesStore,
-  useIssuesStoreStatus,
+  useCompanyIssuesStore,
   useReorderIssueStatuses,
-  useSetIssueKeyPrefix,
   useUpdateIssueStatus,
 } from "../../../state/issues";
 import { ColorSelector } from "../../color-selector";
@@ -45,6 +41,7 @@ import { Spinner } from "../../ui/spinner";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
+import { useCompanySettings } from "../company/useCompanySettings";
 import {
   countIssuesByStatus,
   DEFAULT_ISSUE_COLOR,
@@ -52,11 +49,9 @@ import {
   ISSUE_COLOR_OPTIONS,
   ISSUE_KEY_PREFIX_MAX_CHARS,
   ISSUE_STATUS_CATEGORY_OPTIONS,
-  issueKeyPrefixError,
   issueStatusCategoryLabel,
   issueStatusDeletability,
   issueStatusReassignmentOptions,
-  normalizeIssueKeyPrefix,
   reorderedIssueStatusIds,
 } from "./issuesSettings.logic";
 
@@ -234,16 +229,15 @@ function StatusRow({
 }
 
 export function StatusesSettingsPanel() {
-  const storeStatus = useIssuesStoreStatus();
-  const store = useIssuesStore();
-  const statuses = useIssueStatuses();
-  const config = useIssueTrackerConfig();
+  const { companyId } = useCompanySettings();
+  const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
+  const statuses = store.statuses;
+  const config = store.config;
 
-  const createStatus = useCreateIssueStatus();
-  const updateStatus = useUpdateIssueStatus();
-  const deleteStatus = useDeleteIssueStatus();
-  const reorderStatuses = useReorderIssueStatuses();
-  const setKeyPrefix = useSetIssueKeyPrefix();
+  const createStatus = useCreateIssueStatus(companyId);
+  const updateStatus = useUpdateIssueStatus(companyId);
+  const deleteStatus = useDeleteIssueStatus(companyId);
+  const reorderStatuses = useReorderIssueStatuses(companyId);
 
   const [busy, setBusy] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -251,7 +245,6 @@ export function StatusesSettingsPanel() {
   const [draftCategory, setDraftCategory] = useState<IssueStatusCategory>("unstarted");
   const [pendingDelete, setPendingDelete] = useState<IssueStatus | null>(null);
   const [reassignToId, setReassignToId] = useState<string | null>(null);
-  const [prefixError, setPrefixError] = useState<string | null>(null);
 
   const issueCounts = useMemo(() => countIssuesByStatus(store), [store]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -339,18 +332,6 @@ export function StatusesSettingsPanel() {
       }
     })();
   }, [deleteStatus, pendingDelete, reassignToId, run]);
-
-  const handlePrefixBlur = useCallback(
-    (raw: string) => {
-      const error = issueKeyPrefixError(raw);
-      setPrefixError(error);
-      if (error !== null) return;
-      const keyPrefix = normalizeIssueKeyPrefix(raw);
-      if (keyPrefix === config?.keyPrefix) return;
-      void run("Failed to rename the issue key prefix", () => setKeyPrefix({ keyPrefix }));
-    },
-    [config?.keyPrefix, run, setKeyPrefix],
-  );
 
   const reassignOptions =
     pendingDelete === null ? [] : issueStatusReassignmentOptions(statuses, pendingDelete.id);
@@ -465,33 +446,18 @@ export function StatusesSettingsPanel() {
           <SettingsRow
             title="Prefix"
             description="The letters in front of every issue number. New issues take this prefix; keys already handed out keep the one they were minted with."
-            status={
-              prefixError !== null ? (
-                <span className="text-destructive-foreground">{prefixError}</span>
-              ) : config === null ? null : (
-                `Next issue: ${config.keyPrefix}-${config.nextNumber}`
-              )
-            }
+            status={config === null ? null : `Next issue: ${config.keyPrefix}-${config.nextNumber}`}
             control={
               <Input
                 key={config?.keyPrefix ?? "loading"}
                 className="w-full font-mono sm:w-32"
                 aria-label="Issue key prefix"
-                aria-invalid={prefixError !== null}
                 maxLength={ISSUE_KEY_PREFIX_MAX_CHARS}
                 spellCheck={false}
                 autoCapitalize="characters"
                 defaultValue={config?.keyPrefix ?? ""}
-                disabled={busy || config === null}
-                onBlur={(event) => handlePrefixBlur(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                  if (event.key === "Escape" && config !== null) {
-                    event.currentTarget.value = config.keyPrefix;
-                    setPrefixError(null);
-                    event.currentTarget.blur();
-                  }
-                }}
+                disabled
+                title="Company issue prefixes are assigned when the company is created."
               />
             }
           />

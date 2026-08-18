@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
+import { CompanyId } from "@spiritdevs/contracts/company";
 
 import {
   classifySyncStatusError,
   deriveCompanySyncStatus,
+  selectedCompanySyncStatusSummary,
+  summarizeCompanySyncStatuses,
+  type CompanySyncStatus,
   type CompanySyncEngineState,
 } from "./syncStatus.logic";
 
@@ -12,6 +16,18 @@ const state = (overrides: Partial<CompanySyncEngineState> = {}): CompanySyncEngi
   pending: [],
   rejected: [],
   quarantined: [],
+  lastError: null,
+  ...overrides,
+});
+
+const status = (overrides: Partial<CompanySyncStatus> = {}): CompanySyncStatus => ({
+  phase: "live",
+  bootstrapComplete: true,
+  pendingCount: 0,
+  pendingKinds: [],
+  blockedCount: 0,
+  rejectedCount: 0,
+  quarantinedCount: 0,
   lastError: null,
   ...overrides,
 });
@@ -72,6 +88,44 @@ describe("classifySyncStatusError", () => {
     expect(classifySyncStatusError({ reason: "unauthorized", message: "   " })).toEqual({
       classification: "Sign-in required",
       message: "Pathway could not authorize cloud sync. Sign in again to continue.",
+    });
+  });
+});
+
+describe("company sync status summaries", () => {
+  it("uses the worst visible phase and sums pending operations for All companies", () => {
+    expect(
+      summarizeCompanySyncStatuses([
+        status({ phase: "live", pendingCount: 2 }),
+        status({ phase: "bootstrapping", pendingCount: 3 }),
+        status({
+          phase: "error",
+          pendingCount: 1,
+          lastError: { classification: "Offline", message: "Network unavailable" },
+        }),
+      ]),
+    ).toEqual({
+      phase: "error",
+      pendingCount: 6,
+      companyCount: 3,
+      lastError: { classification: "Offline", message: "Network unavailable" },
+    });
+  });
+
+  it("returns no summary before any visible company has published a status", () => {
+    expect(summarizeCompanySyncStatuses([])).toBeNull();
+  });
+
+  it("does not fall back to another company's status for a concrete selection", () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    const statuses = new Map([[companyA, status({ pendingCount: 4 })]]);
+
+    expect(selectedCompanySyncStatusSummary(companyB, statuses)).toBeNull();
+    expect(selectedCompanySyncStatusSummary(null, statuses)).toMatchObject({
+      phase: "live",
+      pendingCount: 4,
+      companyCount: 1,
     });
   });
 });

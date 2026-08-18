@@ -1,11 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
 
-import { activeCompanyAtom } from "../../cloud/activeCompany";
+import { activeCompanyAtom, activeCompanyIdAtom } from "../../cloud/activeCompany";
 import { cloudSyncAvailabilityAtom, companySyncStatusesAtom } from "../../cloud/syncStatus";
-import { syncStatusPhaseLabel, type CompanySyncStatus } from "../../cloud/syncStatus.logic";
+import {
+  selectedCompanySyncStatusSummary,
+  syncStatusPhaseLabel,
+  type CompanySyncStatusSummary,
+} from "../../cloud/syncStatus.logic";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 
-function dotClasses(status: CompanySyncStatus | null) {
+function dotClasses(status: CompanySyncStatusSummary | null) {
   if (status === null) return { dotClassName: "bg-muted-foreground/40", pingClassName: null };
   if (status.phase === "error") {
     return { dotClassName: "bg-destructive", pingClassName: null };
@@ -18,6 +22,7 @@ function dotClasses(status: CompanySyncStatus | null) {
 
 export function SyncStatusIndicator() {
   const availability = useAtomValue(cloudSyncAvailabilityAtom);
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const activeCompany = useAtomValue(activeCompanyAtom);
   const statuses = useAtomValue(companySyncStatusesAtom);
 
@@ -42,11 +47,10 @@ export function SyncStatusIndicator() {
     );
   }
 
-  const fallback = statuses.entries().next().value;
-  const companyId = activeCompany?.id ?? fallback?.[0] ?? null;
-  const status = companyId === null ? null : (statuses.get(companyId) ?? null);
+  const status = selectedCompanySyncStatusSummary(activeCompanyId, statuses);
   const companyName =
-    activeCompany?.name ?? (companyId === null ? "Cloud sync" : `Company ${companyId}`);
+    activeCompany?.name ??
+    (activeCompanyId === null ? "All companies" : `Company ${activeCompanyId}`);
   const tooltip =
     status === null
       ? `${companyName}\nWaiting for engine status…`

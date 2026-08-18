@@ -12,6 +12,7 @@ import {
   emailMatchesFilter,
   emailMatchesQuery,
   emailMessageCountLabel,
+  emailMessageSelectionId,
   emailRangeIds,
   emailRowActionCounts,
   emailSelectAllState,
@@ -269,6 +270,24 @@ describe("selectedEmailMessages", () => {
   it("keeps display order rather than selection order", () => {
     const selection: EmailSelection = { ids: new Set([id("m3"), id("m1")]), anchorId: null };
     expect(selectedEmailMessages(ALL, selection)).toEqual([unreadWithCode, plainRead]);
+  });
+
+  it("keeps identical source ids independently selectable across companies", () => {
+    const companyA = {
+      ...unreadWithCode,
+      companyId: "company-a",
+      environmentId: "environment-one",
+    };
+    const companyB = {
+      ...unreadWithCode,
+      companyId: "company-b",
+      environmentId: "environment-one",
+    };
+    const companyAKey = emailMessageSelectionId(companyA);
+    const selection: EmailSelection = { ids: new Set([companyAKey]), anchorId: companyAKey };
+
+    expect(emailMessageSelectionId(companyA)).not.toBe(emailMessageSelectionId(companyB));
+    expect(selectedEmailMessages([companyA, companyB], selection)).toEqual([companyA]);
   });
 });
 

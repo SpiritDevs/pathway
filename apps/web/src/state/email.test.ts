@@ -14,6 +14,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { DEFAULT_EMAIL_CAPTURE_SETTINGS } from "@spiritdevs/contracts";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -22,6 +23,7 @@ import {
   applyEmailStreamEvents,
   emailScopeKey,
   emailScopesEqual,
+  emailInboxSummariesFromMessages,
   EMPTY_EMAIL_STREAM_STATE,
   findEmailInbox,
   mergeSyncedInboxSummaries,
@@ -35,6 +37,8 @@ const REMOTE_PROJECT_ID = "remote_prj_1" as ProjectId;
 const PRIMARY_ENVIRONMENT_ID = "environment-primary" as EnvironmentId;
 const REMOTE_ENVIRONMENT_ID = "environment-remote" as EnvironmentId;
 const CLOUD_PROJECT_ID = "cloud-project-1" as CloudProjectId;
+const COMPANY_ID = "company-1" as CompanyId;
+const OTHER_COMPANY_ID = "company-2" as CompanyId;
 
 function inbox(unreadCount: number, overrides?: Partial<EmailInboxSummary>): EmailInboxSummary {
   return {
@@ -293,16 +297,21 @@ describe("findEmailInbox", () => {
 
 describe("cross-environment captured mail", () => {
   const bindings = new Map([
-    [`${PRIMARY_ENVIRONMENT_ID}\0${PROJECT_ID}`, CLOUD_PROJECT_ID] as const,
+    [
+      `${PRIMARY_ENVIRONMENT_ID}\0${PROJECT_ID}`,
+      [{ companyId: COMPANY_ID, cloudProjectId: CLOUD_PROJECT_ID }],
+    ] as const,
   ]);
   const synced = [
     {
+      companyId: COMPANY_ID,
       environmentId: PRIMARY_ENVIRONMENT_ID,
       cloudProjectId: CLOUD_PROJECT_ID,
       message: message("local-one", PROJECT_ID, "Stale replica copy"),
       tagIds: ["tag-auth" as EmailTagId],
     },
     {
+      companyId: COMPANY_ID,
       environmentId: REMOTE_ENVIRONMENT_ID,
       cloudProjectId: CLOUD_PROJECT_ID,
       message: message("remote-one", REMOTE_PROJECT_ID, "Remote capture"),
@@ -330,6 +339,7 @@ describe("cross-environment captured mail", () => {
       scope: { type: "project", projectId: PROJECT_ID },
       environmentId: null,
       bindings,
+      selectedCompanyId: null,
     });
 
     expect(rows.map((row) => [row.environmentId, row.subject])).toEqual([
@@ -337,6 +347,70 @@ describe("cross-environment captured mail", () => {
       [REMOTE_ENVIRONMENT_ID, "Remote capture"],
     ]);
     expect(rows[0]?.tagIds).toEqual(["tag-auth"]);
+    expect(rows.map((row) => row.companyId)).toEqual([COMPANY_ID, COMPANY_ID]);
+  });
+
+  it("does not leak a local row whose company cannot be proven into a company selection", () => {
+    const rows = mergeSyncedMessages({
+      local: [summary("not-yet-synced")],
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      scope: ALL_EMAIL_SCOPE,
+      environmentId: null,
+      bindings,
+      selectedCompanyId: OTHER_COMPANY_ID,
+    });
+
+    expect(rows).toEqual([]);
+  });
+
+  it("keeps duplicate source identities separate and refuses an ambiguous local overlay", () => {
+    const rows = mergeSyncedMessages({
+      local: [
+        {
+          ...summary("local-one"),
+          subject: "Ambiguous fresh copy",
+          attribution: {
+            projectId: PROJECT_ID,
+            mailSlug: null,
+            matchedBy: "auth-username" as const,
+            matchedValue: "pathway",
+          },
+        },
+      ],
+      synced: [
+        synced[0]!,
+        {
+          ...synced[0]!,
+          companyId: OTHER_COMPANY_ID,
+          message: message("local-one", PROJECT_ID, "Other company copy"),
+        },
+      ],
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      scope: ALL_EMAIL_SCOPE,
+      environmentId: null,
+      bindings,
+      selectedCompanyId: null,
+    });
+
+    expect(rows.map((row) => [row.companyId, row.subject])).toEqual([
+      [COMPANY_ID, "Stale replica copy"],
+      [OTHER_COMPANY_ID, "Other company copy"],
+    ]);
+    const summaries = emailInboxSummariesFromMessages({
+      messages: rows,
+      local: [inbox(99, { messageCount: 99 })],
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      bindings,
+    });
+    expect(findEmailInbox(summaries, ALL_EMAIL_SCOPE)).toMatchObject({
+      messageCount: 2,
+      unreadCount: 2,
+    });
+    expect(findEmailInbox(summaries, { type: "project", projectId: PROJECT_ID })).toMatchObject({
+      messageCount: 2,
+      unreadCount: 2,
+    });
   });
 
   it("filters rows by source environment and adds only remote copies to local inbox counts", () => {
@@ -347,6 +421,7 @@ describe("cross-environment captured mail", () => {
       scope: { type: "project", projectId: PROJECT_ID },
       environmentId: REMOTE_ENVIRONMENT_ID,
       bindings,
+      selectedCompanyId: null,
     });
     expect(rows.map((row) => row.id)).toEqual(["remote-one"]);
 
@@ -355,6 +430,7 @@ describe("cross-environment captured mail", () => {
       synced,
       primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
       bindings,
+      selectedCompanyId: null,
     });
     expect(findEmailInbox(summaries, ALL_EMAIL_SCOPE)).toMatchObject({
       messageCount: 2,
@@ -363,6 +439,18 @@ describe("cross-environment captured mail", () => {
     expect(findEmailInbox(summaries, { type: "project", projectId: PROJECT_ID })).toMatchObject({
       messageCount: 1,
       unreadCount: 1,
+    });
+
+    const companySummaries = mergeSyncedInboxSummaries({
+      local: [inbox(99, { messageCount: 99 })],
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      bindings,
+      selectedCompanyId: COMPANY_ID,
+    });
+    expect(findEmailInbox(companySummaries, ALL_EMAIL_SCOPE)).toMatchObject({
+      messageCount: 2,
+      unreadCount: 2,
     });
   });
 });

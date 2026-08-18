@@ -11,15 +11,16 @@
  *
  * @module components/settings/EmailSettingsPanel
  */
-import { useAtomValue } from "@effect/atom-react";
-import type { EmailCaptureSettings, ProjectId, TrustedEmailSenderId } from "@spiritdevs/contracts";
+import { TrustedEmailSenderEntity } from "@spiritdevs/client-runtime/sync";
+import type { EmailCaptureSettings, ProjectId } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
 import { BellIcon, MailIcon, RadioIcon, ShieldCheckIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useCapturedEmailAdmin } from "../../cloud/capturedEmailAdmin";
-import { cloudTrustedEmailSendersAtom } from "../../cloud/capturedEmailReadModel";
+import { cloudEnvironmentProjectsFromReplicas } from "../../cloud/agentThreadReadModel";
 import { cn } from "../../lib/utils";
-import { useProjects } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useEmailSettings, useUpdateEmailSettings } from "../../state/email";
 import {
   isEmailPortConflict,
@@ -37,6 +38,7 @@ import { Switch } from "../ui/switch";
 import { Button } from "../ui/button";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { useCompanySettings } from "./company/useCompanySettings";
 
 const LISTENER_TONE_CLASSES = {
   listening: "text-success-foreground",
@@ -45,9 +47,20 @@ const LISTENER_TONE_CLASSES = {
 } as const;
 
 export function EmailSettingsPanel() {
+  const company = useCompanySettings();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { settings, listenerStatus, error } = useEmailSettings();
   const updateSettings = useUpdateEmailSettings();
-  const projects = useProjects();
+  const projects = useMemo(
+    () =>
+      company.companyId === null || company.replica === null || primaryEnvironmentId === null
+        ? []
+        : cloudEnvironmentProjectsFromReplicas(
+            new Map([[company.companyId, company.replica]]),
+            primaryEnvironmentId,
+          ),
+    [company.companyId, company.replica, primaryEnvironmentId],
+  );
   const [ruleProjectId, setRuleProjectId] = useState<ProjectId | null>(null);
 
   const selectedProjectId = ruleProjectId ?? projects[0]?.id ?? null;
@@ -223,7 +236,7 @@ export function EmailSettingsPanel() {
         />
       </SettingsSection>
 
-      <EmailProjectCaptureSettings save={save} settings={settings} />
+      <EmailProjectCaptureSettings projects={projects} save={save} settings={settings} />
 
       <EmailTriggerRulesSection
         headerContent={
@@ -256,17 +269,33 @@ export function EmailSettingsPanel() {
 }
 
 function TrustedEmailSendersSettingsSection() {
-  const senders = useAtomValue(cloudTrustedEmailSendersAtom);
+  const company = useCompanySettings();
+  const senders = useMemo(() => {
+    const companyId = company.companyId;
+    if (companyId === null || company.replica === null) return [];
+    const isTrustedSender = Schema.is(TrustedEmailSenderEntity);
+    return [...company.replica.view.values()].flatMap((value) =>
+      isTrustedSender(value)
+        ? [
+            {
+              id: value.id,
+              address: value.address,
+              companyId,
+            },
+          ]
+        : [],
+    );
+  }, [company.companyId, company.replica]);
   const emailAdmin = useCapturedEmailAdmin();
-  const [removingId, setRemovingId] = useState<TrustedEmailSenderId | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const remove = async (id: TrustedEmailSenderId) => {
+  const remove = async (sender: (typeof senders)[number]) => {
     if (emailAdmin === null || removingId !== null) return;
-    setRemovingId(id);
+    setRemovingId(sender.id);
     setError(null);
     try {
-      await emailAdmin.removeTrustedSender(id);
+      await emailAdmin.removeTrustedSender(sender.companyId, sender.id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -304,7 +333,7 @@ function TrustedEmailSendersSettingsSection() {
                 <Button
                   aria-label={`Stop trusting ${sender.address}`}
                   disabled={emailAdmin === null || removingId !== null}
-                  onClick={() => void remove(sender.id)}
+                  onClick={() => void remove(sender)}
                   size="icon-xs"
                   title="Stop loading remote content automatically"
                   variant="ghost"

@@ -913,18 +913,12 @@ function useCompanyEnvironmentConnections(): void {
   useEffect(() => {
     const discovered = discoverCompanyEnvironmentConnections(replicas, primaryEnvironmentId);
 
-    for (const environmentId of installedEnvironmentIds.current) {
-      if (discovered.has(environmentId)) continue;
-      installedEnvironmentIds.current.delete(environmentId);
-      void runAtomCommand(appAtomRegistry, environmentCatalog.remove, environmentId, {
-        label: "company environment disconnect",
-        reportFailure: true,
-        reportDefect: true,
-      });
-    }
-
     for (const [environmentId, label] of discovered) {
-      if (localCatalog.entries.has(environmentId)) continue;
+      if (
+        localCatalog.entries.has(environmentId) ||
+        installedEnvironmentIds.current.has(environmentId)
+      )
+        continue;
       installedEnvironmentIds.current.add(environmentId);
       void runAtomCommand(
         appAtomRegistry,

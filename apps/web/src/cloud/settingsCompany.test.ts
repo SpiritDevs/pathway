@@ -4,8 +4,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ActiveCompanyRow } from "./activeCompany";
 import {
   hasMultipleCompanies,
+  isExplicitSettingsCompanyScope,
   organizationCompanies,
   resolveSettingsCompanyId,
+  SETTINGS_AUTO_SCOPE,
+  SETTINGS_PROFILE_SCOPE,
 } from "./settingsCompany";
 
 const PERSONAL = {
@@ -34,18 +37,37 @@ describe("settings company scope", () => {
     expect(hasMultipleCompanies([PERSONAL, ACME, BETA])).toBe(true);
   });
 
-  it("keeps the existing active workspace behavior until there are multiple companies", () => {
+  it("keeps explicit Profile company-free even with one organization", () => {
     expect(
       resolveSettingsCompanyId({
         companies: [PERSONAL, ACME],
-        activeCompanyId: ACME.id,
-        scope: "profile",
+        scope: SETTINGS_PROFILE_SCOPE,
+      }),
+    ).toBeNull();
+  });
+
+  it("automatically selects a sole organization when the picker is absent", () => {
+    expect(
+      resolveSettingsCompanyId({
+        companies: [PERSONAL, ACME],
+        scope: SETTINGS_AUTO_SCOPE,
       }),
     ).toBe(ACME.id);
+  });
+
+  it("keeps Auto company-free when multiple organizations require an explicit choice", () => {
+    expect(
+      resolveSettingsCompanyId({
+        companies: [PERSONAL, ACME, BETA],
+        scope: SETTINGS_AUTO_SCOPE,
+      }),
+    ).toBeNull();
+  });
+
+  it("uses an explicitly selected organization", () => {
     expect(
       resolveSettingsCompanyId({
         companies: [PERSONAL, ACME],
-        activeCompanyId: PERSONAL.id,
         scope: ACME.id,
       }),
     ).toBe(ACME.id);
@@ -55,16 +77,20 @@ describe("settings company scope", () => {
     expect(
       resolveSettingsCompanyId({
         companies: [PERSONAL, ACME, BETA],
-        activeCompanyId: ACME.id,
-        scope: "profile",
+        scope: SETTINGS_PROFILE_SCOPE,
       }),
     ).toBeNull();
     expect(
       resolveSettingsCompanyId({
         companies: [PERSONAL, ACME, BETA],
-        activeCompanyId: ACME.id,
         scope: BETA.id,
       }),
     ).toBe(BETA.id);
+  });
+
+  it("distinguishes explicit company bootstrap from Auto and Profile", () => {
+    expect(isExplicitSettingsCompanyScope(ACME.id)).toBe(true);
+    expect(isExplicitSettingsCompanyScope(SETTINGS_AUTO_SCOPE)).toBe(false);
+    expect(isExplicitSettingsCompanyScope(SETTINGS_PROFILE_SCOPE)).toBe(false);
   });
 });

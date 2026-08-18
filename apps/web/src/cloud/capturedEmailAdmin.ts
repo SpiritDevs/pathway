@@ -1,6 +1,5 @@
 /** Authenticated Convex writes for synchronized captured-email administration. */
 import { useAuth } from "@clerk/react";
-import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { EmailMessageId, EmailTagId, TrustedEmailSenderId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
@@ -8,7 +7,6 @@ import { ConvexClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { useEffect, useMemo } from "react";
 
-import { activeCompanyReplicaRoutingAtom } from "./activeCompany";
 import { newCompanyDomainId } from "./companyAdmin";
 import { resolveCloudSyncConvexUrl } from "./publicConfig";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
@@ -59,36 +57,47 @@ const REFERENCES = {
   }>("trustedEmailSenders:remove"),
 } as const;
 
-interface ConvexMutationClient {
+export interface CapturedEmailAdminConvexClient {
   readonly mutation: (reference: FunctionReference<"mutation">, args: Args) => Promise<unknown>;
   readonly setAuth: (fetchToken: ConvexAuthTokenFetcher) => void;
   readonly close: () => Promise<void>;
 }
 
 export interface CapturedEmailAdminClient {
-  readonly createTag: (input: { name: string; color: string }) => Promise<EmailTagId>;
+  readonly createTag: (input: {
+    companyId: CompanyId;
+    name: string;
+    color: string;
+  }) => Promise<EmailTagId>;
   readonly updateTag: (input: {
+    companyId: CompanyId;
     tagId: EmailTagId;
     name?: string;
     color?: string;
   }) => Promise<void>;
-  readonly deleteTag: (tagId: EmailTagId) => Promise<void>;
+  readonly deleteTag: (companyId: CompanyId, tagId: EmailTagId) => Promise<void>;
   readonly setTag: (
+    companyId: CompanyId,
     message: CapturedEmailIdentity,
     tagId: EmailTagId,
     present: boolean,
   ) => Promise<void>;
-  readonly deleteMessages: (messages: ReadonlyArray<CapturedEmailIdentity>) => Promise<void>;
-  readonly trustSender: (address: string) => Promise<TrustedEmailSenderId>;
-  readonly removeTrustedSender: (trustedSenderId: TrustedEmailSenderId) => Promise<void>;
+  readonly deleteMessages: (
+    companyId: CompanyId,
+    messages: ReadonlyArray<CapturedEmailIdentity>,
+  ) => Promise<void>;
+  readonly trustSender: (companyId: CompanyId, address: string) => Promise<TrustedEmailSenderId>;
+  readonly removeTrustedSender: (
+    companyId: CompanyId,
+    trustedSenderId: TrustedEmailSenderId,
+  ) => Promise<void>;
   readonly close: () => Promise<void>;
 }
 
 export function makeCapturedEmailAdminClient(options: {
-  companyId: CompanyId;
   convexUrl: string;
   fetchToken: ConvexAuthTokenFetcher;
-  client?: ConvexMutationClient;
+  client?: CapturedEmailAdminConvexClient;
 }): CapturedEmailAdminClient {
   const ownsClient = options.client === undefined;
   const client = options.client ?? new ConvexClient(options.convexUrl);
@@ -96,43 +105,41 @@ export function makeCapturedEmailAdminClient(options: {
   const mutate = (reference: FunctionReference<"mutation">, args: Args) =>
     client.mutation(reference, args).then(() => undefined);
   return {
-    createTag: async ({ name, color }) => {
+    createTag: async ({ companyId, name, color }) => {
       const id = newCompanyDomainId() as EmailTagId;
-      await mutate(REFERENCES.createTag, { companyId: options.companyId, id, name, color });
+      await mutate(REFERENCES.createTag, { companyId, id, name, color });
       return id;
     },
-    updateTag: (input) => mutate(REFERENCES.updateTag, { companyId: options.companyId, ...input }),
-    deleteTag: (tagId) => mutate(REFERENCES.deleteTag, { companyId: options.companyId, tagId }),
-    setTag: (message, tagId, present) =>
-      mutate(REFERENCES.setTag, { companyId: options.companyId, ...message, tagId, present }),
-    deleteMessages: (messages) =>
-      mutate(REFERENCES.deleteMessages, { companyId: options.companyId, messages }),
-    trustSender: async (address) => {
+    updateTag: (input) => mutate(REFERENCES.updateTag, input),
+    deleteTag: (companyId, tagId) => mutate(REFERENCES.deleteTag, { companyId, tagId }),
+    setTag: (companyId, message, tagId, present) =>
+      mutate(REFERENCES.setTag, { companyId, ...message, tagId, present }),
+    deleteMessages: (companyId, messages) =>
+      mutate(REFERENCES.deleteMessages, { companyId, messages }),
+    trustSender: async (companyId, address) => {
       const id = newCompanyDomainId() as TrustedEmailSenderId;
-      await mutate(REFERENCES.trustSender, { companyId: options.companyId, id, address });
+      await mutate(REFERENCES.trustSender, { companyId, id, address });
       return id;
     },
-    removeTrustedSender: (trustedSenderId) =>
-      mutate(REFERENCES.removeTrustedSender, { companyId: options.companyId, trustedSenderId }),
+    removeTrustedSender: (companyId, trustedSenderId) =>
+      mutate(REFERENCES.removeTrustedSender, { companyId, trustedSenderId }),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }
 
 /** Null when company sync is unavailable; environment-local email actions can still use RPC. */
 export function useCapturedEmailAdmin(): CapturedEmailAdminClient | null {
-  const companyId = useAtomValue(activeCompanyReplicaRoutingAtom);
   const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const convexUrl = resolveCloudSyncConvexUrl();
   const client = useMemo(
     () =>
-      companyId === null || convexUrl === null || !isSignedIn
+      convexUrl === null || !isSignedIn
         ? null
         : makeCapturedEmailAdminClient({
-            companyId,
             convexUrl,
             fetchToken: makeClerkConvexTokenFetcher(getToken),
           }),
-    [companyId, convexUrl, getToken, isSignedIn],
+    [convexUrl, getToken, isSignedIn],
   );
   useEffect(() => () => void client?.close(), [client]);
   return client;

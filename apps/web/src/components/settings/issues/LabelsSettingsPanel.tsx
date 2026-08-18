@@ -6,9 +6,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
   useCreateIssueLabel,
   useDeleteIssueLabel,
-  useIssueLabels,
-  useIssuesStore,
-  useIssuesStoreStatus,
+  useCompanyIssuesStore,
   useUpdateIssueLabel,
 } from "../../../state/issues";
 import { ColorSelector } from "../../color-selector";
@@ -29,6 +27,7 @@ import { Spinner } from "../../ui/spinner";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
+import { useCompanySettings } from "../company/useCompanySettings";
 import {
   countIssuesByLabel,
   DEFAULT_ISSUE_COLOR,
@@ -80,13 +79,13 @@ function LabelColorPicker({
 }
 
 export function LabelsSettingsPanel() {
-  const storeStatus = useIssuesStoreStatus();
-  const store = useIssuesStore();
-  const labels = useIssueLabels();
+  const { companyId } = useCompanySettings();
+  const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
+  const labels = store.labels;
 
-  const createLabel = useCreateIssueLabel();
-  const updateLabel = useUpdateIssueLabel();
-  const deleteLabel = useDeleteIssueLabel();
+  const createLabel = useCreateIssueLabel(companyId);
+  const updateLabel = useUpdateIssueLabel(companyId);
+  const deleteLabel = useDeleteIssueLabel(companyId);
 
   const [busy, setBusy] = useState(false);
   const [draftName, setDraftName] = useState("");

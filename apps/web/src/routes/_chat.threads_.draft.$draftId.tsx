@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import * as Option from "effect/Option";
 import { useEffect } from "react";
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -9,8 +10,10 @@ import {
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
-import { buildThreadRouteParams } from "../threadRoutes";
+import { buildThreadRouteParams, promotedDraftThreadIsFilteredOut } from "../threadRoutes";
 import { useThreadRefs, useThreadShell } from "../state/entities";
+import { useEnvironmentQuery } from "../state/query";
+import { environmentShell } from "../state/shell";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
@@ -27,6 +30,21 @@ function DraftChatThreadRouteView() {
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
   const serverThread = useThreadShell(serverThreadRef);
+  const unfilteredEnvironmentShell = useEnvironmentQuery(
+    serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
+  );
+  const unfilteredSnapshot =
+    unfilteredEnvironmentShell.data === null
+      ? null
+      : Option.getOrNull(unfilteredEnvironmentShell.data.snapshot);
+  const promotedThreadFilteredOut = promotedDraftThreadIsFilteredOut({
+    hasPromotedThread: draftSession?.promotedTo != null,
+    promotedThreadExists:
+      serverThreadRef !== null &&
+      (unfilteredSnapshot?.threads.some((thread) => thread.id === serverThreadRef.threadId) ??
+        false),
+    promotedThreadVisible: serverThread !== null,
+  });
   const serverThreadStarted = threadHasStarted(serverThread);
   const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
 
@@ -60,13 +78,18 @@ function DraftChatThreadRouteView() {
   }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
+    if (!promotedThreadFilteredOut) return;
+    void navigate({ to: "/threads", replace: true });
+  }, [navigate, promotedThreadFilteredOut]);
+
+  useEffect(() => {
     if (draftSession || canonicalThreadRef) {
       return;
     }
     void navigate({ to: "/threads", replace: true });
   }, [canonicalThreadRef, draftSession, navigate]);
 
-  if (!draftSession) {
+  if (!draftSession || promotedThreadFilteredOut) {
     return null;
   }
 

@@ -2,13 +2,17 @@ import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/con
 import { cloudEntityCodec, type CloudSyncEntity } from "@spiritdevs/client-runtime/sync";
 import { IssueId } from "@spiritdevs/contracts";
 import type { SyncEntityKind } from "@spiritdevs/contracts/cloudSync";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   EMPTY_SYNCED_ISSUE_DOMAIN,
+  issueDomainEntityCompanyIdsFromReplicas,
+  issueDomainEntityCompanyKey,
   syncedIssueDetailById,
   syncedIssueDomainFromReplica,
+  syncedIssueDomainFromReplicas,
 } from "./issueDomainReadModel";
 
 function decoded(entityKind: SyncEntityKind, payload: Record<string, unknown>): CloudSyncEntity {
@@ -201,6 +205,45 @@ describe("syncedIssueDomainFromReplica", () => {
     expect(selected.issueMilestones.map(({ id }) => id)).toEqual(["milestone-1"]);
     expect(selected.issueCycles.map(({ id }) => id)).toEqual(["cycle-1"]);
     expect(selected.issueViews.map(({ id }) => id)).toEqual(["view-first", "view-a", "view-b"]);
+  });
+});
+
+describe("multi-company issue domain", () => {
+  it("aggregates scoped replicas while retaining the company that owns each entity", () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    const replicas = new Map([
+      [companyA, replica(issue("issue-a", 2))],
+      [
+        companyB,
+        replica(
+          issue("issue-b", 1),
+          decoded("issueLabel", {
+            id: "label-b",
+            teamId: null,
+            name: "Beta",
+            color: "#ff0000",
+            createdAt: 1,
+            updatedAt: 1,
+          }),
+        ),
+      ],
+    ]);
+
+    const domain = syncedIssueDomainFromReplicas(replicas);
+    const companyIds = issueDomainEntityCompanyIdsFromReplicas(replicas);
+
+    expect(domain.issues.map(({ id }) => id)).toEqual(["issue-b", "issue-a"]);
+    expect(domain.issueLabels.map(({ id }) => id)).toEqual(["label-b"]);
+    expect(companyIds.get(issueDomainEntityCompanyKey("issue", "issue-a"))).toEqual(
+      new Set([companyA]),
+    );
+    expect(companyIds.get(issueDomainEntityCompanyKey("issue", "issue-b"))).toEqual(
+      new Set([companyB]),
+    );
+    expect(companyIds.get(issueDomainEntityCompanyKey("issueLabel", "label-b"))).toEqual(
+      new Set([companyB]),
+    );
   });
 });
 

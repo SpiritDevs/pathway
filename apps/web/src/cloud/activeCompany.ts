@@ -1,9 +1,11 @@
 import { managedRelaySessionAtom } from "@spiritdevs/client-runtime/relay";
-import type { CompanyId, WorkspaceKind } from "@spiritdevs/contracts/company";
+import { CompanyId, type WorkspaceKind } from "@spiritdevs/contracts/company";
 import { Atom } from "effect/unstable/reactivity";
 
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
+
+export const ALL_COMPANIES_SCOPE = "all" as const;
 
 export interface ActiveCompanyRow {
   readonly id: CompanyId;
@@ -26,8 +28,13 @@ export function resolveActiveCompanyId(
   companies: ReadonlyArray<Pick<ActiveCompanyRow, "id">>,
   preferredId: string | null,
 ): CompanyId | null {
-  if (scope === null || companies.length === 0) return null;
-  return companies.find((company) => company.id === preferredId)?.id ?? companies[0]!.id;
+  if (scope === null || preferredId === ALL_COMPANIES_SCOPE) return null;
+  // A persisted concrete selection is authoritative even before (or between) replica listings.
+  // Keeping the id makes every scoped projection fail closed until that exact replica returns.
+  if (preferredId !== null) return CompanyId.make(preferredId);
+  // This is only an implicit compatibility fallback. It is deliberately not persisted, so a
+  // staggered second replica changes an account with no preference to All companies.
+  return companies.length === 1 ? companies[0]!.id : null;
 }
 
 export function readActiveCompanyId(options: {
@@ -35,7 +42,7 @@ export function readActiveCompanyId(options: {
   readonly companies: ReadonlyArray<Pick<ActiveCompanyRow, "id">>;
   readonly storage: ActiveCompanyStorage | null;
 }): CompanyId | null {
-  if (options.scope === null || options.companies.length === 0) return null;
+  if (options.scope === null) return null;
 
   let persistedId: string | null = null;
   try {
@@ -44,16 +51,7 @@ export function readActiveCompanyId(options: {
     // A blocked storage API should not make company selection unavailable.
   }
 
-  const activeCompanyId = resolveActiveCompanyId(options.scope, options.companies, persistedId);
-  if (activeCompanyId === null) return null;
-  if (activeCompanyId !== persistedId && options.storage !== null) {
-    try {
-      options.storage.setItem(activeCompanyIdStorageKey(options.scope), activeCompanyId);
-    } catch {
-      // Keep the in-memory fallback when persistence is unavailable.
-    }
-  }
-  return activeCompanyId;
+  return resolveActiveCompanyId(options.scope, options.companies, persistedId);
 }
 
 export function writeActiveCompanyId(options: {
@@ -62,20 +60,16 @@ export function writeActiveCompanyId(options: {
   readonly companyId: CompanyId | null;
   readonly storage: ActiveCompanyStorage | null;
 }): CompanyId | null {
-  const activeCompanyId = resolveActiveCompanyId(
-    options.scope,
-    options.companies,
-    options.companyId,
-  );
-  if (options.scope === null || activeCompanyId === null || options.storage === null) {
-    return activeCompanyId;
-  }
+  if (options.scope === null) return null;
   try {
-    options.storage.setItem(activeCompanyIdStorageKey(options.scope), activeCompanyId);
+    options.storage?.setItem(
+      activeCompanyIdStorageKey(options.scope),
+      options.companyId ?? ALL_COMPANIES_SCOPE,
+    );
   } catch {
     // The selection still applies for this render even if the browser rejects persistence.
   }
-  return activeCompanyId;
+  return options.companyId;
 }
 
 function ambientLocalStorage(): ActiveCompanyStorage | null {
@@ -143,42 +137,38 @@ export const companyListAtom = Atom.make((get) =>
   companyRowsFromRegistryReplicas(get(companyRegistryReplicasAtom)),
 ).pipe(Atom.withEquality(sameCompanyRows), Atom.withLabel("cloud-sync:company-list"));
 
-const activeCompanyScopeAtom = Atom.make((get) => {
+const activeCompanyAccountScopeAtom = Atom.make((get) => {
   // Mirrors cloudSyncScope without importing the intentionally lazy sync runtime into the app UI.
   const accountId = get(managedRelaySessionAtom)?.accountId.trim();
   return accountId ? accountId : null;
 }).pipe(Atom.withLabel("cloud-sync:active-company-scope"));
 
-const activeCompanyOverridesAtom = Atom.make<ReadonlyMap<string, CompanyId>>(new Map()).pipe(
+const activeCompanyOverridesAtom = Atom.make<ReadonlyMap<string, CompanyId | null>>(new Map()).pipe(
   Atom.keepAlive,
   Atom.withLabel("cloud-sync:active-company-overrides"),
 );
 
 export const activeCompanyIdAtom = Atom.writable(
   (get) => {
-    const scope = get(activeCompanyScopeAtom);
+    const scope = get(activeCompanyAccountScopeAtom);
     const companies = get(companyListAtom);
     const storage = ambientLocalStorage();
-    const override = scope === null ? undefined : get(activeCompanyOverridesAtom).get(scope);
-    if (override === undefined) {
+    const overrides = get(activeCompanyOverridesAtom);
+    if (scope === null || !overrides.has(scope)) {
       return readActiveCompanyId({ scope, companies, storage });
     }
 
-    const activeCompanyId = resolveActiveCompanyId(scope, companies, override);
-    if (activeCompanyId !== null && activeCompanyId !== override) {
-      writeActiveCompanyId({ scope, companies, companyId: activeCompanyId, storage });
-    }
-    return activeCompanyId;
+    return overrides.get(scope) ?? null;
   },
   (context, companyId: CompanyId | null) => {
-    const scope = context.get(activeCompanyScopeAtom);
+    const scope = context.get(activeCompanyAccountScopeAtom);
     const activeCompanyId = writeActiveCompanyId({
       scope,
       companies: context.get(companyListAtom),
       companyId,
       storage: ambientLocalStorage(),
     });
-    if (scope !== null && activeCompanyId !== null) {
+    if (scope !== null) {
       context.set(
         activeCompanyOverridesAtom,
         new Map(context.get(activeCompanyOverridesAtom)).set(scope, activeCompanyId),
@@ -188,12 +178,27 @@ export const activeCompanyIdAtom = Atom.writable(
   },
 ).pipe(Atom.withLabel("cloud-sync:active-company-id"));
 
+export function companyReplicasForSelection(
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  companyId: CompanyId | null,
+): ReadonlyMap<CompanyId, CompanyRegistryReplicaState> {
+  if (companyId === null) return replicas;
+  const replica = replicas.get(companyId);
+  return replica === undefined
+    ? new Map<CompanyId, CompanyRegistryReplicaState>()
+    : new Map([[companyId, replica]]);
+}
+
+/** The replicas visible through the account-level All companies/company selection. */
+export const scopedCompanyRegistryReplicasAtom = Atom.make((get) => {
+  return companyReplicasForSelection(get(companyRegistryReplicasAtom), get(activeCompanyIdAtom));
+}).pipe(Atom.withLabel("cloud-sync:scoped-company-registry-replicas"));
+
 /**
- * The single read/write cutover decision for issue-domain state.
+ * The selected-company mutation target for callers that do not carry entity provenance.
  *
- * A company is replica-routed only after its engine has published a usable replica. Keeping the
- * company id (rather than a boolean) lets mutation commands enqueue into that exact engine while
- * the list projection reads from the same replica-presence signal.
+ * All companies deliberately has no single target. Existing-entity writes must route through the
+ * entity's owning replica; creation flows must ask for a concrete company before enqueueing.
  */
 export const activeCompanyReplicaRoutingAtom = Atom.make((get): CompanyId | null => {
   const companyId = get(activeCompanyIdAtom);

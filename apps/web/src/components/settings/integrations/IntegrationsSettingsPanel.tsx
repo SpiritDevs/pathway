@@ -15,7 +15,7 @@ import {
   RefreshCwIcon,
   SlackIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Schema from "effect/Schema";
 
 import {
@@ -1144,8 +1144,13 @@ export function IntegrationsSettingsPanel() {
   );
   const [automation, setAutomation] = useState<CompanyAutomationSettingsSummary | null>(null);
   const [jobs, setJobs] = useState<ReadonlyArray<CompanyAutomationJobSummary>>([]);
+  const [loadedCompanyId, setLoadedCompanyId] = useState(company.companyId);
   const [sheet, setSheet] = useState<SheetState>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const refreshVersionRef = useRef(0);
+  const companyIdRef = useRef(company.companyId);
+  companyIdRef.current = company.companyId;
   const values = company.replica?.view.values() ?? [];
   const environments = useMemo(
     () =>
@@ -1187,23 +1192,54 @@ export function IntegrationsSettingsPanel() {
   const manageGate = permissionGate(company.permissions, "integrations.manage");
   const refresh = useCallback(async () => {
     if (client === null || company.companyId === null || !readGate.enabled) return;
-    const [nextIntegrations, nextAutomation, nextJobs] = await Promise.all([
-      client.list(company.companyId),
-      client.getAutomation(company.companyId),
-      client.listJobs(company.companyId),
-    ]);
+    const companyId = company.companyId;
+    const refreshVersion = ++refreshVersionRef.current;
+    let result;
+    try {
+      result = await Promise.all([
+        client.list(companyId),
+        client.getAutomation(companyId),
+        client.listJobs(companyId),
+      ]);
+    } catch (error) {
+      if (refreshVersion !== refreshVersionRef.current || companyIdRef.current !== companyId)
+        return;
+      throw error;
+    }
+    const [nextIntegrations, nextAutomation, nextJobs] = result;
+    if (refreshVersion !== refreshVersionRef.current || companyIdRef.current !== companyId) return;
     setIntegrations(nextIntegrations);
     setAutomation(nextAutomation);
     setJobs(nextJobs);
+    setLoadedCompanyId(companyId);
+    setLoadError(null);
     setLoading(false);
   }, [client, company.companyId, readGate.enabled]);
   useEffect(() => {
-    if (workspaceKind !== "organization") return;
-    void refresh().catch((error) => {
+    refreshVersionRef.current += 1;
+    setSheet(null);
+    setLoading(true);
+    setLoadError(null);
+    if (workspaceKind !== "organization" || company.companyId === null) {
       setLoading(false);
+      return;
+    }
+    if (client === null || !readGate.enabled) {
+      setLoading(false);
+      setLoadError(
+        client === null
+          ? "Company integrations are unavailable while cloud sync is disconnected."
+          : (readGate.tooltip ?? "You do not have permission to view company integrations."),
+      );
+      return;
+    }
+    void refresh().catch((error) => {
+      if (companyIdRef.current !== company.companyId) return;
+      setLoading(false);
+      setLoadError(error instanceof Error ? error.message : "Could not load integrations.");
       reportError("Could not load integrations", error);
     });
-  }, [refresh, workspaceKind]);
+  }, [client, company.companyId, readGate.enabled, readGate.tooltip, refresh, workspaceKind]);
   if (workspaceKind !== "organization") return <PersonalIntegrationsPanel />;
   if (!readGate.enabled)
     return (
@@ -1216,17 +1252,22 @@ export function IntegrationsSettingsPanel() {
         />
       </SettingsPageContainer>
     );
+  const dataMatchesCompany = loadedCompanyId === company.companyId;
+  const visibleIntegrations = dataMatchesCompany ? integrations : [];
+  const visibleAutomation = dataMatchesCompany ? automation : null;
+  const visibleJobs = dataMatchesCompany ? jobs : [];
   const selected =
     sheet?.kind === "slack"
-      ? (integrations.find((item) => item.id === sheet.integrationId) ?? null)
+      ? (visibleIntegrations.find((item) => item.id === sheet.integrationId) ?? null)
       : null;
   const attention =
-    integrations.filter(
+    visibleIntegrations.filter(
       (item) =>
         item.blockedReason !== null ||
         item.currentError !== null ||
         (item.state === "active" && item.controllerEnvironmentId === null),
-    ).length + jobs.filter((job) => job.state === "blocked" || job.state === "failed").length;
+    ).length +
+    visibleJobs.filter((job) => job.state === "blocked" || job.state === "failed").length;
   return (
     <SettingsPageContainer>
       <SettingsSection {...searchableSetting("issue-intake")}>
@@ -1253,12 +1294,14 @@ export function IntegrationsSettingsPanel() {
             <div className="p-8 text-center text-xs text-muted-foreground">
               Loading integrations…
             </div>
-          ) : integrations.length === 0 ? (
+          ) : loadError !== null ? (
+            <div className="p-8 text-center text-xs text-muted-foreground">{loadError}</div>
+          ) : visibleIntegrations.length === 0 ? (
             <div className="p-8 text-center text-xs text-muted-foreground">
               No Slack workspaces connected.
             </div>
           ) : (
-            integrations.map((integration) => (
+            visibleIntegrations.map((integration) => (
               <button
                 key={integration.id}
                 type="button"
@@ -1306,19 +1349,22 @@ export function IntegrationsSettingsPanel() {
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="text-sm font-medium">Issue automation</span>
-                <Badge variant={automation?.enabled ? "success" : "secondary"}>
-                  {automation?.enabled ? "Enabled" : "Paused"}
+                <Badge variant={visibleAutomation?.enabled ? "success" : "secondary"}>
+                  {visibleAutomation?.enabled ? "Enabled" : "Paused"}
                 </Badge>
               </span>
               <span className="block text-xs text-muted-foreground">
                 {
-                  jobs.filter(
+                  visibleJobs.filter(
                     (job) =>
                       job.state === "pending" || job.state === "running" || job.state === "claimed",
                   ).length
                 }{" "}
                 active ·{" "}
-                {jobs.filter((job) => job.state === "blocked" || job.state === "failed").length}{" "}
+                {
+                  visibleJobs.filter((job) => job.state === "blocked" || job.state === "failed")
+                    .length
+                }{" "}
                 need attention
               </span>
             </span>
@@ -1357,8 +1403,8 @@ export function IntegrationsSettingsPanel() {
             <AutomationSheet
               client={client}
               companyId={company.companyId}
-              summary={automation}
-              jobs={jobs}
+              summary={visibleAutomation}
+              jobs={visibleJobs}
               fallback={localSettings.issueAutomation}
               issueKeys={issueKeys}
               canManage={manageGate.enabled}

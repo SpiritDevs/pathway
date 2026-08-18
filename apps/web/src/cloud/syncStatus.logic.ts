@@ -3,6 +3,7 @@ import type {
   SyncTransportError,
 } from "@spiritdevs/client-runtime/sync";
 import type { SyncOperationKind } from "@spiritdevs/contracts/cloudSync";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 
 export type SyncStatusPhase =
   | "disabled"
@@ -36,6 +37,61 @@ export interface CompanySyncStatus {
   readonly rejectedCount: number;
   readonly quarantinedCount: number;
   readonly lastError: SyncStatusError | null;
+}
+
+export interface CompanySyncStatusSummary {
+  readonly phase: SyncStatusPhase;
+  readonly pendingCount: number;
+  readonly companyCount: number;
+  readonly lastError: SyncStatusError | null;
+}
+
+const SYNC_STATUS_PHASE_SEVERITY: Readonly<Record<SyncStatusPhase, number>> = {
+  live: 0,
+  disabled: 1,
+  "signed-out": 2,
+  bootstrapping: 3,
+  reconnecting: 4,
+  error: 5,
+};
+
+export function summarizeCompanySyncStatuses(
+  statuses: Iterable<CompanySyncStatus>,
+): CompanySyncStatusSummary | null {
+  let companyCount = 0;
+  let pendingCount = 0;
+  let worstStatus: CompanySyncStatus | null = null;
+  let lastError: SyncStatusError | null = null;
+
+  for (const status of statuses) {
+    companyCount += 1;
+    pendingCount += status.pendingCount;
+    if (lastError === null && status.lastError !== null) lastError = status.lastError;
+    if (
+      worstStatus === null ||
+      SYNC_STATUS_PHASE_SEVERITY[status.phase] > SYNC_STATUS_PHASE_SEVERITY[worstStatus.phase]
+    ) {
+      worstStatus = status;
+    }
+  }
+
+  if (worstStatus === null) return null;
+  return {
+    phase: worstStatus.phase,
+    pendingCount,
+    companyCount,
+    lastError: worstStatus.lastError ?? lastError,
+  };
+}
+
+/** A concrete selection never falls back to another company; null intentionally means All. */
+export function selectedCompanySyncStatusSummary(
+  companyId: CompanyId | null,
+  statuses: ReadonlyMap<CompanyId, CompanySyncStatus>,
+): CompanySyncStatusSummary | null {
+  if (companyId === null) return summarizeCompanySyncStatuses(statuses.values());
+  const status = statuses.get(companyId);
+  return status === undefined ? null : summarizeCompanySyncStatuses([status]);
 }
 
 /** Only the engine fields that can actually support the status UI. */

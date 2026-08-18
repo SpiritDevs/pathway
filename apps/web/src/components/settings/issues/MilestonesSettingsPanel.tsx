@@ -10,24 +10,25 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { AtomCommandResult } from "@spiritdevs/client-runtime/state/runtime";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
 import type {
   IssueMilestone,
   IssueMilestonePatch,
   IssueStatusCategory,
 } from "@spiritdevs/contracts";
+import { ProjectId } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import { FolderIcon, GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { cn } from "../../../lib/utils";
-import { useProjects } from "../../../state/entities";
+import { useSyncedIssueDomainForCompany } from "../../../cloud/issueDomainReadModel";
 import {
   useCreateIssueMilestone,
   useDeleteIssueMilestone,
-  useIssueMilestoneCategoryCounts,
-  useIssueMilestoneProgress,
-  useIssueMilestonesForProject,
-  useIssuesStoreStatus,
+  issueMilestoneCategoryCounts,
+  issueMilestoneProgressByMilestone,
+  issueMilestonesForProject,
+  useCompanyIssuesStore,
   useReorderIssueMilestones,
   useUpdateIssueMilestone,
 } from "../../../state/issues";
@@ -49,6 +50,7 @@ import { Spinner } from "../../ui/spinner";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
+import { useCompanySettings } from "../company/useCompanySettings";
 import {
   duplicateNameError,
   issueMilestoneCreateInput,
@@ -211,21 +213,24 @@ function MilestoneRow({
  */
 function ProjectMilestoneGroup({
   project,
+  companyId,
+  milestones,
   progress,
   busy,
   run,
   onRequestDelete,
 }: {
-  project: EnvironmentProject;
+  project: { readonly id: ProjectId; readonly title: string };
+  companyId: CompanyId;
+  milestones: ReadonlyArray<IssueMilestone>;
   progress: ReadonlyMap<string, MilestoneProgress>;
   busy: boolean;
   run: RunWrite;
   onRequestDelete: (milestone: IssueMilestone) => void;
 }) {
-  const milestones = useIssueMilestonesForProject(project.id);
-  const createMilestone = useCreateIssueMilestone();
-  const updateMilestone = useUpdateIssueMilestone();
-  const reorderMilestones = useReorderIssueMilestones();
+  const createMilestone = useCreateIssueMilestone(companyId);
+  const updateMilestone = useUpdateIssueMilestone(companyId);
+  const reorderMilestones = useReorderIssueMilestones(companyId);
 
   const [draft, setDraft] = useState<IssueMilestoneDraft>(EMPTY_DRAFT);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -385,11 +390,16 @@ function ProjectMilestoneGroup({
 }
 
 export function MilestonesSettingsPanel() {
-  const storeStatus = useIssuesStoreStatus();
-  const projects = useProjects();
-  const progress = useIssueMilestoneProgress();
-  const categoryCounts = useIssueMilestoneCategoryCounts();
-  const deleteMilestone = useDeleteIssueMilestone();
+  const { companyId } = useCompanySettings();
+  const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
+  const domain = useSyncedIssueDomainForCompany(companyId);
+  const projects = (domain?.cloudProjects ?? []).map((project) => ({
+    id: ProjectId.make(String(project.id)),
+    title: project.name,
+  }));
+  const progress = issueMilestoneProgressByMilestone(store);
+  const categoryCounts = issueMilestoneCategoryCounts(store);
+  const deleteMilestone = useDeleteIssueMilestone(companyId);
 
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<IssueMilestone | null>(null);
@@ -452,6 +462,10 @@ export function MilestonesSettingsPanel() {
               <Spinner className="size-3.5" />
               Loading milestones…
             </div>
+          ) : companyId === null ? (
+            <p className="px-3 py-3 text-[13px] text-muted-foreground/80 sm:px-4">
+              Select a company to configure its milestones.
+            </p>
           ) : projects.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-muted-foreground/80 sm:px-4">
               A milestone belongs to a project, and this environment has none yet.
@@ -461,6 +475,8 @@ export function MilestonesSettingsPanel() {
               <ProjectMilestoneGroup
                 key={project.id}
                 project={project}
+                companyId={companyId}
+                milestones={issueMilestonesForProject(store, project.id)}
                 progress={progress}
                 busy={busy}
                 run={run}

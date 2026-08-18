@@ -6,6 +6,7 @@ import { DraftId } from "./composerDraftStore";
 import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
+  promotedDraftThreadIsFilteredOut,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
   resolveThreadRouteRef,
@@ -92,6 +93,30 @@ describe("threadRoutes", () => {
         promotedTo: null,
       }),
     ).toBeNull();
+  });
+
+  it("closes a promoted draft only when its existing server thread is filtered out", () => {
+    expect(
+      promotedDraftThreadIsFilteredOut({
+        hasPromotedThread: true,
+        promotedThreadExists: true,
+        promotedThreadVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      promotedDraftThreadIsFilteredOut({
+        hasPromotedThread: true,
+        promotedThreadExists: false,
+        promotedThreadVisible: false,
+      }),
+    ).toBe(false);
+    expect(
+      promotedDraftThreadIsFilteredOut({
+        hasPromotedThread: true,
+        promotedThreadExists: true,
+        promotedThreadVisible: true,
+      }),
+    ).toBe(false);
   });
 
   it("renders authoritative server-thread shells when bootstrap is complete", () => {

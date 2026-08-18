@@ -3,7 +3,7 @@ import { useAtom, useAtomValue } from "@effect/atom-react";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { useEffect, useMemo, useRef } from "react";
 
-import { activeCompanyIdAtom, companyListAtom } from "../../../cloud/activeCompany";
+import { companyListAtom } from "../../../cloud/activeCompany";
 import { makeCompanyAdminClient, type CompanyAdminClient } from "../../../cloud/companyAdmin";
 import {
   companyRegistryMembershipIdsAtom,
@@ -24,12 +24,10 @@ import {
 
 export function useCompanySettings() {
   const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
   const [settingsCompanyScope, setSettingsCompanyScope] = useAtom(settingsCompanyScopeAtom);
   const companyId = resolveSettingsCompanyId({
     companies,
-    activeCompanyId,
     scope: settingsCompanyScope,
   });
   const activeCompany = companies.find((company) => company.id === companyId) ?? null;

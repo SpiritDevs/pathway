@@ -41,7 +41,6 @@ import {
   type EmailInboxSummary,
   type EmailListenerStatus,
   type EmailMessageId,
-  type EmailTag,
   type EmailTagId,
   type EmailReadTarget,
   type EmailSettingsSnapshot,
@@ -52,6 +51,7 @@ import {
   type ProjectId,
 } from "@spiritdevs/contracts";
 import type { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -62,10 +62,13 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useEffectEvent, useMemo } from "react";
 
 import {
+  type CompanyEmailTag,
+  type CompanyProjectBinding,
   cloudCapturedEmailsAtom,
   cloudEmailTagsAtom,
   cloudProjectBindingsAtom,
 } from "../cloud/capturedEmailReadModel";
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { useEnvironmentQuery } from "./query";
@@ -315,12 +318,15 @@ export interface EmailInboxView {
 
 /** One row as rendered: the local contract plus the environment that owns its durable files. */
 export interface CapturedEmailListItem extends CapturedEmailSummary {
+  /** Null only for a fresh local capture that has not published into a company replica yet. */
+  readonly companyId: CompanyId | null;
   readonly environmentId: EnvironmentId;
   readonly cloudProjectId: CloudProjectId | null;
   readonly tagIds: ReadonlyArray<EmailTagId>;
 }
 
 const summaryOfSyncedMessage = (
+  companyId: CompanyId,
   environmentId: EnvironmentId,
   cloudProjectId: CloudProjectId | null,
   message: CapturedEmailMessage,
@@ -337,6 +343,7 @@ const summaryOfSyncedMessage = (
   attachmentCount: message.attachments.length,
   isRead: message.isRead,
   detectedCode: message.detectedCode,
+  companyId,
   environmentId,
   cloudProjectId,
   tagIds,
@@ -349,20 +356,23 @@ function syncedMessageMatchesScope(
   item: CapturedEmailListItem,
   scope: EmailInboxScope,
   primaryEnvironmentId: EnvironmentId | null,
-  bindings: ReadonlyMap<string, CloudProjectId>,
+  bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>,
 ): boolean {
   if (scope.type === "all") return true;
   if (scope.type === "unassigned") return item.cloudProjectId === null;
   if (primaryEnvironmentId === null) return false;
-  const cloudProjectId = bindings.get(bindingKey(primaryEnvironmentId, scope.projectId));
-  return cloudProjectId === undefined
+  const binding = bindings
+    .get(bindingKey(primaryEnvironmentId, scope.projectId))
+    ?.find((candidate) => candidate.companyId === item.companyId);
+  return binding === undefined
     ? item.environmentId === primaryEnvironmentId && item.attribution.projectId === scope.projectId
-    : item.cloudProjectId === cloudProjectId;
+    : item.companyId === binding.companyId && item.cloudProjectId === binding.cloudProjectId;
 }
 
 export function mergeSyncedMessages(input: {
   readonly local: ReadonlyArray<CapturedEmailSummary>;
   readonly synced: ReadonlyArray<{
+    readonly companyId: CompanyId;
     readonly environmentId: EnvironmentId;
     readonly cloudProjectId: CloudProjectId | null;
     readonly message: CapturedEmailMessage;
@@ -371,29 +381,52 @@ export function mergeSyncedMessages(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly scope: EmailInboxScope;
   readonly environmentId: EnvironmentId | null;
-  readonly bindings: ReadonlyMap<string, CloudProjectId>;
+  readonly bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>;
+  readonly selectedCompanyId: CompanyId | null;
 }): ReadonlyArray<CapturedEmailListItem> {
   const rows = new Map<string, CapturedEmailListItem>();
+  const scopedSynced =
+    input.selectedCompanyId === null
+      ? input.synced
+      : input.synced.filter((entity) => entity.companyId === input.selectedCompanyId);
+  const syncedBySource = new Map<string, typeof scopedSynced>();
+  for (const entity of scopedSynced) {
+    const sourceKey = `${entity.environmentId}\0${entity.message.id}`;
+    syncedBySource.set(sourceKey, [...(syncedBySource.get(sourceKey) ?? []), entity]);
+  }
   if (input.primaryEnvironmentId !== null) {
     const primaryEnvironmentId = input.primaryEnvironmentId;
     for (const message of input.local) {
       if (input.environmentId !== null && input.environmentId !== primaryEnvironmentId) continue;
-      rows.set(`${primaryEnvironmentId}:${message.id}`, {
+      const sourceKey = `${primaryEnvironmentId}\0${message.id}`;
+      const syncedCandidates = syncedBySource.get(sourceKey) ?? [];
+      const synced = syncedCandidates.length === 1 ? syncedCandidates[0] : undefined;
+      const bindingCandidates =
+        message.attribution.projectId === null
+          ? undefined
+          : input.bindings.get(bindingKey(primaryEnvironmentId, message.attribution.projectId));
+      const binding =
+        bindingCandidates?.find(
+          (candidate) => candidate.companyId === (synced?.companyId ?? input.selectedCompanyId),
+        ) ?? (bindingCandidates?.length === 1 ? bindingCandidates[0] : undefined);
+      const companyId = synced?.companyId ?? binding?.companyId ?? null;
+      if (input.selectedCompanyId !== null && companyId !== input.selectedCompanyId) continue;
+      // A shared source identity may exist in more than one company. Only overlay a local value
+      // after replica/binding provenance resolves it to exactly one owner.
+      if (syncedCandidates.length > 1) continue;
+      rows.set(`${companyId ?? "local"}\0${primaryEnvironmentId}\0${message.id}`, {
         ...message,
+        companyId,
         environmentId: primaryEnvironmentId,
-        cloudProjectId:
-          message.attribution.projectId === null
-            ? null
-            : (input.bindings.get(
-                bindingKey(primaryEnvironmentId, message.attribution.projectId),
-              ) ?? null),
+        cloudProjectId: synced?.cloudProjectId ?? binding?.cloudProjectId ?? null,
         tagIds: [],
       });
     }
   }
-  for (const entity of input.synced) {
+  for (const entity of scopedSynced) {
     if (input.environmentId !== null && entity.environmentId !== input.environmentId) continue;
     const item = summaryOfSyncedMessage(
+      entity.companyId,
       entity.environmentId,
       entity.cloudProjectId,
       entity.message,
@@ -402,11 +435,21 @@ export function mergeSyncedMessages(input: {
     if (!syncedMessageMatchesScope(item, input.scope, input.primaryEnvironmentId, input.bindings)) {
       continue;
     }
-    const key = `${entity.environmentId}:${entity.message.id}`;
+    const key = `${entity.companyId}\0${entity.environmentId}\0${entity.message.id}`;
     // Local content/read state wins until publication catches up; cloud-owned tag assignments do
     // not exist in SQLite, so they are always overlaid from the replica.
     const local = rows.get(key);
-    rows.set(key, local === undefined ? item : { ...local, tagIds: entity.tagIds ?? [] });
+    rows.set(
+      key,
+      local === undefined
+        ? item
+        : {
+            ...local,
+            companyId: entity.companyId,
+            cloudProjectId: entity.cloudProjectId,
+            tagIds: entity.tagIds ?? [],
+          },
+    );
   }
   return [...rows.values()].sort(
     (left, right) => Date.parse(right.receivedAt) - Date.parse(left.receivedAt),
@@ -416,25 +459,33 @@ export function mergeSyncedMessages(input: {
 export function mergeSyncedInboxSummaries(input: {
   readonly local: ReadonlyArray<EmailInboxSummary>;
   readonly synced: ReadonlyArray<{
+    readonly companyId: CompanyId;
     readonly environmentId: EnvironmentId;
     readonly cloudProjectId: CloudProjectId | null;
     readonly message: CapturedEmailMessage;
   }>;
   readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly bindings: ReadonlyMap<string, CloudProjectId>;
+  readonly bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>;
   readonly environmentId?: EnvironmentId | null;
+  readonly selectedCompanyId: CompanyId | null;
 }): ReadonlyArray<EmailInboxSummary> {
   const includeLocal =
-    input.environmentId == null || input.environmentId === input.primaryEnvironmentId;
+    input.selectedCompanyId === null &&
+    (input.environmentId == null || input.environmentId === input.primaryEnvironmentId);
   const summaries = new Map(
     (includeLocal ? input.local : []).map((inbox) => [emailScopeKey(inbox.scope), inbox]),
   );
-  const localProjectByCloud = new Map<CloudProjectId, ProjectId>();
+  const localProjectByCloud = new Map<string, ProjectId>();
   if (input.primaryEnvironmentId !== null) {
     const prefix = `${input.primaryEnvironmentId}\0`;
-    for (const [key, cloudProjectId] of input.bindings) {
-      if (key.startsWith(prefix))
-        localProjectByCloud.set(cloudProjectId, key.slice(prefix.length) as ProjectId);
+    for (const [key, bindings] of input.bindings) {
+      if (!key.startsWith(prefix)) continue;
+      for (const binding of bindings) {
+        localProjectByCloud.set(
+          `${binding.companyId}\0${binding.cloudProjectId}`,
+          key.slice(prefix.length) as ProjectId,
+        );
+      }
     }
   }
   const increment = (scope: EmailInboxScope, isRead: boolean) => {
@@ -456,15 +507,84 @@ export function mergeSyncedInboxSummaries(input: {
     });
   };
   for (const entity of input.synced) {
-    if (entity.environmentId === input.primaryEnvironmentId) continue;
+    if (input.selectedCompanyId !== null && entity.companyId !== input.selectedCompanyId) continue;
+    if (includeLocal && entity.environmentId === input.primaryEnvironmentId) continue;
     if (input.environmentId != null && entity.environmentId !== input.environmentId) continue;
     increment(ALL_EMAIL_SCOPE, entity.message.isRead);
     if (entity.cloudProjectId === null) {
       increment(UNASSIGNED_EMAIL_SCOPE, entity.message.isRead);
       continue;
     }
-    const projectId = localProjectByCloud.get(entity.cloudProjectId);
+    const projectId = localProjectByCloud.get(`${entity.companyId}\0${entity.cloudProjectId}`);
     if (projectId !== undefined) increment({ type: "project", projectId }, entity.message.isRead);
+  }
+  return [...summaries.values()];
+}
+
+export function emailInboxSummariesFromMessages(input: {
+  readonly messages: ReadonlyArray<CapturedEmailListItem>;
+  readonly local: ReadonlyArray<EmailInboxSummary>;
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>;
+}): ReadonlyArray<EmailInboxSummary> {
+  const summaries = new Map(
+    input.local.map((inbox) => [
+      emailScopeKey(inbox.scope),
+      { ...inbox, messageCount: 0, unreadCount: 0 },
+    ]),
+  );
+  const increment = (scope: EmailInboxScope) => {
+    const key = emailScopeKey(scope);
+    const current = summaries.get(key);
+    summaries.set(key, {
+      scope,
+      name:
+        current?.name ??
+        (scope.type === "all"
+          ? "All mail"
+          : scope.type === "unassigned"
+            ? "Unassigned"
+            : "Project"),
+      mailSlug: current?.mailSlug ?? null,
+      messageCount: (current?.messageCount ?? 0) + 1,
+      unreadCount: (current?.unreadCount ?? 0) + 1,
+      toastMuted: current?.toastMuted ?? false,
+    });
+  };
+  for (const message of input.messages) {
+    const incrementWithReadState = (scope: EmailInboxScope) => {
+      increment(scope);
+      if (message.isRead) {
+        const key = emailScopeKey(scope);
+        const current = summaries.get(key);
+        if (current !== undefined)
+          summaries.set(key, { ...current, unreadCount: current.unreadCount - 1 });
+      }
+    };
+    incrementWithReadState(ALL_EMAIL_SCOPE);
+    if (message.cloudProjectId === null) {
+      incrementWithReadState(UNASSIGNED_EMAIL_SCOPE);
+      continue;
+    }
+    let projectId =
+      message.environmentId === input.primaryEnvironmentId ? message.attribution.projectId : null;
+    if (projectId === null && input.primaryEnvironmentId !== null && message.companyId !== null) {
+      const prefix = `${input.primaryEnvironmentId}\0`;
+      for (const [key, bindings] of input.bindings) {
+        if (
+          key.startsWith(prefix) &&
+          bindings.some(
+            (binding) =>
+              binding.companyId === message.companyId &&
+              binding.cloudProjectId === message.cloudProjectId,
+          )
+        ) {
+          projectId = key.slice(prefix.length) as ProjectId;
+          break;
+        }
+      }
+    }
+    if (projectId !== null) incrementWithReadState({ type: "project", projectId });
   }
   return [...summaries.values()];
 }
@@ -481,6 +601,7 @@ export function useEmailInbox(
   environmentFilter: EnvironmentId | null = null,
 ): EmailInboxView {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const selectedCompanyId = useAtomValue(activeCompanyIdAtom);
   const streamView = useAtomValue(emailStreamViewAtom);
   const synced = useAtomValue(cloudCapturedEmailsAtom);
   const bindings = useAtomValue(cloudProjectBindingsAtom);
@@ -509,26 +630,27 @@ export function useEmailInbox(
         scope,
         environmentId: environmentFilter,
         bindings,
-      }),
-    [bindings, environmentFilter, environmentId, query.data?.messages, scope, synced],
-  );
-  const inboxes = useMemo(
-    () =>
-      mergeSyncedInboxSummaries({
-        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
-        synced,
-        primaryEnvironmentId: environmentId,
-        bindings,
-        environmentId: environmentFilter,
+        selectedCompanyId,
       }),
     [
       bindings,
       environmentFilter,
       environmentId,
-      query.data?.inboxes,
-      streamView.state.inboxes,
+      query.data?.messages,
+      scope,
+      selectedCompanyId,
       synced,
     ],
+  );
+  const inboxes = useMemo(
+    () =>
+      emailInboxSummariesFromMessages({
+        messages,
+        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
+        primaryEnvironmentId: environmentId,
+        bindings,
+      }),
+    [bindings, environmentId, messages, query.data?.inboxes, streamView.state.inboxes],
   );
 
   return {
@@ -555,6 +677,7 @@ export function useEmailInboxSummaries(
   environmentFilter: EnvironmentId | null = null,
 ): ReadonlyArray<EmailInboxSummary> {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const selectedCompanyId = useAtomValue(activeCompanyIdAtom);
   const streamView = useAtomValue(emailStreamViewAtom);
   const synced = useAtomValue(cloudCapturedEmailsAtom);
   const bindings = useAtomValue(cloudProjectBindingsAtom);
@@ -564,23 +687,36 @@ export function useEmailInboxSummaries(
       ? null
       : emailListQuery({ environmentId, input: { scope } }),
   );
-  return useMemo(
+  const messages = useMemo(
     () =>
-      mergeSyncedInboxSummaries({
-        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
+      mergeSyncedMessages({
+        local: query.data?.messages ?? EMPTY_EMAIL_MESSAGES,
         synced,
         primaryEnvironmentId: environmentId,
-        bindings,
+        scope,
         environmentId: environmentFilter,
+        bindings,
+        selectedCompanyId,
       }),
     [
       bindings,
       environmentFilter,
       environmentId,
-      query.data?.inboxes,
-      streamView.state.inboxes,
+      query.data?.messages,
+      scope,
+      selectedCompanyId,
       synced,
     ],
+  );
+  return useMemo(
+    () =>
+      emailInboxSummariesFromMessages({
+        messages,
+        local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
+        primaryEnvironmentId: environmentId,
+        bindings,
+      }),
+    [bindings, environmentId, messages, query.data?.inboxes, streamView.state.inboxes],
   );
 }
 
@@ -614,11 +750,14 @@ export interface EmailAnalyticsView {
  */
 export function useEmailAnalytics(input: EmailAnalyticsInput | null): EmailAnalyticsView {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const selectedCompanyId = useAtomValue(activeCompanyIdAtom);
   const revision = useAtomValue(emailStreamViewAtom).state.revision;
   // The window is rebuilt from the range on every render; the family keys on the JSON of its input,
   // so an unchanged window resolves to the same atom without a memo.
   const query = useEnvironmentQuery(
-    environmentId === null || input === null ? null : emailAnalyticsQuery({ environmentId, input }),
+    environmentId === null || input === null || selectedCompanyId !== null
+      ? null
+      : emailAnalyticsQuery({ environmentId, input }),
   );
 
   const refetch = useEffectEvent(() => query.refresh());
@@ -630,7 +769,10 @@ export function useEmailAnalytics(input: EmailAnalyticsInput | null): EmailAnaly
   return {
     analytics: query.data ?? null,
     isPending: query.isPending,
-    error: query.error,
+    error:
+      selectedCompanyId === null
+        ? query.error
+        : "Company-scoped email analytics are not available yet. Select All companies to view local SMTP analytics.",
     refresh: query.refresh,
   };
 }
@@ -746,15 +888,24 @@ export interface EmailMessageView {
 }
 
 /** The open message: bodies, attachments, and the SMTP transcript the list row does not carry. */
-export function useEmailMessage(messageId: EmailMessageId | null): EmailMessageView {
+export function useEmailMessage(
+  messageId: EmailMessageId | null,
+  source?: { readonly companyId: CompanyId | null; readonly environmentId: EnvironmentId },
+): EmailMessageView {
   const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const synced = useAtomValue(cloudCapturedEmailsAtom);
   const syncedMessage = useMemo(
     () =>
       messageId === null
         ? null
-        : (synced.find((entity) => entity.message.id === messageId) ?? null),
-    [messageId, synced],
+        : (synced.find(
+            (entity) =>
+              entity.message.id === messageId &&
+              (source === undefined ||
+                (entity.companyId === source.companyId &&
+                  entity.environmentId === source.environmentId)),
+          ) ?? null),
+    [messageId, source, synced],
   );
   // A local read wins for the primary environment because its read state changes immediately.
   // Other environments are read from the durable replica and do not require their relay online.
@@ -922,4 +1073,4 @@ export const useUpsertEmailTriggerRule = () =>
 export const useDeleteEmailTriggerRule = () =>
   usePrimaryEmailCommand(emailCommands.deleteTriggerRule);
 
-export const useEmailTags = (): ReadonlyArray<EmailTag> => useAtomValue(cloudEmailTagsAtom);
+export const useEmailTags = (): ReadonlyArray<CompanyEmailTag> => useAtomValue(cloudEmailTagsAtom);

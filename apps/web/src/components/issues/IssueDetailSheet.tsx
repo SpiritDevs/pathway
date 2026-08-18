@@ -67,7 +67,10 @@ import {
 } from "react";
 
 import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
-import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
+import {
+  issueDomainEntityCompanyIdsAtom,
+  issueDomainEntityCompanyId,
+} from "~/cloud/issueDomainReadModel";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { type ComposerImageAttachment, useComposerDraftStore } from "~/composerDraftStore";
 import { useCommitOnBlur } from "~/hooks/useCommitOnBlur";
@@ -538,12 +541,12 @@ function IssueDetailBody({
 }) {
   const store = useIssuesStore();
   const storeStatus = useIssuesStoreStatus();
-  const statuses = useIssueStatuses();
-  const labels = useIssueLabels();
+  const allStatuses = useIssueStatuses();
+  const allLabels = useIssueLabels();
   const projects = useProjects();
-  const issueProjects = useIssueProjectOptions();
-  const cycles = useIssueCycles();
-  const milestones = useIssueMilestonesForProject(issue.projectId);
+  const allIssueProjects = useIssueProjectOptions();
+  const allCycles = useIssueCycles();
+  const allMilestones = useIssueMilestonesForProject(issue.projectId);
   const { events, refresh: refreshEvents } = useIssueEvents(issue.id);
   const lastPullRequestEventRefresh = useRef(issue.pullRequest?.updatedAt ?? null);
   useEffect(() => {
@@ -553,12 +556,36 @@ function IssueDetailBody({
     refreshEvents();
   }, [issue.pullRequest?.updatedAt, refreshEvents]);
   const { detail, isPending: detailPending } = useIssueDetail(issue.id);
-  const attachmentCloud = useReplicaIssueAttachmentCloud();
+  const issueCompanyIds = useAtomValue(issueDomainEntityCompanyIdsAtom);
+  const companyId = issueDomainEntityCompanyId(issueCompanyIds, "issue", issue.id);
+  const statuses = allStatuses.filter(
+    (status) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueStatus", status.id, companyId) ===
+      companyId,
+  );
+  const labels = allLabels.filter(
+    (label) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueLabel", label.id, companyId) === companyId,
+  );
+  const cycles = allCycles.filter(
+    (cycle) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueCycle", cycle.id, companyId) === companyId,
+  );
+  const milestones = allMilestones.filter(
+    (milestone) =>
+      issueDomainEntityCompanyId(issueCompanyIds, "issueMilestone", milestone.id, companyId) ===
+      companyId,
+  );
+  const issueProjects = allIssueProjects.filter(
+    (project) =>
+      project.companyId === companyId ||
+      (companyId !== null && project.companyIds.includes(companyId)),
+  );
+  const attachmentCloud = useReplicaIssueAttachmentCloud(companyId);
   const attachmentDrafts = useIssueImageAttachmentDrafts(issue.id, attachmentCloud);
   const childRollup = useIssueChildRollup(issue.id);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { presentationById } = useEnvironments();
-  const companyId = useAtomValue(activeCompanyReplicaRoutingAtom);
   const environmentControl = useEnvironmentControl();
   const [defaultPhysicalProjectKey, setDefaultPhysicalProjectKey] = useState<string | null>(null);
   const [launchPhysicalProjectKey, setLaunchPhysicalProjectKey] = useState<string | null>(null);
@@ -575,8 +602,8 @@ function IssueDetailBody({
   const updateIssue = useUpdateIssue();
   const deleteIssue = useDeleteIssue();
   const restoreIssue = useRestoreIssue();
-  const createLabel = useCreateIssueLabel();
-  const createMilestone = useCreateIssueMilestone();
+  const createLabel = useCreateIssueLabel(companyId);
+  const createMilestone = useCreateIssueMilestone(companyId);
   const createTodo = useCreateIssueTodo();
   const updateTodo = useUpdateIssueTodo();
   const deleteTodo = useDeleteIssueTodo();
@@ -639,9 +666,15 @@ function IssueDetailBody({
   );
   const issueKeys = useMemo(() => {
     const keys = new Map<string, string>();
-    for (const candidate of store.issuesById.values()) keys.set(candidate.id, candidate.key);
+    for (const candidate of store.issuesById.values()) {
+      if (
+        issueDomainEntityCompanyId(issueCompanyIds, "issue", candidate.id, companyId) === companyId
+      ) {
+        keys.set(candidate.id, candidate.key);
+      }
+    }
     return keys;
-  }, [store]);
+  }, [companyId, issueCompanyIds, store]);
 
   const status = statuses.find((candidate) => candidate.id === issue.statusId) ?? null;
   const projectTitle =
@@ -1839,6 +1872,7 @@ function IssueDetailBody({
             <aside className="relative flex shrink-0 flex-col gap-3 border-t border-border/50 pt-3 @xl/issue-detail:w-[var(--issue-detail-properties-width)] @xl/issue-detail:border-t-0 @xl/issue-detail:border-s @xl/issue-detail:pt-0 @xl/issue-detail:ps-4">
               <IssuePropertiesResizeHandle maxWidth={propertiesMaxWidth} size={propertiesSize} />
               <IssueDetailProperties
+                companyId={companyId}
                 cycles={cycles}
                 environmentOptions={defaultEnvironmentOptions}
                 environmentValue={defaultProject?.physicalProjectKey ?? null}

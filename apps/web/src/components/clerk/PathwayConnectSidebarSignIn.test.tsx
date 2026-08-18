@@ -8,7 +8,7 @@ const { atoms, testState } = vi.hoisted(() => ({
     companyList: Symbol("company-list"),
   },
   testState: {
-    activeCompanyId: "company-b",
+    activeCompanyId: "company-b" as string | null,
     companies: [] as ReadonlyArray<{
       readonly id: string;
       readonly name: string;
@@ -127,6 +127,19 @@ describe("PathwayConnectProfileButton", () => {
     expect(markup).toContain("Beta Labs");
     expect(markup).toContain("Open settings for Acme");
     expect(markup).toContain("Create company");
+    expect(markup).toContain('data-checked="true"');
+  });
+
+  it("checks All companies when the global company filter is unscoped", () => {
+    testState.activeCompanyId = null;
+    testState.companies = [
+      { id: "company-a", name: "Corey's Workspace", workspaceKind: "personal" },
+      { id: "company-b", name: "Beta Labs", workspaceKind: "organization" },
+    ];
+
+    const markup = renderToStaticMarkup(<PathwayConnectProfileButton />);
+
+    expect(markup).toContain("All companies");
     expect(markup).toContain('data-checked="true"');
   });
 });

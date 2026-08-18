@@ -1,12 +1,31 @@
 import { createEnvironmentProjectAtoms } from "@spiritdevs/client-runtime/state/projects";
 import { createProjectEnvironmentAtoms } from "@spiritdevs/client-runtime/state/projects";
 import { createEnvironmentRpcQueryAtomFamily } from "@spiritdevs/client-runtime/state/runtime";
-import { WS_METHODS } from "@spiritdevs/contracts";
+import { WS_METHODS, type EnvironmentId } from "@spiritdevs/contracts";
+import { Atom } from "effect/unstable/reactivity";
 
+import { activeCompanyIdAtom, scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
+import {
+  cloudEnvironmentProjectsAtom,
+  companyScopedEnvironmentProjects,
+} from "../cloud/agentThreadReadModel";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
-import { cloudEnvironmentProjectsAtom } from "../cloud/agentThreadReadModel";
+
+const companyScopedProjectSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const snapshot = get(environmentSnapshotAtom(environmentId));
+    if (snapshot === null) return null;
+    const projects = companyScopedEnvironmentProjects(
+      snapshot.projects,
+      get(activeCompanyIdAtom),
+      get(scopedCompanyRegistryReplicasAtom),
+      environmentId,
+    );
+    return projects === snapshot.projects ? snapshot : { ...snapshot, projects };
+  }).pipe(Atom.withLabel(`company-scoped-project-snapshot:${environmentId}`)),
+);
 
 export const projectEnvironment = createProjectEnvironmentAtoms(connectionAtomRuntime);
 /**
@@ -22,6 +41,6 @@ export const projectContentSearch = createEnvironmentRpcQueryAtomFamily(connecti
 });
 export const environmentProjects = createEnvironmentProjectAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
-  snapshotAtom: environmentSnapshotAtom,
+  snapshotAtom: companyScopedProjectSnapshotAtom,
   fallbackProjectsAtom: cloudEnvironmentProjectsAtom,
 });

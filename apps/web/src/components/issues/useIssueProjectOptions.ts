@@ -1,14 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
-import type {
-  CloudProjectSyncEntity,
-  EnvironmentBindingEntity,
-} from "@spiritdevs/client-runtime/sync";
+import { CloudProjectSyncEntity, EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import * as Schema from "effect/Schema";
 import { useMemo } from "react";
 
-import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
-import { useSyncedCloudProjects, useSyncedEnvironmentBindings } from "~/cloud/issueDomainReadModel";
+import { scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
+import { syncedIssueDomainFromReplica } from "~/cloud/issueDomainReadModel";
 import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { useProjectGroups } from "../projects/useProjectGroups";
 
@@ -19,6 +18,8 @@ export interface IssueProjectChoice {
 }
 
 export interface IssueProjectOption extends IssueProjectChoice {
+  readonly companyId: CompanyId | null;
+  readonly companyIds: ReadonlyArray<CompanyId>;
   readonly isCompanyProject: boolean;
   /** Every environment-local or cloud id represented by this logical project. */
   readonly projectIds: ReadonlyArray<ProjectId>;
@@ -120,6 +121,7 @@ export function buildIssueProjectOptions(input: {
   readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
   readonly cloudProjects: ReadonlyArray<CloudProjectSyncEntity>;
   readonly environmentBindings: ReadonlyArray<EnvironmentBindingEntity>;
+  readonly companyId?: CompanyId | null;
 }): ReadonlyArray<IssueProjectOption> {
   const cloudProjects = input.cloudProjects.filter((project) => project.archivedAt === null);
   const environmentBindings = input.environmentBindings.filter(
@@ -166,6 +168,9 @@ export function buildIssueProjectOptions(input: {
     projectIds.add(ProjectId.make(String(id)));
 
     return {
+      companyId: input.companyId ?? null,
+      companyIds:
+        input.companyId === undefined || input.companyId === null ? [] : [input.companyId],
       id: ProjectId.make(String(id)),
       title: canonicalCloudProject?.name ?? group.displayName,
       isCompanyProject: canonicalCloudProject !== null,
@@ -222,6 +227,9 @@ export function buildIssueProjectOptions(input: {
   for (const project of cloudProjects) {
     if (usedCloudIds.has(String(project.id))) continue;
     options.push({
+      companyId: input.companyId ?? null,
+      companyIds:
+        input.companyId === undefined || input.companyId === null ? [] : [input.companyId],
       id: ProjectId.make(project.id),
       title: project.name,
       isCompanyProject: true,
@@ -240,16 +248,52 @@ export function buildIssueProjectOptions(input: {
 
 export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
   const groups = useProjectGroups();
-  const companyId = useAtomValue(activeCompanyReplicaRoutingAtom);
-  const syncedCloudProjects = useSyncedCloudProjects();
-  const syncedEnvironmentBindings = useSyncedEnvironmentBindings();
-  return useMemo(
-    () =>
-      buildIssueProjectOptions({
+  const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
+  return useMemo(() => {
+    if (replicas.size === 0) {
+      return buildIssueProjectOptions({ groups, cloudProjects: [], environmentBindings: [] });
+    }
+    const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
+    const allCompanies = replicas.size > 1;
+    const scopedOptions = [...replicas].flatMap(([companyId, replica]) => {
+      const domain = syncedIssueDomainFromReplica(replica);
+      const options = buildIssueProjectOptions({
         groups,
-        cloudProjects: companyId === null ? [] : syncedCloudProjects,
-        environmentBindings: companyId === null ? [] : syncedEnvironmentBindings,
-      }),
-    [companyId, groups, syncedCloudProjects, syncedEnvironmentBindings],
-  );
+        cloudProjects: domain.cloudProjects,
+        environmentBindings: [...replica.view.values()].filter(isEnvironmentBinding),
+        companyId,
+      });
+      // An unregistered local checkout has no company provenance. It is safe to offer only when
+      // exactly one company is selected; in All it would make the create destination ambiguous.
+      return allCompanies ? options.filter((option) => option.companyProject !== null) : options;
+    });
+    if (!allCompanies) return scopedOptions;
+
+    // Menus and filters use the project id as their value. In All, represent a shared id once
+    // while retaining every owning company for issue-owner narrowing in detail views.
+    const byId = new Map<string, IssueProjectOption>();
+    for (const option of scopedOptions) {
+      const current = byId.get(String(option.id));
+      if (current === undefined) {
+        byId.set(String(option.id), option);
+        continue;
+      }
+      byId.set(String(option.id), {
+        ...current,
+        companyId: null,
+        companyIds: [...new Set([...current.companyIds, ...option.companyIds])],
+        projectIds: [...new Set([...current.projectIds, ...option.projectIds])],
+        environmentProjects: [
+          ...new Map(
+            [...current.environmentProjects, ...option.environmentProjects].map((project) => [
+              project.physicalProjectKey,
+              project,
+            ]),
+          ).values(),
+        ],
+        environmentBindings: [...current.environmentBindings, ...option.environmentBindings],
+      });
+    }
+    return [...byId.values()].sort((left, right) => left.title.localeCompare(right.title));
+  }, [groups, replicas]);
 }

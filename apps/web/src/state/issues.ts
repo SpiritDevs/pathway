@@ -69,6 +69,7 @@ import {
   type SlackIntakeStatus,
   type ThreadId,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Data from "effect/Data";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -79,8 +80,11 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef } from "react";
 
-import { activeCompanyReplicaRoutingAtom } from "../cloud/activeCompany";
+import { scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
 import {
+  issueDomainEntityCompanyIdsAtom,
+  issueDomainEntityCompanyId,
+  syncedIssueDomainForCompanyAtomFamily,
   syncedIssueDetailAtomFamily,
   syncedIssueDomainAtom,
   type SyncedIssueDetail,
@@ -736,7 +740,7 @@ export function selectIssuesStoreState(
 export const issuesStoreStateAtom = Atom.make((get): IssuesStoreState => {
   const view = get(issuesStreamViewAtom);
   const legacyState: IssuesStoreState = { store: view.state.store, status: view.status };
-  if (get(activeCompanyReplicaRoutingAtom) === null) {
+  if (get(scopedCompanyRegistryReplicasAtom).size === 0) {
     return selectIssuesStoreState(legacyState, null);
   }
   return selectIssuesStoreState(
@@ -744,6 +748,22 @@ export const issuesStoreStateAtom = Atom.make((get): IssuesStoreState => {
     issuesStoreFromReplica(get(syncedIssueDomainAtom), legacyState.store),
   );
 }).pipe(Atom.withLabel("web-issues-store-state"));
+
+const companyIssuesStoreStateAtomFamily = Atom.family((companyId: CompanyId) =>
+  Atom.make((get): IssuesStoreState => {
+    const domain = get(syncedIssueDomainForCompanyAtomFamily(companyId));
+    if (domain === null) return { store: EMPTY_ISSUES_STORE, status: "loading" };
+    return {
+      store: issuesStoreFromReplica(domain, EMPTY_ISSUES_STORE),
+      status: "ready",
+    };
+  }).pipe(Atom.withLabel(`web-issues-store:${companyId}`)),
+);
+
+const EMPTY_COMPANY_ISSUES_STORE_STATE_ATOM = Atom.make<IssuesStoreState>({
+  store: EMPTY_ISSUES_STORE,
+  status: "loading",
+}).pipe(Atom.withLabel("web-issues-store:company-empty"));
 
 export const issuesStoreAtom = Atom.make(
   (get): IssuesStore => get(issuesStoreStateAtom).store,
@@ -813,7 +833,7 @@ export function groupIssueThreadLinksByIssue(
 
 /** Replica mode must not depend on the legacy stream for issue-owned thread links. */
 const effectiveIssueThreadLinksByIssueAtom = Atom.make((get) =>
-  get(activeCompanyReplicaRoutingAtom) === null
+  get(scopedCompanyRegistryReplicasAtom).size === 0
     ? get(issueAgentStateAtom).linksByIssue
     : groupIssueThreadLinksByIssue(
         issueThreadLinksFromReplica(get(syncedIssueDomainAtom).issueThreadLinks),
@@ -1361,6 +1381,14 @@ export function useIssuesStore(): IssuesStore {
   return useAtomValue(issuesStoreAtom);
 }
 
+export function useCompanyIssuesStore(companyId: CompanyId | null): IssuesStoreState {
+  return useAtomValue(
+    companyId === null
+      ? EMPTY_COMPANY_ISSUES_STORE_STATE_ATOM
+      : companyIssuesStoreStateAtomFamily(companyId),
+  );
+}
+
 export function useIssuesStoreStatus(): IssuesStoreStatus {
   return useAtomValue(issuesStoreStateAtom).status;
 }
@@ -1546,7 +1574,9 @@ const NOOP_REPLICA_REFRESH = () => undefined;
  * twice while its operation is pending.
  */
 function useReplicaIssueDetailProjection(issueId: IssueId | null) {
-  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const companyIds = useAtomValue(issueDomainEntityCompanyIdsAtom);
+  const replicaCompanyId =
+    issueId === null ? null : issueDomainEntityCompanyId(companyIds, "issue", issueId);
   const synced = useAtomValue(
     issueId === null ? EMPTY_SYNCED_ISSUE_DETAIL_ATOM : syncedIssueDetailAtomFamily(issueId),
   );
@@ -1777,10 +1807,10 @@ export function useIssueLinksForThread(
   threadId: ThreadId | null,
   enabled = true,
 ): IssueLinksForThreadView {
-  const replicaCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+  const replicaRouted = useAtomValue(scopedCompanyRegistryReplicasAtom).size > 0;
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const query = useEnvironmentQuery(
-    replicaCompanyId !== null || environmentId === null || threadId === null || !enabled
+    replicaRouted || environmentId === null || threadId === null || !enabled
       ? null
       : issueLinksForThreadQuery({ environmentId, input: { threadId } }),
   );
@@ -1794,9 +1824,9 @@ export function useIssueLinksForThread(
   );
   return {
     links,
-    isPending: replicaCompanyId === null ? query.isPending : false,
-    error: replicaCompanyId === null ? query.error : null,
-    refresh: replicaCompanyId === null ? query.refresh : NOOP_REPLICA_REFRESH,
+    isPending: replicaRouted ? false : query.isPending,
+    error: replicaRouted ? null : query.error,
+    refresh: replicaRouted ? NOOP_REPLICA_REFRESH : query.refresh,
   };
 }
 
@@ -2294,7 +2324,7 @@ const commandFailureMessage = (cause: Cause.Cause<unknown>): string => {
 const triageAcceptCommand: typeof syncedTriageAcceptCommand = {
   label: syncedTriageAcceptCommand.label,
   run: async (registry, target) => {
-    const replicaRouted = registry.get(activeCompanyReplicaRoutingAtom) !== null;
+    const replicaRouted = registry.get(scopedCompanyRegistryReplicasAtom).size > 0;
     const accepted = await syncedTriageAcceptCommand.run(registry, target);
     if (!replicaRouted || !target.input.runEnrichment || !AsyncResult.isSuccess(accepted)) {
       return accepted;
@@ -2659,12 +2689,17 @@ type IssueCommandFailure<C> = C extends AtomCommand<infer _W, infer _A, infer E>
  */
 function usePrimaryIssueCommand<
   C extends AtomCommand<
-    { readonly environmentId: EnvironmentId; readonly input: never },
+    {
+      readonly environmentId: EnvironmentId;
+      readonly input: never;
+      readonly targetCompanyId?: CompanyId;
+    },
     unknown,
     unknown
   >,
 >(
   command: C,
+  targetCompanyId: CompanyId | null = null,
 ): (
   input: IssueCommandInput<C>,
 ) => Promise<
@@ -2673,7 +2708,11 @@ function usePrimaryIssueCommand<
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const run = useAtomCommand(
     command as unknown as AtomCommand<
-      { readonly environmentId: EnvironmentId; readonly input: IssueCommandInput<C> },
+      {
+        readonly environmentId: EnvironmentId;
+        readonly input: IssueCommandInput<C>;
+        readonly targetCompanyId?: CompanyId;
+      },
       IssueCommandSuccess<C>,
       IssueCommandFailure<C>
     >,
@@ -2688,8 +2727,12 @@ function usePrimaryIssueCommand<
               }),
             ),
           )
-        : run({ environmentId, input }),
-    [environmentId, run],
+        : run({
+            environmentId,
+            input,
+            ...(targetCompanyId === null ? {} : { targetCompanyId }),
+          }),
+    [environmentId, run, targetCompanyId],
   );
 }
 
@@ -2699,23 +2742,36 @@ export const useDeleteIssue = () => usePrimaryIssueCommand(issueCommands.delete)
 export const useRestoreIssue = () => usePrimaryIssueCommand(issueCommands.restore);
 export const useBulkUpdateIssues = () => usePrimaryIssueCommand(issueCommands.bulkUpdate);
 export const useSetIssueSortOrder = () => usePrimaryIssueCommand(issueCommands.setSortOrder);
-export const useCreateIssueStatus = () => usePrimaryIssueCommand(issueCommands.createStatus);
-export const useUpdateIssueStatus = () => usePrimaryIssueCommand(issueCommands.updateStatus);
-export const useDeleteIssueStatus = () => usePrimaryIssueCommand(issueCommands.deleteStatus);
-export const useReorderIssueStatuses = () => usePrimaryIssueCommand(issueCommands.reorderStatuses);
-export const useCreateIssueLabel = () => usePrimaryIssueCommand(issueCommands.createLabel);
-export const useUpdateIssueLabel = () => usePrimaryIssueCommand(issueCommands.updateLabel);
-export const useDeleteIssueLabel = () => usePrimaryIssueCommand(issueCommands.deleteLabel);
+export const useCreateIssueStatus = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.createStatus, companyId);
+export const useUpdateIssueStatus = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.updateStatus, companyId);
+export const useDeleteIssueStatus = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.deleteStatus, companyId);
+export const useReorderIssueStatuses = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.reorderStatuses, companyId);
+export const useCreateIssueLabel = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.createLabel, companyId);
+export const useUpdateIssueLabel = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.updateLabel, companyId);
+export const useDeleteIssueLabel = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.deleteLabel, companyId);
 export const useSetIssueKeyPrefix = () => usePrimaryIssueCommand(issueCommands.setKeyPrefix);
 export const useImportIssuesCsv = () => usePrimaryIssueCommand(issueCommands.importCsv);
-export const useCreateIssueMilestone = () => usePrimaryIssueCommand(issueCommands.milestoneCreate);
-export const useUpdateIssueMilestone = () => usePrimaryIssueCommand(issueCommands.milestoneUpdate);
-export const useDeleteIssueMilestone = () => usePrimaryIssueCommand(issueCommands.milestoneDelete);
-export const useReorderIssueMilestones = () =>
-  usePrimaryIssueCommand(issueCommands.milestonesReorder);
-export const useCreateIssueCycle = () => usePrimaryIssueCommand(issueCommands.cycleCreate);
-export const useUpdateIssueCycle = () => usePrimaryIssueCommand(issueCommands.cycleUpdate);
-export const useDeleteIssueCycle = () => usePrimaryIssueCommand(issueCommands.cycleDelete);
+export const useCreateIssueMilestone = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.milestoneCreate, companyId);
+export const useUpdateIssueMilestone = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.milestoneUpdate, companyId);
+export const useDeleteIssueMilestone = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.milestoneDelete, companyId);
+export const useReorderIssueMilestones = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.milestonesReorder, companyId);
+export const useCreateIssueCycle = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.cycleCreate, companyId);
+export const useUpdateIssueCycle = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.cycleUpdate, companyId);
+export const useDeleteIssueCycle = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.cycleDelete, companyId);
 export const useCreateIssueTodo = () => usePrimaryIssueCommand(issueCommands.todoCreate);
 export const useUpdateIssueTodo = () => usePrimaryIssueCommand(issueCommands.todoUpdate);
 export const useDeleteIssueTodo = () => usePrimaryIssueCommand(issueCommands.todoDelete);

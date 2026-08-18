@@ -1,5 +1,4 @@
 /** Browser client for Convex-authorized, direct-to-UploadThing issue attachments. */
-import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
 import type { ChatAttachmentId, IssueId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
@@ -8,7 +7,6 @@ import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { useEffect, useMemo, useState } from "react";
 
-import { activeCompanyReplicaRoutingAtom } from "./activeCompany";
 import { resolveCloudSyncConvexUrl } from "./publicConfig";
 import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
 import type { ConvexArgs, ConvexAuthTokenFetcher } from "./syncTransport";
@@ -190,8 +188,9 @@ export interface ReplicaIssueAttachmentCloud {
 }
 
 /** One short-lived Convex client per open issue sheet; legacy sheets create none. */
-export function useReplicaIssueAttachmentCloud(): ReplicaIssueAttachmentCloud | null {
-  const companyId = useAtomValue(activeCompanyReplicaRoutingAtom);
+export function useReplicaIssueAttachmentCloud(
+  companyId: CompanyId | null,
+): ReplicaIssueAttachmentCloud | null {
   const { getToken } = useAuth();
   const convexUrl = resolveCloudSyncConvexUrl();
   const [isOnline, setIsOnline] = useState(

@@ -19,9 +19,20 @@ import {
   MAX_EMAIL_PREVIEW_WIDTH,
   MIN_EMAIL_PREVIEW_WIDTH,
   parseEmailSearch,
+  hasOneOffRemoteContentPermission,
   normalizeTrustedEmailSenderAddress,
   trustedEmailSenderAddress,
 } from "./emailView.logic";
+
+describe("one-off remote content permission", () => {
+  it("is scoped to the composite message identity", () => {
+    const permitted = "company-a\0environment-one\0message-one";
+    expect(hasOneOffRemoteContentPermission(permitted, permitted)).toBe(true);
+    expect(
+      hasOneOffRemoteContentPermission(permitted, "company-b\0environment-one\0message-one"),
+    ).toBe(false);
+  });
+});
 
 describe("parseEmailSearch", () => {
   it("keeps every param it recognises", () => {

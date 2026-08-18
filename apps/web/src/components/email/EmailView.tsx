@@ -23,7 +23,10 @@ import {
 
 import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { useCapturedEmailAdmin } from "~/cloud/capturedEmailAdmin";
-import { cloudTrustedEmailSendersAtom } from "~/cloud/capturedEmailReadModel";
+import {
+  cloudTrustedEmailSendersAtom,
+  trustedEmailSenderAddressesForCompany,
+} from "~/cloud/capturedEmailReadModel";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
@@ -80,6 +83,7 @@ import {
   emailActionMenuItems,
   emailActionTargets,
   emailIdsNeedingReadState,
+  emailMessageSelectionId,
   emailSelectAllState,
   emailSelectModeForModifiers,
   filterEmailMessages,
@@ -192,9 +196,25 @@ export function EmailView({
     edge: "right",
   });
 
-  const selectedId = (search.message ?? null) as EmailMessageId | null;
-  const detail = useEmailMessage(selectedId);
-  const selectedListMessage = inbox.messages.find((message) => message.id === selectedId) ?? null;
+  const selectedKey = search.message ?? null;
+  const selectedListMessage =
+    selectedKey === null
+      ? null
+      : (inbox.messages.find((message) => emailMessageSelectionId(message) === selectedKey) ??
+        inbox.messages.find((message) => message.id === selectedKey) ??
+        null);
+  const selectedId =
+    selectedListMessage?.id ??
+    (selectedKey !== null && !selectedKey.includes("\0") ? (selectedKey as EmailMessageId) : null);
+  const detail = useEmailMessage(
+    selectedId,
+    selectedListMessage === null
+      ? undefined
+      : {
+          companyId: selectedListMessage.companyId,
+          environmentId: selectedListMessage.environmentId,
+        },
+  );
   const tab = emailReadingTab(search);
 
   const projectTitles = useMemo(
@@ -209,8 +229,9 @@ export function EmailView({
     [environments],
   );
   const trustedSenderAddresses = useMemo(
-    () => new Set(trustedSenders.map((sender) => sender.address)),
-    [trustedSenders],
+    () =>
+      trustedEmailSenderAddressesForCompany(trustedSenders, selectedListMessage?.companyId ?? null),
+    [selectedListMessage?.companyId, trustedSenders],
   );
   // Read once rather than tracked: nothing in a message list is worth a midnight timer, and a
   // reconnect or a route change re-reads it. Same trade as the issue list's `today`.
@@ -236,7 +257,8 @@ export function EmailView({
     markOpenedRead(selectedId, selectedEnvironmentId);
   }, [selectedEnvironmentId, selectedId]);
 
-  const selectMessage = (message: CapturedEmailListItem) => onSearch({ message: message.id });
+  const selectMessage = (message: CapturedEmailListItem) =>
+    onSearch({ message: emailMessageSelectionId(message) });
 
   const inboxSummary = findEmailInbox(inbox.inboxes, scope);
   const unreadCount = inboxSummary?.unreadCount ?? 0;
@@ -247,7 +269,7 @@ export function EmailView({
       ? filtered
       : filtered.filter((message) => message.tagIds.includes(search.tag as EmailTagId));
   }, [filter, inbox.messages, query, search.tag]);
-  const visibleIds = useMemo(() => visibleMessages.map((message) => message.id), [visibleMessages]);
+  const visibleIds = useMemo(() => visibleMessages.map(emailMessageSelectionId), [visibleMessages]);
 
   // A capture, a retention sweep, a scope change, and a keystroke in the search field all take rows
   // away. `pruneEmailSelection` hands back the same selection when none of them moved anything, so
@@ -258,11 +280,44 @@ export function EmailView({
 
   const selectedMessages = selectedEmailMessages(visibleMessages, selection);
   const selectedUnreadCount = selectedMessages.filter((message) => !message.isRead).length;
-  const currentTagTargets = tagTargets.map(
-    (target) =>
-      inbox.messages.find(
-        (message) => message.id === target.id && message.environmentId === target.environmentId,
-      ) ?? target,
+  const currentTagTargets = tagTargets.map((target) =>
+    inbox.messages.find(
+      (message) =>
+        message.companyId === target.companyId &&
+        message.id === target.id &&
+        message.environmentId === target.environmentId,
+    ),
+  );
+  const resolvedTagTargets = currentTagTargets.filter(
+    (target): target is CapturedEmailListItem => target !== undefined,
+  );
+  const currentDeleteTargets = deleteTargets.flatMap((target) => {
+    const current = inbox.messages.find(
+      (message) => emailMessageSelectionId(message) === emailMessageSelectionId(target),
+    );
+    return current === undefined ? [] : [current];
+  });
+  useEffect(() => {
+    setTagTargets((current) =>
+      current.filter((target) =>
+        inbox.messages.some(
+          (message) => emailMessageSelectionId(message) === emailMessageSelectionId(target),
+        ),
+      ),
+    );
+    setDeleteTargets((current) =>
+      current.filter((target) =>
+        inbox.messages.some(
+          (message) => emailMessageSelectionId(message) === emailMessageSelectionId(target),
+        ),
+      ),
+    );
+  }, [inbox.messages]);
+  const tagTargetCompanyId = resolvedTagTargets[0]?.companyId ?? null;
+  const availableTags = useMemo(
+    () =>
+      tagTargetCompanyId === null ? [] : tags.filter((tag) => tag.companyId === tagTargetCompanyId),
+    [tagTargetCompanyId, tags],
   );
 
   /**
@@ -330,11 +385,19 @@ export function EmailView({
   };
 
   const applyTag = async (tagId: EmailTagId, present: boolean) => {
-    if (emailAdmin === null || tagTargets.length === 0 || isApplyingAction) return;
+    if (
+      emailAdmin === null ||
+      tagTargetCompanyId === null ||
+      resolvedTagTargets.length === 0 ||
+      isApplyingAction
+    )
+      return;
+    if (!availableTags.some((tag) => tag.id === tagId)) return;
     setIsApplyingAction(true);
     try {
-      await forEachWithConcurrency(tagTargets, 4, (message) =>
+      await forEachWithConcurrency(resolvedTagTargets, 4, (message) =>
         emailAdmin.setTag(
+          tagTargetCompanyId,
           { environmentId: message.environmentId, messageId: message.id },
           tagId,
           present,
@@ -348,12 +411,13 @@ export function EmailView({
   };
 
   const createAndApplyTag = async (input: { name: string; color: string }) => {
-    if (emailAdmin === null || isApplyingAction) return;
+    if (emailAdmin === null || tagTargetCompanyId === null || isApplyingAction) return;
     setIsApplyingAction(true);
     try {
-      const tagId = await emailAdmin.createTag(input);
-      await forEachWithConcurrency(tagTargets, 4, (message) =>
+      const tagId = await emailAdmin.createTag({ companyId: tagTargetCompanyId, ...input });
+      await forEachWithConcurrency(resolvedTagTargets, 4, (message) =>
         emailAdmin.setTag(
+          tagTargetCompanyId,
           { environmentId: message.environmentId, messageId: message.id },
           tagId,
           true,
@@ -367,20 +431,33 @@ export function EmailView({
   };
 
   const deleteMessages = async () => {
-    if (deleteTargets.length === 0 || isApplyingAction) return;
-    const targets = deleteTargets;
+    if (currentDeleteTargets.length === 0 || isApplyingAction) return;
+    const targets = currentDeleteTargets;
     setIsApplyingAction(true);
     try {
       // Cloud first makes the delete durable while a source is offline. The source RPC then removes
       // SQLite, raw source, and attachment files immediately wherever that environment is online.
       if (emailAdmin !== null) {
-        for (let index = 0; index < targets.length; index += 100) {
-          await emailAdmin.deleteMessages(
-            targets.slice(index, index + 100).map((message) => ({
-              environmentId: message.environmentId,
-              messageId: message.id,
-            })),
-          );
+        const byCompany = new Map<
+          NonNullable<CapturedEmailListItem["companyId"]>,
+          CapturedEmailListItem[]
+        >();
+        for (const message of targets) {
+          if (message.companyId === null) continue;
+          const messages = byCompany.get(message.companyId) ?? [];
+          messages.push(message);
+          byCompany.set(message.companyId, messages);
+        }
+        for (const [companyId, messages] of byCompany) {
+          for (let index = 0; index < messages.length; index += 100) {
+            await emailAdmin.deleteMessages(
+              companyId,
+              messages.slice(index, index + 100).map((message) => ({
+                environmentId: message.environmentId,
+                messageId: message.id,
+              })),
+            );
+          }
         }
       }
       const byEnvironment = new Map<EnvironmentId, EmailMessageId[]>();
@@ -400,7 +477,10 @@ export function EmailView({
           }
         }
       }
-      if (selectedId !== null && targets.some((message) => message.id === selectedId)) {
+      if (
+        selectedKey !== null &&
+        targets.some((message) => emailMessageSelectionId(message) === selectedKey)
+      ) {
         onSearch({ message: undefined, tab: undefined });
       }
       setSelection(EMPTY_EMAIL_SELECTION);
@@ -431,6 +511,14 @@ export function EmailView({
         reportCloudEmailFailure(
           "Tags require company sync",
           new Error("Connect and sign in to the synced company before tagging captured mail."),
+        );
+        return;
+      }
+      const companyIds = new Set(targets.map((target) => target.companyId));
+      if (companyIds.size !== 1 || companyIds.has(null)) {
+        reportCloudEmailFailure(
+          "Choose mail from one company",
+          new Error("Email tags belong to one company. Select messages from a single company."),
         );
         return;
       }
@@ -539,12 +627,12 @@ export function EmailView({
                   setSelection((current) =>
                     selectEmailRow(current, {
                       ids: visibleIds,
-                      messageId: message.id,
+                      messageId: emailMessageSelectionId(message),
                       mode: emailSelectModeForModifiers(modifiers),
                     }),
                   )
                 }
-                selectedMessageId={selectedId}
+                selectedMessageId={selectedKey}
                 selection={{
                   ids: selection.ids,
                   count: selectedMessages.length,
@@ -566,7 +654,14 @@ export function EmailView({
           error={detail.error}
           isPending={detail.isPending}
           message={detail.message}
-          tags={tags}
+          messageIdentity={
+            selectedListMessage === null ? null : emailMessageSelectionId(selectedListMessage)
+          }
+          tags={
+            selectedListMessage?.companyId === null || selectedListMessage === null
+              ? []
+              : tags.filter((tag) => tag.companyId === selectedListMessage.companyId)
+          }
           tagIds={detail.tagIds}
           onEditTags={() => {
             if (selectedListMessage !== null)
@@ -581,7 +676,8 @@ export function EmailView({
           }}
           trustedSenderAddresses={trustedSenderAddresses}
           onTrustRemoteSender={(address) => {
-            if (emailAdmin === null) {
+            const companyId = selectedListMessage?.companyId ?? null;
+            if (emailAdmin === null || companyId === null) {
               reportCloudEmailFailure(
                 "Couldn't remember this sender",
                 new Error("Connect and sign in to company sync to trust this sender everywhere."),
@@ -589,7 +685,7 @@ export function EmailView({
               return;
             }
             void emailAdmin
-              .trustSender(address)
+              .trustSender(companyId, address)
               .catch((error) => reportCloudEmailFailure("Couldn't remember this sender", error));
           }}
           onTab={(next) => onSearch({ tab: next })}
@@ -617,12 +713,12 @@ export function EmailView({
           if (!open) setTagTargets([]);
         }}
         onSetTag={(tagId, present) => void applyTag(tagId, present)}
-        open={tagTargets.length > 0}
-        tags={tags}
-        targets={currentTagTargets}
+        open={resolvedTagTargets.length > 0}
+        tags={availableTags}
+        targets={resolvedTagTargets}
       />
       <AlertDialog
-        open={deleteTargets.length > 0}
+        open={currentDeleteTargets.length > 0}
         onOpenChange={(open) => {
           if (!open && !isApplyingAction) setDeleteTargets([]);
         }}
@@ -631,7 +727,10 @@ export function EmailView({
           <AlertDialogHeader>
             <AlertDialogTitle>
               Delete{" "}
-              {deleteTargets.length === 1 ? "this message" : `${deleteTargets.length} messages`}?
+              {currentDeleteTargets.length === 1
+                ? "this message"
+                : `${currentDeleteTargets.length} messages`}
+              ?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This removes the captured email, raw source, and attachments from its source

@@ -1,18 +1,31 @@
 import { companyEntityCodec, type CompanySyncEntity } from "@spiritdevs/client-runtime/sync";
-import { EnvironmentId } from "@spiritdevs/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@spiritdevs/contracts";
+import { AgentThreadId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Option from "effect/Option";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
-import { cloudEnvironmentProjectsAtom, cloudEnvironmentThreadsAtom } from "./agentThreadReadModel";
+import {
+  cloudEnvironmentProjectsAtom,
+  cloudEnvironmentProjectsFromReplicas,
+  cloudEnvironmentThreadsAtom,
+  cloudEnvironmentThreadsFromReplicas,
+  companyScopedEnvironmentProjects,
+  companyScopedEnvironmentSnapshot,
+  companyScopedEnvironmentThreads,
+} from "./agentThreadReadModel";
 
 const COMPANY_ID = CompanyId.make("company-one");
+const OTHER_COMPANY_ID = CompanyId.make("company-two");
 const ENVIRONMENT_ID = EnvironmentId.make("environment-one");
 const CLOUD_PROJECT_ID = "cloud-project-one";
 const LOCAL_PROJECT_ID = "local-project-one";
 const THREAD_ID = "thread-one";
+
+type AgentThreadSyncEntity = Extract<CompanySyncEntity, { readonly entityKind: "agentThread" }>;
+type CloudProjectSyncEntity = Extract<CompanySyncEntity, { readonly entityKind: "cloudProject" }>;
 
 function entity(kind: "cloudProject" | "environmentBinding" | "agentThread", payload: unknown) {
   const codec = companyEntityCodec(kind);
@@ -89,25 +102,64 @@ const agentThread = entity("agentThread", {
     deletedAt: null,
   },
   updatedAt: 2_000,
+}) as AgentThreadSyncEntity;
+
+const otherCloudProject = entity("cloudProject", {
+  id: "cloud-project-two",
+  name: "Other company project",
+  description: "",
+  teamIds: [],
+  defaultWorkflowOwner: null,
+  preferredBindingId: null,
+  archivedAt: null,
+  createdAt: 3_000,
+  updatedAt: 4_000,
+}) as CloudProjectSyncEntity;
+
+const otherBinding = entity("environmentBinding", {
+  id: "binding-two",
+  cloudProjectId: "cloud-project-two",
+  environmentId: ENVIRONMENT_ID,
+  localProjectId: "local-project-two",
+  localWorkspaceRoot: "/work/other",
+  status: "active",
+  lastSeenAt: 4_000,
+  createdAt: 3_000,
+  updatedAt: 4_000,
 });
+
+const otherAgentThread = {
+  ...agentThread,
+  id: AgentThreadId.make(`${ENVIRONMENT_ID}:thread-two`),
+  environmentId: ENVIRONMENT_ID,
+  cloudProjectId: otherCloudProject.id,
+  shell: {
+    ...agentThread.shell,
+    id: ThreadId.make("thread-two"),
+    projectId: ProjectId.make("local-project-two"),
+    title: "Other company work",
+    worktreePath: "/work/other",
+    lineage: {
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: ThreadId.make("thread-two"),
+    },
+  },
+  updatedAt: 4_000,
+} satisfies typeof agentThread;
+
+function replica(...values: ReadonlyArray<CompanySyncEntity>) {
+  return {
+    view: new Map(values.map((value) => [`${value.entityKind}:${value.id}`, value] as const)),
+  };
+}
 
 describe("cloud Agent Thread read model", () => {
   beforeEach(() => {
     resetAppAtomRegistryForTests();
     appAtomRegistry.set(
       companyRegistryReplicasAtom,
-      new Map([
-        [
-          COMPANY_ID,
-          {
-            view: new Map<string, CompanySyncEntity>([
-              ["cloudProject:cloud-project-one", cloudProject],
-              ["environmentBinding:binding-one", binding],
-              ["agentThread:environment-one:thread-one", agentThread],
-            ]),
-          },
-        ],
-      ]),
+      new Map([[COMPANY_ID, replica(cloudProject, binding, agentThread)]]),
     );
   });
 
@@ -128,5 +180,84 @@ describe("cloud Agent Thread read model", () => {
         latestVisibleMessage: { id: "message-one", role: "assistant", text: "" },
       },
     ]);
+  });
+
+  it("uses the selected replica or every replica for company scope", () => {
+    const companyOne = replica(cloudProject, binding, agentThread);
+    const companyTwo = replica(otherCloudProject, otherBinding, otherAgentThread);
+    const allCompanies = new Map([
+      [COMPANY_ID, companyOne],
+      [OTHER_COMPANY_ID, companyTwo],
+    ]);
+    const selectedCompany = new Map([[OTHER_COMPANY_ID, companyTwo]]);
+
+    expect(
+      cloudEnvironmentProjectsFromReplicas(allCompanies, ENVIRONMENT_ID).map(
+        (project) => project.id,
+      ),
+    ).toEqual([LOCAL_PROJECT_ID, "local-project-two"]);
+    expect(
+      cloudEnvironmentThreadsFromReplicas(allCompanies, ENVIRONMENT_ID).map((thread) => thread.id),
+    ).toEqual([THREAD_ID, "thread-two"]);
+
+    expect(
+      cloudEnvironmentProjectsFromReplicas(selectedCompany, ENVIRONMENT_ID).map(
+        (project) => project.id,
+      ),
+    ).toEqual(["local-project-two"]);
+    expect(
+      cloudEnvironmentThreadsFromReplicas(selectedCompany, ENVIRONMENT_ID).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["thread-two"]);
+  });
+
+  it("filters connected environment snapshots without narrowing All companies", () => {
+    const companyOne = replica(cloudProject, binding, agentThread);
+    const companyTwo = replica(otherCloudProject, otherBinding, otherAgentThread);
+    const replicas = new Map([
+      [COMPANY_ID, companyOne],
+      [OTHER_COMPANY_ID, companyTwo],
+    ]);
+    const projects = cloudEnvironmentProjectsFromReplicas(replicas, ENVIRONMENT_ID);
+    const threads = cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID);
+
+    expect(companyScopedEnvironmentProjects(projects, null, replicas, ENVIRONMENT_ID)).toBe(
+      projects,
+    );
+    expect(companyScopedEnvironmentThreads(threads, null, replicas, ENVIRONMENT_ID)).toBe(threads);
+    expect(
+      companyScopedEnvironmentProjects(projects, OTHER_COMPANY_ID, replicas, ENVIRONMENT_ID).map(
+        (project) => project.id,
+      ),
+    ).toEqual(["local-project-two"]);
+    expect(
+      companyScopedEnvironmentThreads(threads, OTHER_COMPANY_ID, replicas, ENVIRONMENT_ID).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["thread-two"]);
+
+    const archivedSnapshot = {
+      schemaVersion: 1,
+      snapshotSequence: 2,
+      projects,
+      threads,
+    };
+    expect(
+      companyScopedEnvironmentSnapshot(
+        archivedSnapshot,
+        OTHER_COMPANY_ID,
+        replicas,
+        ENVIRONMENT_ID,
+      ),
+    ).toMatchObject({
+      schemaVersion: 1,
+      snapshotSequence: 2,
+      projects: [{ id: "local-project-two" }],
+      threads: [{ id: "thread-two" }],
+    });
+    expect(companyScopedEnvironmentSnapshot(archivedSnapshot, null, replicas, ENVIRONMENT_ID)).toBe(
+      archivedSnapshot,
+    );
   });
 });

@@ -40,6 +40,7 @@ import {
   formatEmailDurationMs,
   hasRemoteEmailContent,
   isTrustedEmailSender,
+  hasOneOffRemoteContentPermission,
   trustedEmailSenderAddress,
   type EmailReadingTab,
 } from "./emailView.logic";
@@ -64,6 +65,7 @@ export function EmailReadingPane({
   onMarkUnread,
   trustedSenderAddresses,
   onTrustRemoteSender,
+  messageIdentity,
   tab,
   onTab,
 }: {
@@ -81,6 +83,8 @@ export function EmailReadingPane({
   /** Normalized exact addresses replicated through the active company. */
   trustedSenderAddresses: ReadonlySet<string>;
   onTrustRemoteSender: (address: string) => void;
+  /** Company + environment + message identity; prevents a one-off grant crossing equal ids. */
+  messageIdentity: string | null;
   tab: EmailReadingTab;
   onTab: (tab: EmailReadingTab) => void;
 }) {
@@ -89,7 +93,9 @@ export function EmailReadingPane({
   const senderAddress = message === null ? null : trustedEmailSenderAddress(message);
   const allowRemote =
     message !== null &&
-    (allowRemoteFor === message.id || isTrustedEmailSender(message, trustedSenderAddresses));
+    messageIdentity !== null &&
+    (hasOneOffRemoteContentPermission(allowRemoteFor, messageIdentity) ||
+      isTrustedEmailSender(message, trustedSenderAddresses));
 
   const previewDocument = useMemo(
     () =>
@@ -186,7 +192,7 @@ export function EmailReadingPane({
         <EmailPreviewFrame
           document={previewDocument}
           onLoadRemoteContent={() => {
-            setAllowRemoteFor(message.id);
+            if (messageIdentity !== null) setAllowRemoteFor(messageIdentity);
             if (senderAddress !== null) onTrustRemoteSender(senderAddress);
           }}
           remoteContentBlocked={!allowRemote && hasRemoteEmailContent(message.htmlBody)}

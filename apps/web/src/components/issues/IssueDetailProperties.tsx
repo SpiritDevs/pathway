@@ -24,6 +24,7 @@ import type {
   IssueStatusId,
   ProjectId,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CalendarIcon,
   CalendarRangeIcon,
@@ -100,12 +101,18 @@ function PropertyRow({ label, children }: { label: string; children: ReactNode }
 
 function IssueAssigneeMenu({
   value,
+  companyId,
   onSelect,
 }: {
   value: IssueAssignee | null;
+  companyId: CompanyId | null;
   onSelect: (assignee: IssueAssignee | null) => void;
 }) {
-  const memberDirectory = useIssueMemberDirectory();
+  const aggregateDirectory = useIssueMemberDirectory();
+  const memberDirectory =
+    companyId === null
+      ? aggregateDirectory
+      : (aggregateDirectory.byCompany.get(companyId) ?? aggregateDirectory);
   const ASSIGNEE_OPTIONS = useMemo(
     () =>
       issueAssigneeOptions(
@@ -218,6 +225,7 @@ function IssueDueDateField({
 }
 
 export function IssueDetailProperties({
+  companyId,
   issue,
   status,
   statuses,
@@ -244,6 +252,7 @@ export function IssueDetailProperties({
   onCycle,
   onParent,
 }: {
+  companyId: CompanyId | null;
   issue: Issue;
   status: IssueStatus | null;
   statuses: ReadonlyArray<IssueStatus>;
@@ -328,7 +337,7 @@ export function IssueDetailProperties({
       </PropertyRow>
 
       <PropertyRow label="Assignee">
-        <IssueAssigneeMenu onSelect={onAssignee} value={issue.assignee} />
+        <IssueAssigneeMenu companyId={companyId} onSelect={onAssignee} value={issue.assignee} />
       </PropertyRow>
 
       <PropertyRow label="Labels">

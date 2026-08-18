@@ -37,6 +37,15 @@ export function settingsSectionPathForSearchPath(path: SettingsSearchPath): Sett
   return path === "/settings/appearance/action-palette" ? "/settings/appearance" : path;
 }
 
+export function settingsSectionPathForLocation(pathname: string): SettingsPath | null {
+  const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  return (
+    (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find(
+      (path) => normalizedPathname === path || normalizedPathname.startsWith(`${path}/`),
+    ) ?? null
+  );
+}
+
 export function settingsPathIsVisibleForWorkspace(
   path: SettingsSearchPath,
   workspaceKind: SettingsWorkspaceKind,
@@ -47,6 +56,14 @@ export function settingsPathIsVisibleForWorkspace(
   return workspaceKind === "organization"
     ? path !== "/settings/members-teams"
     : !path.startsWith("/settings/company-");
+}
+
+export function settingsLocationIsVisibleForWorkspace(
+  pathname: string,
+  workspaceKind: SettingsWorkspaceKind,
+): boolean {
+  const section = settingsSectionPathForLocation(pathname);
+  return section === null || settingsPathIsVisibleForWorkspace(section, workspaceKind);
 }
 
 const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([

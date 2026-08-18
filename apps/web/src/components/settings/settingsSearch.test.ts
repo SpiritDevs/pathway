@@ -6,7 +6,9 @@ import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
+  settingsLocationIsVisibleForWorkspace,
   settingsPathIsVisibleForWorkspace,
+  settingsSectionPathForLocation,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -238,6 +240,27 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(settingsPathIsVisibleForWorkspace("/settings/environments", "profile")).toBe(false);
     expect(settingsPathIsVisibleForWorkspace("/settings/issues-statuses", "profile")).toBe(false);
     expect(settingsPathIsVisibleForWorkspace("/settings/email", "profile")).toBe(false);
+  });
+
+  it("resolves direct and nested Settings locations to their owning section", () => {
+    expect(settingsSectionPathForLocation("/settings/company-members")).toBe(
+      "/settings/company-members",
+    );
+    expect(settingsSectionPathForLocation("/settings/projects/pathway")).toBe("/settings/projects");
+    expect(settingsSectionPathForLocation("/settings/appearance/action-palette")).toBe(
+      "/settings/appearance",
+    );
+    expect(settingsSectionPathForLocation("/settings")).toBeNull();
+  });
+
+  it("rejects direct company-owned Settings locations in Profile scope", () => {
+    expect(settingsLocationIsVisibleForWorkspace("/settings/company-members", "profile")).toBe(
+      false,
+    );
+    expect(settingsLocationIsVisibleForWorkspace("/settings/integrations", "profile")).toBe(false);
+    expect(settingsLocationIsVisibleForWorkspace("/settings/projects/pathway", "profile")).toBe(
+      true,
+    );
   });
 
   it("keeps Projects in the Workspace group with its own settings page", () => {

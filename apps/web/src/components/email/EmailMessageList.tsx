@@ -12,7 +12,8 @@
  * @module components/email/EmailMessageList
  */
 import { LegendList } from "@legendapp/list/react";
-import type { EmailMessageId, EmailTag, EnvironmentId } from "@spiritdevs/contracts";
+import type { EmailTag, EnvironmentId } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import { CheckIcon, KeyRoundIcon, MonitorIcon, PaperclipIcon } from "lucide-react";
 import { useMemo, type MouseEvent } from "react";
 
@@ -24,6 +25,7 @@ import { EmailActionMenu } from "./EmailActionMenu";
 import { EmailTagChips } from "./EmailTagChips";
 import {
   emailActionMenuItems,
+  emailMessageSelectionId,
   emailRowActionCounts,
   type EmailMessageAction,
 } from "./emailList.logic";
@@ -32,11 +34,12 @@ import { emailAddressDisplayName, formatEmailTimestamp } from "./emailView.logic
 /** Two lines of ~34px plus padding; the rows are uniform, so one estimate covers the list. */
 const ESTIMATED_ROW_HEIGHT = 72;
 const EMPTY_EMAIL_TAGS: ReadonlyArray<EmailTag> = Object.freeze([]);
+type ScopedDisplayEmailTag = EmailTag & { readonly companyId?: CompanyId };
 
-const keyExtractor = (message: CapturedEmailListItem) => `${message.environmentId}:${message.id}`;
+const keyExtractor = (message: CapturedEmailListItem) => emailMessageSelectionId(message);
 
 export interface EmailMessageListSelection {
-  readonly ids: ReadonlySet<EmailMessageId>;
+  readonly ids: ReadonlySet<string>;
   /** Passed as counts rather than rows: every row needs them and none of them needs the rows. */
   readonly count: number;
   readonly unreadCount: number;
@@ -56,8 +59,8 @@ export function EmailMessageList({
 }: {
   messages: ReadonlyArray<CapturedEmailListItem>;
   environmentNames: ReadonlyMap<EnvironmentId, string>;
-  tags?: ReadonlyArray<EmailTag>;
-  selectedMessageId: EmailMessageId | null;
+  tags?: ReadonlyArray<ScopedDisplayEmailTag>;
+  selectedMessageId: string | null;
   selection: EmailMessageListSelection;
   onSelect: (message: CapturedEmailListItem) => void;
   onToggleSelect: (message: CapturedEmailListItem, modifiers: { shiftKey: boolean }) => void;
@@ -82,16 +85,16 @@ export function EmailMessageList({
   );
   const renderItem = ({ item }: { item: CapturedEmailListItem }) => (
     <EmailMessageRow
-      checked={selection.ids.has(item.id)}
+      checked={selection.ids.has(emailMessageSelectionId(item))}
       message={item}
       environmentName={environmentNames.get(item.environmentId) ?? item.environmentId}
-      tags={tags}
+      tags={tags.filter((tag) => tag.companyId === undefined || tag.companyId === item.companyId)}
       now={now}
       onAction={onAction}
       onContextMenu={onContextMenu}
       onSelect={onSelect}
       onToggleSelect={onToggleSelect}
-      selected={item.id === selectedMessageId}
+      selected={emailMessageSelectionId(item) === selectedMessageId}
       selectionCount={selection.count}
       selectionUnreadCount={selection.unreadCount}
     />
@@ -127,7 +130,7 @@ export function EmailMessageRow({
 }: {
   message: CapturedEmailListItem;
   environmentName: string;
-  tags?: ReadonlyArray<EmailTag>;
+  tags?: ReadonlyArray<ScopedDisplayEmailTag>;
   selected: boolean;
   checked: boolean;
   selectionCount: number;

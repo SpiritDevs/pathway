@@ -16,7 +16,6 @@ import type { EmailCaptureSettings, EmailProjectSettings } from "@spiritdevs/con
 import { BellIcon, ChevronRightIcon, MailIcon } from "lucide-react";
 import { useState } from "react";
 
-import { useProjects } from "~/state/entities";
 import { SettingsRow, SettingsSection } from "../settings/settingsLayout";
 import { searchableSetting } from "../settings/settingsSearch";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -40,25 +39,33 @@ import {
 export function EmailProjectCaptureSettings({
   settings,
   save,
+  projects,
 }: {
   settings: EmailCaptureSettings;
+  projects: ReadonlyArray<{
+    readonly id: EmailProjectSettings["projectId"];
+    readonly title: string;
+  }>;
   /** Sends the whole document, the way every capture write does; true when it landed. */
   save: (next: EmailCaptureSettings) => Promise<boolean>;
 }) {
-  const projects = useProjects();
+  const visibleProjectIds = new Set(projects.map((project) => project.id));
+  const visibleSettings = settings.projects.filter((project) =>
+    visibleProjectIds.has(project.projectId),
+  );
 
   return (
     <SettingsSection
       {...searchableSetting("email-project-capture")}
       icon={<MailIcon className="size-3.5" />}
     >
-      {settings.projects.length === 0 ? (
+      {visibleSettings.length === 0 ? (
         <p className="px-3 py-6 text-center text-xs text-muted-foreground sm:px-4">
           A project gets a capture address — and everything below — as soon as it exists.
         </p>
       ) : (
         <div className="divide-y divide-border/60">
-          {settings.projects.map((project) => (
+          {visibleSettings.map((project) => (
             <ProjectCaptureBlock
               key={project.projectId}
               project={project}

@@ -11,10 +11,28 @@ import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { activeCompanyIdAtom, scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
+import {
+  cloudEnvironmentThreadsAtom,
+  companyScopedEnvironmentThreads,
+} from "../cloud/agentThreadReadModel";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
-import { cloudEnvironmentThreadsAtom } from "../cloud/agentThreadReadModel";
+
+const companyScopedThreadSnapshotAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make((get) => {
+    const snapshot = get(environmentSnapshotAtom(environmentId));
+    if (snapshot === null) return null;
+    const threads = companyScopedEnvironmentThreads(
+      snapshot.threads,
+      get(activeCompanyIdAtom),
+      get(scopedCompanyRegistryReplicasAtom),
+      environmentId,
+    );
+    return threads === snapshot.threads ? snapshot : { ...snapshot, threads };
+  }).pipe(Atom.withLabel(`company-scoped-thread-snapshot:${environmentId}`)),
+);
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
 export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
@@ -23,7 +41,7 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
 );
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
-  snapshotAtom: environmentSnapshotAtom,
+  snapshotAtom: companyScopedThreadSnapshotAtom,
   fallbackThreadsAtom: cloudEnvironmentThreadsAtom,
 });
 

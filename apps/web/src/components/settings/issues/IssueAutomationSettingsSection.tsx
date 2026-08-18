@@ -23,7 +23,8 @@ import {
   sortProviderInstanceEntries,
 } from "~/providerInstances";
 import { primaryServerProvidersAtom } from "~/state/server";
-import { useIssueStatuses } from "~/state/issues";
+import { useCompanyIssuesStore } from "~/state/issues";
+import { useCompanySettings } from "../company/useCompanySettings";
 import { ProviderModelPicker } from "../../chat/ProviderModelPicker";
 import { TraitsPicker } from "../../chat/TraitsPicker";
 import { Button } from "../../ui/button";
@@ -128,17 +129,18 @@ function AutomationModelPicker({
 }
 
 function StatusTransitionSelect({
+  statuses,
   label,
   automaticLabel,
   value,
   onChange,
 }: {
+  statuses: ReturnType<typeof useCompanyIssuesStore>["store"]["statuses"];
   label: string;
   automaticLabel: string;
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
-  const statuses = useIssueStatuses();
   const selected = statuses.find((status) => status.id === value);
   return (
     <label className="space-y-1">
@@ -328,6 +330,9 @@ export function IssueAutomationSettingsSection({
   readonly automation?: IssueAutomationSettings | undefined;
   readonly onSave?: ((settings: IssueAutomationSettings) => void) | undefined;
 } = {}) {
+  const { companyId } = useCompanySettings();
+  const { store } = useCompanyIssuesStore(companyId);
+  const statuses = store.statuses;
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const automation = externalAutomation ?? settings.issueAutomation;
@@ -564,6 +569,7 @@ export function IssueAutomationSettingsSection({
 
       <div className="grid gap-2 px-3 pt-2 sm:grid-cols-2 sm:px-4">
         <StatusTransitionSelect
+          statuses={statuses}
           automaticLabel="First Started status"
           label="When work starts"
           onChange={(workStartedStatusId) =>
@@ -572,6 +578,7 @@ export function IssueAutomationSettingsSection({
           value={automation.statusTransitions.workStartedStatusId}
         />
         <StatusTransitionSelect
+          statuses={statuses}
           automaticLabel="First Review status"
           label="When work finishes / review begins"
           onChange={(workFinishedStatusId) =>
@@ -580,6 +587,7 @@ export function IssueAutomationSettingsSection({
           value={automation.statusTransitions.workFinishedStatusId}
         />
         <StatusTransitionSelect
+          statuses={statuses}
           automaticLabel="Next status after review"
           label="When every audit passes"
           onChange={(auditPassedStatusId) =>
@@ -588,6 +596,7 @@ export function IssueAutomationSettingsSection({
           value={automation.statusTransitions.auditPassedStatusId}
         />
         <StatusTransitionSelect
+          statuses={statuses}
           automaticLabel="Previous Started status"
           label="When an audit requests changes"
           onChange={(auditChangesRequestedStatusId) =>

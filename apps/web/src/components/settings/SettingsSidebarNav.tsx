@@ -61,7 +61,7 @@ import { PathwayConnectSidebarSignIn } from "../clerk/PathwayConnectSidebarSignI
 import { useCompanySettings } from "./company/useCompanySettings";
 import { permissionGate } from "./company/companySettings.logic";
 import { useCompanyIntegrationsClient } from "~/cloud/useCompanyIntegrationsClient";
-import { SETTINGS_PROFILE_SCOPE } from "~/cloud/settingsCompany";
+import { SETTINGS_AUTO_SCOPE, SETTINGS_PROFILE_SCOPE } from "~/cloud/settingsCompany";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -306,7 +306,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 sideOffset={4}
               >
                 <DropdownMenuCheckboxItem
-                  checked={companySettings.settingsCompanyScope === SETTINGS_PROFILE_SCOPE}
+                  checked={
+                    companySettings.settingsCompanyScope === SETTINGS_PROFILE_SCOPE ||
+                    (companySettings.settingsCompanyScope === SETTINGS_AUTO_SCOPE &&
+                      companySettings.companyId === null)
+                  }
                   onCheckedChange={(checked) => {
                     if (checked) selectSettingsScope(SETTINGS_PROFILE_SCOPE);
                   }}

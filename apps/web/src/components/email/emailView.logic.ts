@@ -195,6 +195,13 @@ export function isTrustedEmailSender(
   return address !== null && trustedAddresses.has(address);
 }
 
+export function hasOneOffRemoteContentPermission(
+  permittedMessageIdentity: string | null,
+  messageIdentity: string,
+): boolean {
+  return permittedMessageIdentity === messageIdentity;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")

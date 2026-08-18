@@ -54,7 +54,7 @@ import {
 
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
-import { activeCompanyReplicaRoutingAtom } from "~/cloud/activeCompany";
+import { activeCompanyIdAtom, scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
 import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { useSyncIssueOperations } from "~/cloud/issueDomainMutations";
@@ -299,8 +299,10 @@ export function NewIssueDialog({
   const syncIssueOperations = useSyncIssueOperations();
   const store = useIssuesStore();
   const cycles = useIssueCycles();
-  const activeCompanyId = useAtomValue(activeCompanyReplicaRoutingAtom);
-  const attachmentCloud = useReplicaIssueAttachmentCloud();
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const replicaRouted = useAtomValue(scopedCompanyRegistryReplicasAtom).size > 0;
+  const companyRequired = replicaRouted && activeCompanyId === null;
+  const attachmentCloud = useReplicaIssueAttachmentCloud(activeCompanyId);
   const environmentControl = useEnvironmentControl();
   const availableProjects = projects;
   const availableDefaultProjectId = resolveIssueProjectOptionId(
@@ -420,17 +422,25 @@ export function NewIssueDialog({
     () => new Map(statuses.map((status) => [status.id, status])),
     [statuses],
   );
-  const canSubmit = title.trim().length > 0 && !submitting;
+  const canSubmit = title.trim().length > 0 && !submitting && !companyRequired;
 
   const handleCreateLabel = useCallback(
     async (input: { readonly name: string; readonly color: string }) => {
+      if (companyRequired) {
+        toastManager.add({
+          type: "error",
+          title: "Choose a company",
+          description: "Labels belong to one company and cannot be created in All companies.",
+        });
+        return false;
+      }
       const created = await createLabel(input);
       if (reportIssueWriteFailure("Failed to create the label", created)) return false;
       if (!AsyncResult.isSuccess(created)) return false;
       setLabelIds((current) => [...current, created.value.label.id]);
       return true;
     },
-    [createLabel],
+    [companyRequired, createLabel],
   );
 
   const reportAttachmentRejection = useCallback((message: string) => {
@@ -510,6 +520,14 @@ export function NewIssueDialog({
   const submit = async () => {
     const trimmed = title.trim();
     if (trimmed.length === 0 || submitting) return;
+    if (companyRequired) {
+      toastManager.add({
+        type: "error",
+        title: "Choose a company",
+        description: "New issues belong to one company. Select a company before creating one.",
+      });
+      return;
+    }
     setSubmitting(true);
     const preparedAttachments = await prepareAttachments();
     if (preparedAttachments === null) {
@@ -1071,6 +1089,11 @@ export function NewIssueDialog({
                 {attachments.length} {attachments.length === 1 ? "image" : "images"}
               </span>
             )}
+            {companyRequired ? (
+              <span className="me-auto text-xs text-muted-foreground">
+                Choose a company to create an issue.
+              </span>
+            ) : null}
             <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
               <Switch checked={createMore} disabled={submitting} onCheckedChange={setCreateMore} />
               Create more
