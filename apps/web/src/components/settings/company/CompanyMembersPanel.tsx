@@ -7,11 +7,11 @@ import {
 import {
   LockIcon,
   MailPlusIcon,
+  PencilIcon,
   RefreshCwIcon,
   UserMinusIcon,
   UserRoundCheckIcon,
   UsersIcon,
-  XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -19,18 +19,7 @@ import { newCompanyDomainId, type CompanyInvitationSummary } from "../../../clou
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
-import {
-  Dialog,
-  DialogClose,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../../ui/dialog";
 import { Input } from "../../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
 import {
@@ -44,9 +33,8 @@ import {
   CompanySettingsEmptyState,
   PermissionTooltip,
 } from "./CompanySettingsShared";
+import { CompanySettingsSheet } from "./CompanySettingsSheet";
 import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
-
-const ADD_ROLE_VALUE = "__add_role__";
 
 function reportError(title: string, error: unknown): void {
   toastManager.add(
@@ -64,7 +52,7 @@ function memberStateBadge(state: CompanyMemberRow["state"]) {
   return <Badge variant="secondary">Left</Badge>;
 }
 
-function InviteMemberDialog({
+function InviteMemberSheet({
   settings,
   open,
   onOpenChange,
@@ -115,74 +103,73 @@ function InviteMemberDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>Invite member</DialogTitle>
-          <DialogDescription>
-            Send an email invitation and optionally grant company roles and team access.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-5">
-          <label className="space-y-1.5">
-            <span className="text-xs font-medium">Email address</span>
-            <Input
-              autoFocus
-              type="email"
-              value={email}
-              placeholder="person@example.com"
-              onChange={(event) => setEmail(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void submit();
-              }}
-            />
-          </label>
-          {roles.length > 0 ? (
-            <fieldset className="space-y-2">
-              <legend className="text-xs font-medium">Company roles</legend>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {roles.map((role) => (
-                  <label key={role.id} className="flex items-start gap-2 rounded-lg border p-2.5">
-                    <Checkbox
-                      checked={roleIds.has(role.id)}
-                      onCheckedChange={() => setRoleIds(toggle(roleIds, role.id))}
-                    />
-                    <span className="min-w-0">
-                      <span className="block text-xs font-medium">{role.name}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {role.description || `${role.permissions.length} permissions`}
-                      </span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ) : null}
-          {teams.length > 0 ? (
-            <fieldset className="space-y-2">
-              <legend className="text-xs font-medium">Teams</legend>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {teams.map((team) => (
-                  <label key={team.id} className="flex items-center gap-2 rounded-lg border p-2.5">
-                    <Checkbox
-                      checked={teamIds.has(team.id)}
-                      onCheckedChange={() => setTeamIds(toggle(teamIds, team.id))}
-                    />
-                    <span className="truncate text-xs font-medium">{team.name}</span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ) : null}
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" disabled={pending} />}>Cancel</DialogClose>
+    <CompanySettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Invite member"
+      description="Send an email invitation and optionally grant company roles and team access."
+      footer={
+        <>
+          <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button disabled={pending || email.trim().length === 0} onClick={() => void submit()}>
             {pending ? "Sending…" : "Send invitation"}
           </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+        </>
+      }
+    >
+      <label className="space-y-1.5">
+        <span className="text-xs font-medium">Email address</span>
+        <Input
+          autoFocus
+          type="email"
+          value={email}
+          placeholder="person@example.com"
+          onChange={(event) => setEmail(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void submit();
+          }}
+        />
+      </label>
+      {roles.length > 0 ? (
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-medium">Company roles</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {roles.map((role) => (
+              <label key={role.id} className="flex items-start gap-2 rounded-lg border p-2.5">
+                <Checkbox
+                  checked={roleIds.has(role.id)}
+                  onCheckedChange={() => setRoleIds(toggle(roleIds, role.id))}
+                />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium">{role.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {role.description || `${role.permissions.length} permissions`}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+      {teams.length > 0 ? (
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-medium">Teams</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {teams.map((team) => (
+              <label key={team.id} className="flex items-center gap-2 rounded-lg border p-2.5">
+                <Checkbox
+                  checked={teamIds.has(team.id)}
+                  onCheckedChange={() => setTeamIds(toggle(teamIds, team.id))}
+                />
+                <span className="truncate text-xs font-medium">{team.name}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
+    </CompanySettingsSheet>
   );
 }
 
@@ -262,69 +249,157 @@ function PendingInvitations({
   );
 }
 
-function MemberRow({
+function MemberEditSheet({
   settings,
   member,
+  open,
+  onOpenChange,
 }: {
   readonly settings: CompanySettings;
   readonly member: CompanyMemberRow;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
 }) {
   const { admin, companyId, directory, permissions } = settings;
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const manageMembersGate = permissionGate(permissions, "members.manage");
   const manageRolesGate = permissionGate(permissions, "roles.manage");
+  const manageTeamsGate = permissionGate(permissions, "teams.manage");
   const assignedCompanyRoleIds = new Set(
     member.roles.filter((role) => role.isCompanyScoped).map((role) => role.roleId),
   );
-  const availableRoles = sortRoles(directory.roles).filter(
-    (role) => !assignedCompanyRoleIds.has(role.id),
-  );
+  const assignedTeamIds = new Set(member.teams.map((team) => team.id));
+  const roles = sortRoles(directory.roles);
+  const teams = directory.teams.filter((team) => team.archivedAt === null);
 
-  const run = async (label: string, operation: () => Promise<void>) => {
-    if (pendingAction !== null) return;
+  const run = async (label: string, operation: () => Promise<void>): Promise<boolean> => {
+    if (pendingAction !== null) return false;
     setPendingAction(label);
     try {
       await operation();
+      return true;
     } catch (error) {
       reportError("Could not update member", error);
+      return false;
     } finally {
       setPendingAction(null);
     }
   };
 
-  const assignRole = (roleId: RoleId) => {
+  const toggleRole = (roleId: RoleId, assigned: boolean) => {
     if (admin === null || companyId === null) return;
-    void run(`assign-${roleId}`, () =>
-      admin.assignRole({
-        companyId,
-        id: RoleAssignmentId.make(newCompanyDomainId()),
-        membershipId: member.id,
-        assignment: { roleId, scope: { kind: "company" } },
-      }),
+    if (assigned) {
+      void run(`assign-${roleId}`, () =>
+        admin.assignRole({
+          companyId,
+          id: RoleAssignmentId.make(newCompanyDomainId()),
+          membershipId: member.id,
+          assignment: { roleId, scope: { kind: "company" } },
+        }),
+      );
+      return;
+    }
+    const assignment = member.roles.find((role) => role.isCompanyScoped && role.roleId === roleId);
+    if (assignment === undefined) return;
+    void run(`unassign-${assignment.assignmentId}`, () =>
+      admin.unassignRole({ companyId, assignmentId: assignment.assignmentId }),
     );
   };
 
   return (
-    <div className="space-y-3 border-b px-4 py-4 last:border-b-0">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium">{member.displayName || member.email}</p>
-            {memberStateBadge(member.state)}
-            {member.isOwner ? <Badge variant="info">Owner</Badge> : null}
-          </div>
-          <p className="truncate text-xs text-muted-foreground">{member.email}</p>
-          {member.teams.length > 0 ? (
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Teams: {member.teams.map((team) => team.name).join(", ")}
-            </p>
-          ) : null}
+    <CompanySettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={member.displayName || member.email}
+      description={`Manage ${member.email}'s company access.`}
+      footer={<Button onClick={() => onOpenChange(false)}>Done</Button>}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {memberStateBadge(member.state)}
+        {member.isOwner ? <Badge variant="info">Owner</Badge> : null}
+        <span className="text-xs text-muted-foreground">{member.email}</span>
+      </div>
+
+      <fieldset
+        className="space-y-2"
+        disabled={pendingAction !== null || member.state !== "active"}
+      >
+        <legend className="text-xs font-medium">Company roles</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {roles.map((role) => (
+            <PermissionTooltip key={role.id} tooltip={manageRolesGate.tooltip}>
+              <label className="flex items-start gap-2 rounded-lg border p-2.5">
+                <Checkbox
+                  checked={assignedCompanyRoleIds.has(role.id)}
+                  disabled={!manageRolesGate.enabled}
+                  onCheckedChange={(checked) => toggleRole(role.id, checked === true)}
+                />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium">{role.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {role.description || `${role.permissions.length} permissions`}
+                  </span>
+                </span>
+              </label>
+            </PermissionTooltip>
+          ))}
         </div>
-        {member.state !== "left" ? (
-          <div className="flex flex-wrap gap-1.5">
+      </fieldset>
+
+      <fieldset
+        className="space-y-2"
+        disabled={pendingAction !== null || member.state !== "active"}
+      >
+        <legend className="text-xs font-medium">Teams</legend>
+        {teams.length === 0 ? (
+          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+            No active teams are available.
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {teams.map((team) => (
+              <PermissionTooltip key={team.id} tooltip={manageTeamsGate.tooltip}>
+                <label className="flex items-center gap-2 rounded-lg border p-2.5">
+                  <Checkbox
+                    checked={assignedTeamIds.has(team.id)}
+                    disabled={!manageTeamsGate.enabled}
+                    onCheckedChange={(checked) => {
+                      if (admin === null || companyId === null) return;
+                      const shouldAssign = checked === true;
+                      void run(`${shouldAssign ? "add" : "remove"}-team-${team.id}`, () =>
+                        shouldAssign
+                          ? admin.addTeamMember({
+                              companyId,
+                              teamId: team.id,
+                              membershipId: member.id,
+                            })
+                          : admin.removeTeamMember({
+                              companyId,
+                              teamId: team.id,
+                              membershipId: member.id,
+                            }),
+                      );
+                    }}
+                  />
+                  <span className="truncate text-xs font-medium">{team.name}</span>
+                </label>
+              </PermissionTooltip>
+            ))}
+          </div>
+        )}
+      </fieldset>
+
+      {member.state !== "left" ? (
+        <div className="space-y-3 border-t pt-5">
+          <div>
+            <p className="text-xs font-medium">Member access</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Deactivate access temporarily, or remove this person from the company.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
             <PermissionTooltip tooltip={manageMembersGate.tooltip}>
               <Button
-                size="xs"
                 variant="outline"
                 disabled={!manageMembersGate.enabled || pendingAction !== null}
                 onClick={() => {
@@ -339,17 +414,12 @@ function MemberRow({
                   );
                 }}
               >
-                {member.state === "locked" ? (
-                  <UserRoundCheckIcon className="size-3" />
-                ) : (
-                  <LockIcon className="size-3" />
-                )}
-                {member.state === "locked" ? "Reactivate" : "Deactivate"}
+                {member.state === "locked" ? <UserRoundCheckIcon /> : <LockIcon />}
+                {member.state === "locked" ? "Reactivate member" : "Deactivate member"}
               </Button>
             </PermissionTooltip>
             <PermissionTooltip tooltip={manageMembersGate.tooltip}>
               <Button
-                size="xs"
                 variant="ghost"
                 className="text-destructive"
                 disabled={!manageMembersGate.enabled || pendingAction !== null}
@@ -365,72 +435,84 @@ function MemberRow({
                   }
                   void run("remove", () =>
                     admin.removeMembership({ companyId, membershipId: member.id }),
-                  );
+                  ).then((removed) => {
+                    if (removed) onOpenChange(false);
+                  });
                 }}
               >
-                <UserMinusIcon className="size-3" /> Remove
+                <UserMinusIcon /> Remove member
               </Button>
             </PermissionTooltip>
           </div>
+        </div>
+      ) : null}
+    </CompanySettingsSheet>
+  );
+}
+
+function MemberRow({
+  settings,
+  member,
+}: {
+  readonly settings: CompanySettings;
+  readonly member: CompanyMemberRow;
+}) {
+  const [editOpen, setEditOpen] = useState(false);
+  const manageMembersGate = permissionGate(settings.permissions, "members.manage");
+  const manageRolesGate = permissionGate(settings.permissions, "roles.manage");
+  const manageTeamsGate = permissionGate(settings.permissions, "teams.manage");
+  const canEdit = manageMembersGate.enabled || manageRolesGate.enabled || manageTeamsGate.enabled;
+  const editTooltip = canEdit
+    ? null
+    : "Requires members.manage, roles.manage, or teams.manage permission.";
+
+  return (
+    <div className="space-y-3 border-b px-4 py-4 last:border-b-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-medium">{member.displayName || member.email}</p>
+            {memberStateBadge(member.state)}
+            {member.isOwner ? <Badge variant="info">Owner</Badge> : null}
+          </div>
+          <p className="truncate text-xs text-muted-foreground">{member.email}</p>
+        </div>
+        {member.state !== "left" ? (
+          <PermissionTooltip tooltip={editTooltip}>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!canEdit || settings.admin === null}
+              onClick={() => setEditOpen(true)}
+            >
+              <PencilIcon className="size-3" /> Edit
+            </Button>
+          </PermissionTooltip>
         ) : null}
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="me-1 text-[11px] font-medium text-muted-foreground">Roles</span>
+      <div className="flex flex-wrap gap-1.5">
         {member.roles.map((role) => (
           <Badge key={role.assignmentId} variant={role.isCompanyScoped ? "outline" : "secondary"}>
             {role.roleName}
             {!role.isCompanyScoped ? ` · ${role.scopeLabel}` : ""}
-            {role.isCompanyScoped && member.state === "active" ? (
-              <PermissionTooltip tooltip={manageRolesGate.tooltip}>
-                <button
-                  type="button"
-                  aria-label={`Remove ${role.roleName} role from ${member.displayName}`}
-                  disabled={!manageRolesGate.enabled || pendingAction !== null}
-                  className="rounded-sm disabled:opacity-50"
-                  onClick={() => {
-                    if (admin === null || companyId === null) return;
-                    void run(`unassign-${role.assignmentId}`, () =>
-                      admin.unassignRole({ companyId, assignmentId: role.assignmentId }),
-                    );
-                  }}
-                >
-                  <XIcon className="size-2.5" />
-                </button>
-              </PermissionTooltip>
-            ) : null}
           </Badge>
         ))}
-        {member.roles.length === 0 ? (
-          <span className="text-[11px] text-muted-foreground">No roles assigned</span>
-        ) : null}
-        {member.state === "active" && availableRoles.length > 0 ? (
-          <PermissionTooltip tooltip={manageRolesGate.tooltip}>
-            <div>
-              <Select
-                value={ADD_ROLE_VALUE}
-                disabled={!manageRolesGate.enabled || pendingAction !== null}
-                onValueChange={(value) => {
-                  if (value !== null && value !== ADD_ROLE_VALUE) assignRole(RoleId.make(value));
-                }}
-              >
-                <SelectTrigger size="xs" className="w-auto min-w-24">
-                  <SelectValue>Add role</SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={ADD_ROLE_VALUE} disabled>
-                    Add role
-                  </SelectItem>
-                  {availableRoles.map((role) => (
-                    <SelectItem key={role.id} value={role.id}>
-                      {role.name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </div>
-          </PermissionTooltip>
+        {member.teams.map((team) => (
+          <Badge key={team.id} variant="secondary">
+            {team.name}
+          </Badge>
+        ))}
+        {member.roles.length === 0 && member.teams.length === 0 ? (
+          <span className="text-[11px] text-muted-foreground">No roles or teams assigned</span>
         ) : null}
       </div>
+      <MemberEditSheet
+        key={`${member.id}-${editOpen}`}
+        settings={settings}
+        member={member}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
     </div>
   );
 }
@@ -505,7 +587,7 @@ export function CompanyMembersSections({ settings }: { readonly settings: Compan
         invitations={invitations}
         onRefresh={refreshInvitations}
       />
-      <InviteMemberDialog
+      <InviteMemberSheet
         settings={settings}
         open={inviteOpen}
         onOpenChange={setInviteOpen}

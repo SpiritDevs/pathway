@@ -10,7 +10,6 @@ import {
   PlusIcon,
   ShieldIcon,
   Trash2Icon,
-  UserMinusIcon,
   UsersRoundIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -19,18 +18,7 @@ import { newCompanyDomainId } from "../../../cloud/companyAdmin";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
-import {
-  Dialog,
-  DialogClose,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "../../ui/dialog";
 import { Input } from "../../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
@@ -39,6 +27,7 @@ import {
   deriveTeamRows,
   permissionGate,
   sortRoles,
+  type CompanyMemberRow,
   type CompanyTeamRow,
 } from "./companySettings.logic";
 import {
@@ -46,10 +35,10 @@ import {
   CompanySettingsEmptyState,
   PermissionTooltip,
 } from "./CompanySettingsShared";
+import { CompanySettingsSheet } from "./CompanySettingsSheet";
 import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
 type RoleRow = CompanySettings["directory"]["roles"][number];
-const ADD_MEMBER_VALUE = "__add_member__";
 
 function reportError(title: string, error: unknown): void {
   toastManager.add(
@@ -61,19 +50,24 @@ function reportError(title: string, error: unknown): void {
   );
 }
 
-function TeamDialog({
+function TeamSheet({
   settings,
   team,
+  members,
   open,
   onOpenChange,
 }: {
   readonly settings: CompanySettings;
   readonly team: CompanyTeamRow | null;
+  readonly members: ReturnType<typeof deriveMemberRows>;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
   const [name, setName] = useState(team?.name ?? "");
   const [description, setDescription] = useState(team?.description ?? "");
+  const existingMemberIds = new Set(team?.members.map((member) => member.id) ?? []);
+  const [memberIds, setMemberIds] =
+    useState<ReadonlySet<CompanyMemberRow["id"]>>(existingMemberIds);
   const [pending, setPending] = useState(false);
 
   const submit = async () => {
@@ -87,10 +81,11 @@ function TeamDialog({
     }
     setPending(true);
     try {
+      const teamId = team?.id ?? TeamId.make(newCompanyDomainId());
       if (team === null) {
         await settings.admin.createTeam({
           companyId: settings.companyId,
-          id: TeamId.make(newCompanyDomainId()),
+          id: teamId,
           name,
           description,
         });
@@ -102,6 +97,24 @@ function TeamDialog({
           description,
         });
       }
+      for (const memberId of memberIds) {
+        if (existingMemberIds.has(memberId)) continue;
+        await settings.admin.addTeamMember({
+          companyId: settings.companyId,
+          teamId,
+          membershipId: memberId,
+        });
+      }
+      if (team !== null) {
+        for (const member of team.members) {
+          if (memberIds.has(member.id)) continue;
+          await settings.admin.removeTeamMember({
+            companyId: settings.companyId,
+            teamId,
+            membershipId: member.id,
+          });
+        }
+      }
       onOpenChange(false);
     } catch (error) {
       reportError(team === null ? "Could not create team" : "Could not update team", error);
@@ -110,71 +123,105 @@ function TeamDialog({
     }
   };
 
+  const toggleMember = (memberId: CompanyMemberRow["id"]) => {
+    const next = new Set(memberIds);
+    if (next.has(memberId)) next.delete(memberId);
+    else next.add(memberId);
+    setMemberIds(next);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup>
-        <DialogHeader>
-          <DialogTitle>{team === null ? "Create team" : "Edit team"}</DialogTitle>
-          <DialogDescription>
-            Teams group members and scope access to company work.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-4">
-          <label className="space-y-1.5">
-            <span className="text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-          </label>
-          <label className="space-y-1.5">
-            <span className="text-xs font-medium">Description</span>
-            <Textarea
-              value={description}
-              onChange={(event) => setDescription(event.currentTarget.value)}
-            />
-          </label>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" disabled={pending} />}>Cancel</DialogClose>
+    <CompanySettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={team === null ? "Create team" : "Edit team"}
+      description="Teams group members and scope access to company work."
+      footer={
+        <>
+          <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button disabled={pending || name.trim().length === 0} onClick={() => void submit()}>
             {pending ? "Saving…" : team === null ? "Create team" : "Save changes"}
           </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+        </>
+      }
+    >
+      <label className="space-y-1.5">
+        <span className="text-xs font-medium">Name</span>
+        <Input autoFocus value={name} onChange={(event) => setName(event.currentTarget.value)} />
+      </label>
+      <label className="space-y-1.5">
+        <span className="text-xs font-medium">Description</span>
+        <Textarea
+          value={description}
+          onChange={(event) => setDescription(event.currentTarget.value)}
+        />
+      </label>
+      <fieldset className="space-y-2">
+        <legend className="text-xs font-medium">Members</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {members
+            .filter((member) => member.state === "active")
+            .map((member) => (
+              <label key={member.id} className="flex items-start gap-2 rounded-lg border p-2.5">
+                <Checkbox
+                  checked={memberIds.has(member.id)}
+                  disabled={team?.archivedAt !== null && !existingMemberIds.has(member.id)}
+                  onCheckedChange={() => toggleMember(member.id)}
+                />
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-medium">
+                    {member.displayName || member.email}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {member.email}
+                  </span>
+                </span>
+              </label>
+            ))}
+        </div>
+      </fieldset>
+      {team !== null && team.archivedAt === null ? (
+        <div className="border-t pt-5">
+          <Button
+            variant="ghost"
+            className="text-destructive"
+            disabled={pending}
+            onClick={() => {
+              if (
+                settings.admin === null ||
+                settings.companyId === null ||
+                !window.confirm(`Archive ${team.name}?`)
+              ) {
+                return;
+              }
+              setPending(true);
+              void settings.admin
+                .archiveTeam({ companyId: settings.companyId, teamId: team.id })
+                .then(() => onOpenChange(false))
+                .catch((error) => reportError("Could not archive team", error))
+                .finally(() => setPending(false));
+            }}
+          >
+            <ArchiveIcon /> Archive team
+          </Button>
+        </div>
+      ) : null}
+    </CompanySettingsSheet>
   );
 }
 
 function TeamCard({
   settings,
   team,
-  members,
   onEdit,
 }: {
   readonly settings: CompanySettings;
   readonly team: CompanyTeamRow;
-  readonly members: ReturnType<typeof deriveMemberRows>;
   readonly onEdit: () => void;
 }) {
-  const [pending, setPending] = useState<string | null>(null);
   const gate = permissionGate(settings.permissions, "teams.manage");
-  const existingMemberIds = new Set(team.members.map((member) => member.id));
-  const availableMembers = members.filter(
-    (member) => member.state === "active" && !existingMemberIds.has(member.id),
-  );
-
-  const run = async (key: string, operation: () => Promise<void>) => {
-    setPending(key);
-    try {
-      await operation();
-    } catch (error) {
-      reportError("Could not update team", error);
-    } finally {
-      setPending(null);
-    }
-  };
 
   return (
     <div className="space-y-3 border-b px-4 py-4 last:border-b-0">
@@ -196,115 +243,29 @@ function TeamCard({
             <Button
               size="xs"
               variant="outline"
-              disabled={!gate.enabled || pending !== null}
+              disabled={!gate.enabled || settings.admin === null}
               onClick={onEdit}
             >
-              <PencilIcon className="size-3" /> Rename
-            </Button>
-          </PermissionTooltip>
-          <PermissionTooltip tooltip={gate.tooltip}>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={!gate.enabled || team.archivedAt !== null || pending !== null}
-              onClick={() => {
-                const { admin, companyId } = settings;
-                if (
-                  admin === null ||
-                  companyId === null ||
-                  !window.confirm(`Archive ${team.name}?`)
-                ) {
-                  return;
-                }
-                void run("archive", () => admin.archiveTeam({ companyId, teamId: team.id }));
-              }}
-            >
-              <ArchiveIcon className="size-3" /> Archive
+              <PencilIcon className="size-3" /> Edit
             </Button>
           </PermissionTooltip>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="me-1 text-[11px] font-medium text-muted-foreground">Members</span>
         {team.members.map((member) => (
           <Badge key={member.id} variant="outline">
             {member.displayName}
-            <PermissionTooltip tooltip={gate.tooltip}>
-              <button
-                type="button"
-                aria-label={`Remove ${member.displayName} from ${team.name}`}
-                disabled={!gate.enabled || pending !== null}
-                onClick={() => {
-                  const { admin, companyId } = settings;
-                  if (admin === null || companyId === null) return;
-                  void run(`remove-${member.id}`, () =>
-                    admin.removeTeamMember({
-                      companyId,
-                      teamId: team.id,
-                      membershipId: member.id,
-                    }),
-                  );
-                }}
-              >
-                <UserMinusIcon className="size-2.5" />
-              </button>
-            </PermissionTooltip>
           </Badge>
         ))}
         {team.members.length === 0 ? (
           <span className="text-[11px] text-muted-foreground">No members</span>
-        ) : null}
-        {team.archivedAt === null && availableMembers.length > 0 ? (
-          <PermissionTooltip tooltip={gate.tooltip}>
-            <div>
-              <Select
-                value={ADD_MEMBER_VALUE}
-                disabled={!gate.enabled || pending !== null}
-                onValueChange={(value) => {
-                  if (
-                    value === null ||
-                    value === ADD_MEMBER_VALUE ||
-                    settings.admin === null ||
-                    settings.companyId === null
-                  ) {
-                    return;
-                  }
-                  const member = availableMembers.find((candidate) => candidate.id === value);
-                  if (!member) return;
-                  const { admin, companyId } = settings;
-                  if (admin === null || companyId === null) return;
-                  void run(`add-${member.id}`, () =>
-                    admin.addTeamMember({
-                      companyId,
-                      teamId: team.id,
-                      membershipId: member.id,
-                    }),
-                  );
-                }}
-              >
-                <SelectTrigger size="xs" className="w-auto min-w-28">
-                  <SelectValue>Add member</SelectValue>
-                </SelectTrigger>
-                <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value={ADD_MEMBER_VALUE} disabled>
-                    Add member
-                  </SelectItem>
-                  {availableMembers.map((member) => (
-                    <SelectItem key={member.id} value={member.id}>
-                      {member.displayName}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </div>
-          </PermissionTooltip>
         ) : null}
       </div>
     </div>
   );
 }
 
-function RoleDialog({
+function RoleSheet({
   settings,
   role,
   open,
@@ -363,64 +324,58 @@ function RoleDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{role === null ? "Create role" : "Edit role"}</DialogTitle>
-          <DialogDescription>
-            Role permissions are allow-only. Team-scoped assignments cannot grant company
-            administration.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1.5">
-              <span className="text-xs font-medium">Name</span>
-              <Input
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.currentTarget.value)}
-              />
-            </label>
-            <label className="space-y-1.5">
-              <span className="text-xs font-medium">Description</span>
-              <Input
-                value={description}
-                onChange={(event) => setDescription(event.currentTarget.value)}
-              />
-            </label>
-          </div>
-          <fieldset className="space-y-2">
-            <legend className="text-xs font-medium">Permissions</legend>
-            <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-              {COMPANY_PERMISSIONS.map((permission) => (
-                <label
-                  key={permission}
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
-                >
-                  <Checkbox
-                    checked={permissions.has(permission)}
-                    onCheckedChange={() => {
-                      const next = new Set(permissions);
-                      if (next.has(permission)) next.delete(permission);
-                      else next.add(permission);
-                      setPermissions(next);
-                    }}
-                  />
-                  <span className="truncate font-mono text-[11px]">{permission}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        </DialogPanel>
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" disabled={pending} />}>Cancel</DialogClose>
+    <CompanySettingsSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={role === null ? "Create role" : "Edit role"}
+      description="Role permissions are allow-only. Team-scoped assignments cannot grant company administration."
+      footer={
+        <>
+          <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
           <Button disabled={pending || name.trim().length === 0} onClick={() => void submit()}>
             {pending ? "Saving…" : role === null ? "Create role" : "Save changes"}
           </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium">Name</span>
+          <Input autoFocus value={name} onChange={(event) => setName(event.currentTarget.value)} />
+        </label>
+        <label className="space-y-1.5">
+          <span className="text-xs font-medium">Description</span>
+          <Input
+            value={description}
+            onChange={(event) => setDescription(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <fieldset className="space-y-2">
+        <legend className="text-xs font-medium">Permissions</legend>
+        <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+          {COMPANY_PERMISSIONS.map((permission) => (
+            <label
+              key={permission}
+              className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
+            >
+              <Checkbox
+                checked={permissions.has(permission)}
+                onCheckedChange={() => {
+                  const next = new Set(permissions);
+                  if (next.has(permission)) next.delete(permission);
+                  else next.add(permission);
+                  setPermissions(next);
+                }}
+              />
+              <span className="truncate font-mono text-[11px]">{permission}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </CompanySettingsSheet>
   );
 }
 
@@ -499,20 +454,14 @@ function RoleCard({
   );
 }
 
-export function CompanyTeamsRolesSections({ settings }: { readonly settings: CompanySettings }) {
+export function CompanyTeamsSection({ settings }: { readonly settings: CompanySettings }) {
   const teams = useMemo(() => deriveTeamRows(settings.directory), [settings.directory]);
   const members = useMemo(() => deriveMemberRows(settings.directory), [settings.directory]);
-  const roles = useMemo(() => sortRoles(settings.directory.roles), [settings.directory.roles]);
-  const [teamDialog, setTeamDialog] = useState<{ open: boolean; team: CompanyTeamRow | null }>({
+  const [teamSheet, setTeamSheet] = useState<{ open: boolean; team: CompanyTeamRow | null }>({
     open: false,
     team: null,
   });
-  const [roleDialog, setRoleDialog] = useState<{ open: boolean; role: RoleRow | null }>({
-    open: false,
-    role: null,
-  });
   const teamGate = permissionGate(settings.permissions, "teams.manage");
-  const roleGate = permissionGate(settings.permissions, "roles.manage");
 
   return (
     <>
@@ -525,7 +474,7 @@ export function CompanyTeamsRolesSections({ settings }: { readonly settings: Com
             <Button
               size="sm"
               disabled={!teamGate.enabled || settings.admin === null}
-              onClick={() => setTeamDialog({ open: true, team: null })}
+              onClick={() => setTeamSheet({ open: true, team: null })}
             >
               <PlusIcon className="size-3.5" /> Create team
             </Button>
@@ -543,14 +492,35 @@ export function CompanyTeamsRolesSections({ settings }: { readonly settings: Com
                 key={team.id}
                 settings={settings}
                 team={team}
-                members={members}
-                onEdit={() => setTeamDialog({ open: true, team })}
+                onEdit={() => setTeamSheet({ open: true, team })}
               />
             ))
           )}
         </CompanySectionCard>
       </SettingsSection>
 
+      <TeamSheet
+        key={`${teamSheet.team?.id ?? "new"}-${teamSheet.open}`}
+        settings={settings}
+        team={teamSheet.team}
+        members={members}
+        open={teamSheet.open}
+        onOpenChange={(open) => setTeamSheet((current) => ({ ...current, open }))}
+      />
+    </>
+  );
+}
+
+export function CompanyRolesSection({ settings }: { readonly settings: CompanySettings }) {
+  const roles = useMemo(() => sortRoles(settings.directory.roles), [settings.directory.roles]);
+  const [roleSheet, setRoleSheet] = useState<{ open: boolean; role: RoleRow | null }>({
+    open: false,
+    role: null,
+  });
+  const roleGate = permissionGate(settings.permissions, "roles.manage");
+
+  return (
+    <>
       <SettingsSection
         id="company-roles"
         title="Roles"
@@ -560,7 +530,7 @@ export function CompanyTeamsRolesSections({ settings }: { readonly settings: Com
             <Button
               size="sm"
               disabled={!roleGate.enabled || settings.admin === null}
-              onClick={() => setRoleDialog({ open: true, role: null })}
+              onClick={() => setRoleSheet({ open: true, role: null })}
             >
               <PlusIcon className="size-3.5" /> Create role
             </Button>
@@ -578,40 +548,34 @@ export function CompanyTeamsRolesSections({ settings }: { readonly settings: Com
                 key={role.id}
                 settings={settings}
                 role={role}
-                onEdit={() => setRoleDialog({ open: true, role })}
+                onEdit={() => setRoleSheet({ open: true, role })}
               />
             ))
           )}
         </CompanySectionCard>
       </SettingsSection>
 
-      <TeamDialog
-        key={`${teamDialog.team?.id ?? "new"}-${teamDialog.open}`}
+      <RoleSheet
+        key={`${roleSheet.role?.id ?? "new"}-${roleSheet.open}`}
         settings={settings}
-        team={teamDialog.team}
-        open={teamDialog.open}
-        onOpenChange={(open) => setTeamDialog((current) => ({ ...current, open }))}
-      />
-      <RoleDialog
-        key={`${roleDialog.role?.id ?? "new"}-${roleDialog.open}`}
-        settings={settings}
-        role={roleDialog.role}
-        open={roleDialog.open}
-        onOpenChange={(open) => setRoleDialog((current) => ({ ...current, open }))}
+        role={roleSheet.role}
+        open={roleSheet.open}
+        onOpenChange={(open) => setRoleSheet((current) => ({ ...current, open }))}
       />
     </>
   );
 }
 
-export function CompanyTeamsRolesPanel() {
+function CompanyAdministrationPanel({ page }: { readonly page: "teams" | "roles" }) {
   const settings = useCompanySettings();
+  const label = page === "teams" ? "teams" : "roles";
 
   if (settings.isAuthLoaded && !settings.isSignedIn) {
     return (
       <SettingsPageContainer>
         <CompanySettingsEmptyState
-          title="Sign in to manage teams and roles"
-          description="Company teams, rosters, and permission roles are available after you sign in."
+          title={`Sign in to manage ${label}`}
+          description="Company administration settings are available after you sign in."
         />
       </SettingsPageContainer>
     );
@@ -631,7 +595,7 @@ export function CompanyTeamsRolesPanel() {
       <SettingsPageContainer>
         <CompanySettingsEmptyState
           title="Workspace data is syncing"
-          description="Team and role settings will appear when this workspace is ready."
+          description={`${page === "teams" ? "Team" : "Role"} settings will appear when this workspace is ready.`}
         />
       </SettingsPageContainer>
     );
@@ -639,7 +603,19 @@ export function CompanyTeamsRolesPanel() {
 
   return (
     <SettingsPageContainer>
-      <CompanyTeamsRolesSections settings={settings} />
+      {page === "teams" ? (
+        <CompanyTeamsSection settings={settings} />
+      ) : (
+        <CompanyRolesSection settings={settings} />
+      )}
     </SettingsPageContainer>
   );
+}
+
+export function CompanyTeamsPanel() {
+  return <CompanyAdministrationPanel page="teams" />;
+}
+
+export function CompanyRolesPanel() {
+  return <CompanyAdministrationPanel page="roles" />;
 }

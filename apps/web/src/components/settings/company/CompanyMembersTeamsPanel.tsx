@@ -1,13 +1,12 @@
 import { CheckIcon, ShieldCheckIcon, UserRoundPlusIcon, UsersRoundIcon } from "lucide-react";
+import { Navigate } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
-import { CompanyMembersSections } from "./CompanyMembersPanel";
 import { CompanySettingsEmptyState, CompanySectionCard } from "./CompanySettingsShared";
-import { CompanyTeamsRolesSections } from "./CompanyTeamsRolesPanel";
 import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
 type WorkspaceKind = "personal" | "organization";
@@ -211,10 +210,5 @@ export function CompanyMembersTeamsPanel() {
     );
   }
 
-  return (
-    <SettingsPageContainer>
-      <CompanyMembersSections settings={settings} />
-      <CompanyTeamsRolesSections settings={settings} />
-    </SettingsPageContainer>
-  );
+  return <Navigate to="/settings/company-members" replace />;
 }

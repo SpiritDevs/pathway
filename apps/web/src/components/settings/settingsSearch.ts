@@ -4,6 +4,9 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/projects"
   | "/settings/members-teams"
+  | "/settings/company-members"
+  | "/settings/company-teams"
+  | "/settings/company-roles"
   | "/settings/environments"
   | "/settings/providers"
   | "/settings/scheduled-tasks"
@@ -32,6 +35,15 @@ export function settingsSectionPathForSearchPath(path: SettingsSearchPath): Sett
   return path === "/settings/appearance/action-palette" ? "/settings/appearance" : path;
 }
 
+export function settingsPathIsVisibleForWorkspace(
+  path: SettingsSearchPath,
+  workspaceKind: "personal" | "organization",
+): boolean {
+  return workspaceKind === "organization"
+    ? path !== "/settings/members-teams"
+    : !path.startsWith("/settings/company-");
+}
+
 /**
  * Section labels in sidebar order. The sidebar nav, the breadcrumb, and the
  * search-result subtitles all render from this record, so each label exists
@@ -43,6 +55,9 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/projects": "Projects",
   "/settings/members-teams": "Members & Teams",
+  "/settings/company-members": "Members",
+  "/settings/company-teams": "Teams",
+  "/settings/company-roles": "Roles",
   "/settings/environments": "Environments",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
@@ -80,7 +95,13 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     label: "Account",
-    paths: ["/settings/members-teams", "/settings/environments"],
+    paths: [
+      "/settings/members-teams",
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/company-roles",
+      "/settings/environments",
+    ],
   },
   {
     label: "Agents",
@@ -124,17 +145,17 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "company-members",
     title: "Members and invitations",
-    to: "/settings/members-teams",
+    to: "/settings/company-members",
   },
   {
     id: "company-teams",
     title: "Teams",
-    to: "/settings/members-teams",
+    to: "/settings/company-teams",
   },
   {
     id: "company-roles",
     title: "Roles and permissions",
-    to: "/settings/members-teams",
+    to: "/settings/company-roles",
   },
   {
     id: "company-upgrade",

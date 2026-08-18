@@ -24,9 +24,11 @@ threads, environments, sync, issues, providers, schedules, source control, and u
 company workspace. Its **Members & Teams** page explains the collaboration features and can upgrade
 the workspace to a company without moving or recreating any work.
 
-A company workspace adds invitations, member administration, teams, and role management. Pathway
-keeps the membership and service permissions needed for sync and environments internally for an
-individual workspace; they do not require separate setup.
+A company workspace adds separate **Members**, **Teams**, and **Roles** pages in Settings. Use them
+to invite or deactivate members, group people into teams, and define permission roles. Creating or
+editing any of these opens a floating panel from the right so you can make changes without losing
+your place. Pathway keeps the membership and service permissions needed for sync and environments
+internally for an individual workspace; they do not require separate setup.
 
 Setup remembers where you were. If you close the app partway through — even if you continue on a
 different computer — it resumes at the step you left.

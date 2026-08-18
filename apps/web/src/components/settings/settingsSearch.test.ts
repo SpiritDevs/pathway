@@ -6,6 +6,7 @@ import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
+  settingsPathIsVisibleForWorkspace,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -176,11 +177,22 @@ describe("SETTINGS_NAV_GROUPS", () => {
   it("puts collaboration and environments in the Account group", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Account")?.paths).toEqual([
       "/settings/members-teams",
+      "/settings/company-members",
+      "/settings/company-teams",
+      "/settings/company-roles",
       "/settings/environments",
     ]);
     expect(searchSettings("members and invitations")[0]).toMatchObject({
       id: "company-members",
-      to: "/settings/members-teams",
+      to: "/settings/company-members",
+    });
+    expect(searchSettings("teams")[0]).toMatchObject({
+      id: "company-teams",
+      to: "/settings/company-teams",
+    });
+    expect(searchSettings("roles and permissions")[0]).toMatchObject({
+      id: "company-roles",
+      to: "/settings/company-roles",
     });
     expect(searchSettings("upgrade to a company workspace")[0]).toMatchObject({
       id: "company-upgrade",
@@ -199,6 +211,19 @@ describe("SETTINGS_NAV_GROUPS", () => {
       to: "/settings/environments",
       targetId: "company-environments",
     });
+  });
+
+  it("shows split administration pages only for organization workspaces", () => {
+    expect(settingsPathIsVisibleForWorkspace("/settings/members-teams", "personal")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/company-members", "personal")).toBe(false);
+    expect(settingsPathIsVisibleForWorkspace("/settings/members-teams", "organization")).toBe(
+      false,
+    );
+    expect(settingsPathIsVisibleForWorkspace("/settings/company-members", "organization")).toBe(
+      true,
+    );
+    expect(settingsPathIsVisibleForWorkspace("/settings/company-teams", "organization")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/company-roles", "organization")).toBe(true);
   });
 
   it("keeps Projects in the Workspace group with its own settings page", () => {

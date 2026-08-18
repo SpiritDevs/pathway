@@ -27,7 +27,10 @@ import {
   ServerIcon,
   Settings2Icon,
   TagsIcon,
+  ShieldIcon,
+  UserRoundIcon,
   UsersIcon,
+  UsersRoundIcon,
   WandSparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -47,9 +50,11 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { PathwayConnectSidebarSignIn } from "../clerk/PathwayConnectSidebarSignIn";
+import { useCompanySettings } from "./company/useCompanySettings";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
+  settingsPathIsVisibleForWorkspace,
   settingsSectionPathForSearchPath,
   SETTINGS_NAV_GROUPS,
   SETTINGS_SECTION_LABELS,
@@ -66,6 +71,9 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/projects": FolderIcon,
   "/settings/members-teams": UsersIcon,
+  "/settings/company-members": UserRoundIcon,
+  "/settings/company-teams": UsersRoundIcon,
+  "/settings/company-roles": ShieldIcon,
   "/settings/environments": ServerIcon,
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
@@ -88,6 +96,11 @@ function SettingsSectionIcon({ to }: { to: SettingsSearchPath }) {
 }
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
+  const companySettings = useCompanySettings();
+  const workspaceKind =
+    companySettings.activeCompany?.workspaceKind ??
+    companySettings.directory.company?.workspaceKind ??
+    "personal";
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
   const canGoBack = useCanGoBack();
@@ -95,7 +108,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
-  const results = useMemo(() => searchSettings(query), [query]);
+  const results = useMemo(
+    () =>
+      searchSettings(query).filter((item) =>
+        settingsPathIsVisibleForWorkspace(item.to, workspaceKind),
+      ),
+    [query, workspaceKind],
+  );
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
 
@@ -301,23 +320,25 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                   {group.label}
                 </SidebarGroupLabel>
                 <SidebarMenu className="ps-px">
-                  {group.paths.map((to) => {
-                    const Icon = SETTINGS_SECTION_ICONS[to];
-                    // Prefix match keeps the section active on nested routes
-                    // like /settings/projects/$projectKey.
-                    const isActive = pathname === to || pathname.startsWith(`${to}/`);
-                    return (
-                      <SidebarMenuItem key={to}>
-                        <SidebarMenuButton
-                          isActive={isActive}
-                          onClick={() => handleSectionClick(to)}
-                        >
-                          <Icon />
-                          <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    );
-                  })}
+                  {group.paths
+                    .filter((to) => settingsPathIsVisibleForWorkspace(to, workspaceKind))
+                    .map((to) => {
+                      const Icon = SETTINGS_SECTION_ICONS[to];
+                      // Prefix match keeps the section active on nested routes
+                      // like /settings/projects/$projectKey.
+                      const isActive = pathname === to || pathname.startsWith(`${to}/`);
+                      return (
+                        <SidebarMenuItem key={to}>
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            onClick={() => handleSectionClick(to)}
+                          >
+                            <Icon />
+                            <span className="truncate">{SETTINGS_SECTION_LABELS[to]}</span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
                 </SidebarMenu>
               </div>
             ))
