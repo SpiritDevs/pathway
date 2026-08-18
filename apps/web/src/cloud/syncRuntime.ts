@@ -77,6 +77,7 @@ import {
   type CompanySyncEngineMutationHandle,
 } from "./companySyncEngines";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
+import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
 import {
@@ -986,6 +987,35 @@ export function automaticEnvironmentRegistrationServiceRoleId(
   );
 }
 
+function capabilitiesMatch(
+  left: EnvironmentCloudRegistrationInfo["descriptor"]["capabilities"],
+  right: EnvironmentCloudRegistrationInfo["descriptor"]["capabilities"],
+): boolean {
+  const entries = (value: typeof left) =>
+    Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(entries(left)) === JSON.stringify(entries(right));
+}
+
+export function environmentRegistrationMatchesInfo(
+  registration: EnvironmentRegistrationEntity,
+  info: EnvironmentCloudRegistrationInfo,
+): boolean {
+  const current = registration.descriptor;
+  const incoming = info.descriptor;
+  return (
+    registration.state === "active" &&
+    registration.publicKeyThumbprint === info.publicKeyThumbprint &&
+    registration.relayLinkState === info.relayLinkState &&
+    registration.managedEndpointAvailable === info.managedEndpointAvailable &&
+    current.environmentId === incoming.environmentId &&
+    current.label === incoming.label &&
+    current.platform.os === incoming.platform.os &&
+    current.platform.arch === incoming.platform.arch &&
+    current.serverVersion === incoming.serverVersion &&
+    capabilitiesMatch(current.capabilities, incoming.capabilities)
+  );
+}
+
 export async function registerEnvironmentAutomatically(input: {
   readonly companyId: CompanyId;
   readonly environmentId: EnvironmentId;
@@ -993,16 +1023,29 @@ export async function registerEnvironmentAutomatically(input: {
   readonly control: Pick<EnvironmentControlClient, "registerEnvironment">;
   readonly readRegistrationInfo: () => Promise<EnvironmentCloudRegistrationInfo>;
 }): Promise<boolean> {
+  const activeRegistration = Array.from(input.replica.view.values()).find(
+    (value): value is EnvironmentRegistrationEntity =>
+      isEnvironmentRegistration(value) &&
+      value.environmentId === input.environmentId &&
+      value.state === "active",
+  );
   const serviceRoleId = automaticEnvironmentRegistrationServiceRoleId(
     input.replica.view.values(),
     input.environmentId,
   );
-  if (serviceRoleId === null) return false;
+  if (activeRegistration === undefined && serviceRoleId === null) return false;
   const info = await input.readRegistrationInfo();
+  if (
+    activeRegistration !== undefined &&
+    environmentRegistrationMatchesInfo(activeRegistration, info)
+  ) {
+    return false;
+  }
   await input.control.registerEnvironment({
     companyId: input.companyId,
     info,
-    serviceRoleIds: [serviceRoleId],
+    serviceRoleIds:
+      activeRegistration?.serviceRoleIds ?? (serviceRoleId === null ? [] : [serviceRoleId]),
   });
   return true;
 }
@@ -1013,6 +1056,9 @@ function useAutomaticEnvironmentRegistration(): void {
   const companyId = useAppAtomValue(activeCompanyIdAtom);
   const replicas = useAppAtomValue(companyRegistryReplicasAtom);
   const environmentId = useAppAtomValue(primaryEnvironmentIdAtom);
+  const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const relayLinked = primaryCloudLinkState.data?.linked ?? null;
+  const managedTunnelActive = primaryCloudLinkState.data?.managedTunnelActive ?? null;
   const inFlight = useRef(new Map<string, Promise<boolean>>());
   const retryAttempts = useRef(new Map<string, number>());
   const [retryNonce, setRetryNonce] = useState(0);
@@ -1021,11 +1067,6 @@ function useAutomaticEnvironmentRegistration(): void {
   useEffect(() => {
     if (control === null || companyId === null || environmentId === null) return;
     if (replica === undefined) return;
-    if (
-      automaticEnvironmentRegistrationServiceRoleId(replica.view.values(), environmentId) === null
-    )
-      return;
-
     const registrationKey = `${companyId}\u0000${environmentId}`;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1067,7 +1108,7 @@ function useAutomaticEnvironmentRegistration(): void {
       cancelled = true;
       if (retryTimer !== null) clearTimeout(retryTimer);
     };
-  }, [companyId, control, environmentId, replica, retryNonce]);
+  }, [companyId, control, environmentId, managedTunnelActive, relayLinked, replica, retryNonce]);
 }
 
 export function discoverCompanyEnvironmentConnections(

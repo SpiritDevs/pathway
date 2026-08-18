@@ -45,6 +45,7 @@ import {
   decodeCloudSyncCompanies,
   discoverCompanyEnvironmentConnections,
   automaticEnvironmentRegistrationServiceRoleId,
+  environmentRegistrationMatchesInfo,
   registerEnvironmentAutomatically,
   repairCloudSyncCurrentUserWorkspace,
   readCloudSyncClientId,
@@ -264,6 +265,75 @@ describe("automaticEnvironmentRegistrationServiceRoleId", () => {
     expect(registered).toBe(true);
     expect(registrations).toEqual([
       { companyId: COMPANY_A, info, serviceRoleIds: [RoleId.make("service")] },
+    ]);
+  });
+
+  it("does not republish an unchanged active environment", async () => {
+    const registration = environmentRegistration(OWN_ENVIRONMENT_ID);
+    const info = {
+      descriptor: registration.descriptor,
+      publicKeyThumbprint: registration.publicKeyThumbprint,
+      relayLinkState: registration.relayLinkState,
+      managedEndpointAvailable: registration.managedEndpointAvailable,
+    };
+    expect(environmentRegistrationMatchesInfo(registration, info)).toBe(true);
+
+    const registrations: unknown[] = [];
+    const registered = await registerEnvironmentAutomatically({
+      companyId: COMPANY_A,
+      environmentId: OWN_ENVIRONMENT_ID,
+      replica: { view: new Map([["registration:own", registration]]) },
+      control: {
+        registerEnvironment: async (args) => {
+          registrations.push(args);
+        },
+      },
+      readRegistrationInfo: async () => info,
+    });
+
+    expect(registered).toBe(false);
+    expect(registrations).toEqual([]);
+  });
+
+  it("refreshes an active environment when its version and Pathway Connect state change", async () => {
+    const registration = {
+      ...environmentRegistration(OWN_ENVIRONMENT_ID),
+      descriptor: {
+        ...environmentRegistration(OWN_ENVIRONMENT_ID).descriptor,
+        serverVersion: "0.0.33",
+      },
+      relayLinkState: "unlinked" as const,
+      managedEndpointAvailable: false,
+      serviceRoleIds: [RoleId.make("existing-service")],
+    };
+    const info = {
+      descriptor: { ...registration.descriptor, serverVersion: "0.0.37" },
+      publicKeyThumbprint: registration.publicKeyThumbprint,
+      relayLinkState: "linked" as const,
+      managedEndpointAvailable: true,
+    };
+    expect(environmentRegistrationMatchesInfo(registration, info)).toBe(false);
+
+    const registrations: unknown[] = [];
+    const registered = await registerEnvironmentAutomatically({
+      companyId: COMPANY_A,
+      environmentId: OWN_ENVIRONMENT_ID,
+      replica: { view: new Map([["registration:own", registration]]) },
+      control: {
+        registerEnvironment: async (args) => {
+          registrations.push(args);
+        },
+      },
+      readRegistrationInfo: async () => info,
+    });
+
+    expect(registered).toBe(true);
+    expect(registrations).toEqual([
+      {
+        companyId: COMPANY_A,
+        info,
+        serviceRoleIds: [RoleId.make("existing-service")],
+      },
     ]);
   });
 });
