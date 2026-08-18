@@ -32,7 +32,6 @@ import { writeTextToClipboard } from "../../../hooks/useCopyToClipboard";
 import { PrimaryEnvironmentHttpClient } from "../../../environments/primary/httpClient";
 import { runPrimaryHttp } from "../../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
-import { useEnvironments } from "../../../state/environments";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
 import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
 import {
@@ -70,7 +69,6 @@ import {
 } from "../../ui/sheet";
 import { Textarea } from "../../ui/textarea";
 import { EnvironmentConnectionSettings } from "../ConnectionsSettings";
-import { partitionEnvironmentsByConnection } from "../ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
 import { permissionGate } from "./companySettings.logic";
 import {
@@ -85,6 +83,7 @@ import {
   deriveRecentEnvironmentCommands,
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
+  partitionCompanyEnvironmentRowsByConnection,
   resolveDeleteConfirmationClick,
   type CompanyEnvironmentRow,
   type PathwayConnectStatus,
@@ -662,7 +661,6 @@ function CommandHistory({
 export function CompanyEnvironmentsPanel() {
   const settings = useCompanySettings();
   const control = useEnvironmentControl();
-  const { environments } = useEnvironments();
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const primaryCloudLinkState = usePrimaryCloudLinkState();
@@ -684,21 +682,22 @@ export function CompanyEnvironmentsPanel() {
       }),
     [catalog.entries, ownEnvironmentId, registrations, settings.directory.teams],
   );
-  const companyEnvironmentsByConnection = useMemo(() => {
-    const connectionByEnvironmentId = new Map(
-      environments.map((environment) => [environment.environmentId, environment.connection]),
-    );
-    const partitioned = partitionEnvironmentsByConnection(
-      rows.map((row) => ({
-        row,
-        connection: connectionByEnvironmentId.get(row.environmentId) ?? { phase: "offline" },
-      })),
-    );
-    return {
-      connected: partitioned.connected.map(({ row }) => row),
-      disconnected: partitioned.disconnected.map(({ row }) => row),
-    };
-  }, [environments, rows]);
+  const companyEnvironmentsByConnection = useMemo(
+    () =>
+      partitionCompanyEnvironmentRowsByConnection({
+        rows,
+        ownCloudLinkPhase: cloudLinkStatus.phase,
+        ownManagedEndpointAvailable,
+        ownCloudLinkError: primaryCloudLinkState.error ?? cloudLinkStatus.error,
+      }),
+    [
+      cloudLinkStatus.error,
+      cloudLinkStatus.phase,
+      ownManagedEndpointAvailable,
+      primaryCloudLinkState.error,
+      rows,
+    ],
+  );
   const registeredEnvironmentIds = useMemo(
     () => new Set(rows.map((row) => row.environmentId)),
     [rows],

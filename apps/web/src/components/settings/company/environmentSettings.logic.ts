@@ -55,6 +55,31 @@ export function derivePathwayConnectStatus(input: {
   return input.row.registration.managedEndpointAvailable ? "active" : "connecting";
 }
 
+export function partitionCompanyEnvironmentRowsByConnection(input: {
+  readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+  readonly ownManagedEndpointAvailable: boolean | null;
+  readonly ownCloudLinkError: string | null;
+}): {
+  readonly connected: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly disconnected: ReadonlyArray<CompanyEnvironmentRow>;
+} {
+  const connected: CompanyEnvironmentRow[] = [];
+  const disconnected: CompanyEnvironmentRow[] = [];
+
+  for (const row of input.rows) {
+    const status = derivePathwayConnectStatus({
+      row,
+      ownCloudLinkPhase: input.ownCloudLinkPhase,
+      ownManagedEndpointAvailable: input.ownManagedEndpointAvailable,
+      ownCloudLinkError: input.ownCloudLinkError,
+    });
+    (status === "active" ? connected : disconnected).push(row);
+  }
+
+  return { connected, disconnected };
+}
+
 export function deriveEnvironmentRows(input: {
   readonly registrations: ReadonlyArray<EnvironmentRegistrationEntityType>;
   readonly catalogEntries: ReadonlyMap<EnvironmentId, EffectiveConnectionCatalogEntry>;

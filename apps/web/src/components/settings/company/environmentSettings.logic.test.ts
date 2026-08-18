@@ -17,6 +17,7 @@ import {
   deriveRecentEnvironmentCommands,
   environmentCommandSummary,
   environmentRegistrationsFromReplicaValues,
+  partitionCompanyEnvironmentRowsByConnection,
   resolveDeleteConfirmationClick,
 } from "./environmentSettings.logic";
 
@@ -135,6 +136,29 @@ describe("environment settings derivation", () => {
     expect(derive({ managedEndpointAvailable: false })).toBe("connecting");
     expect(derive({ relayLinkState: "unlinked" })).toBe("failed");
     expect(derive({ state: "revoked" })).toBe("failed");
+  });
+
+  it("groups company environments by the Pathway Connect state shown on their rows", () => {
+    const offlineId = "environment-offline" as EnvironmentId;
+    const rows = deriveEnvironmentRows({
+      registrations: [
+        registration(REMOTE_ID, { managedEndpointAvailable: true }),
+        registration(offlineId, { managedEndpointAvailable: false }),
+      ],
+      catalogEntries: new Map(),
+      teams: [],
+      ownEnvironmentId: OWN_ID,
+    });
+
+    const partitioned = partitionCompanyEnvironmentRowsByConnection({
+      rows,
+      ownCloudLinkPhase: "idle",
+      ownManagedEndpointAvailable: null,
+      ownCloudLinkError: null,
+    });
+
+    expect(partitioned.connected.map((row) => row.environmentId)).toEqual([REMOTE_ID]);
+    expect(partitioned.disconnected.map((row) => row.environmentId)).toEqual([offlineId]);
   });
 
   it("extracts registrations and joins catalog, own-device, and team metadata", () => {
