@@ -4,6 +4,7 @@ import {
   type TeamEntity,
 } from "@spiritdevs/client-runtime/sync";
 import type { EffectiveConnectionCatalogEntry } from "@spiritdevs/client-runtime/connection";
+import type { Discovery } from "@spiritdevs/client-runtime/relay";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import type { EnvironmentCommandResult } from "@spiritdevs/contracts/cloudProject";
 import * as Schema from "effect/Schema";
@@ -39,6 +40,7 @@ export function derivePathwayConnectStatus(input: {
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
   readonly ownManagedEndpointAvailable: boolean | null;
   readonly ownCloudLinkError: string | null;
+  readonly remoteRelayAvailability?: Discovery.RelayEnvironmentAvailability | null | undefined;
 }): PathwayConnectStatus {
   if (input.row.registration.state !== "active") return "failed";
 
@@ -52,7 +54,13 @@ export function derivePathwayConnectStatus(input: {
   }
 
   if (input.row.registration.relayLinkState !== "linked") return "failed";
-  return input.row.registration.managedEndpointAvailable ? "active" : "connecting";
+  if (!input.row.registration.managedEndpointAvailable) return "connecting";
+  if (input.remoteRelayAvailability === "online") return "active";
+  if (input.remoteRelayAvailability === "offline" || input.remoteRelayAvailability === "error") {
+    return "failed";
+  }
+  if (input.remoteRelayAvailability === "checking") return "connecting";
+  return "active";
 }
 
 export function partitionCompanyEnvironmentRowsByConnection(input: {
@@ -60,6 +68,10 @@ export function partitionCompanyEnvironmentRowsByConnection(input: {
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
   readonly ownManagedEndpointAvailable: boolean | null;
   readonly ownCloudLinkError: string | null;
+  readonly remoteRelayAvailability: ReadonlyMap<
+    EnvironmentId,
+    Discovery.RelayEnvironmentAvailability
+  >;
 }): {
   readonly connected: ReadonlyArray<CompanyEnvironmentRow>;
   readonly disconnected: ReadonlyArray<CompanyEnvironmentRow>;
@@ -73,6 +85,7 @@ export function partitionCompanyEnvironmentRowsByConnection(input: {
       ownCloudLinkPhase: input.ownCloudLinkPhase,
       ownManagedEndpointAvailable: input.ownManagedEndpointAvailable,
       ownCloudLinkError: input.ownCloudLinkError,
+      remoteRelayAvailability: input.remoteRelayAvailability.get(row.environmentId),
     });
     (status === "active" ? connected : disconnected).push(row);
   }

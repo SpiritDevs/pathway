@@ -708,31 +708,46 @@ export const make = Effect.gen(function* () {
             if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
               return yield* new ServerAuthScopeNotGrantedError({});
             }
-            return yield* sessions
-              .issue({
-                method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
-                subject: grant.subject,
-                ...(grant.initiatingEnvironmentId
-                  ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
-                  : {}),
-                scopes: grantedScopes,
-                ...(input?.proofKeyThumbprint
-                  ? {
-                      proofKeyThumbprint: input.proofKeyThumbprint,
-                      ttl: Duration.hours(1),
-                    }
-                  : {}),
-                client: {
-                  ...requestMetadata,
-                  ...(grant.label ? { label: grant.label } : {}),
-                },
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) => new ServerAuthAuthenticatedAccessTokenIssueError({ cause }),
-                ),
+            const session = yield* sessions.issue({
+              method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
+              subject: grant.subject,
+              ...(grant.initiatingEnvironmentId
+                ? { initiatingEnvironmentId: grant.initiatingEnvironmentId }
+                : {}),
+              scopes: grantedScopes,
+              ...(input?.proofKeyThumbprint
+                ? {
+                    proofKeyThumbprint: input.proofKeyThumbprint,
+                    ttl: Duration.hours(1),
+                  }
+                : {}),
+              client: {
+                ...requestMetadata,
+                ...(grant.label ? { label: grant.label } : {}),
+              },
+            });
+            if (grant.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT) {
+              const superseded = (yield* sessions.listActive()).filter(
+                (candidate) =>
+                  candidate.sessionId !== session.sessionId &&
+                  candidate.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT,
               );
-          }),
+              yield* Effect.forEach(
+                superseded,
+                (candidate) => sessions.revoke(candidate.sessionId),
+                {
+                  discard: true,
+                },
+              );
+            }
+            return session;
+          }).pipe(
+            Effect.mapError((cause) =>
+              isServerAuthInvalidRequestError(cause)
+                ? cause
+                : new ServerAuthAuthenticatedAccessTokenIssueError({ cause }),
+            ),
+          ),
         ),
         Effect.flatMap((session) =>
           DateTime.now.pipe(

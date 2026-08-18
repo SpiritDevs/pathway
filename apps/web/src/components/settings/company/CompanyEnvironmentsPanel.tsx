@@ -32,6 +32,9 @@ import { writeTextToClipboard } from "../../../hooks/useCopyToClipboard";
 import { PrimaryEnvironmentHttpClient } from "../../../environments/primary/httpClient";
 import { runPrimaryHttp } from "../../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
+import { relayEnvironmentDiscovery } from "../../../state/relay";
+import { useRelayEnvironmentDiscovery } from "../../../state/environments";
+import { useAtomCommand } from "../../../state/use-atom-command";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
 import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
 import {
@@ -101,18 +104,19 @@ const COMMAND_KINDS: ReadonlyArray<{
   { kind: "statusQuery", label: "Check status" },
 ];
 
+const RELAY_HEALTH_REFRESH_INTERVAL_MS = 15_000;
+
 function relativeTimestamp(timestamp: number | null): string {
   return timestamp === null
     ? "Never"
     : formatRelativeTimeLabel(new Date(timestamp).toISOString()) || "Unknown";
 }
 
-function registrationStateBadge(row: CompanyEnvironmentRow) {
-  return row.registration.state === "active" ? (
-    <Badge variant="success">Active</Badge>
-  ) : (
-    <Badge variant="secondary">Revoked</Badge>
-  );
+function registrationStateBadge(row: CompanyEnvironmentRow, status: PathwayConnectStatus) {
+  if (row.registration.state !== "active") return <Badge variant="secondary">Revoked</Badge>;
+  if (status === "active") return <Badge variant="success">Active</Badge>;
+  if (status === "connecting") return <Badge variant="warning">Connecting</Badge>;
+  return <Badge variant="secondary">Inactive</Badge>;
 }
 
 const PATHWAY_CONNECT_BADGE = {
@@ -152,6 +156,7 @@ function EnvironmentList({
   ownManagedEndpointAvailable,
   ownCloudLinkPhase,
   ownCloudLinkError,
+  remoteRelayAvailability,
   deleteEnabled,
   deleteTooltip,
   deletingEnvironmentId,
@@ -164,6 +169,10 @@ function EnvironmentList({
   readonly ownManagedEndpointAvailable: boolean | null;
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
   readonly ownCloudLinkError: string | null;
+  readonly remoteRelayAvailability: ReadonlyMap<
+    EnvironmentId,
+    "checking" | "online" | "offline" | "error"
+  >;
   readonly deleteEnabled: boolean;
   readonly deleteTooltip: string | null;
   readonly deletingEnvironmentId: EnvironmentId | null;
@@ -181,6 +190,7 @@ function EnvironmentList({
       ownManagedEndpointAvailable={ownManagedEndpointAvailable}
       ownCloudLinkPhase={ownCloudLinkPhase}
       ownCloudLinkError={ownCloudLinkError}
+      remoteRelayAvailability={remoteRelayAvailability.get(row.environmentId)}
       deleteEnabled={deleteEnabled}
       deleteTooltip={deleteTooltip}
       deleting={deletingEnvironmentId === row.environmentId}
@@ -277,6 +287,7 @@ function EnvironmentListRow({
   ownManagedEndpointAvailable,
   ownCloudLinkPhase,
   ownCloudLinkError,
+  remoteRelayAvailability,
   deleteEnabled,
   deleteTooltip,
   deleting,
@@ -287,6 +298,7 @@ function EnvironmentListRow({
   readonly ownManagedEndpointAvailable: boolean | null;
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
   readonly ownCloudLinkError: string | null;
+  readonly remoteRelayAvailability: "checking" | "online" | "offline" | "error" | undefined;
   readonly deleteEnabled: boolean;
   readonly deleteTooltip: string | null;
   readonly deleting: boolean;
@@ -320,6 +332,7 @@ function EnvironmentListRow({
     ownCloudLinkPhase,
     ownManagedEndpointAvailable: managedEndpointAvailable,
     ownCloudLinkError,
+    remoteRelayAvailability,
   });
 
   return (
@@ -335,7 +348,7 @@ function EnvironmentListRow({
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate text-sm font-medium">{row.label}</span>
           {row.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
-          {registrationStateBadge(row)}
+          {registrationStateBadge(row, pathwayConnectStatus)}
           <PathwayConnectBadge status={pathwayConnectStatus} />
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -665,6 +678,20 @@ export function CompanyEnvironmentsPanel() {
   const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const primaryCloudLinkState = usePrimaryCloudLinkState();
   const cloudLinkStatus = useAlwaysOnCloudLinkStatus();
+  const relayDiscovery = useRelayEnvironmentDiscovery();
+  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    reportFailure: false,
+  });
+  const remoteRelayAvailability = useMemo(
+    () =>
+      new Map(
+        [...relayDiscovery.environments].map(([environmentId, environment]) => [
+          environmentId as EnvironmentId,
+          environment.availability,
+        ]),
+      ),
+    [relayDiscovery.environments],
+  );
   const ownManagedEndpointAvailable = primaryCloudLinkState.data
     ? (primaryCloudLinkState.data.managedTunnelActive ?? primaryCloudLinkState.data.linked)
     : null;
@@ -689,12 +716,14 @@ export function CompanyEnvironmentsPanel() {
         ownCloudLinkPhase: cloudLinkStatus.phase,
         ownManagedEndpointAvailable,
         ownCloudLinkError: primaryCloudLinkState.error ?? cloudLinkStatus.error,
+        remoteRelayAvailability,
       }),
     [
       cloudLinkStatus.error,
       cloudLinkStatus.phase,
       ownManagedEndpointAvailable,
       primaryCloudLinkState.error,
+      remoteRelayAvailability,
       rows,
     ],
   );
@@ -710,6 +739,21 @@ export function CompanyEnvironmentsPanel() {
   const [loadingCommands, setLoadingCommands] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [grant, setGrant] = useState<IssuedConnectGrant | null>(null);
+
+  useEffect(() => {
+    if (!settings.isSignedIn) return;
+    const refreshWhileVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshRelayEnvironments();
+    };
+    refreshWhileVisible();
+    const interval = window.setInterval(refreshWhileVisible, RELAY_HEALTH_REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshWhileVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhileVisible);
+    };
+  }, [refreshRelayEnvironments, settings.isSignedIn]);
 
   useEffect(() => {
     if (
@@ -760,6 +804,7 @@ export function CompanyEnvironmentsPanel() {
         ownCloudLinkPhase: cloudLinkStatus.phase,
         ownManagedEndpointAvailable,
         ownCloudLinkError: primaryCloudLinkState.error ?? cloudLinkStatus.error,
+        remoteRelayAvailability: remoteRelayAvailability.get(selected.environmentId),
       })
     : null;
   const recentCommands =
@@ -906,6 +951,7 @@ export function CompanyEnvironmentsPanel() {
               ownManagedEndpointAvailable={ownManagedEndpointAvailable}
               ownCloudLinkPhase={cloudLinkStatus.phase}
               ownCloudLinkError={primaryCloudLinkState.error ?? cloudLinkStatus.error}
+              remoteRelayAvailability={remoteRelayAvailability}
               deleteEnabled={manageGate.enabled && control !== null && pendingAction === null}
               deleteTooltip={manageGate.tooltip}
               deletingEnvironmentId={
@@ -964,7 +1010,9 @@ export function CompanyEnvironmentsPanel() {
               <div className="flex items-center gap-2 pr-8">
                 <SheetTitle className="truncate">{selected.label}</SheetTitle>
                 {selected.isOwnEnvironment ? <Badge variant="info">This device</Badge> : null}
-                {registrationStateBadge(selected)}
+                {selectedPathwayConnectStatus
+                  ? registrationStateBadge(selected, selectedPathwayConnectStatus)
+                  : null}
                 {selectedPathwayConnectStatus ? (
                   <PathwayConnectBadge status={selectedPathwayConnectStatus} />
                 ) : null}

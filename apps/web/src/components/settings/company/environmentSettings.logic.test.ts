@@ -129,6 +129,7 @@ describe("environment settings derivation", () => {
         ownCloudLinkPhase: "idle",
         ownManagedEndpointAvailable: null,
         ownCloudLinkError: null,
+        remoteRelayAvailability: "online",
       });
     };
 
@@ -136,6 +137,28 @@ describe("environment settings derivation", () => {
     expect(derive({ managedEndpointAvailable: false })).toBe("connecting");
     expect(derive({ relayLinkState: "unlinked" })).toBe("failed");
     expect(derive({ state: "revoked" })).toBe("failed");
+  });
+
+  it("uses live relay health instead of configured tunnel state for remote presence", () => {
+    const row = deriveEnvironmentRows({
+      registrations: [registration(REMOTE_ID)],
+      catalogEntries: new Map(),
+      teams: [],
+      ownEnvironmentId: OWN_ID,
+    })[0]!;
+    const derive = (remoteRelayAvailability: "online" | "offline" | "checking" | "error") =>
+      derivePathwayConnectStatus({
+        row,
+        ownCloudLinkPhase: "idle",
+        ownManagedEndpointAvailable: null,
+        ownCloudLinkError: null,
+        remoteRelayAvailability,
+      });
+
+    expect(derive("online")).toBe("active");
+    expect(derive("offline")).toBe("failed");
+    expect(derive("error")).toBe("failed");
+    expect(derive("checking")).toBe("connecting");
   });
 
   it("groups company environments by the Pathway Connect state shown on their rows", () => {
@@ -155,6 +178,10 @@ describe("environment settings derivation", () => {
       ownCloudLinkPhase: "idle",
       ownManagedEndpointAvailable: null,
       ownCloudLinkError: null,
+      remoteRelayAvailability: new Map([
+        [REMOTE_ID, "online"],
+        [offlineId, "offline"],
+      ]),
     });
 
     expect(partitioned.connected.map((row) => row.environmentId)).toEqual([REMOTE_ID]);

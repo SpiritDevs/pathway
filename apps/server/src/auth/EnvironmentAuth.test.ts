@@ -53,6 +53,16 @@ const makeCookieRequest = (
     EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
   >[0];
 
+const makeBearerRequest = (
+  sessionToken: string,
+): Parameters<EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]>[0] =>
+  ({
+    cookies: {},
+    headers: { authorization: `Bearer ${sessionToken}` },
+  }) as unknown as Parameters<
+    EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
+  >[0];
+
 const requestMetadata = {
   deviceType: "desktop" as const,
   os: "macOS",
@@ -175,6 +185,44 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
 
       expect(token.scope).toBe("orchestration:read");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("retires the previous desktop session when the app relaunches", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+
+      const first = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        "desktop-bootstrap-token",
+        undefined,
+        requestMetadata,
+      );
+      const firstSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(first.access_token),
+      );
+      const second = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        "desktop-bootstrap-token",
+        undefined,
+        requestMetadata,
+      );
+      const secondSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(second.access_token),
+      );
+      const active = yield* sessions.listActive();
+      const retired = yield* serverAuth
+        .authenticateHttpRequest(makeBearerRequest(first.access_token))
+        .pipe(Effect.flip);
+
+      expect(active.filter((session) => session.subject === "desktop-bootstrap")).toHaveLength(1);
+      expect(active[0]?.sessionId).toBe(secondSession.sessionId);
+      expect(secondSession.sessionId).not.toBe(firstSession.sessionId);
+      expect(second.access_token).not.toBe(first.access_token);
+      expect(retired._tag).toBe("ServerAuthInvalidCredentialError");
+    }).pipe(
+      Effect.provide(
+        makeEnvironmentAuthLayer({ desktopBootstrapToken: "desktop-bootstrap-token" }),
+      ),
+    ),
   );
 
   it.effect("keeps user-issued administrative pairing links manageable", () =>
