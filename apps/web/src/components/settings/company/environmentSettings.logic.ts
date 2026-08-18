@@ -35,6 +35,19 @@ export interface CompanyEnvironmentRow {
 
 export type PathwayConnectStatus = "active" | "connecting" | "failed";
 
+export function completeRemoteRelayAvailability(input: {
+  readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly reported: ReadonlyMap<EnvironmentId, Discovery.RelayEnvironmentAvailability>;
+  readonly refreshing: boolean;
+}): ReadonlyMap<EnvironmentId, Discovery.RelayEnvironmentAvailability> {
+  const completed = new Map(input.reported);
+  for (const row of input.rows) {
+    if (row.isOwnEnvironment || completed.has(row.environmentId)) continue;
+    completed.set(row.environmentId, input.refreshing ? "checking" : "offline");
+  }
+  return completed;
+}
+
 export function derivePathwayConnectStatus(input: {
   readonly row: CompanyEnvironmentRow;
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
@@ -60,7 +73,7 @@ export function derivePathwayConnectStatus(input: {
     return "failed";
   }
   if (input.remoteRelayAvailability === "checking") return "connecting";
-  return "active";
+  return "connecting";
 }
 
 export function partitionCompanyEnvironmentRowsByConnection(input: {

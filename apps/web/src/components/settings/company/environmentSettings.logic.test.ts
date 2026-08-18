@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentCommandRecord } from "../../../cloud/environmentControl";
 import {
+  completeRemoteRelayAvailability,
   deleteConfirmationSecondsRemaining,
   derivePathwayConnectStatus,
   deriveEnvironmentRows,
@@ -159,6 +160,33 @@ describe("environment settings derivation", () => {
     expect(derive("offline")).toBe("failed");
     expect(derive("error")).toBe("failed");
     expect(derive("checking")).toBe("connecting");
+  });
+
+  it("does not treat an omitted remote relay result as active", () => {
+    const rows = deriveEnvironmentRows({
+      registrations: [registration(OWN_ID), registration(REMOTE_ID)],
+      catalogEntries: new Map(),
+      teams: [],
+      ownEnvironmentId: OWN_ID,
+    });
+
+    expect(
+      completeRemoteRelayAvailability({ rows, reported: new Map(), refreshing: true }).get(
+        REMOTE_ID,
+      ),
+    ).toBe("checking");
+    expect(
+      completeRemoteRelayAvailability({ rows, reported: new Map(), refreshing: false }).get(
+        REMOTE_ID,
+      ),
+    ).toBe("offline");
+    expect(
+      completeRemoteRelayAvailability({
+        rows,
+        reported: new Map([[REMOTE_ID, "online"]]),
+        refreshing: false,
+      }).get(REMOTE_ID),
+    ).toBe("online");
   });
 
   it("groups company environments by the Pathway Connect state shown on their rows", () => {

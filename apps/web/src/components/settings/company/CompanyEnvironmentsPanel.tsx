@@ -80,6 +80,7 @@ import {
   PermissionTooltip,
 } from "./CompanySettingsShared";
 import {
+  completeRemoteRelayAvailability,
   deleteConfirmationSecondsRemaining,
   derivePathwayConnectStatus,
   deriveEnvironmentRows,
@@ -682,7 +683,7 @@ export function CompanyEnvironmentsPanel() {
   const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
     reportFailure: false,
   });
-  const remoteRelayAvailability = useMemo(
+  const reportedRemoteRelayAvailability = useMemo(
     () =>
       new Map(
         [...relayDiscovery.environments].map(([environmentId, environment]) => [
@@ -708,6 +709,15 @@ export function CompanyEnvironmentsPanel() {
         ownEnvironmentId,
       }),
     [catalog.entries, ownEnvironmentId, registrations, settings.directory.teams],
+  );
+  const remoteRelayAvailability = useMemo(
+    () =>
+      completeRemoteRelayAvailability({
+        rows,
+        reported: reportedRemoteRelayAvailability,
+        refreshing: relayDiscovery.refreshing,
+      }),
+    [relayDiscovery.refreshing, reportedRemoteRelayAvailability, rows],
   );
   const companyEnvironmentsByConnection = useMemo(
     () =>
