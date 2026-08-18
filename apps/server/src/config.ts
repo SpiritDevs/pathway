@@ -81,8 +81,6 @@ export class ServerConfig extends Context.Service<
     readonly resourceMonitorPath?: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
-    readonly tailscaleServeEnabled: boolean;
-    readonly tailscaleServePort: number;
   }
 >()("@spiritdevs/pathway/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */
@@ -184,8 +182,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     mode: "web",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
-    tailscaleServeEnabled: false,
-    tailscaleServePort: 443,
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

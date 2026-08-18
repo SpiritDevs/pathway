@@ -37,12 +37,12 @@ describe("remote", () => {
     expect(
       resolveRemotePairingTarget({
         pairingUrl:
-          "https://app.spiritdevs.com/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%3A44342%2F#token=pairing-token",
+          "https://app.spiritdevs.com/pair?host=https%3A%2F%2Fdesktop.example.com%3A44342%2F#token=pairing-token",
       }),
     ).toEqual({
       credential: "pairing-token",
-      httpBaseUrl: "https://desktop.tailnet.ts.net:44342/",
-      wsBaseUrl: "wss://desktop.tailnet.ts.net:44342/",
+      httpBaseUrl: "https://desktop.example.com:44342/",
+      wsBaseUrl: "wss://desktop.example.com:44342/",
     });
   });
 

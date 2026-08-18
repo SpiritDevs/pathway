@@ -14,7 +14,7 @@ Lots of apps have gotten bogged down with bad tech decisions and "slop". We have
 
 ### 2. Remote ready
 
-The architecture of Pathway's websocket layer (npx @spiritdevs/pathway) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or leaning in fully with Pathway Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
+The architecture of Pathway's websocket layer (npx @spiritdevs/pathway) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network or using Pathway Connect (our tunnel solution, also in this repo), we need to make sure new features are properly supported.
 
 ### 3. Multi-surface
 
@@ -75,7 +75,7 @@ The most common defect in this repo is a change that works on the path you teste
 - `vp i` installs. Worktrees get this from the pathway.json setup script; if module resolution looks broken, it probably did not run.
 - `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.pathway`, which deliberately outranks an ambient `PATHWAY_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.
 - Ports derive from the worktree path and are stable across restarts, but read the real ones from the `[dev-runner]` line since occupied ports shift.
-- Sharing over the tailnet is three steps: run `vp run dev --share` in the background, wait for the `pairingUrl:` line in its output, paste that full URL (token included) in your reply. Do not wire up `tailscale serve` by hand for this, and do not open the URL yourself.
+- To share a development environment remotely, use Pathway Connect rather than exposing the development server directly.
 - The web app requires pairing. Hand over the pairing URL, not the bare origin. A URL without its token is useless to whoever you gave it to. If the token got consumed, mint a fresh one with `node apps/server/src/bin.ts pair` — note it carries standard scopes, while the startup URL carries admin scopes (needed for Settings → Connections management).
 - Stop what you started, by the PID you tracked. See rule 1.
 

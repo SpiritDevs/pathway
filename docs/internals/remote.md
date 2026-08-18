@@ -2,7 +2,7 @@
 
 > For maintainers. Using Pathway? See [docs/user](../user/).
 
-Remote environments are shipped, not planned. Direct, bearer-paired, relay-tunneled, Tailscale, and
+Remote environments are shipped, not planned. Direct, bearer-paired, Pathway Connect, and
 desktop-managed SSH access all exist today. This document describes the model they share and where
 each piece lives. For the user-facing setup guide see
 [remote access](../user/remote-access.md).
@@ -21,8 +21,8 @@ the connection layer, never by splitting the runtime.
                 │ resolves one access endpoint
 ┌───────────────▼──────────────────────────────┐
 │ Access method                                │
-│  direct ws/wss, relay tunnel,                │
-│  Tailscale serve, desktop-managed ssh        │
+│  direct ws/wss, Pathway Connect,             │
+│  desktop-managed ssh                         │
 └───────────────┬──────────────────────────────┘
                 │ connects to one Pathway server
 ┌───────────────▼──────────────────────────────┐
@@ -57,11 +57,9 @@ control plane or a copy of session state.
 | `RelayConnectionTarget`   | Managed Pathway Connect relay tunnels.                                   |
 | `SshConnectionTarget`     | Desktop-managed SSH environments.                                        |
 
-Bearer, relay, and SSH are persisted; primary is platform-managed. Note that Tailscale is not a
-separate target kind. A Tailscale URL is paired through the ordinary bearer path in
-[`onboarding.ts`][onboarding] (`preparePairingRegistration`), which accepts either a pairing URL or a
-host plus pairing code. Tailscale is an endpoint provider and transport, not a distinct runtime
-concept.
+Bearer, relay, and SSH are persisted; primary is platform-managed. Any separately managed direct
+URL is paired through the ordinary bearer path in [`onboarding.ts`][onboarding]
+(`preparePairingRegistration`), which accepts either a pairing URL or a host plus pairing code.
 
 ### AdvertisedEndpoint
 
@@ -85,21 +83,7 @@ unavailable endpoints and then picks, in order:
 
 There is no unconditional loopback fallback. A loopback endpoint only wins through an explicit saved
 override or `isDefault`. Persist the override by stable endpoint kind rather than raw URL where
-possible, since LAN addresses change with networks; Tailscale endpoints use provider-specific stable
-keys (`tailscale-ip:`, `tailscale-magicdns:`).
-
-### Endpoint providers
-
-Endpoint providers contribute advertised endpoints without becoming part of the core environment
-model: core owns environments, pairing, and connection lifecycle, and providers return normalized
-`AdvertisedEndpoint` records.
-
-Tailscale is the first provider, and Pathway manages more than discovery. When `tailscaleServeEnabled` is
-set, the server acquires a Tailscale serve mapping for its actual listening port at startup with
-`ensureTailscaleServe` and releases it with `disableTailscaleServe` on scope close
-(`apps/server/src/server.ts`, using [`@spiritdevs/tailscale`](../../packages/tailscale/src/tailscale.ts)).
-Endpoint identifiers are synthesized in `apps/desktop/src/backend/tailscaleEndpointProvider.ts` with
-`private-network` reachability.
+possible, since LAN addresses change with networks.
 
 ### Hosted pairing request
 
@@ -148,12 +132,6 @@ the client's perspective this is still an ordinary WebSocket connection; the rou
 relay Worker only brokers credentials and a managed endpoint; application traffic then flows over
 the provisioned Cloudflare tunnel hostname for the life of the connection, not through the relay
 Worker itself. See [pathway-connect.md](./pathway-connect.md).
-
-### Tailscale access
-
-A Pathway-managed `tailscale serve` mapping exposes the server on the tailnet over HTTPS, and the
-resulting private-network endpoints are advertised for pairing. Connection then follows the ordinary
-bearer path.
 
 ### Desktop-managed SSH access
 

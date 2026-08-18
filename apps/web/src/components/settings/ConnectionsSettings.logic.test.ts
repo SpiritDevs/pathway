@@ -3,8 +3,48 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
   isQrShareableEndpoint,
+  partitionClientSessionsByConnection,
+  partitionEnvironmentsByConnection,
   selectQrEndpointOption,
 } from "./ConnectionsSettings.logic";
+
+describe("partitionEnvironmentsByConnection", () => {
+  const environment = (label: string, phase: string) => ({ label, connection: { phase } });
+
+  it("keeps connected and in-flight environments visible above the disconnected fold", () => {
+    const result = partitionEnvironmentsByConnection([
+      environment("Connected", "connected"),
+      environment("Connecting", "connecting"),
+      environment("Reconnecting", "reconnecting"),
+      environment("Idle", "idle"),
+      environment("Failed", "error"),
+    ]);
+
+    expect(result.connected.map(({ label }) => label)).toEqual([
+      "Connected",
+      "Connecting",
+      "Reconnecting",
+    ]);
+    expect(result.disconnected.map(({ label }) => label)).toEqual(["Idle", "Failed"]);
+  });
+
+  it("returns empty groups when the catalog is empty", () => {
+    expect(partitionEnvironmentsByConnection([])).toEqual({ connected: [], disconnected: [] });
+  });
+});
+
+describe("partitionClientSessionsByConnection", () => {
+  it("keeps the current and live sessions above the disconnected fold", () => {
+    const current = { id: "current", current: true, connected: false };
+    const live = { id: "live", current: false, connected: true };
+    const offline = { id: "offline", current: false, connected: false };
+
+    expect(partitionClientSessionsByConnection([current, live, offline])).toEqual({
+      connected: [current, live],
+      disconnected: [offline],
+    });
+  });
+});
 
 const baseWslState: DesktopWslState = {
   enabled: false,
@@ -123,13 +163,13 @@ describe("selectQrEndpointOption", () => {
       qrShareable: false,
     },
     {
-      id: "tailscale-ip:http://100.84.12.7:4780",
-      preferenceKey: "tailscale:ip:http",
+      id: "private-ip:http://100.84.12.7:4780",
+      preferenceKey: "private:ip:http",
       qrShareable: true,
     },
     {
-      id: "tailscale-ip:http://100.84.12.8:4780",
-      preferenceKey: "tailscale:ip:http",
+      id: "private-ip:http://100.84.12.8:4780",
+      preferenceKey: "private:ip:http",
       qrShareable: true,
     },
     {
@@ -140,8 +180,8 @@ describe("selectQrEndpointOption", () => {
   ];
 
   it("resolves an explicit selection by unique endpoint id, not the shared preference key", () => {
-    expect(selectQrEndpointOption(options, "tailscale-ip:http://100.84.12.8:4780", null)?.id).toBe(
-      "tailscale-ip:http://100.84.12.8:4780",
+    expect(selectQrEndpointOption(options, "private-ip:http://100.84.12.8:4780", null)?.id).toBe(
+      "private-ip:http://100.84.12.8:4780",
     );
   });
 
@@ -152,8 +192,8 @@ describe("selectQrEndpointOption", () => {
   });
 
   it("skips non-QR-shareable options in the fallback so the panel never opens on loopback", () => {
-    expect(selectQrEndpointOption(options, "tailscale-ip:gone", "nope")?.id).toBe(
-      "tailscale-ip:http://100.84.12.7:4780",
+    expect(selectQrEndpointOption(options, "private-ip:gone", "nope")?.id).toBe(
+      "private-ip:http://100.84.12.7:4780",
     );
   });
 

@@ -110,8 +110,6 @@ export function makeReplayServerConfig(
       devAllowedOrigins: [],
       noBrowser: false,
       startupPresentation: "browser",
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
       desktopBootstrapToken: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,

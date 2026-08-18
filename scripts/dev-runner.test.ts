@@ -68,7 +68,6 @@ const devServerInput = {
   port: 13_773,
   devUrl: undefined,
   dryRun: false,
-  share: false,
   runArgs: ["--inspect", "secret-token-value"],
 } as const;
 
@@ -872,8 +871,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       });
     });
 
-    // `tailscale serve` config outlives the process, so a dry run that shared
-    // would replace and then tear down whatever mapping the port already had.
     // Base-dir precedence (--home-dir > worktree .pathway) lives in
     // runDevRunnerWithInput; the env builder must not consult the ambient
     // variable on its own, or it would silently outrank the worktree default
@@ -897,34 +894,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.PATHWAY_HOME, undefined);
       }),
     );
-
-    // Sharing dev:desktop would publish a URL whose renderer dials the
-    // visitor's own loopback, and would clobber the VITE_DEV_SERVER_URL that
-    // Electron loads from. It must decline, not half-work.
-    it.effect("declines to share for dev:desktop and still starts the stack", () => {
-      let spawnCount = 0;
-      const spawnerLayer = Layer.succeed(
-        ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make(() => {
-          spawnCount += 1;
-          return Effect.succeed(mockProcess(0));
-        }),
-      );
-
-      return Effect.gen(function* () {
-        yield* runDevRunnerWithInput({
-          ...devServerInput,
-          mode: "dev:desktop",
-          port: undefined,
-          share: true,
-        }).pipe(
-          Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-          Effect.provideService(HostProcessPlatform, "linux"),
-        );
-
-        assert.equal(spawnCount, 1);
-      });
-    });
 
     // Single-origin browser dev proxies the backend at localhost, so a backend
     // bound only to a specific interface breaks every proxied request in a way
@@ -953,7 +922,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(error.mode, "dev");
         assert.equal(error.host, "192.168.1.10");
         assert.include(error.message, "0.0.0.0");
-        assert.include(error.message, "--share");
+        assert.include(error.message, "Use a wildcard");
       });
     });
 
@@ -1007,141 +976,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         );
 
         assert.equal(spawnCount, 1);
-      });
-    });
-
-    // A shared origin means a remote browser, where unbundled dev's
-    // per-module waterfall pays a tailnet round trip per import level. The
-    // runner defaults bundled dev on for the spawned stack, but only
-    // defaults: an explicit PATHWAY_BUNDLED_DEV (even "0") must pass through.
-    describe("--share bundled dev default", () => {
-      const shareSpawnedEnv = (input: { readonly ambientBundledDev: string | undefined }) =>
-        Effect.gen(function* () {
-          let captured: Record<string, string | undefined> | undefined;
-          const spawnerLayer = Layer.succeed(
-            ChildProcessSpawner.ChildProcessSpawner,
-            ChildProcessSpawner.make((command) => {
-              const spawned = command as unknown as {
-                readonly command: string;
-                readonly args: ReadonlyArray<string>;
-                readonly options?: { readonly env?: Record<string, string | undefined> };
-              };
-              if (spawned.command === "vp") {
-                captured = spawned.options?.env;
-                return Effect.succeed(mockProcess(0));
-              }
-              // tailscale: answer `status --json` with a valid tailnet name,
-              // succeed the `serve`/`off` calls.
-              return Effect.succeed(
-                ChildProcessSpawner.makeHandle({
-                  pid: ChildProcessSpawner.ProcessId(2),
-                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-                  isRunning: Effect.succeed(false),
-                  kill: () => Effect.void,
-                  unref: Effect.succeed(Effect.void),
-                  stdin: Sink.drain,
-                  stdout: spawned.args.includes("status")
-                    ? Stream.make(
-                        new TextEncoder().encode(
-                          JSON.stringify({ Self: { DNSName: "host.example.ts.net." } }),
-                        ),
-                      )
-                    : Stream.empty,
-                  stderr: Stream.empty,
-                  all: Stream.empty,
-                  getInputFd: () => Sink.drain,
-                  getOutputFd: () => Stream.empty,
-                }),
-              );
-            }),
-          );
-
-          yield* runDevRunnerWithInput({
-            ...devServerInput,
-            mode: "dev",
-            port: undefined,
-            share: true,
-          }).pipe(
-            Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-            Effect.provideService(HostProcessPlatform, "linux"),
-            Effect.provideService(
-              HostProcessEnvironment,
-              input.ambientBundledDev === undefined
-                ? {}
-                : { PATHWAY_BUNDLED_DEV: input.ambientBundledDev },
-            ),
-          );
-
-          return captured;
-        });
-
-      it.effect("defaults PATHWAY_BUNDLED_DEV=1 for a shared run", () =>
-        Effect.gen(function* () {
-          const env = yield* shareSpawnedEnv({ ambientBundledDev: undefined });
-          assert.equal(env?.PATHWAY_BUNDLED_DEV, "1");
-        }),
-      );
-
-      it.effect("keeps an explicit PATHWAY_BUNDLED_DEV=0 opt-out", () =>
-        Effect.gen(function* () {
-          const env = yield* shareSpawnedEnv({ ambientBundledDev: "0" });
-          assert.equal(env?.PATHWAY_BUNDLED_DEV, "0");
-        }),
-      );
-
-      it.effect("leaves PATHWAY_BUNDLED_DEV unset without --share", () =>
-        Effect.gen(function* () {
-          let captured: Record<string, string | undefined> | undefined;
-          const spawnerLayer = Layer.succeed(
-            ChildProcessSpawner.ChildProcessSpawner,
-            ChildProcessSpawner.make((command) => {
-              captured = (
-                command as {
-                  readonly options?: { readonly env?: Record<string, string | undefined> };
-                }
-              ).options?.env;
-              return Effect.succeed(mockProcess(0));
-            }),
-          );
-
-          yield* runDevRunnerWithInput({
-            ...devServerInput,
-            mode: "dev",
-            port: undefined,
-          }).pipe(
-            Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-            Effect.provideService(HostProcessPlatform, "linux"),
-            Effect.provideService(HostProcessEnvironment, {}),
-          );
-
-          assert.equal(captured?.PATHWAY_BUNDLED_DEV, undefined);
-        }),
-      );
-    });
-
-    it.effect("spawns nothing when --dry-run is combined with --share", () => {
-      let spawnCount = 0;
-      const spawnerLayer = Layer.succeed(
-        ChildProcessSpawner.ChildProcessSpawner,
-        ChildProcessSpawner.make(() => {
-          spawnCount += 1;
-          return Effect.succeed(mockProcess(0));
-        }),
-      );
-
-      return Effect.gen(function* () {
-        yield* runDevRunnerWithInput({
-          ...devServerInput,
-          mode: "dev",
-          port: undefined,
-          dryRun: true,
-          share: true,
-        }).pipe(
-          Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-          Effect.provideService(HostProcessPlatform, "linux"),
-        );
-
-        assert.equal(spawnCount, 0);
       });
     });
 

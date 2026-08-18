@@ -59,8 +59,8 @@ const sourcemapEnv = process.env.PATHWAY_WEB_SOURCEMAP?.trim().toLowerCase();
 // Vite 8.1's experimental bundled dev mode: serves rolldown-bundled chunks in
 // dev for much faster startup/reload on large module graphs, with HMR served
 // as hot patches. Opt-in while experimental: PATHWAY_BUNDLED_DEV=1 pnpm dev:web
-// The dev runner defaults this on for --share runs (remote browsers pay a
-// round trip per import level in unbundled dev); PATHWAY_BUNDLED_DEV=0 opts out.
+// Remote browsers pay a round trip per import level in unbundled dev;
+// PATHWAY_BUNDLED_DEV=0 opts out.
 const bundledDevEnv = process.env.PATHWAY_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
 
@@ -89,7 +89,7 @@ function resolveDevProxyTarget(
   wsUrl: string | undefined,
 ): string | undefined {
   // Browser dev is single-origin: the backend port is proxied through this
-  // server so the app works from any origin (localhost, tailnet, LAN, phone).
+  // server so the app works from any origin (localhost, tunnel, LAN, phone).
   // PATHWAY_PORT is set by scripts/dev-runner.ts for every non-desktop mode.
   const port = Number(backendPort?.trim());
   if (Number.isInteger(port) && port > 0) {
@@ -121,7 +121,7 @@ function resolveDevProxyTarget(
 const devProxyTarget = resolveDevProxyTarget(process.env.PATHWAY_PORT, configuredWsUrl);
 
 // Vite's dev server sends JS uncompressed. On localhost that is free; over a
-// shared origin (tailnet, LAN) it is the whole cold-start: bundled dev serves
+// shared origin (tunnel, LAN) it is the whole cold-start: bundled dev serves
 // one ~25 MB chunk, and a typical uplink moves that in about a minute while
 // both machines sit idle. Compressing turns it into a few seconds of CPU.
 // Brotli quality 5 keeps encode time in the hundreds of ms; the default
@@ -142,15 +142,13 @@ function devCompressionPlugin(): Plugin {
   };
 }
 
-// Vite rejects requests whose Host header isn't localhost, which blocks sharing
-// a dev server over Tailscale/LAN. Tailnet names are safe to allow wholesale:
-// the DNS is controlled by tailscale, so they can't be rebound by an attacker.
-// Anything else (ngrok, a LAN IP alias) goes through the env var.
+// Vite rejects requests whose Host header isn't localhost. Explicitly shared
+// development hosts are allowed through the environment variable.
 const configuredAllowedHosts = (process.env.PATHWAY_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
-const allowedHosts = [".ts.net", ...configuredAllowedHosts];
+const allowedHosts = configuredAllowedHosts;
 
 export default defineConfig(() => {
   return {
@@ -220,7 +218,7 @@ export default defineConfig(() => {
       // Transform the whole module graph at server start instead of on the
       // first request. Without this, a cold worktree discovers and transforms
       // modules one import-level at a time while the browser waits — which
-      // over a tailnet origin turns into minutes of waterfall.
+      // over a remote origin turns into minutes of waterfall.
       warmup: {
         clientFiles: ["./src/main.tsx"],
       },
@@ -246,7 +244,7 @@ export default defineConfig(() => {
       // Electron's BrowserWindow needs the HMR socket pinned to an explicit
       // host to connect reliably; dev:desktop is the only mode that sets HOST.
       // Everywhere else, leaving this unset lets the client derive it from the
-      // page origin, which is what makes HMR work over Tailscale/LAN instead of
+      // page origin, which is what makes HMR work over a tunnel or LAN instead of
       // failing an attempt against the wrong machine's localhost first.
       // (Vite 8 logs connection state via console.debug — enable "Verbose".)
       ...(explicitHost

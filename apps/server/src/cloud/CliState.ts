@@ -17,7 +17,7 @@ export const CLOUD_CLI_DESIRED_LINK_SECRET = "cloud-cli-desired-link";
 // "managed" provisions a Cloudflare tunnel (default, legacy value "true").
 // "publish_only" links the environment to the relay purely to publish agent
 // activity — no tunnel, no relay-advertised endpoint — so activity can flow to
-// mobile clients even when they reach the environment out of band (Tailscale,
+// mobile clients even when they reach the environment through a direct endpoint
 // direct pairing) without Pathway Connect.
 export type CliDesiredLinkMode = "managed" | "publish_only";
 

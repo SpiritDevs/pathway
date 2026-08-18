@@ -19,7 +19,6 @@
     "@spiritdevs/contracts": "workspace:*",
     "@spiritdevs/shared": "workspace:*",
     "@spiritdevs/ssh": "workspace:*",
-    "@spiritdevs/tailscale": "workspace:*",
     "effect": "catalog:",
     "electron": "41.5.0",
     "electron-store": "^8.2.0",

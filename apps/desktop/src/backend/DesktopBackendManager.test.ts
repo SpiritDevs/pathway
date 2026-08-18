@@ -47,8 +47,6 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
     pathwayHome: "/tmp/pathway",
     host: "127.0.0.1",
     desktopBootstrapToken: "token",
-    tailscaleServeEnabled: false,
-    tailscaleServePort: 443,
     desktopTelemetryFd: 4,
     desktopTelemetryControlFd: 5,
   },
@@ -61,7 +59,6 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
 
 const configWithObservability: DesktopBackendBootstrapValue = {
   ...baseConfig.bootstrap,
-  tailscaleServeEnabled: true,
   desktopTelemetryFd: 4,
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };

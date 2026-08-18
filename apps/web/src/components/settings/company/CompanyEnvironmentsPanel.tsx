@@ -7,6 +7,7 @@ import {
 } from "@spiritdevs/contracts/cloudProject";
 import {
   CheckIcon,
+  ChevronRightIcon,
   CircleStopIcon,
   CopyIcon,
   InfoIcon,
@@ -31,6 +32,7 @@ import { writeTextToClipboard } from "../../../hooks/useCopyToClipboard";
 import { PrimaryEnvironmentHttpClient } from "../../../environments/primary/httpClient";
 import { runPrimaryHttp } from "../../../lib/runtime";
 import { primaryEnvironmentIdAtom } from "../../../state/primaryEnvironment";
+import { useEnvironments } from "../../../state/environments";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
 import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
 import {
@@ -39,6 +41,17 @@ import {
 } from "../../../cloud/useCloudLinkController";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../../ui/alert-dialog";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../../ui/collapsible";
 import { Input } from "../../ui/input";
 import {
   DropdownMenu,
@@ -57,6 +70,7 @@ import {
 } from "../../ui/sheet";
 import { Textarea } from "../../ui/textarea";
 import { EnvironmentConnectionSettings } from "../ConnectionsSettings";
+import { partitionEnvironmentsByConnection } from "../ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
 import { permissionGate } from "./companySettings.logic";
 import {
@@ -134,7 +148,8 @@ function commandStateBadge(state: EnvironmentCommandRecord["state"]) {
 }
 
 function EnvironmentList({
-  rows,
+  connectedRows,
+  disconnectedRows,
   ownManagedEndpointAvailable,
   ownCloudLinkPhase,
   ownCloudLinkError,
@@ -143,8 +158,10 @@ function EnvironmentList({
   deletingEnvironmentId,
   onInfo,
   onDelete,
+  onDeleteAllDisconnected,
 }: {
-  readonly rows: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly connectedRows: ReadonlyArray<CompanyEnvironmentRow>;
+  readonly disconnectedRows: ReadonlyArray<CompanyEnvironmentRow>;
   readonly ownManagedEndpointAvailable: boolean | null;
   readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
   readonly ownCloudLinkError: string | null;
@@ -153,7 +170,26 @@ function EnvironmentList({
   readonly deletingEnvironmentId: EnvironmentId | null;
   readonly onInfo: (environmentId: EnvironmentId) => void;
   readonly onDelete: (environment: CompanyEnvironmentRow) => void;
+  readonly onDeleteAllDisconnected: () => void;
 }) {
+  const [disconnectedOpen, setDisconnectedOpen] = useState(false);
+  const [removeAllOpen, setRemoveAllOpen] = useState(false);
+  const rows = [...connectedRows, ...disconnectedRows];
+  const renderRow = (row: CompanyEnvironmentRow) => (
+    <EnvironmentListRow
+      key={row.registration.id}
+      row={row}
+      ownManagedEndpointAvailable={ownManagedEndpointAvailable}
+      ownCloudLinkPhase={ownCloudLinkPhase}
+      ownCloudLinkError={ownCloudLinkError}
+      deleteEnabled={deleteEnabled}
+      deleteTooltip={deleteTooltip}
+      deleting={deletingEnvironmentId === row.environmentId}
+      onInfo={() => onInfo(row.environmentId)}
+      onDelete={() => onDelete(row)}
+    />
+  );
+
   return (
     <CompanySectionCard>
       {rows.length === 0 ? (
@@ -161,20 +197,75 @@ function EnvironmentList({
           No environments are registered with this company.
         </div>
       ) : (
-        rows.map((row) => (
-          <EnvironmentListRow
-            key={row.registration.id}
-            row={row}
-            ownManagedEndpointAvailable={ownManagedEndpointAvailable}
-            ownCloudLinkPhase={ownCloudLinkPhase}
-            ownCloudLinkError={ownCloudLinkError}
-            deleteEnabled={deleteEnabled}
-            deleteTooltip={deleteTooltip}
-            deleting={deletingEnvironmentId === row.environmentId}
-            onInfo={() => onInfo(row.environmentId)}
-            onDelete={() => onDelete(row)}
-          />
-        ))
+        <>
+          <div className="flex min-h-9 items-center gap-2 border-b px-4 text-xs font-medium text-muted-foreground">
+            <span>Connected</span>
+            <span className="tabular-nums text-muted-foreground/60">{connectedRows.length}</span>
+          </div>
+          {connectedRows.length > 0 ? (
+            connectedRows.map(renderRow)
+          ) : (
+            <p className="border-b px-4 py-4 text-xs text-muted-foreground/70">
+              No environments are connected.
+            </p>
+          )}
+          {disconnectedRows.length > 0 ? (
+            <Collapsible open={disconnectedOpen} onOpenChange={setDisconnectedOpen}>
+              <div className="flex min-h-11 items-center justify-between gap-3 px-4">
+                <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs font-medium text-muted-foreground outline-hidden ring-ring hover:text-foreground focus-visible:ring-2">
+                  <ChevronRightIcon
+                    aria-hidden
+                    className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                  />
+                  <span>Disconnected</span>
+                  <span className="tabular-nums text-muted-foreground/60">
+                    {disconnectedRows.length}
+                  </span>
+                </CollapsibleTrigger>
+                <AlertDialog open={removeAllOpen} onOpenChange={setRemoveAllOpen}>
+                  <AlertDialogTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="destructive-outline"
+                        disabled={!deleteEnabled || deletingEnvironmentId !== null}
+                      />
+                    }
+                  >
+                    Remove all
+                  </AlertDialogTrigger>
+                  <AlertDialogPopup>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Remove disconnected environments?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This removes {disconnectedRows.length} disconnected{" "}
+                        {disconnectedRows.length === 1 ? "environment" : "environments"} from the
+                        workspace. Their server data will not be deleted.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogClose render={<Button variant="outline" />}>
+                        Cancel
+                      </AlertDialogClose>
+                      <Button
+                        variant="destructive"
+                        onClick={() => {
+                          setRemoveAllOpen(false);
+                          onDeleteAllDisconnected();
+                        }}
+                      >
+                        Remove all
+                      </Button>
+                    </AlertDialogFooter>
+                  </AlertDialogPopup>
+                </AlertDialog>
+              </div>
+              <CollapsiblePanel>
+                <div className="border-t">{disconnectedRows.map(renderRow)}</div>
+              </CollapsiblePanel>
+            </Collapsible>
+          ) : null}
+        </>
       )}
     </CompanySectionCard>
   );
@@ -571,6 +662,7 @@ function CommandHistory({
 export function CompanyEnvironmentsPanel() {
   const settings = useCompanySettings();
   const control = useEnvironmentControl();
+  const { environments } = useEnvironments();
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
   const ownEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   const primaryCloudLinkState = usePrimaryCloudLinkState();
@@ -592,6 +684,21 @@ export function CompanyEnvironmentsPanel() {
       }),
     [catalog.entries, ownEnvironmentId, registrations, settings.directory.teams],
   );
+  const companyEnvironmentsByConnection = useMemo(() => {
+    const connectionByEnvironmentId = new Map(
+      environments.map((environment) => [environment.environmentId, environment.connection]),
+    );
+    const partitioned = partitionEnvironmentsByConnection(
+      rows.map((row) => ({
+        row,
+        connection: connectionByEnvironmentId.get(row.environmentId) ?? { phase: "offline" },
+      })),
+    );
+    return {
+      connected: partitioned.connected.map(({ row }) => row),
+      disconnected: partitioned.disconnected.map(({ row }) => row),
+    };
+  }, [environments, rows]);
   const registeredEnvironmentIds = useMemo(
     () => new Set(rows.map((row) => row.environmentId)),
     [rows],
@@ -795,7 +902,8 @@ export function CompanyEnvironmentsPanel() {
               </CompanySectionCard>
             ) : null}
             <EnvironmentList
-              rows={rows}
+              connectedRows={companyEnvironmentsByConnection.connected}
+              disconnectedRows={companyEnvironmentsByConnection.disconnected}
               ownManagedEndpointAvailable={ownManagedEndpointAvailable}
               ownCloudLinkPhase={cloudLinkStatus.phase}
               ownCloudLinkError={primaryCloudLinkState.error ?? cloudLinkStatus.error}
@@ -825,6 +933,17 @@ export function CompanyEnvironmentsPanel() {
                   }
                   setEnvironmentInfoOpen(false);
                   setSelectedEnvironmentId(null);
+                });
+              }}
+              onDeleteAllDisconnected={() => {
+                if (control === null) return;
+                void runAction("deactivate-all-disconnected", async () => {
+                  for (const environment of companyEnvironmentsByConnection.disconnected) {
+                    await control.deactivateEnvironment({
+                      companyId,
+                      environmentId: environment.environmentId,
+                    });
+                  }
                 });
               }}
             />

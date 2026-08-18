@@ -22,11 +22,6 @@ authenticated.
 ## Dev
 
 - `vp run dev`: Starts contracts, server, and web in watch mode.
-- `vp run dev --share`: Also publishes the web port over HTTPS on this machine's tailnet. The
-  startup pairing URL is built against the shared origin, and the mapping is removed on exit.
-  Shared runs default to Vite's bundled dev mode (`PATHWAY_BUNDLED_DEV=1`): a remote browser pays a
-  network round trip per import level in unbundled dev, which turns a cold module graph into
-  minutes of waterfall. Set `PATHWAY_BUNDLED_DEV=0` to opt a shared run back out.
 - `vp run dev --browser`: Auto-opens a browser. Off by default. The dev runner writes
   `PATHWAY_NO_BROWSER` itself from this flag, so setting `PATHWAY_NO_BROWSER=0` in your environment has
   no effect; use `--browser`.
@@ -99,7 +94,7 @@ authenticated.
 
 `dev` and `dev:web` leave `VITE_HTTP_URL` and `VITE_WS_URL` unset so the browser resolves the backend
 from `window.location.origin`. Vite proxies `/api`, `/ws`, `/oauth`, and `/.well-known` to the
-server, allowing the same bundle to work from localhost or a tailnet hostname.
+server, allowing the same bundle to work from localhost or another explicitly configured hostname.
 
 ## Running multiple dev instances
 

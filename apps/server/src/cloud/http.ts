@@ -324,7 +324,7 @@ function isAllowedEndpointOrigin(input: {
 
 // A managed (Cloudflare tunnel) endpoint is provisioned by the relay and must
 // point at a loopback origin. A manual endpoint is reached out of band (e.g.
-// Tailscale) or not advertised at all for publish-only links, so it is not
+// another direct endpoint) or not advertised at all for publish-only links, so it is not
 // tied to the managed-tunnel scope.
 export function isSupportedLinkProviderKind(request: RelayLinkProofRequest): boolean {
   return (

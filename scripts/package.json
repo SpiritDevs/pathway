@@ -10,7 +10,6 @@
     "@effect/platform-node": "catalog:",
     "@spiritdevs/contracts": "workspace:*",
     "@spiritdevs/shared": "workspace:*",
-    "@spiritdevs/tailscale": "workspace:*",
     "effect": "catalog:",
     "pngjs": "7.0.0",
     "yaml": "catalog:"

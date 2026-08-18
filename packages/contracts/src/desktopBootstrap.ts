@@ -12,8 +12,6 @@ export const DesktopBackendBootstrap = Schema.Struct({
   pathwayHome: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
-  tailscaleServeEnabled: Schema.Boolean,
-  tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),

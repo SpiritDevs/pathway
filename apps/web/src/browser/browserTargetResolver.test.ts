@@ -25,7 +25,7 @@ describe("browser target resolver", () => {
     });
   });
 
-  it("maps localhost URL navigation onto a remote Tailscale IPv4 host", async () => {
+  it("maps localhost URL navigation onto a remote private IPv4 host", async () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://100.65.180.100:3773" });
     const { resolveBrowserNavigationTarget } = await import("./browserTargetResolver");
     expect(

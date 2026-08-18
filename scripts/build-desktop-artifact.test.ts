@@ -163,7 +163,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "@spiritdevs/contracts": "workspace:*",
           "@spiritdevs/shared": "workspace:*",
           "@spiritdevs/ssh": "workspace:*",
-          "@spiritdevs/tailscale": "workspace:*",
           effect: "catalog:",
           electron: "41.5.0",
         },

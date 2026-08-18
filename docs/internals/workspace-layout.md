@@ -30,8 +30,6 @@ the task commands.
   [README](../../packages/client-runtime/README.md).
 - `packages/ssh` (`@spiritdevs/ssh`): SSH config parsing, auth prompts, command execution, and the
   tunnel/environment manager behind desktop-managed SSH environments.
-- `packages/tailscale` (`@spiritdevs/tailscale`): Tailscale CLI wrapper, including the
-  `ensureTailscaleServe` / `disableTailscaleServe` serve lifecycle the server drives.
 - `packages/effect-acp` (`effect-acp`): Effect client and agent implementation of the Agent Client
   Protocol, used by ACP-speaking provider drivers.
 - `packages/effect-codex-app-server` (`effect-codex-app-server`): Effect client for the

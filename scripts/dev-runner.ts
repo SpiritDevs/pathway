@@ -22,7 +22,6 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
-import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 Object.assign(process.env, loadRepoEnv());
@@ -44,10 +43,7 @@ const FETCH_BAD_PORTS = new Set([
   6669, 6679, 6697, 10080,
 ]);
 // Dev servers bind loopback, so loopback is the only interface whose
-// availability decides whether we can use a port. Probing wildcards too made
-// the runner walk away from a perfectly free port whenever something else held
-// the same number on another interface — `tailscale serve` does exactly that,
-// which silently moved the ports out from under a URL that had just been shared.
+// availability decides whether we can use a port.
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "::1"] as const;
 
 /**
@@ -189,7 +185,7 @@ export class DevRunnerHostNotProxiableError extends Schema.TaggedErrorClass<DevR
   },
 ) {
   override get message(): string {
-    return `--host ${this.host} cannot be combined with ${this.mode}: single-origin browser dev proxies the backend at localhost, and a backend bound only to ${this.host} leaves localhost unanswered, so every proxied request fails. Use a wildcard (0.0.0.0 or ::) to serve that interface and loopback together, or --share for remote access.`;
+    return `--host ${this.host} cannot be combined with ${this.mode}: single-origin browser dev proxies the backend at localhost, and a backend bound only to ${this.host} leaves localhost unanswered, so every proxied request fails. Use a wildcard (0.0.0.0 or ::) to serve that interface and loopback together.`;
   }
 }
 
@@ -366,7 +362,7 @@ export function createDevRunnerEnv({
         // window.location.origin rather than a baked-in localhost URL. See
         // resolveConfiguredPrimaryTarget in apps/web/src/environments/primary/target.ts
         // — it only defers to the origin when both of these are absent. Baking
-        // localhost here is what breaks any non-localhost origin (tailnet, LAN,
+        // localhost here is what breaks any non-localhost origin (tunnel, LAN,
         // phone): the remote browser dials its own machine.
         delete output.VITE_HTTP_URL;
         delete output.VITE_WS_URL;
@@ -629,7 +625,6 @@ interface DevRunnerCliInput {
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
   readonly dryRun: boolean;
-  readonly share: boolean;
   readonly runArgs: ReadonlyArray<string>;
 }
 
@@ -712,96 +707,8 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.PATHWAY_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
     );
 
-    // Before the share block: --dry-run only resolves and prints. Sharing would
-    // replace, then tear down, whatever mapping the port already had — a
-    // surprising side effect from a command documented as inert.
     if (input.dryRun) {
       return;
-    }
-
-    const sharedWebPort = BASE_WEB_PORT + webOffset;
-    if (input.share) {
-      if (input.mode === "dev:server") {
-        yield* Effect.logInfo("[dev-runner] --share has no effect for dev:server (no web server).");
-      } else if (input.mode === "dev:desktop") {
-        // Desktop is not single-origin: the renderer gets VITE_HTTP_URL and
-        // VITE_WS_URL baked to loopback, so a tailnet visitor would load the UI
-        // and then watch it dial its own 127.0.0.1 for the backend. Worse,
-        // sharing would overwrite VITE_DEV_SERVER_URL, which is the origin
-        // Electron itself loads the renderer from. Refuse rather than hand out
-        // a URL that is broken in a way the user cannot see.
-        yield* Effect.logWarning(
-          "[dev-runner] --share is not supported for dev:desktop (the renderer is pinned to loopback). Use `dev`, which runs the whole browser stack.",
-        );
-      } else {
-        // acquireRelease, not share-then-addFinalizer: the mapping outlives this
-        // process (and reboots), so the cleanup has to be registered atomically
-        // with creating it. An interrupt landing in between would otherwise
-        // leave a mapping pointing at a port nothing is listening on.
-        //
-        // Deliberately no ownership tracking beyond that: if a second runner
-        // takes this port during a fast restart, the first's exit can briefly
-        // tear down the new mapping — visible (the URL stops working) and fixed
-        // by re-running --share. A lease protocol closing that window existed
-        // and was removed as more machinery than a dev convenience warrants.
-        //
-        // A tailnet that isn't up shouldn't stop the dev server from starting —
-        // warn, and carry on serving locally.
-        const shared = yield* Effect.acquireRelease(
-          shareDevServer({ webPort: sharedWebPort }),
-          () =>
-            // Serve config outlives this process, so a cleanup that did not
-            // take leaves a tailnet URL pointing at a port nothing serves.
-            unshareDevServer(sharedWebPort).pipe(
-              Effect.flatMap((result) =>
-                result.cleared
-                  ? Effect.void
-                  : Effect.logWarning(
-                      `[dev-runner] could not remove the tailnet mapping for port ${String(sharedWebPort)}${
-                        result.explanation ? `: ${result.explanation}` : ""
-                      }. Remove it with \`tailscale serve --https=${String(sharedWebPort)} off\`.`,
-                    ),
-              ),
-            ),
-        ).pipe(
-          Effect.tapError((error: DevShareError) =>
-            Effect.logWarning(
-              `[dev-runner] could not share on the tailnet: ${error.message}${
-                error.hint ? ` — ${error.hint}` : ""
-              }`,
-            ),
-          ),
-          Effect.option,
-          Effect.map(Option.getOrUndefined),
-        );
-
-        if (shared) {
-          // The app is reached from the tailnet origin. Vite already allows
-          // *.ts.net hosts; the backend needs the origin for credentialed
-          // requests that bypass the proxy (desktop renderer, direct calls).
-          env.PATHWAY_DEV_ALLOWED_ORIGINS = [
-            env.PATHWAY_DEV_ALLOWED_ORIGINS,
-            new URL(shared.url).origin,
-          ]
-            .filter((entry) => entry && entry.length > 0)
-            .join(",");
-          // The server builds its pairing URL from this, so the URL printed at
-          // startup is already the shareable one — no rewriting by hand. An
-          // explicit --dev-url still wins.
-          if (input.devUrl === undefined) {
-            env.VITE_DEV_SERVER_URL = shared.url;
-          }
-          // A shared origin serves a remote browser, where unbundled dev's
-          // per-module requests each pay a tailnet round trip — a cold module
-          // graph takes minutes to first paint. Bundled dev collapses that to
-          // a few chunk requests. Only defaulted, so PATHWAY_BUNDLED_DEV=0
-          // still opts a --share run back out.
-          if (env.PATHWAY_BUNDLED_DEV === undefined) {
-            env.PATHWAY_BUNDLED_DEV = "1";
-          }
-          yield* Effect.logInfo(`[dev-runner] shared on tailnet: ${shared.url}`);
-        }
-      }
     }
 
     const spawnCommand = yield* resolveSpawnCommand(
@@ -901,12 +808,6 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   dryRun: Flag.boolean("dry-run").pipe(
     Flag.withDescription("Resolve mode/ports/env and print, but do not spawn Vite+."),
-    Flag.withDefault(false),
-  ),
-  share: Flag.boolean("share").pipe(
-    Flag.withDescription(
-      "Publish the web dev server on this machine's tailnet over HTTPS (via `tailscale serve`) and print the pairing URL for it. Removed again on exit.",
-    ),
     Flag.withDefault(false),
   ),
   runArgs: Argument.string("run-arg").pipe(

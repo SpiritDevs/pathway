@@ -1,4 +1,5 @@
 import {
+  ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
   PlusIcon,
   QrCodeIcon,
@@ -42,6 +43,8 @@ import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls
 import {
   applyWslEnableSelection,
   isQrShareableEndpoint,
+  partitionClientSessionsByConnection,
+  partitionEnvironmentsByConnection,
   selectQrEndpointOption,
 } from "./ConnectionsSettings.logic";
 import {
@@ -54,7 +57,6 @@ import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
-  DialogClose,
   DialogFooter,
   DialogDescription,
   DialogHeader,
@@ -72,6 +74,7 @@ import {
   AlertDialogHeader,
   AlertDialogPopup,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "../ui/alert-dialog";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { QRCodeSvg } from "../ui/qr-code";
@@ -81,6 +84,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
 import { Textarea } from "../ui/textarea";
@@ -88,7 +92,6 @@ import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
 import { readHostedPairingRequest } from "../../hostedPairing";
 import {
   createServerPairingCredential,
-  revokeOtherServerClientSessions,
   revokeServerClientSession,
   revokeServerPairingLink,
   isLoopbackHostname,
@@ -126,7 +129,6 @@ import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 
-const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 
@@ -438,10 +440,6 @@ function selectPairingEndpoint(
   );
 }
 
-function isTailscaleHttpsEndpoint(endpoint: AdvertisedEndpoint): boolean {
-  return endpoint.id.startsWith("tailscale-magicdns:");
-}
-
 function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   if (endpoint.id.startsWith("desktop-loopback:")) {
     return "desktop-core:loopback:http";
@@ -449,13 +447,6 @@ function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   if (endpoint.id.startsWith("desktop-lan:")) {
     return "desktop-core:lan:http";
   }
-  if (endpoint.id.startsWith("tailscale-ip:")) {
-    return "tailscale:ip:http";
-  }
-  if (isTailscaleHttpsEndpoint(endpoint)) {
-    return "tailscale:magicdns:https";
-  }
-
   let scheme = "unknown";
   try {
     scheme = new URL(endpoint.httpBaseUrl).protocol.replace(/:$/u, "");
@@ -882,6 +873,7 @@ type ConnectedClientListRowProps = {
   clientSession: ServerClientSessionRecord;
   presentation?: AccessSectionPresentation;
   revokingClientSessionId: string | null;
+  disableActions?: boolean;
   onRevokeSession: (sessionId: ServerClientSessionRecord["sessionId"]) => void;
 };
 
@@ -889,6 +881,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
   clientSession,
   presentation = "current",
   revokingClientSessionId,
+  disableActions = false,
   onRevokeSession,
 }: ConnectedClientListRowProps) {
   const nowMs = useRelativeTimeTick(1_000);
@@ -946,7 +939,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
             <Button
               size="xs"
               variant="destructive-outline"
-              disabled={revokingClientSessionId === clientSession.sessionId}
+              disabled={disableActions || revokingClientSessionId === clientSession.sessionId}
               onClick={() => void onRevokeSession(clientSession.sessionId)}
             >
               {revokingClientSessionId === clientSession.sessionId ? "Revoking…" : "Revoke"}
@@ -959,15 +952,11 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
 });
 
 type AuthorizedClientsHeaderActionProps = {
-  clientSessions: ReadonlyArray<ServerClientSessionRecord>;
-  isRevokingOtherClients: boolean;
-  onRevokeOtherClients: () => void;
+  readonly disabled?: boolean;
 };
 
 const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
-  clientSessions,
-  isRevokingOtherClients,
-  onRevokeOtherClients,
+  disabled = false,
 }: AuthorizedClientsHeaderActionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
@@ -1005,16 +994,6 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 
   return (
     <div className="flex items-center gap-2">
-      <Button
-        size="xs"
-        variant="destructive-outline"
-        disabled={
-          isRevokingOtherClients || clientSessions.every((clientSession) => clientSession.current)
-        }
-        onClick={() => void onRevokeOtherClients()}
-      >
-        {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
-      </Button>
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
@@ -1027,7 +1006,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       >
         <DialogTrigger
           render={
-            <Button size="xs" variant="default">
+            <Button size="xs" variant="default" disabled={disabled}>
               <PlusIcon className="size-3" />
               Create link
             </Button>
@@ -1142,8 +1121,12 @@ type PairingClientsListProps = {
   clientSessions: ReadonlyArray<ServerClientSessionRecord>;
   revokingPairingLinkId: string | null;
   revokingClientSessionId: string | null;
+  isRevokingDisconnectedClients: boolean;
   onRevokePairingLink: (id: string) => void;
   onRevokeClientSession: (sessionId: ServerClientSessionRecord["sessionId"]) => void;
+  onRevokeDisconnectedClients: (
+    sessionIds: ReadonlyArray<ServerClientSessionRecord["sessionId"]>,
+  ) => void;
 };
 
 const PairingClientsList = memo(function PairingClientsList({
@@ -1156,37 +1139,154 @@ const PairingClientsList = memo(function PairingClientsList({
   clientSessions,
   revokingPairingLinkId,
   revokingClientSessionId,
+  isRevokingDisconnectedClients,
   onRevokePairingLink,
   onRevokeClientSession,
+  onRevokeDisconnectedClients,
 }: PairingClientsListProps) {
+  const [disconnectedClientsOpen, setDisconnectedClientsOpen] = useState(false);
+  const [revokeAllDisconnectedOpen, setRevokeAllDisconnectedOpen] = useState(false);
+  const clientSessionsByConnection = useMemo(
+    () => partitionClientSessionsByConnection(clientSessions),
+    [clientSessions],
+  );
+  const disconnectedSessionIds = clientSessionsByConnection.disconnected.map(
+    ({ sessionId }) => sessionId,
+  );
+
   return (
     <>
-      {pairingLinks.map((pairingLink) => (
-        <PairingLinkListRow
-          key={pairingLink.id}
-          pairingLink={pairingLink}
-          endpointUrl={endpointUrl}
-          endpoints={endpoints}
-          defaultEndpointKey={defaultEndpointKey}
-          presentation={presentation}
-          revokingPairingLinkId={revokingPairingLinkId}
-          onRevoke={onRevokePairingLink}
-        />
-      ))}
+      {pairingLinks.length > 0 ? (
+        <div className="space-y-1">
+          <div className="flex min-h-7 items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground sm:px-4">
+            <span>Pairing links</span>
+            <span className="tabular-nums text-muted-foreground/60">{pairingLinks.length}</span>
+          </div>
+          {pairingLinks.map((pairingLink) => (
+            <PairingLinkListRow
+              key={pairingLink.id}
+              pairingLink={pairingLink}
+              endpointUrl={endpointUrl}
+              endpoints={endpoints}
+              defaultEndpointKey={defaultEndpointKey}
+              presentation={presentation}
+              revokingPairingLinkId={revokingPairingLinkId}
+              onRevoke={onRevokePairingLink}
+            />
+          ))}
+        </div>
+      ) : null}
 
-      {clientSessions.map((clientSession) => (
-        <ConnectedClientListRow
-          key={clientSession.sessionId}
-          clientSession={clientSession}
-          presentation={presentation}
-          revokingClientSessionId={revokingClientSessionId}
-          onRevokeSession={onRevokeClientSession}
-        />
-      ))}
+      {clientSessions.length > 0 ? (
+        <div className="space-y-1">
+          <div className="flex min-h-7 items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground sm:px-4">
+            <span>Connected</span>
+            <span className="tabular-nums text-muted-foreground/60">
+              {clientSessionsByConnection.connected.length}
+            </span>
+          </div>
+          {clientSessionsByConnection.connected.map((clientSession) => (
+            <ConnectedClientListRow
+              key={clientSession.sessionId}
+              clientSession={clientSession}
+              presentation={presentation}
+              revokingClientSessionId={revokingClientSessionId}
+              disableActions={isRevokingDisconnectedClients}
+              onRevokeSession={onRevokeClientSession}
+            />
+          ))}
+          {clientSessionsByConnection.disconnected.length > 0 ? (
+            <Collapsible
+              open={disconnectedClientsOpen}
+              onOpenChange={setDisconnectedClientsOpen}
+              className="pt-1"
+            >
+              <div className="flex min-h-9 items-center justify-between gap-3 px-3 sm:px-4">
+                <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs font-medium text-muted-foreground outline-hidden ring-ring hover:text-foreground focus-visible:ring-2">
+                  <ChevronRightIcon
+                    aria-hidden
+                    className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                  />
+                  <span>Disconnected</span>
+                  <span className="tabular-nums text-muted-foreground/60">
+                    {clientSessionsByConnection.disconnected.length}
+                  </span>
+                </CollapsibleTrigger>
+                <AlertDialog
+                  open={revokeAllDisconnectedOpen}
+                  onOpenChange={setRevokeAllDisconnectedOpen}
+                >
+                  <AlertDialogTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="destructive-outline"
+                        disabled={isRevokingDisconnectedClients}
+                      />
+                    }
+                  >
+                    Revoke all
+                  </AlertDialogTrigger>
+                  <AlertDialogPopup>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Revoke disconnected devices?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This revokes access for {disconnectedSessionIds.length} disconnected{" "}
+                        {disconnectedSessionIds.length === 1 ? "device" : "devices"}. They will need
+                        a new pairing link before reconnecting.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogClose
+                        disabled={isRevokingDisconnectedClients}
+                        render={
+                          <Button variant="outline" disabled={isRevokingDisconnectedClients} />
+                        }
+                      >
+                        Cancel
+                      </AlertDialogClose>
+                      <Button
+                        variant="destructive"
+                        disabled={isRevokingDisconnectedClients}
+                        onClick={() => {
+                          onRevokeDisconnectedClients(disconnectedSessionIds);
+                        }}
+                      >
+                        {isRevokingDisconnectedClients ? (
+                          <>
+                            <Spinner className="size-3.5" />
+                            Revoking…
+                          </>
+                        ) : (
+                          "Revoke all"
+                        )}
+                      </Button>
+                    </AlertDialogFooter>
+                  </AlertDialogPopup>
+                </AlertDialog>
+              </div>
+              <CollapsiblePanel>
+                <div className="space-y-1">
+                  {clientSessionsByConnection.disconnected.map((clientSession) => (
+                    <ConnectedClientListRow
+                      key={clientSession.sessionId}
+                      clientSession={clientSession}
+                      presentation={presentation}
+                      revokingClientSessionId={revokingClientSessionId}
+                      disableActions={isRevokingDisconnectedClients}
+                      onRevokeSession={onRevokeClientSession}
+                    />
+                  ))}
+                </div>
+              </CollapsiblePanel>
+            </Collapsible>
+          ) : null}
+        </div>
+      ) : null}
 
       {pairingLinks.length === 0 && clientSessions.length === 0 && !isLoading ? (
         <div className={accessRowClassName(presentation)}>
-          <p className="text-xs text-muted-foreground/60">No pairing links or client sessions.</p>
+          <p className="text-xs text-muted-foreground/60">No pairing links or devices.</p>
         </div>
       ) : null}
     </>
@@ -1198,9 +1298,6 @@ type AdvertisedEndpointListRowProps = {
   isDefault: boolean;
   presentation?: AccessSectionPresentation;
   onSetDefault: (endpoint: AdvertisedEndpoint) => void;
-  onSetupTailscaleServe: (endpoint: AdvertisedEndpoint) => void;
-  onDisableTailscaleServe: (endpoint: AdvertisedEndpoint) => void;
-  isUpdatingTailscaleServe: boolean;
 };
 
 const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
@@ -1208,15 +1305,8 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
   isDefault,
   presentation = "current",
   onSetDefault,
-  onSetupTailscaleServe,
-  onDisableTailscaleServe,
-  isUpdatingTailscaleServe,
 }: AdvertisedEndpointListRowProps) {
   const isAvailable = endpoint.status === "available";
-  const needsTailscaleSetup = isTailscaleHttpsEndpoint(endpoint) && endpoint.status !== "available";
-  const canDisableTailscaleServe =
-    isTailscaleHttpsEndpoint(endpoint) && endpoint.status === "available";
-  const shouldShowEndpointUrl = !needsTailscaleSetup;
   const isEndpointRail = presentation === "endpoint-rail";
   return (
     <div className={endpointRowClassName(presentation, isAvailable)}>
@@ -1228,14 +1318,12 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
           <h3 className="shrink-0 text-sm leading-5 font-medium text-foreground">
             {endpoint.label}
           </h3>
-          {shouldShowEndpointUrl ? (
-            <p
-              className="min-w-0 truncate text-xs leading-5 text-muted-foreground"
-              title={endpoint.httpBaseUrl}
-            >
-              {endpoint.httpBaseUrl}
-            </p>
-          ) : null}
+          <p
+            className="min-w-0 truncate text-xs leading-5 text-muted-foreground"
+            title={endpoint.httpBaseUrl}
+          >
+            {endpoint.httpBaseUrl}
+          </p>
           {!isAvailable ? (
             <span className="shrink-0 rounded-md border border-border/70 px-1 py-0.5 text-[10px] text-muted-foreground">
               Setup required
@@ -1248,27 +1336,7 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
               Default
             </span>
           ) : null}
-          {needsTailscaleSetup ? (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => onSetupTailscaleServe(endpoint)}
-              disabled={isUpdatingTailscaleServe}
-            >
-              {isUpdatingTailscaleServe ? "Restarting…" : "Setup"}
-            </Button>
-          ) : null}
-          {canDisableTailscaleServe ? (
-            <Button
-              size="xs"
-              variant="destructive-outline"
-              onClick={() => onDisableTailscaleServe(endpoint)}
-              disabled={isUpdatingTailscaleServe}
-            >
-              {isUpdatingTailscaleServe ? "Restarting…" : "Disable"}
-            </Button>
-          ) : null}
-          {!needsTailscaleSetup && !isDefault ? (
+          {!isDefault ? (
             <Button size="xs" variant="outline" onClick={() => onSetDefault(endpoint)}>
               Set as default
             </Button>
@@ -1282,6 +1350,7 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
+  disableActions?: boolean;
   onConnect: (environmentId: EnvironmentId) => void;
   onRemove: (environmentId: EnvironmentId) => void;
 };
@@ -1289,6 +1358,7 @@ type SavedBackendListRowProps = {
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
+  disableActions = false,
   onConnect,
   onRemove,
 }: SavedBackendListRowProps) {
@@ -1438,7 +1508,7 @@ function SavedBackendListRow({
                 <Button
                   size="xs"
                   variant="outline"
-                  disabled={removingEnvironmentId === environmentId}
+                  disabled={disableActions || removingEnvironmentId === environmentId}
                   onClick={() => void onRemove(environmentId)}
                 >
                   {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
@@ -1447,7 +1517,7 @@ function SavedBackendListRow({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={isConnecting || removingEnvironmentId === environmentId}
+                disabled={disableActions || isConnecting || removingEnvironmentId === environmentId}
                 onClick={() =>
                   void (isConnected ? onRemove(environmentId) : onConnect(environmentId))
                 }
@@ -1573,6 +1643,17 @@ export function EnvironmentConnectionSettings({
           ),
     [excludeEnvironmentIds, savedEnvironments],
   );
+  const savedEnvironmentsByConnection = useMemo(
+    () => partitionEnvironmentsByConnection(visibleSavedEnvironments),
+    [visibleSavedEnvironments],
+  );
+  const removableDisconnectedEnvironments = useMemo(
+    () =>
+      savedEnvironmentsByConnection.disconnected.filter(
+        (environment) => !isDesktopLocalConnectionTarget(environment.entry.target),
+      ),
+    [savedEnvironmentsByConnection.disconnected],
+  );
   const savedDesktopSshEnvironmentsByAlias = useMemo(
     () =>
       savedEnvironments.reduce<Record<string, EnvironmentPresentation>>(
@@ -1623,7 +1704,8 @@ export function EnvironmentConnectionSettings({
   const [revokingDesktopClientSessionId, setRevokingDesktopClientSessionId] = useState<
     string | null
   >(null);
-  const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
+  const [isRevokingDisconnectedDesktopClients, setIsRevokingDisconnectedDesktopClients] =
+    useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
   const [savedBackendHost, setSavedBackendHost] = useState("");
@@ -1635,7 +1717,10 @@ export function EnvironmentConnectionSettings({
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
-  const [isUpdatingTailscaleServe, setIsUpdatingTailscaleServe] = useState(false);
+  const [disconnectedEnvironmentsOpen, setDisconnectedEnvironmentsOpen] = useState(false);
+  const [removeAllDisconnectedDialogOpen, setRemoveAllDisconnectedDialogOpen] = useState(false);
+  const [isRemovingDisconnectedEnvironments, setIsRemovingDisconnectedEnvironments] =
+    useState(false);
   const [isUpdatingWslBackend, setIsUpdatingWslBackend] = useState(false);
   const [desktopWslMutationError, setDesktopWslMutationError] = useState<string | null>(null);
   // Pending WSL setting change waiting on user confirmation. Set when
@@ -1660,12 +1745,6 @@ export function EnvironmentConnectionSettings({
     | { readonly kind: "wsl-only"; readonly nextValue: boolean };
   const [pendingWslChange, setPendingWslChange] = useState<PendingWslChange | null>(null);
   const isWslConfirmDialogOpen = pendingWslChange !== null;
-  const [pendingTailscaleServeEndpoint, setPendingTailscaleServeEndpoint] =
-    useState<AdvertisedEndpoint | null>(null);
-  const [disableTailscaleServeDialogOpen, setDisableTailscaleServeDialogOpen] = useState(false);
-  const [tailscaleServePortInput, setTailscaleServePortInput] = useState(
-    String(DEFAULT_TAILSCALE_SERVE_PORT),
-  );
   const primaryServerConfig = primaryEnvironment?.serverConfig ?? null;
   const primaryVersionMismatch = resolveServerConfigVersionMismatch(primaryServerConfig);
   const primaryServerUpdateState = useAtomValue(
@@ -1746,97 +1825,6 @@ export function EnvironmentConnectionSettings({
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
     : currentAuthPolicy === "remote-reachable";
-  const trimmedTailscaleServePortInput = tailscaleServePortInput.trim();
-  const parsedTailscaleServePort = Number(trimmedTailscaleServePortInput);
-  const isTailscaleServePortValid =
-    /^\d+$/u.test(trimmedTailscaleServePortInput) &&
-    Number.isInteger(parsedTailscaleServePort) &&
-    parsedTailscaleServePort >= 1 &&
-    parsedTailscaleServePort <= 65_535;
-
-  const pendingTailscaleServeBaseUrl = useMemo(() => {
-    if (!pendingTailscaleServeEndpoint) return null;
-    if (!isTailscaleServePortValid) return pendingTailscaleServeEndpoint.httpBaseUrl;
-    if (parsedTailscaleServePort === DEFAULT_TAILSCALE_SERVE_PORT) {
-      return pendingTailscaleServeEndpoint.httpBaseUrl;
-    }
-    try {
-      const url = new URL(pendingTailscaleServeEndpoint.httpBaseUrl);
-      url.port = String(parsedTailscaleServePort);
-      return url.toString().replace(/\/$/u, "");
-    } catch {
-      return pendingTailscaleServeEndpoint.httpBaseUrl;
-    }
-  }, [isTailscaleServePortValid, parsedTailscaleServePort, pendingTailscaleServeEndpoint]);
-
-  const handleConfirmTailscaleServeSetup = useCallback(async () => {
-    if (!desktopBridge) return;
-    if (!isTailscaleServePortValid) return;
-    setIsUpdatingTailscaleServe(true);
-    setDesktopServerExposureMutationError(null);
-    try {
-      await desktopBridge.setTailscaleServeEnabled({
-        enabled: true,
-        port: parsedTailscaleServePort,
-      });
-      refreshDesktopNetworkAccessState();
-      setPendingTailscaleServeEndpoint(null);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to configure Tailscale HTTPS.";
-      setDesktopServerExposureMutationError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not set up Tailscale HTTPS",
-          description: message,
-        }),
-      );
-    } finally {
-      setIsUpdatingTailscaleServe(false);
-    }
-  }, [desktopBridge, isTailscaleServePortValid, parsedTailscaleServePort]);
-
-  const handleStartTailscaleServeSetup = useCallback(
-    (endpoint: AdvertisedEndpoint) => {
-      setTailscaleServePortInput(
-        String(desktopServerExposureState?.tailscaleServePort ?? DEFAULT_TAILSCALE_SERVE_PORT),
-      );
-      setPendingTailscaleServeEndpoint(endpoint);
-    },
-    [desktopServerExposureState?.tailscaleServePort],
-  );
-
-  const handleConfirmTailscaleServeDisable = useCallback(async () => {
-    if (!desktopBridge) return;
-    setIsUpdatingTailscaleServe(true);
-    setDesktopServerExposureMutationError(null);
-    try {
-      await desktopBridge.setTailscaleServeEnabled({
-        enabled: false,
-        port: desktopServerExposureState?.tailscaleServePort ?? DEFAULT_TAILSCALE_SERVE_PORT,
-      });
-      refreshDesktopNetworkAccessState();
-      setDisableTailscaleServeDialogOpen(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to disable Tailscale HTTPS.";
-      setDesktopServerExposureMutationError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not disable Tailscale HTTPS",
-          description: message,
-        }),
-      );
-    } finally {
-      setIsUpdatingTailscaleServe(false);
-    }
-  }, [desktopBridge, desktopServerExposureState?.tailscaleServePort]);
-
-  const handleStartTailscaleServeDisable = useCallback((_endpoint: AdvertisedEndpoint) => {
-    setDisableTailscaleServeDialogOpen(true);
-  }, []);
-
   const handleRevokeDesktopPairingLink = useCallback(async (id: string) => {
     setRevokingDesktopPairingLinkId(id);
     setDesktopAccessManagementMutationError(null);
@@ -1880,30 +1868,48 @@ export function EnvironmentConnectionSettings({
     [],
   );
 
-  const handleRevokeOtherDesktopClients = useCallback(async () => {
-    setIsRevokingOtherDesktopClients(true);
-    setDesktopAccessManagementMutationError(null);
-    try {
-      const revokedCount = await revokeOtherServerClientSessions();
-      toastManager.add({
-        type: "success",
-        title: revokedCount === 1 ? "Revoked 1 other client" : `Revoked ${revokedCount} clients`,
-        description: "Other paired clients will need a new pairing link before reconnecting.",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to revoke other clients.";
-      setDesktopAccessManagementMutationError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not revoke other clients",
-          description: message,
-        }),
-      );
-    } finally {
-      setIsRevokingOtherDesktopClients(false);
-    }
-  }, []);
+  const handleRevokeDisconnectedDesktopClients = useCallback(
+    async (sessionIds: ReadonlyArray<ServerClientSessionRecord["sessionId"]>) => {
+      if (sessionIds.length === 0) return;
+      setIsRevokingDisconnectedDesktopClients(true);
+      setDesktopAccessManagementMutationError(null);
+      const failedSessionIds: Array<ServerClientSessionRecord["sessionId"]> = [];
+
+      for (const sessionId of sessionIds) {
+        try {
+          await revokeServerClientSession(sessionId);
+        } catch {
+          failedSessionIds.push(sessionId);
+        }
+      }
+
+      if (failedSessionIds.length === 0) {
+        toastManager.add({
+          type: "success",
+          title:
+            sessionIds.length === 1
+              ? "Revoked 1 disconnected device"
+              : `Revoked ${sessionIds.length} disconnected devices`,
+          description: "Revoked devices will need a new pairing link before reconnecting.",
+        });
+      } else {
+        const message = `Could not revoke ${failedSessionIds.length} ${
+          failedSessionIds.length === 1 ? "device" : "devices"
+        }.`;
+        setDesktopAccessManagementMutationError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Some devices could not be revoked",
+            description: message,
+          }),
+        );
+      }
+
+      setIsRevokingDisconnectedDesktopClients(false);
+    },
+    [],
+  );
 
   const handleAddSavedBackend = useCallback(async () => {
     if (savedBackendMode === "ssh") {
@@ -2051,6 +2057,47 @@ export function EnvironmentConnectionSettings({
     [removeEnvironment],
   );
 
+  const handleRemoveAllDisconnectedEnvironments = useCallback(async () => {
+    if (removableDisconnectedEnvironments.length === 0) return;
+
+    setIsRemovingDisconnectedEnvironments(true);
+    setSavedBackendError(null);
+    const failedLabels: Array<string> = [];
+
+    for (const environment of removableDisconnectedEnvironments) {
+      setRemovingSavedEnvironmentId(environment.environmentId);
+      const result = await removeEnvironment(environment.environmentId);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        failedLabels.push(environment.label);
+      }
+    }
+
+    setRemovingSavedEnvironmentId(null);
+    setIsRemovingDisconnectedEnvironments(false);
+    setRemoveAllDisconnectedDialogOpen(false);
+
+    if (failedLabels.length > 0) {
+      const message = `Could not remove ${failedLabels.join(", ")}.`;
+      setSavedBackendError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Some environments could not be removed",
+          description: message,
+        }),
+      );
+      return;
+    }
+
+    toastManager.add({
+      type: "success",
+      title: "Disconnected environments removed",
+      description: `${removableDisconnectedEnvironments.length} ${
+        removableDisconnectedEnvironments.length === 1 ? "environment" : "environments"
+      } removed from this client.`,
+    });
+  }, [removableDisconnectedEnvironments, removeEnvironment]);
+
   const handleConnectSshHost = useCallback(
     async (target: DesktopSshEnvironmentTarget, label?: string) => {
       setConnectingSshHostAlias(target.alias);
@@ -2092,40 +2139,18 @@ export function EnvironmentConnectionSettings({
   );
 
   const visibleDesktopPairingLinks = desktopPairingLinks;
-  const tailscaleHttpsEndpoint = useMemo(
-    () => desktopAdvertisedEndpoints.find(isTailscaleHttpsEndpoint) ?? null,
-    [desktopAdvertisedEndpoints],
-  );
   const visibleDesktopNetworkAdvertisedEndpoints = useMemo(
-    () =>
-      isLocalBackendNetworkAccessible
-        ? desktopAdvertisedEndpoints.filter((endpoint) => !isTailscaleHttpsEndpoint(endpoint))
-        : [],
+    () => (isLocalBackendNetworkAccessible ? desktopAdvertisedEndpoints : []),
     [desktopAdvertisedEndpoints, isLocalBackendNetworkAccessible],
   );
-  const visibleDesktopAdvertisedEndpoints = useMemo(
-    () =>
-      tailscaleHttpsEndpoint
-        ? [...visibleDesktopNetworkAdvertisedEndpoints, tailscaleHttpsEndpoint]
-        : visibleDesktopNetworkAdvertisedEndpoints,
-    [tailscaleHttpsEndpoint, visibleDesktopNetworkAdvertisedEndpoints],
-  );
-  const isLocalBackendRemotelyReachable =
-    isLocalBackendNetworkAccessible || tailscaleHttpsEndpoint?.status === "available";
+  const visibleDesktopAdvertisedEndpoints = visibleDesktopNetworkAdvertisedEndpoints;
+  const isLocalBackendRemotelyReachable = isLocalBackendNetworkAccessible;
   const defaultDesktopNetworkAdvertisedEndpoint = useMemo(
     () =>
       selectPairingEndpoint(visibleDesktopNetworkAdvertisedEndpoints, defaultAdvertisedEndpointKey),
     [defaultAdvertisedEndpointKey, visibleDesktopNetworkAdvertisedEndpoints],
   );
-  const defaultDesktopAdvertisedEndpoint = useMemo(
-    () =>
-      defaultDesktopNetworkAdvertisedEndpoint ??
-      selectPairingEndpoint(
-        tailscaleHttpsEndpoint ? [tailscaleHttpsEndpoint] : [],
-        defaultAdvertisedEndpointKey,
-      ),
-    [defaultAdvertisedEndpointKey, defaultDesktopNetworkAdvertisedEndpoint, tailscaleHttpsEndpoint],
-  );
+  const defaultDesktopAdvertisedEndpoint = defaultDesktopNetworkAdvertisedEndpoint;
   const defaultDesktopAdvertisedEndpointKey = defaultDesktopAdvertisedEndpoint
     ? endpointDefaultPreferenceKey(defaultDesktopAdvertisedEndpoint)
     : null;
@@ -2338,9 +2363,6 @@ export function EnvironmentConnectionSettings({
           isDefault={endpointKey === defaultDesktopAdvertisedEndpointKey}
           presentation={presentation}
           onSetDefault={handleSetDefaultAdvertisedEndpoint}
-          onSetupTailscaleServe={handleStartTailscaleServeSetup}
-          onDisableTailscaleServe={handleStartTailscaleServeDisable}
-          isUpdatingTailscaleServe={isUpdatingTailscaleServe}
         />
       );
     });
@@ -2651,35 +2673,6 @@ export function EnvironmentConnectionSettings({
     );
   };
 
-  const renderTailscaleRow = () => (
-    <SettingsRow
-      title="Tailscale HTTPS"
-      description={
-        tailscaleHttpsEndpoint
-          ? tailscaleHttpsEndpoint.status === "available"
-            ? tailscaleHttpsEndpoint.httpBaseUrl
-            : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-          : "Start Tailscale to set up HTTPS access through MagicDNS."
-      }
-      status={desktopServerExposureError}
-      control={
-        tailscaleHttpsEndpoint ? (
-          <Switch
-            checked={tailscaleHttpsEndpoint.status === "available"}
-            disabled={isUpdatingTailscaleServe}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                handleStartTailscaleServeSetup(tailscaleHttpsEndpoint);
-                return;
-              }
-              handleStartTailscaleServeDisable(tailscaleHttpsEndpoint);
-            }}
-            aria-label="Enable Tailscale HTTPS"
-          />
-        ) : null
-      }
-    />
-  );
   const renderAuthorizedClients = (presentation: AccessSectionPresentation) => (
     <>
       {desktopAccessManagementError ? (
@@ -2697,8 +2690,10 @@ export function EnvironmentConnectionSettings({
         clientSessions={desktopClientSessions}
         revokingPairingLinkId={revokingDesktopPairingLinkId}
         revokingClientSessionId={revokingDesktopClientSessionId}
+        isRevokingDisconnectedClients={isRevokingDisconnectedDesktopClients}
         onRevokePairingLink={handleRevokeDesktopPairingLink}
         onRevokeClientSession={handleRevokeDesktopClientSession}
+        onRevokeDisconnectedClients={handleRevokeDisconnectedDesktopClients}
       />
     </>
   );
@@ -2763,15 +2758,116 @@ export function EnvironmentConnectionSettings({
       </DialogPopup>
     </Dialog>
   );
-  const savedEnvironmentRows = visibleSavedEnvironments.map((environment) => (
+  const renderSavedEnvironmentRow = (environment: EnvironmentPresentation) => (
     <SavedBackendListRow
       key={environment.environmentId}
       environment={environment}
       removingEnvironmentId={removingSavedEnvironmentId}
+      disableActions={isRemovingDisconnectedEnvironments}
       onConnect={handleConnectSavedBackend}
       onRemove={handleRemoveSavedBackend}
     />
-  ));
+  );
+  const connectedEnvironmentRows =
+    savedEnvironmentsByConnection.connected.map(renderSavedEnvironmentRow);
+  const disconnectedEnvironmentRows =
+    savedEnvironmentsByConnection.disconnected.map(renderSavedEnvironmentRow);
+  const disconnectedEnvironmentCount = savedEnvironmentsByConnection.disconnected.length;
+  const savedEnvironmentRows =
+    visibleSavedEnvironments.length === 0 ? null : (
+      <div className="space-y-1">
+        <div className="flex min-h-7 items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground sm:px-4">
+          <span>Connected</span>
+          <span className="tabular-nums text-muted-foreground/60">
+            {savedEnvironmentsByConnection.connected.length}
+          </span>
+        </div>
+        {connectedEnvironmentRows.length > 0 ? (
+          connectedEnvironmentRows
+        ) : (
+          <p className="px-3 py-3 text-xs text-muted-foreground/70 sm:px-4">
+            No other environments are connected.
+          </p>
+        )}
+        {disconnectedEnvironmentCount > 0 ? (
+          <Collapsible
+            open={disconnectedEnvironmentsOpen}
+            onOpenChange={setDisconnectedEnvironmentsOpen}
+            className="pt-1"
+          >
+            <div className="flex min-h-9 items-center justify-between gap-3 px-3 sm:px-4">
+              <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs font-medium text-muted-foreground outline-hidden ring-ring hover:text-foreground focus-visible:ring-2">
+                <ChevronRightIcon
+                  aria-hidden
+                  className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+                />
+                <span>Disconnected</span>
+                <span className="tabular-nums text-muted-foreground/60">
+                  {disconnectedEnvironmentCount}
+                </span>
+              </CollapsibleTrigger>
+              {removableDisconnectedEnvironments.length > 0 ? (
+                <AlertDialog
+                  open={removeAllDisconnectedDialogOpen}
+                  onOpenChange={setRemoveAllDisconnectedDialogOpen}
+                >
+                  <AlertDialogTrigger
+                    render={
+                      <Button
+                        size="xs"
+                        variant="destructive-outline"
+                        disabled={isRemovingDisconnectedEnvironments}
+                      />
+                    }
+                  >
+                    Remove all
+                  </AlertDialogTrigger>
+                  <AlertDialogPopup>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Remove disconnected environments?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This removes {removableDisconnectedEnvironments.length} saved{" "}
+                        {removableDisconnectedEnvironments.length === 1
+                          ? "environment"
+                          : "environments"}{" "}
+                        from this client. Their servers and data will not be deleted.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogClose
+                        disabled={isRemovingDisconnectedEnvironments}
+                        render={
+                          <Button variant="outline" disabled={isRemovingDisconnectedEnvironments} />
+                        }
+                      >
+                        Cancel
+                      </AlertDialogClose>
+                      <Button
+                        variant="destructive"
+                        disabled={isRemovingDisconnectedEnvironments}
+                        onClick={() => void handleRemoveAllDisconnectedEnvironments()}
+                      >
+                        {isRemovingDisconnectedEnvironments ? (
+                          <>
+                            <Spinner className="size-3.5" />
+                            Removing…
+                          </>
+                        ) : (
+                          "Remove all"
+                        )}
+                      </Button>
+                    </AlertDialogFooter>
+                  </AlertDialogPopup>
+                </AlertDialog>
+              ) : null}
+            </div>
+            <CollapsiblePanel>
+              <div className="space-y-1">{disconnectedEnvironmentRows}</div>
+            </CollapsiblePanel>
+          </Collapsible>
+        ) : null}
+      </div>
+    );
   const environmentSection = renderEnvironmentSection ? (
     renderEnvironmentSection({ addEnvironmentAction, savedEnvironmentRows })
   ) : (
@@ -2835,7 +2931,6 @@ export function EnvironmentConnectionSettings({
             {desktopBridge ? (
               <>
                 {renderEndpointRows("endpoint-rail")}
-                {renderTailscaleRow()}
                 {renderWslRow()}
               </>
             ) : null}
@@ -2843,13 +2938,9 @@ export function EnvironmentConnectionSettings({
 
           {isLocalBackendRemotelyReachable ? (
             <SettingsSection
-              title="Authorized clients"
+              title="Devices with access"
               headerAction={
-                <AuthorizedClientsHeaderAction
-                  clientSessions={desktopClientSessions}
-                  isRevokingOtherClients={isRevokingOtherDesktopClients}
-                  onRevokeOtherClients={handleRevokeOtherDesktopClients}
-                />
+                <AuthorizedClientsHeaderAction disabled={isRevokingDisconnectedDesktopClients} />
               }
             >
               <ScrollArea
@@ -2969,110 +3060,6 @@ export function EnvironmentConnectionSettings({
               </AlertDialogFooter>
             </AlertDialogPopup>
           </AlertDialog>
-          <AlertDialog
-            open={disableTailscaleServeDialogOpen}
-            onOpenChange={(open) => {
-              if (isUpdatingTailscaleServe) return;
-              setDisableTailscaleServeDialogOpen(open);
-            }}
-          >
-            <AlertDialogPopup>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Pathway will restart the local backend without Tailscale Serve.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogClose
-                  disabled={isUpdatingTailscaleServe}
-                  render={<Button variant="outline" disabled={isUpdatingTailscaleServe} />}
-                >
-                  Cancel
-                </AlertDialogClose>
-                <Button
-                  variant="destructive"
-                  onClick={() => void handleConfirmTailscaleServeDisable()}
-                  disabled={isUpdatingTailscaleServe}
-                >
-                  {isUpdatingTailscaleServe ? (
-                    <>
-                      <Spinner className="size-3.5" />
-                      Restarting…
-                    </>
-                  ) : (
-                    "Restart and disable"
-                  )}
-                </Button>
-              </AlertDialogFooter>
-            </AlertDialogPopup>
-          </AlertDialog>
-          <Dialog
-            open={pendingTailscaleServeEndpoint !== null}
-            onOpenChange={(open) => {
-              if (isUpdatingTailscaleServe) return;
-              if (!open) setPendingTailscaleServeEndpoint(null);
-            }}
-          >
-            <DialogPopup className="max-w-md">
-              <DialogHeader>
-                <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
-                <DialogDescription>
-                  Pathway will restart the local backend with Tailscale Serve enabled and ask
-                  Tailscale to proxy HTTPS traffic to this backend.
-                </DialogDescription>
-              </DialogHeader>
-              <DialogPanel className="space-y-4">
-                <label className="block">
-                  <span className="text-sm font-medium text-foreground">HTTPS port</span>
-                  <Input
-                    className="mt-2"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={65_535}
-                    step={1}
-                    value={tailscaleServePortInput}
-                    onChange={(event) => setTailscaleServePortInput(event.target.value)}
-                    disabled={isUpdatingTailscaleServe}
-                  />
-                </label>
-                {!isTailscaleServePortValid ? (
-                  <p className="mt-2 text-xs text-destructive">Enter a port from 1 to 65535.</p>
-                ) : null}
-                <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
-                  <p className="text-xs font-medium text-muted-foreground">HTTPS endpoint</p>
-                  <p
-                    className="mt-1 truncate text-sm text-foreground"
-                    title={pendingTailscaleServeBaseUrl ?? undefined}
-                  >
-                    {pendingTailscaleServeBaseUrl ?? "Pending MagicDNS endpoint"}
-                  </p>
-                </div>
-              </DialogPanel>
-              <DialogFooter>
-                <DialogClose
-                  disabled={isUpdatingTailscaleServe}
-                  render={<Button variant="outline" disabled={isUpdatingTailscaleServe} />}
-                >
-                  Cancel
-                </DialogClose>
-                <Button
-                  onClick={() => void handleConfirmTailscaleServeSetup()}
-                  disabled={isUpdatingTailscaleServe || !isTailscaleServePortValid}
-                >
-                  {isUpdatingTailscaleServe ? (
-                    <>
-                      <Spinner className="size-3.5" />
-                      Restarting…
-                    </>
-                  ) : (
-                    "Enable"
-                  )}
-                </Button>
-              </DialogFooter>
-            </DialogPopup>
-          </Dialog>
         </>
       ) : (
         <SettingsSection title="This environment">

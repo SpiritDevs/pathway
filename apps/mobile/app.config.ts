@@ -198,7 +198,7 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
-        "Allow Pathway to connect to Pathway servers on your local network or tailnet.",
+        "Allow Pathway to connect to Pathway servers on your local network.",
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that

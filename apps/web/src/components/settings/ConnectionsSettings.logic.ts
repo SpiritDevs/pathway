@@ -1,5 +1,46 @@
 import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@spiritdevs/contracts";
 
+const ACTIVE_ENVIRONMENT_CONNECTION_PHASES = new Set(["connected", "connecting", "reconnecting"]);
+
+export function partitionEnvironmentsByConnection<
+  T extends { readonly connection: { readonly phase: string } },
+>(
+  environments: ReadonlyArray<T>,
+): {
+  readonly connected: ReadonlyArray<T>;
+  readonly disconnected: ReadonlyArray<T>;
+} {
+  const connected: Array<T> = [];
+  const disconnected: Array<T> = [];
+
+  for (const environment of environments) {
+    (ACTIVE_ENVIRONMENT_CONNECTION_PHASES.has(environment.connection.phase)
+      ? connected
+      : disconnected
+    ).push(environment);
+  }
+
+  return { connected, disconnected };
+}
+
+export function partitionClientSessionsByConnection<
+  T extends { readonly connected: boolean; readonly current: boolean },
+>(
+  sessions: ReadonlyArray<T>,
+): {
+  readonly connected: ReadonlyArray<T>;
+  readonly disconnected: ReadonlyArray<T>;
+} {
+  const connected: Array<T> = [];
+  const disconnected: Array<T> = [];
+
+  for (const session of sessions) {
+    (session.current || session.connected ? connected : disconnected).push(session);
+  }
+
+  return { connected, disconnected };
+}
+
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
 
 /**
