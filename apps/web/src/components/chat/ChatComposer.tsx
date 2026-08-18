@@ -42,6 +42,7 @@ import {
   replaceTextRange,
   shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
+import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import {
   deriveComposerSendState,
   readFileAsDataUrl,
@@ -3219,7 +3220,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           : noProviderAvailable
                             ? providerAvailabilityCopy.placeholder
                             : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
+                              ? DISCONNECTED_COMPOSER_PLACEHOLDER
                               : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
