@@ -30,6 +30,12 @@ editing any of these opens a floating panel from the right so you can make chang
 your place. Pathway keeps the membership and service permissions needed for sync and environments
 internally for an individual workspace; they do not require separate setup.
 
+If you belong to more than one company, Settings adds a scope menu above search. Choose **Your
+profile** for device and account preferences, or choose a company to reveal the settings owned by
+that company. The profile menu also lists your companies: choose a company to make it active, use
+its cog to open that company's Settings, or choose **Create company** to start another workspace.
+**All companies** returns to the company-independent Settings view.
+
 Setup remembers where you were. If you close the app partway through — even if you continue on a
 different computer — it resumes at the step you left.
 

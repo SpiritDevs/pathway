@@ -13,6 +13,17 @@
 import type { RoleAssignmentScope } from "./permissions.ts";
 
 /**
+ * How often an active server refreshes its company registration while it is otherwise idle.
+ *
+ * The command claimant already calls Convex more frequently than this. Convex therefore throttles
+ * the registration write to this cadence instead of adding a separate heartbeat function call.
+ */
+export const ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/** A registration older than this is no longer eligible for company work. */
+export const ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS = 120_000;
+
+/**
  * The `cnf.jkt` confirmation claim of a relay-minted token, or `null` when the token carries no
  * usable one. A token without it is treated as unbound and refused rather than trusted.
  */

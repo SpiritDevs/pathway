@@ -53,6 +53,7 @@ describe("company admin function references", () => {
       ),
     ).toEqual({
       listMine: "companies:listMine",
+      createCompany: "companies:create",
       upgradeToOrganization: "companies:upgradeToOrganization",
       listInvitations: "invitations:list",
       createInvitation: "invitations:create",
@@ -115,6 +116,25 @@ describe("company admin function references", () => {
         kind: "mutation",
         name: "companies:upgradeToOrganization",
         args: { companyId: COMPANY_ID, name: "Spirit Devs" },
+      },
+    ]);
+  });
+
+  it("creates an additional company with a client-owned id", async () => {
+    const fake = fakeClient();
+    const admin = makeCompanyAdminClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: async () => "token",
+      client: fake.client,
+    });
+
+    await admin.createCompany({ id: COMPANY_ID, name: "Spirit Devs" });
+
+    expect(fake.calls).toEqual([
+      {
+        kind: "mutation",
+        name: "companies:create",
+        args: { id: COMPANY_ID, name: "Spirit Devs" },
       },
     ]);
   });

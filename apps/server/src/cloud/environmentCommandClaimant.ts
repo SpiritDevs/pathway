@@ -5,9 +5,10 @@
  *
  * The claimant uses `environmentCommands.claim` as both discovery and lease acquisition. That
  * mutation is environment-scoped, orders work by creation time, and returns an existing live claim
- * unchanged, so no member-oriented list query is needed. A command is renewed once before any
- * local side effect and then periodically while it runs; losing that fence interrupts local work
- * and suppresses the terminal report.
+ * unchanged, so no member-oriented list query is needed. The same authenticated call refreshes the
+ * company registration at a backend-throttled 30-second cadence, avoiding a second polling loop.
+ * A command is renewed once before any local side effect and then periodically while it runs;
+ * losing that fence interrupts local work and suppresses the terminal report.
  *
  * @module cloud/environmentCommandClaimant
  */

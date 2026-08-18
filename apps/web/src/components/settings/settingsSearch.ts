@@ -24,6 +24,8 @@ export type SettingsPath =
 
 export type SettingsSearchPath = SettingsPath | "/settings/appearance/action-palette";
 
+export type SettingsWorkspaceKind = "profile" | "personal" | "organization";
+
 export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
@@ -37,12 +39,30 @@ export function settingsSectionPathForSearchPath(path: SettingsSearchPath): Sett
 
 export function settingsPathIsVisibleForWorkspace(
   path: SettingsSearchPath,
-  workspaceKind: "personal" | "organization",
+  workspaceKind: SettingsWorkspaceKind,
 ): boolean {
+  if (workspaceKind === "profile") {
+    return !COMPANY_SCOPED_SETTINGS_PATHS.has(settingsSectionPathForSearchPath(path));
+  }
   return workspaceKind === "organization"
     ? path !== "/settings/members-teams"
     : !path.startsWith("/settings/company-");
 }
+
+const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
+  "/settings/members-teams",
+  "/settings/company-members",
+  "/settings/company-teams",
+  "/settings/company-roles",
+  "/settings/environments",
+  "/settings/integrations",
+  "/settings/issues-statuses",
+  "/settings/issues-labels",
+  "/settings/issues-milestones",
+  "/settings/issues-import",
+  "/settings/issues-enrichment",
+  "/settings/email",
+]);
 
 /**
  * Section labels in sidebar order. The sidebar nav, the breadcrumb, and the

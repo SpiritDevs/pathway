@@ -35,6 +35,13 @@ export interface CompanyEnvironmentRow {
 
 export type PathwayConnectStatus = "active" | "connecting" | "failed";
 
+export function canAttemptEnvironmentReconnect(input: {
+  readonly row: CompanyEnvironmentRow;
+  readonly ownCloudLinkPhase: "idle" | "connecting" | "waiting" | "connected" | "exhausted";
+}): boolean {
+  return input.row.isOwnEnvironment && input.ownCloudLinkPhase === "exhausted";
+}
+
 export function remoteCommandDeliveryCopy(
   status: PathwayConnectStatus,
   environmentLabel: string,

@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off -- Fixtures and lease transitions use Convex epoch milliseconds.
 /** End-to-end remote command authorization, leasing, feed, expiry, and bootstrap coverage. */
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
@@ -10,6 +10,7 @@ import schema from "../convex/schema.ts";
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -349,6 +350,64 @@ describe("environment commands", () => {
       state: "pending",
     });
     expect(otherPending).toMatchObject([{ id: otherId, targetEnvironmentId: ENVIRONMENT_TWO }]);
+  });
+
+  it("keeps the active registration fresh beyond the two-minute offline threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = 1_800_000_000_000;
+      vi.setSystemTime(startedAt);
+      const t = harness();
+      const seeded = await seed(t);
+
+      const lastSeenAt = async () =>
+        await t.run(async (ctx) => {
+          const registration = await ctx.db
+            .query("environmentRegistrations")
+            .withIndex("by_company_and_environment", (q) =>
+              q.eq("companyId", seeded.companyDocId).eq("environmentId", ENVIRONMENT_ONE),
+            )
+            .unique();
+          return registration?.lastSeenAt ?? null;
+        });
+
+      for (const elapsed of [0, 30_000, 60_000, 90_000, 120_000, 150_000]) {
+        vi.setSystemTime(startedAt + elapsed);
+        await expect(
+          asEnvironment(t).mutation(api.environmentCommands.claim, { companyId: COMPANY_ID }),
+        ).resolves.toEqual([]);
+        expect(await lastSeenAt()).toBe(startedAt + elapsed);
+      }
+
+      expect((await lastSeenAt()) ?? 0).toBeGreaterThan(startedAt + 120_000);
+      expect(await feedRows(t)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not refresh a revoked registration", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    const lastSeenAt = async () =>
+      await t.run(async (ctx) => {
+        const registration = await ctx.db
+          .query("environmentRegistrations")
+          .withIndex("by_company_and_environment", (q) =>
+            q.eq("companyId", seeded.companyDocId).eq("environmentId", REVOKED_ENVIRONMENT),
+          )
+          .unique();
+        return registration?.lastSeenAt ?? null;
+      });
+    const before = await lastSeenAt();
+
+    await expect(
+      asEnvironment(t, REVOKED_ENVIRONMENT).mutation(api.environmentCommands.claim, {
+        companyId: COMPANY_ID,
+      }),
+    ).rejects.toThrow("not registered with the company");
+
+    expect(await lastSeenAt()).toBe(before);
   });
 
   it("refuses stale renewals and reports only the live generation to a terminal feed row", async () => {

@@ -1,9 +1,9 @@
 import { useAuth } from "@clerk/react";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { useEffect, useMemo, useRef } from "react";
 
-import { activeCompanyAtom, activeCompanyIdAtom } from "../../../cloud/activeCompany";
+import { activeCompanyIdAtom, companyListAtom } from "../../../cloud/activeCompany";
 import { makeCompanyAdminClient, type CompanyAdminClient } from "../../../cloud/companyAdmin";
 import {
   companyRegistryMembershipIdsAtom,
@@ -12,14 +12,27 @@ import {
 import { resolveCloudSyncConvexUrl } from "../../../cloud/publicConfig";
 import { makeClerkConvexTokenFetcher } from "../../../cloud/syncTransportAuth";
 import {
+  hasMultipleCompanies,
+  organizationCompanies,
+  resolveSettingsCompanyId,
+  settingsCompanyScopeAtom,
+} from "../../../cloud/settingsCompany";
+import {
   companyDirectoryFromReplicaValues,
   deriveCurrentMemberPermissions,
 } from "./companySettings.logic";
 
 export function useCompanySettings() {
   const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const activeCompany = useAtomValue(activeCompanyAtom);
-  const companyId = useAtomValue(activeCompanyIdAtom);
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const companies = useAtomValue(companyListAtom);
+  const [settingsCompanyScope, setSettingsCompanyScope] = useAtom(settingsCompanyScopeAtom);
+  const companyId = resolveSettingsCompanyId({
+    companies,
+    activeCompanyId,
+    scope: settingsCompanyScope,
+  });
+  const activeCompany = companies.find((company) => company.id === companyId) ?? null;
   const replicas = useAtomValue(companyRegistryReplicasAtom);
   const membershipIds = useAtomValue(companyRegistryMembershipIdsAtom);
   const replica = companyId === null ? null : (replicas.get(companyId) ?? null);
@@ -67,6 +80,7 @@ export function useCompanySettings() {
   return {
     admin,
     activeCompany,
+    companies,
     companyId: companyId as CompanyId | null,
     currentMembership,
     directory,
@@ -74,6 +88,11 @@ export function useCompanySettings() {
     isSignedIn: Boolean(isSignedIn),
     permissions,
     replica,
+    organizationCompanies: organizationCompanies(companies),
+    hasMultipleCompanies: hasMultipleCompanies(companies),
+    settingsCompanyScope,
+    setSettingsCompanyScope,
+    workspaceKind: activeCompany === null ? ("profile" as const) : activeCompany.workspaceKind,
   };
 }
 

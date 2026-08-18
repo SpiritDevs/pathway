@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentCommandRecord } from "../../../cloud/environmentControl";
 import {
+  canAttemptEnvironmentReconnect,
   completeRemoteRelayAvailability,
   deleteConfirmationSecondsRemaining,
   derivePathwayConnectStatus,
@@ -116,6 +117,25 @@ describe("environment settings derivation", () => {
         ownCloudLinkError: "Relay unavailable",
       }),
     ).toBe("failed");
+  });
+
+  it("offers manual reconnect only when this device exhausts automatic retries", () => {
+    const [ownRow, remoteRow] = deriveEnvironmentRows({
+      registrations: [registration(OWN_ID), registration(REMOTE_ID)],
+      catalogEntries: new Map(),
+      teams: [],
+      ownEnvironmentId: OWN_ID,
+    });
+
+    expect(canAttemptEnvironmentReconnect({ row: ownRow!, ownCloudLinkPhase: "exhausted" })).toBe(
+      true,
+    );
+    expect(canAttemptEnvironmentReconnect({ row: ownRow!, ownCloudLinkPhase: "waiting" })).toBe(
+      false,
+    );
+    expect(
+      canAttemptEnvironmentReconnect({ row: remoteRow!, ownCloudLinkPhase: "exhausted" }),
+    ).toBe(false);
   });
 
   it("derives Pathway Connect status for remote registrations", () => {

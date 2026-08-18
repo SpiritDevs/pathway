@@ -2,6 +2,7 @@
 /** Company automation settings and durable, generation-fenced execution jobs. */
 import { v } from "convex/values";
 
+import { ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS } from "../src/environmentRegistrations.ts";
 import type { Doc } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
@@ -294,7 +295,9 @@ export const setEnabled = mutation({
         .collect();
       if (
         !capabilities.some(
-          (snapshot) => snapshot.supportsAutomationJobs && now - snapshot.publishedAt <= 120_000,
+          (snapshot) =>
+            snapshot.supportsAutomationJobs &&
+            now - snapshot.publishedAt <= ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS,
         )
       ) {
         throw backendError(
@@ -992,7 +995,7 @@ export const recoverBlocked = internalMutation({
           registration === null ||
           registration.state !== "active" ||
           registration.lastSeenAt === null ||
-          now - registration.lastSeenAt > 120_000
+          now - registration.lastSeenAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
         ) {
           block = {
             code:
@@ -1008,7 +1011,7 @@ export const recoverBlocked = internalMutation({
             .unique();
           if (
             capabilities?.supportsAutomationJobs !== true ||
-            now - capabilities.publishedAt > 120_000
+            now - capabilities.publishedAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
           ) {
             block = {
               code: "environment-offline",

@@ -21,6 +21,7 @@ import {
   environmentCommandPermission,
   isCancellableEnvironmentCommand,
 } from "../src/environmentCommands.ts";
+import { ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS } from "../src/environmentRegistrations.ts";
 import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
@@ -409,6 +410,14 @@ export const claim = mutation({
     const ttl = claimTtl(args.claimTtlMs);
     const now = Date.now();
     const environmentId = actor.registration.environmentId;
+    if (
+      actor.registration.lastSeenAt === null ||
+      now - actor.registration.lastSeenAt >= ENVIRONMENT_REGISTRATION_HEARTBEAT_INTERVAL_MS
+    ) {
+      await ctx.db.patch(actor.registration._id, { lastSeenAt: now });
+      // Presence is operational state, not a replicated company change. The claimant already
+      // polls this mutation, so this adds no function calls and at most two tiny writes a minute.
+    }
     const pending = await ctx.db
       .query("environmentCommands")
       .withIndex("by_target_and_state", (q) =>

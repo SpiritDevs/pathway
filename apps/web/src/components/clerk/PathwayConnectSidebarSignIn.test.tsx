@@ -23,6 +23,10 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: symbol) => (atom === atoms.companyList ? testState.companies : null),
 }));
 
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+}));
+
 vi.mock("@clerk/react", () => ({
   useAuth: () => ({ isLoaded: true, isSignedIn: true }),
   useClerk: () => ({ openUserProfile: vi.fn(), signOut: vi.fn() }),
@@ -71,6 +75,10 @@ vi.mock("../usage/ProviderUsage", () => ({
   ConnectedProviderUsageMenu: () => <div>Connected provider limits</div>,
 }));
 
+vi.mock("../settings/company/CreateCompanyDialog", () => ({
+  CreateCompanyDialog: () => <div>Create company dialog</div>,
+}));
+
 import { PathwayConnectProfileButton } from "./PathwayConnectSidebarSignIn";
 
 describe("PathwayConnectProfileButton", () => {
@@ -93,14 +101,15 @@ describe("PathwayConnectProfileButton", () => {
     expect(markup).not.toContain("cl-userButton");
   });
 
-  it("hides the company section for a personal-only account", () => {
+  it("keeps the personal workspace out of the company list while offering company creation", () => {
     testState.companies = [
       { id: "company-a", name: "Corey's Workspace", workspaceKind: "personal" },
     ];
 
     const markup = renderToStaticMarkup(<PathwayConnectProfileButton />);
 
-    expect(markup).not.toContain("Company");
+    expect(markup).toContain("Company");
+    expect(markup).toContain("Create company");
     expect(markup).not.toContain("Corey&#x27;s Workspace");
   });
 
@@ -113,8 +122,11 @@ describe("PathwayConnectProfileButton", () => {
     const markup = renderToStaticMarkup(<PathwayConnectProfileButton />);
 
     expect(markup).toContain("Company");
+    expect(markup).toContain("All companies");
     expect(markup).toContain("Acme");
     expect(markup).toContain("Beta Labs");
-    expect(markup).toContain('<button data-checked="true">Beta Labs</button>');
+    expect(markup).toContain("Open settings for Acme");
+    expect(markup).toContain("Create company");
+    expect(markup).toContain('data-checked="true"');
   });
 });

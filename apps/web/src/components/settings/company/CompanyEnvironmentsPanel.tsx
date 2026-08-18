@@ -81,6 +81,7 @@ import {
   PermissionTooltip,
 } from "./CompanySettingsShared";
 import {
+  canAttemptEnvironmentReconnect,
   completeRemoteRelayAvailability,
   deleteConfirmationSecondsRemaining,
   derivePathwayConnectStatus,
@@ -162,6 +163,7 @@ function EnvironmentList({
   deleteTooltip,
   deletingEnvironmentId,
   onInfo,
+  onReconnect,
   onDelete,
   onDeleteAllDisconnected,
 }: {
@@ -178,6 +180,7 @@ function EnvironmentList({
   readonly deleteTooltip: string | null;
   readonly deletingEnvironmentId: EnvironmentId | null;
   readonly onInfo: (environmentId: EnvironmentId) => void;
+  readonly onReconnect: () => void;
   readonly onDelete: (environment: CompanyEnvironmentRow) => void;
   readonly onDeleteAllDisconnected: () => void;
 }) {
@@ -196,6 +199,7 @@ function EnvironmentList({
       deleteTooltip={deleteTooltip}
       deleting={deletingEnvironmentId === row.environmentId}
       onInfo={() => onInfo(row.environmentId)}
+      onReconnect={onReconnect}
       onDelete={() => onDelete(row)}
     />
   );
@@ -293,6 +297,7 @@ function EnvironmentListRow({
   deleteTooltip,
   deleting,
   onInfo,
+  onReconnect,
   onDelete,
 }: {
   readonly row: CompanyEnvironmentRow;
@@ -304,6 +309,7 @@ function EnvironmentListRow({
   readonly deleteTooltip: string | null;
   readonly deleting: boolean;
   readonly onInfo: () => void;
+  readonly onReconnect: () => void;
   readonly onDelete: () => void;
 }) {
   const [deleteArmedUntil, setDeleteArmedUntil] = useState<number | null>(null);
@@ -334,6 +340,10 @@ function EnvironmentListRow({
     ownManagedEndpointAvailable: managedEndpointAvailable,
     ownCloudLinkError,
     remoteRelayAvailability,
+  });
+  const canAttemptReconnect = canAttemptEnvironmentReconnect({
+    row,
+    ownCloudLinkPhase,
   });
 
   return (
@@ -383,6 +393,12 @@ function EnvironmentListRow({
           <MoreVerticalIcon className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
+          {canAttemptReconnect ? (
+            <DropdownMenuItem onClick={onReconnect}>
+              <RefreshCwIcon />
+              Try reconnecting
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem onClick={onInfo}>
             <InfoIcon />
             Info
@@ -961,6 +977,7 @@ export function CompanyEnvironmentsPanel() {
                 setSelectedEnvironmentId(environmentId);
                 setEnvironmentInfoOpen(true);
               }}
+              onReconnect={requestAlwaysOnCloudLinkRetry}
               onDelete={(environment) => {
                 if (control === null) return;
                 setSelectedEnvironmentId(environment.environmentId);
@@ -1059,7 +1076,10 @@ export function CompanyEnvironmentsPanel() {
                 ) : null}
               </div>
 
-              {selected.isOwnEnvironment && cloudLinkStatus.phase === "exhausted" ? (
+              {canAttemptEnvironmentReconnect({
+                row: selected,
+                ownCloudLinkPhase: cloudLinkStatus.phase,
+              }) ? (
                 <div
                   role="alert"
                   className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3"

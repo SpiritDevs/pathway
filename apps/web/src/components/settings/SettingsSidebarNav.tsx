@@ -13,6 +13,7 @@ import {
   ArrowLeftIcon,
   BotIcon,
   ChartNoAxesColumnIcon,
+  ChevronDownIcon,
   CircleDotIcon,
   FileUpIcon,
   CalendarClockIcon,
@@ -40,6 +41,13 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Kbd } from "../ui/kbd";
 import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/menu";
+import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -53,6 +61,7 @@ import { PathwayConnectSidebarSignIn } from "../clerk/PathwayConnectSidebarSignI
 import { useCompanySettings } from "./company/useCompanySettings";
 import { permissionGate } from "./company/companySettings.logic";
 import { useCompanyIntegrationsClient } from "~/cloud/useCompanyIntegrationsClient";
+import { SETTINGS_PROFILE_SCOPE } from "~/cloud/settingsCompany";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -101,10 +110,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const companySettings = useCompanySettings();
   const integrationsClient = useCompanyIntegrationsClient();
   const [integrationsAttentionCount, setIntegrationsAttentionCount] = useState(0);
-  const workspaceKind =
-    companySettings.activeCompany?.workspaceKind ??
-    companySettings.directory.company?.workspaceKind ??
-    "personal";
+  const workspaceKind = companySettings.workspaceKind;
   const integrationsRead = permissionGate(companySettings.permissions, "integrations.read").enabled;
   useEffect(() => {
     if (
@@ -201,6 +207,22 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     },
     [isMobile, navigate, setOpenMobile],
   );
+  const selectSettingsScope = useCallback(
+    (scope: typeof companySettings.settingsCompanyScope) => {
+      companySettings.setSettingsCompanyScope(scope);
+      if (scope !== SETTINGS_PROFILE_SCOPE) return;
+      const currentSection = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths).find(
+        (path) => pathname === path || pathname.startsWith(`${path}/`),
+      );
+      if (
+        currentSection !== undefined &&
+        !settingsPathIsVisibleForWorkspace(currentSection, "profile")
+      ) {
+        void navigate({ to: "/settings/general", replace: true });
+      }
+    },
+    [companySettings, navigate, pathname],
+  );
   const clearSearch = useCallback(() => {
     setQuery("");
     setActiveResultIndex(0);
@@ -262,6 +284,50 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     <>
       <SidebarContent className="overflow-x-hidden">
         <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
+          {companySettings.hasMultipleCompanies ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="Choose settings profile or company"
+                className="flex h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-sidebar-foreground outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring data-popup-open:bg-sidebar-row-hover"
+              >
+                {companySettings.activeCompany === null ? (
+                  <UserRoundIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                ) : (
+                  <UsersRoundIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                )}
+                <span className="min-w-0 flex-1 truncate">
+                  {companySettings.activeCompany?.name ?? "Your profile"}
+                </span>
+                <ChevronDownIcon className="size-3.5 shrink-0 text-sidebar-muted-foreground/70" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="w-[calc(var(--sidebar-width)-1rem)]"
+                sideOffset={4}
+              >
+                <DropdownMenuCheckboxItem
+                  checked={companySettings.settingsCompanyScope === SETTINGS_PROFILE_SCOPE}
+                  onCheckedChange={(checked) => {
+                    if (checked) selectSettingsScope(SETTINGS_PROFILE_SCOPE);
+                  }}
+                >
+                  Your profile
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                {companySettings.organizationCompanies.map((company) => (
+                  <DropdownMenuCheckboxItem
+                    checked={company.id === companySettings.companyId}
+                    key={company.id}
+                    onCheckedChange={(checked) => {
+                      if (checked) selectSettingsScope(company.id);
+                    }}
+                  >
+                    <span className="block truncate">{company.name}</span>
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <div className="flex h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
             <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
             <Input

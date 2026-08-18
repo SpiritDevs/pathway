@@ -231,6 +231,15 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(settingsPathIsVisibleForWorkspace("/settings/company-roles", "organization")).toBe(true);
   });
 
+  it("hides company-owned settings in the profile scope", () => {
+    expect(settingsPathIsVisibleForWorkspace("/settings/general", "profile")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/providers", "profile")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/company-members", "profile")).toBe(false);
+    expect(settingsPathIsVisibleForWorkspace("/settings/environments", "profile")).toBe(false);
+    expect(settingsPathIsVisibleForWorkspace("/settings/issues-statuses", "profile")).toBe(false);
+    expect(settingsPathIsVisibleForWorkspace("/settings/email", "profile")).toBe(false);
+  });
+
   it("keeps Projects in the Workspace group with its own settings page", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Workspace")?.paths).toEqual([
       "/settings/general",

@@ -336,6 +336,28 @@ describe("environment command claimant", () => {
     }),
   );
 
+  it.effect("stops cloud calls after unlink and resumes the same claimant after relink", () =>
+    Effect.gen(function* () {
+      let linked = true;
+      const convex = backendHarness({ claim: () => Effect.succeed([]) });
+      const claimant: EnvironmentCommandClaimantRuntime = {
+        ...runtime({
+          backend: convex.backend,
+          executor: { execute: () => Effect.die("no command should execute") },
+        }),
+        isBootstrapped: Effect.sync(() => linked),
+      };
+
+      assert.equal(yield* runEnvironmentCommandClaimCycle(claimant), "idle");
+      linked = false;
+      assert.equal(yield* runEnvironmentCommandClaimCycle(claimant), "unready");
+      linked = true;
+      assert.equal(yield* runEnvironmentCommandClaimCycle(claimant), "idle");
+
+      assert.lengthOf(convex.claimCalls, 2);
+    }),
+  );
+
   it.effect("skips a command whose command-level TTL elapsed", () =>
     Effect.gen(function* () {
       const expired = command(

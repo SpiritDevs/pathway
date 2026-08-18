@@ -102,6 +102,10 @@ interface InvitationCreateArgs extends ConvexArgs {
 
 export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
   listMine: queryReference<{}, ReadonlyArray<CurrentCompanySummary>>("companies:listMine"),
+  createCompany: mutationReference<
+    { readonly id: CompanyId; readonly name: string; readonly issueKeyPrefix?: string },
+    CurrentCompanySummary
+  >("companies:create"),
   upgradeToOrganization: mutationReference<
     { readonly companyId: CompanyId; readonly name: string },
     CurrentCompanySummary
@@ -180,6 +184,7 @@ const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   "not-a-member": "You are not an active member of this company.",
   "permission-denied": "You do not have permission to perform this action.",
   "already-a-member": "That person is already a member of this company.",
+  "company-exists": "That company already exists. Refresh and try again.",
   "invitation-exists": "An invitation with that identifier already exists.",
   "invitation-consumed": "This invitation has already been accepted.",
   "invitation-revoked": "This invitation has been revoked.",
@@ -225,6 +230,11 @@ export function mapCompanyAdminError(error: unknown): CompanyAdminError {
 
 export interface CompanyAdminClient {
   readonly listMine: () => Promise<ReadonlyArray<CurrentCompanySummary>>;
+  readonly createCompany: (args: {
+    readonly id: CompanyId;
+    readonly name: string;
+    readonly issueKeyPrefix?: string;
+  }) => Promise<CurrentCompanySummary>;
   readonly upgradeToOrganization: (args: {
     readonly companyId: CompanyId;
     readonly name: string;
@@ -305,11 +315,15 @@ export function makeCompanyAdminClient(options: {
     call<A>(() => client.query(reference, args));
   const mutation = (reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     call<null>(() => client.mutation(reference, args)).then(() => undefined);
+  const mutationResult = <A>(reference: FunctionReference<"mutation">, args: ConvexArgs) =>
+    call<A>(() => client.mutation(reference, args));
   const action = (reference: FunctionReference<"action">, args: ConvexArgs) =>
     call<unknown>(() => client.action(reference, args)).then(() => undefined);
 
   return {
     listMine: () => query(COMPANY_ADMIN_FUNCTION_REFERENCES.listMine, {}),
+    createCompany: (args) =>
+      mutationResult<CurrentCompanySummary>(COMPANY_ADMIN_FUNCTION_REFERENCES.createCompany, args),
     upgradeToOrganization: (args) =>
       mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.upgradeToOrganization, args),
     listInvitations: (companyId) =>

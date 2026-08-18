@@ -2,6 +2,7 @@
 /** Transactional automation-job scheduling helpers shared by issue and Slack mutations. */
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx } from "../_generated/server.js";
+import { ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS } from "../../src/environmentRegistrations.ts";
 import { mintDomainId } from "./domainIds.ts";
 
 type ModelSelection = { readonly instanceId: string; readonly model: string };
@@ -51,7 +52,7 @@ export async function automationReadiness(
     registration === null ||
     registration.state !== "active" ||
     registration.lastSeenAt === null ||
-    Date.now() - registration.lastSeenAt > 120_000
+    Date.now() - registration.lastSeenAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
   ) {
     return {
       state: "blocked" as const,
@@ -78,7 +79,7 @@ export async function automationReadiness(
   if (
     capabilities === null ||
     !capabilities.supportsAutomationJobs ||
-    Date.now() - capabilities.publishedAt > 120_000
+    Date.now() - capabilities.publishedAt > ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS
   ) {
     return {
       state: "blocked" as const,
