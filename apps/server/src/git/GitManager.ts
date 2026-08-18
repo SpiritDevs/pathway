@@ -172,6 +172,7 @@ interface PullRequestHeadRemoteInfo {
 
 interface BranchHeadContext {
   localBranch: string;
+  localBranchPublished: boolean;
   headBranch: string;
   headSelectors: ReadonlyArray<string>;
   preferredHeadSelector: string;
@@ -925,11 +926,24 @@ export const make = Effect.gen(function* () {
         prLookupEpochByCwd.set(cacheKey, prLookupEpoch(cacheKey) + 1);
       }),
     );
-  // Cache keys are NUL-joined [cwd, branch, upstreamRef, epoch] — none of the
+  // Cache keys are NUL-joined [cwd, branch, upstreamRef, defaultBranch, epoch] — none of the
   // segments can contain a NUL byte, and refs are never empty, so "" decodes
-  // back to a null upstreamRef.
-  const prLookupCacheKey = (cwd: string, details: { branch: string; upstreamRef: string | null }) =>
-    [cwd, details.branch, details.upstreamRef ?? "", String(prLookupEpoch(cwd))].join("\u0000");
+  // back to a null ref.
+  const prLookupCacheKey = (
+    cwd: string,
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+    },
+  ) =>
+    [
+      cwd,
+      details.branch,
+      details.upstreamRef ?? "",
+      details.defaultBranch ?? "",
+      String(prLookupEpoch(cwd)),
+    ].join("\u0000");
   // Consecutive failures per cache key, so a branch that keeps failing waits
   // longer before the next attempt. Cleared as soon as a lookup succeeds.
   const prLookupFailureStreakByKey = new Map<string, number>();
@@ -949,13 +963,31 @@ export const make = Effect.gen(function* () {
   };
   const prLookupCache = yield* Cache.makeWith(
     (key: string) => {
-      const [cwd = "", branch = "", upstreamRef = ""] = key.split("\u0000");
+      const [cwd = "", branch = "", upstreamRef = "", defaultBranch = ""] = key.split("\u0000");
       const details = {
         branch,
         upstreamRef: upstreamRef.length > 0 ? upstreamRef : null,
+        defaultBranch: defaultBranch.length > 0 ? defaultBranch : null,
       };
       return Effect.gen(function* () {
         const headContext = yield* resolveBranchHeadContext(cwd, details);
+        const upstreamHeadIsDefault =
+          headContext.headBranch === details.defaultBranch ||
+          (details.defaultBranch === null &&
+            (headContext.headBranch === "main" || headContext.headBranch === "master"));
+        // `git worktree add -b feature origin/main` makes the new local branch
+        // track origin/main. That upstream is the branch's base, not its
+        // published PR head. Looking up PRs for it can attach an old reverse
+        // merge from main and auto-settle an unrelated feature thread.
+        if (
+          headContext.headBranch !== details.branch &&
+          upstreamHeadIsDefault &&
+          !headContext.localBranchPublished &&
+          !headContext.isCrossRepository &&
+          headContext.headRepositoryNameWithOwner !== null
+        ) {
+          return { latest: null, headContext };
+        }
         // Only skip when the branch is untracked as well: anything carrying an
         // upstream keeps the old behaviour.
         if (details.upstreamRef === null && (yield* isUnpublishedBranch(cwd, headContext))) {
@@ -1036,7 +1068,12 @@ export const make = Effect.gen(function* () {
   };
   const lookupStatusPr = Effect.fn("lookupStatusPr")(function* (
     cwd: string,
-    details: { branch: string; upstreamRef: string | null; isDefaultBranch: boolean },
+    details: {
+      branch: string;
+      upstreamRef: string | null;
+      defaultBranch: string | null;
+      isDefaultBranch: boolean;
+    },
   ) {
     // Keyed by (cwd, branch) only: the upstream ref changing (e.g. a first
     // `push -u`) must not orphan the fallback value for the same branch.
@@ -1102,6 +1139,7 @@ export const make = Effect.gen(function* () {
         ? yield* lookupStatusPr(cwd, {
             branch: details.branch,
             upstreamRef: details.upstreamRef,
+            defaultBranch: details.defaultBranch,
             isDefaultBranch: details.isDefaultBranch,
           })
         : null;
@@ -1180,6 +1218,44 @@ export const make = Effect.gen(function* () {
     return yield* gitCore.resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
   });
 
+  const isBranchPublishedToAnyRemote = Effect.fn("isBranchPublishedToAnyRemote")(function* (
+    cwd: string,
+    branch: string,
+  ) {
+    return yield* Effect.gen(function* () {
+      const remotes = yield* gitCore.execute({
+        operation: "GitManager.isBranchPublishedToAnyRemote.remotes",
+        cwd,
+        args: ["remote"],
+        timeoutMs: 5_000,
+      });
+      const remoteNames = remotes.stdout
+        .split("\n")
+        .map((remoteName) => remoteName.trim())
+        .filter((remoteName) => remoteName.length > 0);
+      const published = yield* Effect.forEach(
+        remoteNames,
+        (remoteName) => {
+          const expectedRef = `refs/remotes/${remoteName}/${branch}`;
+          return gitCore
+            .execute({
+              operation: "GitManager.isBranchPublishedToAnyRemote.ref",
+              cwd,
+              args: ["for-each-ref", "--count=1", "--format=%(refname)", expectedRef],
+              timeoutMs: 5_000,
+            })
+            .pipe(Effect.map((result) => result.stdout.trim() === expectedRef));
+        },
+        { concurrency: "unbounded" },
+      );
+      return published.some(Boolean);
+    }).pipe(
+      // A failed publication probe must not suppress a potentially valid
+      // provider lookup.
+      Effect.orElseSucceed(() => true),
+    );
+  });
+
   const resolveBranchHeadContext = Effect.fn("resolveBranchHeadContext")(function* (
     cwd: string,
     details: { branch: string; upstreamRef: string | null },
@@ -1188,9 +1264,15 @@ export const make = Effect.gen(function* () {
     const headBranchFromUpstream = details.upstreamRef
       ? extractBranchNameFromRemoteRef(details.upstreamRef, { remoteName })
       : "";
-    const headBranch = headBranchFromUpstream.length > 0 ? headBranchFromUpstream : details.branch;
+    const upstreamHeadBranch =
+      headBranchFromUpstream.length > 0 ? headBranchFromUpstream : details.branch;
+    const localBranchPublished =
+      upstreamHeadBranch !== details.branch
+        ? yield* isBranchPublishedToAnyRemote(cwd, details.branch)
+        : false;
+    const headBranch = localBranchPublished ? details.branch : upstreamHeadBranch;
     const shouldProbeLocalBranchSelector =
-      headBranchFromUpstream.length === 0 || headBranch === details.branch;
+      headBranchFromUpstream.length === 0 || headBranch === details.branch || localBranchPublished;
 
     const baseRemoteName = yield* resolveBaseRemoteName(cwd);
     const [remoteRepository, baseRepository] = yield* Effect.all(
@@ -1245,6 +1327,7 @@ export const make = Effect.gen(function* () {
 
     return {
       localBranch: details.branch,
+      localBranchPublished,
       headBranch,
       headSelectors,
       preferredHeadSelector:
