@@ -2,13 +2,13 @@ import type { UserIdentity } from "convex/server";
 
 import type { QueryCtx } from "../_generated/server.js";
 import { backendError } from "./errors.ts";
+import { configuredRelayIssuers } from "../../src/relayIssuers.ts";
 
 export const RELAY_CONTROL_PLANE_SUBJECT = "pathway-relay";
 export const RELAY_CONTROL_PLANE_TOKEN_KIND = "relay-control-plane";
 
 function isRelayIssuer(identity: UserIdentity): boolean {
-  const issuer = process.env.PATHWAY_RELAY_JWT_ISSUER;
-  return issuer !== undefined && identity.issuer === issuer;
+  return configuredRelayIssuers().has(identity.issuer);
 }
 
 /**

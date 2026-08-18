@@ -1,5 +1,5 @@
 /**
- * Two issuers reach this deployment, and only two.
+ * Two kinds of issuer reach this deployment: Clerk and explicitly trusted Pathway relays.
  *
  * Humans arrive through Clerk, which stays the mandatory user identity but owns none of the
  * company model. Pathway servers arrive through the existing relay: they already hold a
@@ -11,6 +11,8 @@
  * @see https://docs.convex.dev/auth/clerk
  * @module auth.config
  */
+
+import { relayJwtProviders } from "../src/relayIssuers.ts";
 
 /** The audience the relay mints for. Environment tokens for any other audience are not accepted. */
 export const CONVEX_ENVIRONMENT_AUDIENCE = "pathway-convex";
@@ -29,14 +31,18 @@ if (relayIssuer === undefined || relayJwks === undefined) {
  * start without calling Convex; after both variables are set, deploying Convex enables its
  * persistence calls and environment service tokens together.
  */
-const relayProvider = {
+const relayProviders = relayJwtProviders(
+  relayIssuer,
+  relayJwks,
+  process.env.PATHWAY_RELAY_JWT_ADDITIONAL_ISSUERS,
+).map(({ issuer, jwks }) => ({
   type: "customJwt" as const,
   applicationID: CONVEX_ENVIRONMENT_AUDIENCE,
-  issuer: relayIssuer,
-  jwks: relayJwks,
+  issuer,
+  jwks,
   /** Dedicated P-256 key; Convex custom JWT providers support ES256, not Ed25519. */
   algorithm: "ES256" as const,
-};
+}));
 
 export default {
   providers: [
@@ -44,6 +50,6 @@ export default {
       domain: process.env.CLERK_JWT_ISSUER_DOMAIN,
       applicationID: "convex",
     },
-    relayProvider,
+    ...relayProviders,
   ],
 };

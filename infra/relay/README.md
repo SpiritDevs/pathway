@@ -147,6 +147,11 @@ pair in this order:
    `PATHWAY_RELAY_JWKS_URL=https://<relay-origin>/.well-known/jwks.json`, then run
    `pnpm --filter @spiritdevs/backend exec convex dev --once`.
 
+If a Convex deployment is intentionally shared by more than one relay stage, keep the production
+relay as the primary issuer and set `PATHWAY_RELAY_JWT_ADDITIONAL_ISSUERS` to a comma-separated list
+of the other relay origins. Convex derives each additional JWKS URL from its origin. Only configure
+stages that are allowed to access the same persisted relay data.
+
 Convex statically requires every environment variable referenced by `auth.config.ts`, so both relay
 variables must be present before codegen or deployment. Relay service calls then use short-lived
 ES256 JWTs; the Worker never receives a Convex deploy key.

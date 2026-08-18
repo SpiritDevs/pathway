@@ -12,6 +12,8 @@ export const DesktopBackendBootstrap = Schema.Struct({
   pathwayHome: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
+  /** Electron parent PID. The backend exits if force-quit leaves it orphaned. */
+  desktopParentPid: Schema.optionalKey(PositiveInt),
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),

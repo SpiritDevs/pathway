@@ -27,6 +27,7 @@ import type { Doc } from "../_generated/dataModel.js";
 import type { QueryCtx } from "../_generated/server.js";
 import { backendError } from "./errors.ts";
 import { isRelayControlPlaneIdentity } from "./relayIdentity.ts";
+import { configuredRelayIssuers } from "../../src/relayIssuers.ts";
 
 export interface MemberActor {
   readonly kind: "member";
@@ -48,16 +49,9 @@ export interface EnvironmentActor {
 
 export type CompanyActor = MemberActor | EnvironmentActor;
 
-function relayIssuer(): string | undefined {
-  return process.env.PATHWAY_RELAY_JWT_ISSUER;
-}
-
 /** True when the token came from the relay's `pathway-convex` audience rather than from Clerk. */
 export function isEnvironmentIdentity(identity: UserIdentity): boolean {
-  const issuer = relayIssuer();
-  return (
-    issuer !== undefined && identity.issuer === issuer && !isRelayControlPlaneIdentity(identity)
-  );
+  return configuredRelayIssuers().has(identity.issuer) && !isRelayControlPlaneIdentity(identity);
 }
 
 export async function requireIdentity(ctx: QueryCtx): Promise<UserIdentity> {

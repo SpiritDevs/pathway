@@ -108,6 +108,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
+import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
@@ -736,6 +737,7 @@ export const makeServerLayer = Layer.unwrap(
       httpListeningLayer,
       runtimeStateLayer,
       cloudDesiredLinkReconcileLayer,
+      DesktopParentMonitor.layer,
       // Default-off. Every gate is read inside the layer (see `cloud/syncDaemon.ts`), so on a
       // A server without cloud configuration contributes one warning and nothing
       // else — no replica tables, no Convex client, no forked fiber. It sits here rather than in
