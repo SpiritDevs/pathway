@@ -43,7 +43,7 @@ import {
   signRelayJwt,
   verifyRelayJwt,
 } from "@spiritdevs/shared/relayJwt";
-import { isSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
+import { isSecureRelayUrl, normalizeSecureRelayUrl } from "@spiritdevs/shared/relayUrl";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -227,31 +227,64 @@ function validateRelayConfigPayload(
   return Effect.void;
 }
 
+/**
+ * A cloud user id only identifies an account within the relay that issued it:
+ * two relay deployments (a developer stage and production) mint ids from
+ * separate identity providers, so comparing an id across them is meaningless.
+ * Only an incoming config for the relay this environment is already linked to
+ * can move it between accounts, and only that case needs an explicit unlink.
+ * Config for a different relay is a fresh link and is adopted — otherwise an
+ * environment that once linked against a dev relay refuses every production
+ * link forever, while the relay keeps a link no connector serves.
+ */
+export function isCloudAccountTakeover(input: {
+  readonly linkedCloudUserId: string | null;
+  readonly linkedRelayUrl: string | null;
+  readonly cloudUserId: string;
+  readonly relayUrl: string;
+}): boolean {
+  if (input.linkedCloudUserId === null || input.linkedCloudUserId === input.cloudUserId) {
+    return false;
+  }
+  const linkedRelayUrl =
+    input.linkedRelayUrl === null ? null : normalizeSecureRelayUrl(input.linkedRelayUrl);
+  // An unreadable or absent stored relay URL keeps the conservative reading:
+  // treat the existing link as belonging to the incoming relay.
+  return linkedRelayUrl === null || linkedRelayUrl === normalizeSecureRelayUrl(input.relayUrl);
+}
+
 function validateLinkedCloudUser(input: {
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly cloudUserId: string;
+  readonly relayUrl: string;
 }): Effect.Effect<void, EnvironmentAuth.ServerAuthInternalError | EnvironmentHttpConflictError> {
-  return input.secrets.get(CLOUD_LINKED_USER_ID).pipe(
+  return Effect.all(
+    [input.secrets.get(CLOUD_LINKED_USER_ID), input.secrets.get(RELAY_URL_SECRET)],
+    { concurrency: 2 },
+  ).pipe(
     Effect.mapError(
       (cause) =>
         new EnvironmentAuth.ServerAuthLinkedCloudAccountVerificationError({
           cause,
         }),
     ),
-    Effect.flatMap((existing) => {
-      if (Option.isNone(existing)) {
-        return Effect.void;
-      }
-      const existingCloudUserId = bytesToString(existing.value);
-      return existingCloudUserId === input.cloudUserId
-        ? Effect.void
-        : Effect.fail(
+    Effect.flatMap(([existing, existingRelayUrl]) =>
+      isCloudAccountTakeover({
+        linkedCloudUserId: Option.isSome(existing) ? bytesToString(existing.value) : null,
+        linkedRelayUrl: Option.isSome(existingRelayUrl)
+          ? bytesToString(existingRelayUrl.value)
+          : null,
+        cloudUserId: input.cloudUserId,
+        relayUrl: input.relayUrl,
+      })
+        ? Effect.fail(
             new EnvironmentHttpConflictError({
               message:
                 "This environment is already linked to a different cloud account. Unlink it before switching accounts.",
             }),
-          );
-    }),
+          )
+        : Effect.void,
+    ),
   );
 }
 
@@ -512,6 +545,7 @@ const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConfig")(fu
   yield* validateLinkedCloudUser({
     secrets: dependencies.secrets,
     cloudUserId: payload.cloudUserId,
+    relayUrl: payload.relayUrl,
   });
   yield* validateCloudMintPublicKey(payload.cloudMintPublicKey);
   const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig(

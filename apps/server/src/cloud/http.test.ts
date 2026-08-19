@@ -53,6 +53,7 @@ import {
   type CloudHttpDependencies,
   cloudMintCredentialHandler,
   consumeCloudReplayGuards,
+  isCloudAccountTakeover,
   isSupportedLinkProviderKind,
   linkProofScopes,
   pendingServiceUpdateExists,
@@ -844,5 +845,72 @@ describe("link proof provider kinds", () => {
       "managed_tunnels",
     ]);
     expect(linkProofScopes(proofRequest("manual"))).toEqual(["agent_activity_notifications"]);
+  });
+});
+
+describe("linked cloud account conflicts", () => {
+  const relayUrl = "https://relay.example.test";
+
+  it("accepts config that keeps the environment on the same account", () => {
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: "user-1",
+        linkedRelayUrl: `${relayUrl}/`,
+        cloudUserId: "user-1",
+        relayUrl,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a different account on the relay the environment is linked to", () => {
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: "user-1",
+        linkedRelayUrl: relayUrl,
+        cloudUserId: "user-2",
+        relayUrl,
+      }),
+    ).toBe(true);
+  });
+
+  it("adopts config from a different relay whose account ids are unrelated", () => {
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: "dev-user-1",
+        linkedRelayUrl: "https://relay-dev.example.test",
+        cloudUserId: "prod-user-1",
+        relayUrl,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a mismatched account when the linked relay is unknown", () => {
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: "user-1",
+        linkedRelayUrl: null,
+        cloudUserId: "user-2",
+        relayUrl,
+      }),
+    ).toBe(true);
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: "user-1",
+        linkedRelayUrl: "not-a-url",
+        cloudUserId: "user-2",
+        relayUrl,
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts config for an environment that has never been linked", () => {
+    expect(
+      isCloudAccountTakeover({
+        linkedCloudUserId: null,
+        linkedRelayUrl: null,
+        cloudUserId: "user-1",
+        relayUrl,
+      }),
+    ).toBe(false);
   });
 });

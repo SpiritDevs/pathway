@@ -533,6 +533,111 @@ describe("web cloud link environment client", () => {
     }),
   );
 
+  it.effect("rolls back the relay link when the environment is bound to another account", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({
+            challenge: "challenge",
+            expiresAt: "2026-06-06T00:05:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(Response.json("signed-proof"))
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            environmentId: TARGET.environmentId,
+            endpoint: {
+              httpBaseUrl: "https://desktop.example.test",
+              wsBaseUrl: "wss://desktop.example.test",
+              providerKind: "cloudflare_tunnel",
+            },
+            endpointRuntime: null,
+            relayIssuer: "https://relay.example.test",
+            cloudUserId: "user-1",
+            environmentCredential: "environment-credential",
+            cloudMintPublicKey: "public-key",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json(
+            {
+              _tag: "EnvironmentHttpConflictError",
+              message:
+                "This environment is already linked to a different cloud account. Unlink it before switching accounts.",
+            },
+            { status: 409 },
+          ),
+        )
+        .mockResolvedValueOnce(Response.json({ ok: true }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = yield* withServices(
+        linkPrimaryEnvironmentToCloud({
+          target: TARGET,
+          clerkToken: "clerk-token",
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toContain("already linked to a different cloud account");
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(String(fetchMock.mock.calls[4]?.[0])).toContain(
+        `/v1/client/environment-links/${TARGET.environmentId}`,
+      );
+      expect(fetchMock.mock.calls[4]?.[1]?.method).toBe("DELETE");
+    }),
+  );
+
+  it.effect("keeps the relay link when the environment fails for another reason", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json({
+            challenge: "challenge",
+            expiresAt: "2026-06-06T00:05:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(Response.json("signed-proof"))
+        .mockResolvedValueOnce(
+          Response.json({
+            ok: true,
+            environmentId: TARGET.environmentId,
+            endpoint: {
+              httpBaseUrl: "https://desktop.example.test",
+              wsBaseUrl: "wss://desktop.example.test",
+              providerKind: "cloudflare_tunnel",
+            },
+            endpointRuntime: null,
+            relayIssuer: "https://relay.example.test",
+            cloudUserId: "user-1",
+            environmentCredential: "environment-credential",
+            cloudMintPublicKey: "public-key",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json(
+            {
+              _tag: "EnvironmentHttpInternalServerError",
+              message: "Could not persist environment relay configuration.",
+            },
+            { status: 500 },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      yield* withServices(
+        linkPrimaryEnvironmentToCloud({
+          target: TARGET,
+          clerkToken: "clerk-token",
+        }),
+      ).pipe(Effect.flip);
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    }),
+  );
+
   it.effect("unlinks locally before revoking the relay record", () =>
     Effect.gen(function* () {
       const fetchMock = vi

@@ -195,7 +195,9 @@ function decodedRelayClientError(message: string) {
   };
 }
 
-function findEnvironmentCloudApiError(cause: unknown): { readonly message: string } | null {
+function findEnvironmentCloudApiError(
+  cause: unknown,
+): { readonly _tag: string; readonly message: string } | null {
   if (isEnvironmentCloudApiError(cause)) {
     return cause;
   }
@@ -203,6 +205,14 @@ function findEnvironmentCloudApiError(cause: unknown): { readonly message: strin
     return null;
   }
   return "cause" in cause ? findEnvironmentCloudApiError(cause.cause) : null;
+}
+
+/**
+ * The environment refuses relay config that would move it to another cloud
+ * account, and only an explicit re-link (local unlink first) clears that.
+ */
+export function isEnvironmentCloudAccountConflict(cause: unknown): boolean {
+  return findEnvironmentCloudApiError(cause)?._tag === "EnvironmentHttpConflictError";
 }
 
 const environmentApiError = (message: string) => (cause: unknown) => {
@@ -541,8 +551,8 @@ export function linkPrimaryEnvironmentToCloud(input: {
       link,
     });
 
-    yield* environmentClient.connect
-      .relayConfig({
+    const configResult = yield* Effect.result(
+      environmentClient.connect.relayConfig({
         headers: {},
         payload: {
           relayUrl: configuredRelayUrl,
@@ -552,7 +562,33 @@ export function linkPrimaryEnvironmentToCloud(input: {
           cloudMintPublicKey: link.cloudMintPublicKey,
           endpointRuntime: link.endpointRuntime,
         },
-      })
-      .pipe(Effect.mapError(environmentApiError("Could not configure environment relay access.")));
+      }),
+    );
+    if (configResult._tag === "Failure") {
+      // The relay commits the link (and provisions a managed tunnel) before the
+      // environment can refuse it. A conflict means this environment is bound
+      // to another cloud account and will never adopt the config, so leaving
+      // the link in place would list an environment that no connector serves:
+      // every other device in the account would show it and fail to connect
+      // with an opaque "endpoint unavailable". Roll the link back instead, and
+      // let the explicit re-link flow move the environment across accounts.
+      if (isEnvironmentCloudAccountConflict(configResult.failure)) {
+        yield* relayClient
+          .unlinkEnvironment({
+            clerkToken: input.clerkToken,
+            environmentId: EnvironmentId.make(input.target.environmentId),
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not roll back the relay link the environment refused.", {
+                cause,
+              }),
+            ),
+          );
+      }
+      return yield* environmentApiError("Could not configure environment relay access.")(
+        configResult.failure,
+      );
+    }
   }).pipe(Effect.provide(primaryEnvironmentHttpLayer));
 }
