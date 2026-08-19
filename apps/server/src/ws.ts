@@ -1888,6 +1888,9 @@ const makeWsRpcLayer = (
                                 commandId: CommandId.make(`${input.actionId}:source-control`),
                                 threadId: input.threadId,
                                 committed: marker.committed,
+                                ...(marker.commitSha === undefined
+                                  ? {}
+                                  : { commitSha: marker.commitSha }),
                                 pullRequest: marker.pullRequest,
                               })
                               .pipe(Effect.ignoreCause({ log: true }), Effect.asVoid)

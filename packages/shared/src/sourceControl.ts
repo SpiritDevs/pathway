@@ -8,9 +8,9 @@ export function sourceControlMarkerLabel(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,
 ): string {
   if (item.pullRequest !== null) {
-    return "pushed, committed, PR created";
+    return "Committed, pushed, PR created";
   }
-  return item.committed ? "pushed and committed" : "pushed";
+  return item.committed ? "Committed and pushed" : "Pushed";
 }
 
 export interface ChangeRequestPresentation {

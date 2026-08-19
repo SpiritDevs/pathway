@@ -206,25 +206,37 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "source_control") {
+    // A push is the tail of the turn that produced it, not a boundary between
+    // turns, so it reads as an inline footnote rather than a full-width divider.
+    const commitSha = item.commitSha?.trim();
     return (
-      <TimelineSystemDivider
-        label={sourceControlMarkerLabel(item)}
-        icon={GitCommitHorizontalIcon}
-        detail={
-          item.pullRequest === null ? null : (
-            <a
-              href={item.pullRequest.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
-              aria-label={`Open PR #${item.pullRequest.number}`}
-            >
-              #{item.pullRequest.number}
-              <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
-            </a>
-          )
-        }
-      />
+      <div
+        data-v2-item-type={item.type}
+        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-1 text-[11px] text-muted-foreground"
+      >
+        <GitCommitHorizontalIcon aria-hidden="true" className="size-3 shrink-0" />
+        <span className="font-medium">{sourceControlMarkerLabel(item)}</span>
+        {commitSha === undefined || commitSha.length === 0 ? null : (
+          <span
+            className="rounded border border-border/70 px-1.5 py-0.5 font-mono text-[10px]"
+            title={commitSha}
+          >
+            {commitSha.slice(0, 7)}
+          </span>
+        )}
+        {item.pullRequest === null ? null : (
+          <a
+            href={item.pullRequest.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+            aria-label={`Open PR #${item.pullRequest.number}`}
+          >
+            #{item.pullRequest.number}
+            <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+          </a>
+        )}
+      </div>
     );
   }
   if (item.type === "thread_created") {
