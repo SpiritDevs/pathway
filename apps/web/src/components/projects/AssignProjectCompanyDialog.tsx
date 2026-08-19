@@ -65,7 +65,9 @@ function ProjectRow({
         aria-label={`Company for ${project.displayName}`}
       >
         <SelectTrigger className="w-full sm:w-56">
-          <SelectValue placeholder="Choose a company" />
+          <SelectValue placeholder="Choose a company">
+            {companies.find((company) => company.id === value)?.name}
+          </SelectValue>
         </SelectTrigger>
         <SelectPopup>
           {companies.map((company) => (
