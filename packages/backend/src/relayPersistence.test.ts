@@ -6,6 +6,7 @@ import { api } from "./convexApi.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
@@ -162,6 +163,86 @@ describe("relayPersistence", () => {
         return rows.length;
       }),
     ).resolves.toBe(1);
+  });
+
+  it("lets an account rename any linked environment without a reconnect overwriting it", async () => {
+    const { t, relay } = testRelay();
+    const link = {
+      userId: "user-1",
+      environmentId: "environment-1",
+      environmentLabel: "macOS-C02DN08X0KPF",
+      environmentPublicKey: "public-key-1",
+      endpointHttpBaseUrl: "https://environment.example.test",
+      endpointWsBaseUrl: "wss://environment.example.test",
+      endpointProviderKind: "pathway_relay" as const,
+      notificationsEnabled: true,
+      liveActivitiesEnabled: true,
+      managedTunnelsEnabled: true,
+      createdByDeviceId: null,
+      now: "2026-08-14T00:00:00.000Z",
+    };
+    await relay.mutation(api.relayPersistence.upsertEnvironmentLink, link);
+    const user = t.withIdentity({
+      issuer: "https://clerk.example.test",
+      subject: "user-1",
+      tokenIdentifier: "https://clerk.example.test|user-1",
+    });
+
+    await user.mutation(api.relayPersistence.renameEnvironmentLink, {
+      environmentId: "environment-1",
+      displayName: "Build laptop",
+    });
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-1" }),
+    ).resolves.toMatchObject([{ label: "Build laptop" }]);
+
+    await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {
+      ...link,
+      environmentLabel: "Refreshed host name",
+      now: "2026-08-14T00:01:00.000Z",
+    });
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-1" }),
+    ).resolves.toMatchObject([{ label: "Build laptop" }]);
+
+    await user.mutation(api.relayPersistence.renameEnvironmentLink, {
+      environmentId: "environment-1",
+      displayName: null,
+    });
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-1" }),
+    ).resolves.toMatchObject([{ label: "Refreshed host name" }]);
+  });
+
+  it("does not let one account rename another account's environment", async () => {
+    const { t, relay } = testRelay();
+    await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {
+      userId: "user-1",
+      environmentId: "environment-1",
+      environmentLabel: "Studio",
+      environmentPublicKey: "public-key-1",
+      endpointHttpBaseUrl: "https://environment.example.test",
+      endpointWsBaseUrl: "wss://environment.example.test",
+      endpointProviderKind: "manual",
+      notificationsEnabled: true,
+      liveActivitiesEnabled: true,
+      managedTunnelsEnabled: false,
+      createdByDeviceId: null,
+      now: "2026-08-14T00:00:00.000Z",
+    });
+
+    await expect(
+      t
+        .withIdentity({
+          issuer: "https://clerk.example.test",
+          subject: "user-2",
+          tokenIdentifier: "https://clerk.example.test|user-2",
+        })
+        .mutation(api.relayPersistence.renameEnvironmentLink, {
+          environmentId: "environment-1",
+          displayName: "Not mine",
+        }),
+    ).rejects.toThrow("not linked to your account");
   });
 
   it("prunes terminal rows even when older nonterminal rows fill the general time index", async () => {

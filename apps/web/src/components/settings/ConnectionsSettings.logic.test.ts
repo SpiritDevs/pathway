@@ -2,7 +2,7 @@ import type { AdvertisedEndpoint, DesktopWslState, EnvironmentId } from "@spirit
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
-  excludeRegisteredEnvironmentClientSessions,
+  excludeRepresentedEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
   partitionEnvironmentsByConnection,
@@ -48,8 +48,8 @@ describe("partitionClientSessionsByConnection", () => {
   });
 });
 
-describe("excludeRegisteredEnvironmentClientSessions", () => {
-  it("keeps client-only access and hides sessions represented by registered environments", () => {
+describe("excludeRepresentedEnvironmentClientSessions", () => {
+  it("keeps client-only access and hides sessions represented by environments", () => {
     type Session = {
       readonly id: string;
       readonly subject: string;
@@ -69,14 +69,14 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
       current: false,
       client: { deviceType: "mobile" },
     };
-    const registeredDesktop: Session = {
+    const representedDesktop: Session = {
       id: "desktop",
       subject: "cloud-connect",
       current: false,
       client: { deviceType: "desktop", browser: "Electron" },
       initiatingEnvironmentId: "environment-studio" as EnvironmentId,
     };
-    const unregisteredDesktop: Session = {
+    const unrepresentedDesktop: Session = {
       id: "old-desktop",
       subject: "cloud-connect",
       current: false,
@@ -85,11 +85,11 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
     };
 
     expect(
-      excludeRegisteredEnvironmentClientSessions(
-        [webPortal, mobile, registeredDesktop, unregisteredDesktop],
-        new Set(["environment-studio" as EnvironmentId]),
+      excludeRepresentedEnvironmentClientSessions(
+        [webPortal, mobile, representedDesktop, unrepresentedDesktop],
+        [{ environmentId: "environment-studio" as EnvironmentId }],
       ),
-    ).toEqual([webPortal, mobile, unregisteredDesktop]);
+    ).toEqual([webPortal, mobile, unrepresentedDesktop]);
   });
 
   it("hides the desktop's current bootstrap session when its environment is registered", () => {
@@ -107,11 +107,7 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
     };
 
     expect(
-      excludeRegisteredEnvironmentClientSessions(
-        [currentDesktop, webPortal],
-        new Set<EnvironmentId>(),
-        true,
-      ),
+      excludeRepresentedEnvironmentClientSessions([currentDesktop, webPortal], [], true),
     ).toEqual([webPortal]);
   });
 
@@ -123,13 +119,9 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
       client: { deviceType: "desktop", browser: "Chrome" },
     };
 
-    expect(
-      excludeRegisteredEnvironmentClientSessions(
-        [currentWebPortal],
-        new Set<EnvironmentId>(),
-        false,
-      ),
-    ).toEqual([currentWebPortal]);
+    expect(excludeRepresentedEnvironmentClientSessions([currentWebPortal], [], false)).toEqual([
+      currentWebPortal,
+    ]);
   });
 
   it("hides legacy Electron relay sessions that predate environment attribution", () => {
@@ -147,11 +139,7 @@ describe("excludeRegisteredEnvironmentClientSessions", () => {
     };
 
     expect(
-      excludeRegisteredEnvironmentClientSessions(
-        [legacyDesktop, webPortal],
-        new Set<EnvironmentId>(),
-        true,
-      ),
+      excludeRepresentedEnvironmentClientSessions([legacyDesktop, webPortal], [], true),
     ).toEqual([webPortal]);
   });
 });

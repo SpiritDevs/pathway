@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useEffect } from "react";
 
 import { activeCompanyAtom, activeCompanyIdAtom } from "../../cloud/activeCompany";
 import { cloudSyncAvailabilityAtom, companySyncStatusesAtom } from "../../cloud/syncStatus";
@@ -8,6 +9,19 @@ import {
   type CompanySyncStatusSummary,
 } from "../../cloud/syncStatus.logic";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
+
+// #region DEBUG
+function debugSyncStatusIndicator(
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis: "H4", event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 function dotClasses(status: CompanySyncStatusSummary | null) {
   if (status === null) return { dotClassName: "bg-muted-foreground/40", pingClassName: null };
@@ -25,6 +39,21 @@ export function SyncStatusIndicator() {
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const activeCompany = useAtomValue(activeCompanyAtom);
   const statuses = useAtomValue(companySyncStatusesAtom);
+  const status = selectedCompanySyncStatusSummary(activeCompanyId, statuses);
+
+  useEffect(() => {
+    // #region DEBUG
+    debugSyncStatusIndicator("indicator-state-observed", {
+      availabilityPhase: availability.phase,
+      tabRole: availability.phase === null ? availability.tab.role : null,
+      activeCompanySelected: activeCompanyId !== null,
+      activeCompanyResolved: activeCompany !== null,
+      statusCount: statuses.size,
+      selectedStatusPhase: status?.phase ?? null,
+      selectedStatusCompanyCount: status?.companyCount ?? 0,
+    });
+    // #endregion DEBUG
+  }, [activeCompany, activeCompanyId, availability, status, statuses]);
 
   if (availability.phase !== null) return null;
 
@@ -47,7 +76,6 @@ export function SyncStatusIndicator() {
     );
   }
 
-  const status = selectedCompanySyncStatusSummary(activeCompanyId, statuses);
   const companyName =
     activeCompany?.name ??
     (activeCompanyId === null ? "All companies" : `Company ${activeCompanyId}`);

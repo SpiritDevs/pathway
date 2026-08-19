@@ -15,7 +15,6 @@
  *
  * @module sync/bootstrap
  */
-import { SYNC_MAX_ID_CHARS } from "./operations.ts";
 import type { SyncEntityKind } from "./protocol.ts";
 
 /**
@@ -156,13 +155,15 @@ export function encodeBootstrapCursor(state: BootstrapCursorState): string {
 
 /**
  * A walk position is coherent when its `afterId` is something the walk could actually have stopped
- * on: `""` for the top of a table, or an id inside the same bounds `validateOperationBatch` holds
- * every entity id to. A cursor naming a padded or oversized id was never minted here, and resuming
- * from it would skip an arbitrary stretch of the table.
+ * on: `""` for the top of a table, or a non-empty trimmed id. Bootstrap walks persisted domain ids,
+ * not operation targets, so the operation protocol's 128-character id ceiling does not apply here.
+ * Agent Thread ids are intentionally composite (`environmentId:threadId`) and can legitimately be
+ * longer; rejecting one would make the server refuse a cursor it minted on the previous page.
+ * Convex's request-size ceiling already bounds the opaque token as a whole.
  */
 function isCoherentAfterId(afterId: string): boolean {
   if (afterId === "") return true;
-  return afterId.length <= SYNC_MAX_ID_CHARS && afterId.trim() === afterId;
+  return afterId.trim() === afterId;
 }
 
 /**

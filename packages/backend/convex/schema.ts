@@ -964,6 +964,8 @@ export default defineSchema({
   relayEnvironmentLinks: defineTable({
     userId: v.string(),
     environmentId: v.string(),
+    /** Account-level name chosen by the user; relay heartbeats never overwrite it. */
+    displayName: v.optional(v.string()),
     environmentLabel: v.string(),
     environmentPublicKey: v.string(),
     endpointHttpBaseUrl: v.string(),

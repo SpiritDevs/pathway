@@ -48,6 +48,12 @@ they can reconnect.
 
 Connected environments stay visible in the **Environments** list. Saved environments that are not
 currently reachable through Pathway Connect are grouped under the collapsed **Disconnected** section.
+Each environment shows its device type when the host can report it. Hover the device and name for a
+quick summary, or select them to open full device, runtime, connection, and server details. Any
+Pathway Connect environment can be given a dedicated name from this detail panel, even while it is
+offline. The name is saved to your Pathway Connect account and appears on every signed-in device;
+choosing the automatic name again restores the host-provided name. Development browser sessions are identified as dev mode rather
+than being presented as a separate physical device.
 Pathway refreshes relay health for the lifetime of the signed-in client, so closing or reopening a
 host is reflected throughout the app. Environments belong to your Pathway Connect account, not to a
 company, so this list does not change when you switch Settings between your profile and a company.

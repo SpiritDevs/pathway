@@ -1,9 +1,12 @@
 /** Atomic Convex persistence operations used exclusively by the hosted relay Worker. */
 import { v } from "convex/values";
+import * as DateTime from "effect/DateTime";
 
 import type { Doc, Id, TableNames } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query } from "./_generated/server.js";
+import { backendError } from "./lib/errors.ts";
+import { isEnvironmentIdentity, requireIdentity } from "./lib/identity.ts";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
 
 const nullableString = v.union(v.string(), v.null());
@@ -657,7 +660,7 @@ export const listEnvironmentLinksForUser = query({
       .filter(activeLink)
       .map((row) => ({
         environmentId: row.environmentId,
-        label: row.environmentLabel.trim() || row.environmentId,
+        label: row.displayName?.trim() || row.environmentLabel.trim() || row.environmentId,
         endpoint: {
           httpBaseUrl: row.endpointHttpBaseUrl,
           wsBaseUrl: row.endpointWsBaseUrl,
@@ -685,7 +688,7 @@ export const getEnvironmentLinkForUser = query({
       ? null
       : {
           environmentId: row.environmentId,
-          label: row.environmentLabel.trim() || row.environmentId,
+          label: row.displayName?.trim() || row.environmentLabel.trim() || row.environmentId,
           environmentPublicKey: row.environmentPublicKey,
           endpoint: {
             httpBaseUrl: row.endpointHttpBaseUrl,
@@ -697,6 +700,56 @@ export const getEnvironmentLinkForUser = query({
           },
           linkedAt: row.createdAt,
         };
+  },
+});
+
+/**
+ * Sets the signed-in account's durable name for one linked environment.
+ *
+ * The user-authored value is deliberately separate from `environmentLabel`: the relay refreshes
+ * that host-provided label whenever an environment relinks, while this name must survive those
+ * metadata updates. Passing `null` restores the current host-provided name.
+ */
+export const renameEnvironmentLink = mutation({
+  args: { environmentId: v.string(), displayName: v.union(v.string(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const identity = await requireIdentity(ctx);
+    if (isEnvironmentIdentity(identity)) {
+      throw backendError(
+        "permission-denied",
+        "An environment cannot rename links owned by a user account.",
+      );
+    }
+    const environmentId = args.environmentId.trim();
+    if (environmentId.length === 0 || environmentId !== args.environmentId) {
+      throw backendError("invalid-arguments", "An environment id must be non-empty and trimmed.");
+    }
+    let displayName: string | null = null;
+    if (args.displayName !== null) {
+      displayName = args.displayName.trim();
+      if (displayName.length === 0 || displayName.length > 120) {
+        throw backendError(
+          "invalid-arguments",
+          "An environment name must contain between 1 and 120 characters.",
+        );
+      }
+    }
+    const row = await ctx.db
+      .query("relayEnvironmentLinks")
+      .withIndex("by_user_and_environment", (q) =>
+        q.eq("userId", identity.subject).eq("environmentId", environmentId),
+      )
+      .unique();
+    if (!row || !activeLink(row)) {
+      throw backendError("entity-not-found", "This environment is not linked to your account.");
+    }
+    if ((row.displayName ?? null) === displayName) return null;
+    await ctx.db.patch(row._id, {
+      displayName: displayName ?? undefined,
+      updatedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+    });
+    return null;
   },
 });
 export const revokeEnvironmentLink = mutation({

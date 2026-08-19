@@ -1,71 +1,45 @@
-# Design QA
+**Comparison target**
 
-- Source visual truth: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-4e89e404-4909-4057-9e34-b6530ea46589.png`
-- Source pixels: 3360 x 1940 at the supplied Retina density.
-- Before implementation: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-b8f74ff7-d389-450b-b680-d915305963b8.png`
-- Before pixels: 3278 x 2030 at the supplied Retina density.
-- Dropdown source crop: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-bc145573-bd64-402a-87d6-17d1591e348c.png`
-- Dropdown source pixels: 964 x 650 at the supplied Retina density.
-- Dropdown before implementation: `/Users/coreybaines/.pathway/userdata/attachments/b51e2361-c6bd-4bb5-a3d9-72b5b171f07c-6a3c5da8-e5a0-448d-a287-35a7a35ffd1b.png`
-- Dropdown before pixels: 3272 x 2024 at the supplied Retina density.
-- Target implementation: `apps/web/src/components/issues/NewIssueDialog.tsx`
-- Target state: desktop new-issue modal, open with default properties and no attachments.
-- Implementation screenshot: unavailable because repository instructions require explicit browser permission.
+- Source visual truth: `/Users/coreybaines/.t3/userdata/attachments/7d5eabac-a902-4d75-8980-04611334b222-602da083-3781-45c5-81b0-1bac6da8507d.png`
+- Implementation: `https://local.spiritdevs.com/settings/environments`
+- State: dark-mode Settings > Environments with three connected environments; hover preview and detail sheet also require capture.
 
-## Full-view comparison evidence
+**Evidence**
 
-Both supplied images were opened at original resolution. The Pathway modal measured approximately
-1456 x 540 CSS pixels at the captured density, while the Linear modal measured approximately
-752 x 260 CSS pixels. The implementation could not be captured in a browser during this pass, so
-no valid same-viewport combined comparison exists.
+- Source pixels: 2352 x 2100.
+- Source CSS size: approximately 1176 x 1050 at 2x density.
+- Intended implementation viewport: 1280 x 800 CSS pixels in the T3 collaborative browser.
+- Implementation screenshot: unavailable. The collaborative automation tab resolves the page to `chrome-error://chromewebdata/` because its isolated browser profile does not trust the Caddy internal certificate. The user's visible T3 browser does trust the certificate.
+- Density normalization: blocked because no implementation image was produced.
+- Full-view comparison: blocked by the missing browser-rendered implementation capture.
+- Focused comparison: required for the environment rows, hover card, and detail/rename sheet, but blocked by the same capture failure.
 
-## Focused region comparison evidence
+**Findings**
 
-The supplied open-project states show matching popover widths of approximately 234–236 CSS pixels,
-but the Pathway menu is approximately 168 CSS pixels tall against Linear's 139 CSS pixels. Source
-inspection traced the extra 29 pixels to simultaneous shell padding and the shared viewport's
-default 16-pixel inset. A post-fix browser capture is still unavailable.
+- [P0] Browser-rendered implementation evidence is unavailable.
+  Location: T3 collaborative browser automation profile.
+  Evidence: the source screenshot opens correctly, while both attached preview tabs resolve the implementation URL to Chrome's certificate error document and cannot produce a snapshot.
+  Impact: typography, spacing, icons, hover behavior, sheet layout, responsive behavior, and rename interaction cannot be visually accepted.
+  Fix: refresh the already-trusted visible T3 browser and capture the environment list, hover card, and detail sheet from that session.
 
-## Required fidelity surfaces
+**Primary interactions tested**
 
-- Fonts and typography: the title, description, breadcrumb, and property controls were reduced to
-  the compact hierarchy visible in the Linear source, but not browser-compared.
-- Spacing and layout rhythm: the desktop frame now targets 752 x 260 CSS pixels, with compressed
-  header, editor, property, and footer spacing. Issue property popovers now use one 6-pixel inset
-  instead of stacking shell padding over the shared 16-pixel viewport inset. The mobile sheet
-  remains viewport-height.
-- Colors and visual tokens: kept on Pathway semantic background, border, muted, and primary tokens;
-  no sampled browser comparison was possible.
-- Image quality and asset fidelity: the reference contains UI icons only. The implementation uses
-  the existing icon library and real image previews for attachments.
-- Copy and content: matches the source's New issue, Issue title, Add description, Create more, and
-  Create issue hierarchy while retaining Pathway-specific properties.
+- Code-level and type-level verification passed for environment metadata, device classification, runtime mode, catalog propagation, persisted naming, and web rendering.
+- Hover, detail-sheet opening, name save/reset, and responsive layout remain visually blocked.
 
-## Interaction verification
+**Console errors checked**
 
-- Source-level verification covers controlled property popovers, native button options, file
-  selection, paste, drag-and-drop, preview removal, upload, and attachment comment creation.
-- Primary browser interactions tested: none; browser permission was not provided.
-- Browser console errors checked: no.
-- Focused lint, formatting, and web typecheck results are recorded in the pull request.
+- App console unavailable because the automation tab never reached the application document.
+- The local HTTP endpoint returns 200 and the live environment descriptor reports `laptop`, `MacBook Pro`, and `development` as expected.
 
-## Findings
+**Comparison history**
 
-- [P1] Browser-rendered fidelity and touch behavior are not yet proven.
-  - Location: new-issue modal and its property popovers.
-  - Evidence: source visual is available, but there is no implementation screenshot or touch run.
-  - Impact: layout drift or a runtime-only interaction issue may remain despite source checks.
-  - Fix: open the local Pathway preview with permission, exercise each picker and attachment path,
-    capture the same 1526 x 538 state, and compare the two images together.
+- Pass 1: source captured; implementation capture blocked by isolated-profile certificate trust. No visual fixes were claimed from this pass.
 
-## Comparison history
+**Implementation checklist**
 
-- Initial pass: blocked before comparison because an implementation capture was not authorized.
-- Fixes made from source inspection: reduced the desktop frame from 1472 x 544 to 752 x 260 CSS
-  pixels; tightened typography, padding, property chips, attachment action, and primary action;
-  retained the existing controlled popovers, coarse-pointer targets, and attachment flow.
-- Dropdown-density pass: removed duplicate shell and viewport padding from the issue-composer
-  property popovers while preserving 32-pixel option rows and 44-pixel coarse-pointer targets.
-- Post-fix visual evidence: unavailable.
+- Capture the refreshed environment list from the trusted T3 browser.
+- Capture the hover preview and detail sheet at the same theme and viewport.
+- Compare the source and implementation together, fix any P0/P1/P2 differences, and repeat if needed.
 
 final result: blocked

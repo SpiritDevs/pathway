@@ -47,6 +47,25 @@ const executionEnvironmentDescriptor = v.object({
     ),
     arch: v.union(v.literal("arm64"), v.literal("x64"), v.literal("other")),
   }),
+  device: v.optional(
+    v.object({
+      kind: v.union(
+        v.literal("desktop"),
+        v.literal("laptop"),
+        v.literal("server"),
+        v.literal("virtual"),
+        v.literal("unknown"),
+      ),
+      hostname: v.optional(v.string()),
+      model: v.optional(v.string()),
+      modelIdentifier: v.optional(v.string()),
+    }),
+  ),
+  runtime: v.optional(
+    v.object({
+      mode: v.union(v.literal("development"), v.literal("desktop"), v.literal("server")),
+    }),
+  ),
   serverVersion: v.string(),
   capabilities: v.object({
     repositoryIdentity: v.boolean(),
@@ -100,6 +119,13 @@ type Descriptor = {
   readonly environmentId: string;
   readonly label: string;
   readonly platform: { readonly os: string; readonly arch: string };
+  readonly device?: {
+    readonly kind: string;
+    readonly hostname?: string;
+    readonly model?: string;
+    readonly modelIdentifier?: string;
+  };
+  readonly runtime?: { readonly mode: string };
   readonly serverVersion: string;
   readonly capabilities: Readonly<Record<string, unknown>>;
 };
@@ -123,6 +149,11 @@ function descriptorKey(value: Descriptor): string {
     value.label,
     value.platform.os,
     value.platform.arch,
+    value.device?.kind,
+    value.device?.hostname,
+    value.device?.model,
+    value.device?.modelIdentifier,
+    value.runtime?.mode,
     value.serverVersion,
     capabilities["repositoryIdentity"],
     capabilities["connectionProbe"],

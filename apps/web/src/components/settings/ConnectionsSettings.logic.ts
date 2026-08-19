@@ -41,23 +41,26 @@ export function partitionClientSessionsByConnection<
   return { connected, disconnected };
 }
 
-export function excludeRegisteredEnvironmentClientSessions<
-  T extends {
+/**
+ * Environment rows are the canonical presentation for Pathway hosts. Their relay sessions stay
+ * out of the client-only access list; if an environment is removed, its remaining session becomes
+ * visible there again so access can still be reviewed and revoked.
+ */
+export function excludeRepresentedEnvironmentClientSessions<
+  Session extends {
     readonly subject: string;
     readonly initiatingEnvironmentId?: EnvironmentId;
     readonly current: boolean;
     readonly client: { readonly deviceType: string; readonly browser?: string };
   },
+  Environment extends { readonly environmentId: EnvironmentId },
 >(
-  sessions: ReadonlyArray<T>,
-  registeredEnvironmentIds?: ReadonlySet<EnvironmentId>,
+  sessions: ReadonlyArray<Session>,
+  environments: ReadonlyArray<Environment>,
   hideCurrentDesktopSession = false,
-): ReadonlyArray<T> {
-  if (
-    !hideCurrentDesktopSession &&
-    (registeredEnvironmentIds === undefined || registeredEnvironmentIds.size === 0)
-  )
-    return sessions;
+): ReadonlyArray<Session> {
+  const representedEnvironmentIds = new Set(environments.map(({ environmentId }) => environmentId));
+  if (!hideCurrentDesktopSession && representedEnvironmentIds.size === 0) return sessions;
   return sessions.filter(
     ({ client, current, initiatingEnvironmentId, subject }) =>
       !(hideCurrentDesktopSession && current) &&
@@ -69,8 +72,7 @@ export function excludeRegisteredEnvironmentClientSessions<
         client.browser === "Electron"
       ) &&
       (initiatingEnvironmentId === undefined ||
-        registeredEnvironmentIds === undefined ||
-        !registeredEnvironmentIds.has(initiatingEnvironmentId)),
+        !representedEnvironmentIds.has(initiatingEnvironmentId)),
   );
 }
 

@@ -11,6 +11,7 @@ import {
   makeEnvironmentControlClient,
   mapEnvironmentControlError,
   type EnvironmentControlConvexClient,
+  type EnvironmentControlHttpClient,
 } from "./environmentControl";
 
 const COMPANY_ID = CompanyId.make("company-1");
@@ -72,6 +73,7 @@ describe("environment control function references", () => {
       issueConnectGrant: "connectGrants:issue",
       deactivateEnvironment: "environments:deactivate",
       registerEnvironment: "environments:register",
+      renameEnvironment: "relayPersistence:renameEnvironmentLink",
       moveProjectToCompany: "projectMigration:moveProjectToCompany",
       provisionPersonalWorkspace: "companies:provisionCurrentUser",
       createCompanyProject: "cloudProjects:createCompanyProject",
@@ -206,6 +208,60 @@ describe("environment control function references", () => {
         teamIds: [],
       },
     });
+  });
+
+  it("renames any Pathway Connect environment through the account-owned Convex record", async () => {
+    const fake = fakeClient();
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+    });
+
+    await control.renameEnvironment({
+      environmentId: ENVIRONMENT_ID,
+      displayName: "Build laptop",
+    });
+
+    expect(fake.calls).toContainEqual({
+      kind: "mutation",
+      name: "relayPersistence:renameEnvironmentLink",
+      args: { environmentId: ENVIRONMENT_ID, displayName: "Build laptop" },
+    });
+  });
+
+  it("uses one authenticated HTTP request for a browser environment rename", async () => {
+    const fake = fakeClient();
+    const calls: Array<{ readonly name: string; readonly args: unknown }> = [];
+    const httpClient: EnvironmentControlHttpClient = {
+      setAuth: vi.fn(),
+      mutation: async (reference, args) => {
+        calls.push({ name: getFunctionName(reference), args });
+        return null;
+      },
+    };
+    const fetchToken = vi.fn(async () => "token");
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken,
+      client: fake.client,
+      httpClient,
+    });
+
+    await control.renameEnvironment({
+      environmentId: ENVIRONMENT_ID,
+      displayName: "Build laptop",
+    });
+
+    expect(fetchToken).toHaveBeenCalledWith({ forceRefreshToken: false });
+    expect(httpClient.setAuth).toHaveBeenCalledWith("token");
+    expect(calls).toEqual([
+      {
+        name: "relayPersistence:renameEnvironmentLink",
+        args: { environmentId: ENVIRONMENT_ID, displayName: "Build laptop" },
+      },
+    ]);
+    expect(fake.calls).toEqual([]);
   });
 
   it("registers an environment-local project before assigning a cloud issue to it", async () => {

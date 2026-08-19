@@ -172,6 +172,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/issues-milestones",
       "/settings/issues-import",
       "/settings/issues-enrichment",
+      "/settings/integrations",
     ]);
   });
 
@@ -182,7 +183,6 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/company-teams",
       "/settings/company-roles",
       "/settings/environments",
-      "/settings/integrations",
     ]);
     expect(searchSettings("members and invitations")[0]).toMatchObject({
       id: "company-members",

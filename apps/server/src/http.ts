@@ -7,11 +7,13 @@ import {
 import { isDevProxiedPath } from "@spiritdevs/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@spiritdevs/shared/observability";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { cast } from "effect/Function";
 import {
   HttpBody,
@@ -44,6 +46,54 @@ const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["pathway://app", "pathway-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+// #region DEBUG
+const CLOUD_SYNC_DEBUG_PATH = "/Users/coreybaines/GitHub/pathway/.codex/logs/debug.log";
+const CLOUD_SYNC_DEBUG_ROUTE = "/api/__debug/cloud-sync";
+const encodeCloudSyncDebugEvent = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+
+function sanitizeCloudSyncDebugEvent(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return { event: "invalid-payload" };
+  const record = value as Record<string, unknown>;
+  const fields =
+    typeof record.fields === "object" && record.fields !== null
+      ? Object.fromEntries(
+          Object.entries(record.fields as Record<string, unknown>).filter(
+            ([, field]) =>
+              typeof field === "string" ||
+              typeof field === "number" ||
+              typeof field === "boolean" ||
+              field === null,
+          ),
+        )
+      : {};
+  return {
+    hypothesis: typeof record.hypothesis === "string" ? record.hypothesis : "unknown",
+    event: typeof record.event === "string" ? record.event : "unknown",
+    fields,
+  };
+}
+
+export const cloudSyncDebugRouteLayer = HttpRouter.add(
+  "POST",
+  CLOUD_SYNC_DEBUG_ROUTE,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const event = sanitizeCloudSyncDebugEvent(yield* request.json);
+    const timestamp = DateTime.formatIso(yield* DateTime.now);
+    const line = yield* encodeCloudSyncDebugEvent({ timestamp, ...event });
+    const fileSystem = yield* FileSystem.FileSystem;
+    yield* fileSystem.writeFileString(CLOUD_SYNC_DEBUG_PATH, `${line}\n`, {
+      flag: "a",
+    });
+    return HttpServerResponse.empty({ status: 204 });
+  }).pipe(
+    Effect.catch(() =>
+      Effect.succeed(HttpServerResponse.text("Debug trace rejected", { status: 400 })),
+    ),
+  ),
+);
+// #endregion DEBUG
 
 export function assetResponseHeaders(filePath: string): Record<string, string> {
   return {

@@ -66,6 +66,14 @@ export interface EnvironmentControlConvexClient {
   readonly close: () => Promise<void>;
 }
 
+export interface EnvironmentControlHttpClient {
+  readonly mutation: (
+    reference: FunctionReference<"mutation">,
+    args: ConvexArgs,
+  ) => Promise<unknown>;
+  readonly setAuth: (token: string) => void;
+}
+
 const queryReference = <Request extends ConvexArgs, Response>(name: string) =>
   makeFunctionReference<"query", Request, Response>(name);
 const mutationReference = <Request extends ConvexArgs, Response>(name: string) =>
@@ -114,6 +122,13 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("environments:register"),
+  renameEnvironment: mutationReference<
+    {
+      readonly environmentId: EnvironmentId;
+      readonly displayName: string | null;
+    },
+    null
+  >("relayPersistence:renameEnvironmentLink"),
   moveProjectToCompany: mutationReference<
     {
       readonly fromCompanyId: CompanyId;
@@ -241,6 +256,10 @@ export interface EnvironmentControlClient {
     readonly info: EnvironmentCloudRegistrationInfo;
     readonly serviceRoleIds: ReadonlyArray<string>;
   }) => Promise<void>;
+  readonly renameEnvironment: (args: {
+    readonly environmentId: EnvironmentId;
+    readonly displayName: string | null;
+  }) => Promise<void>;
   /**
    * Moves a project and everything filed against it to another company.
    *
@@ -299,6 +318,7 @@ export function makeEnvironmentControlClient(options: {
   readonly convexUrl: string;
   readonly fetchToken: ConvexAuthTokenFetcher;
   readonly client?: EnvironmentControlConvexClient;
+  readonly httpClient?: EnvironmentControlHttpClient;
 }): EnvironmentControlClient {
   const ownsClient = options.client === undefined;
   const client: EnvironmentControlConvexClient =
@@ -318,27 +338,27 @@ export function makeEnvironmentControlClient(options: {
     call<null>(() => client.mutation(reference, args)).then(() => undefined);
   const mutationResult = <A>(reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     call<A>(() => client.mutation(reference, args));
-  const registrationMutation =
-    options.client === undefined
-      ? async (args: ConvexArgs) => {
-          const token = await options.fetchToken({ forceRefreshToken: false });
-          if (!token) {
-            throw new EnvironmentControlError({
-              code: "not-authenticated",
-              message: FRIENDLY_ERROR_MESSAGES["not-authenticated"]!,
-            });
-          }
-          const http = new ConvexHttpClient(options.convexUrl);
-          http.setAuth(token);
-          await call<null>(() =>
-            http.mutation(
-              ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment as FunctionReference<"mutation">,
-              args,
-            ),
-          );
-        }
-      : (args: ConvexArgs) =>
-          mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args);
+  const authenticatedHttpMutation = async (
+    reference: FunctionReference<"mutation">,
+    args: ConvexArgs,
+  ) => {
+    const token = await options.fetchToken({ forceRefreshToken: false });
+    if (!token) {
+      throw new EnvironmentControlError({
+        code: "not-authenticated",
+        message: FRIENDLY_ERROR_MESSAGES["not-authenticated"]!,
+      });
+    }
+    const http = options.httpClient ?? new ConvexHttpClient(options.convexUrl);
+    http.setAuth(token);
+    await call<null>(() => http.mutation(reference, args));
+  };
+  const useHttpMutation = options.client === undefined || options.httpClient !== undefined;
+  const registrationMutation = useHttpMutation
+    ? (args: ConvexArgs) =>
+        authenticatedHttpMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args)
+    : (args: ConvexArgs) =>
+        mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args);
   const action = <A>(reference: FunctionReference<"action">, args: ConvexArgs) =>
     call<A>(() => client.action(reference, args));
 
@@ -380,6 +400,10 @@ export function makeEnvironmentControlClient(options: {
         serviceRoleIds,
         teamIds: [],
       }),
+    renameEnvironment: (args) =>
+      useHttpMutation
+        ? authenticatedHttpMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.renameEnvironment, args)
+        : mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.renameEnvironment, args),
     moveProjectToCompany: (args) =>
       mutationResult(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.moveProjectToCompany, args),
     provisionPersonalWorkspace: () =>

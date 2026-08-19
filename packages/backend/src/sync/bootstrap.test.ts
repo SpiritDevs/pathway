@@ -121,6 +121,17 @@ describe("cursor token round trip", () => {
     };
     expect(decodeBootstrapCursor(encodeBootstrapCursor(state), COMPANY)).toEqual(state);
   });
+
+  it("accepts the long composite Agent Thread ids that bootstrap can mint", () => {
+    const state = {
+      companyId: COMPANY,
+      snapshotVersion: 7,
+      entityKind: "agentThread" as const,
+      afterId: `${"environment".repeat(8)}:${"thread".repeat(24)}`,
+    };
+    expect(state.afterId.length).toBeGreaterThan(128);
+    expect(decodeBootstrapCursor(encodeBootstrapCursor(state), COMPANY)).toEqual(state);
+  });
 });
 
 /** A cursor this deployment really minted, for the fields a refusal test wants to spoil. */
@@ -161,7 +172,6 @@ describe("decodeBootstrapCursor refusals", () => {
     ["an entity kind outside the walk", tampered("k", "environmentCommand")],
     ["a non-string afterId", tampered("a", 7)],
     ["an untrimmed afterId the walk could never stop on", tampered("a", " 0198aaaa-1")],
-    ["an afterId past the id ceiling", tampered("a", "z".repeat(129))],
     ["a checksum from a different walk position", tampered("x", "deadbeef")],
   ])("returns null for %s", (_label, token) => {
     expect(decodeBootstrapCursor(token, COMPANY)).toBeNull();

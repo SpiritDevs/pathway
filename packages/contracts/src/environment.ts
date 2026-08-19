@@ -18,6 +18,41 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
   os: ExecutionEnvironmentPlatformOs,
   arch: ExecutionEnvironmentPlatformArch,
 });
+export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
+
+export const ExecutionEnvironmentDeviceKind = Schema.Literals([
+  "desktop",
+  "laptop",
+  "server",
+  "virtual",
+  "unknown",
+]);
+export type ExecutionEnvironmentDeviceKind = typeof ExecutionEnvironmentDeviceKind.Type;
+
+/**
+ * Privacy-safe hardware information reported by the environment host. Device probes must only
+ * populate these display fields; serial numbers, hardware UUIDs, and other stable identifiers do
+ * not belong in the descriptor.
+ */
+export const ExecutionEnvironmentDevice = Schema.Struct({
+  kind: ExecutionEnvironmentDeviceKind,
+  hostname: Schema.optionalKey(TrimmedNonEmptyString),
+  model: Schema.optionalKey(TrimmedNonEmptyString),
+  modelIdentifier: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ExecutionEnvironmentDevice = typeof ExecutionEnvironmentDevice.Type;
+
+export const ExecutionEnvironmentRuntimeMode = Schema.Literals([
+  "development",
+  "desktop",
+  "server",
+]);
+export type ExecutionEnvironmentRuntimeMode = typeof ExecutionEnvironmentRuntimeMode.Type;
+
+export const ExecutionEnvironmentRuntime = Schema.Struct({
+  mode: ExecutionEnvironmentRuntimeMode,
+});
+export type ExecutionEnvironmentRuntime = typeof ExecutionEnvironmentRuntime.Type;
 
 /**
  * Where a new thread runs: the project's current checkout ("local") or a
@@ -26,7 +61,6 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
  */
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
-export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
 /** How a server can replace itself with another version when asked over RPC.
     New servers only advertise the stable launcher-backed "boot-service" path;
@@ -90,6 +124,10 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
+  /** Optional for compatibility with servers released before hardware classification shipped. */
+  device: Schema.optionalKey(ExecutionEnvironmentDevice),
+  /** Optional for compatibility with servers released before runtime mode was advertised. */
+  runtime: Schema.optionalKey(ExecutionEnvironmentRuntime),
   serverVersion: TrimmedNonEmptyString,
   capabilities: ExecutionEnvironmentCapabilities,
 });

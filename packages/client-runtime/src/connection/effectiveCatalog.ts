@@ -66,6 +66,9 @@ export function mergeEffectiveConnectionCatalog(
     merged.set(environmentId, {
       ...entry,
       source: "local",
+      ...(entry.descriptor === undefined && discovered !== undefined
+        ? { descriptor: discovered.descriptor }
+        : {}),
       ...(entry.freshness === undefined && discovered !== undefined
         ? { freshness: { lastSeenAt: discovered.lastSeenAt } }
         : {}),
@@ -86,6 +89,7 @@ export function mergeEffectiveConnectionCatalog(
         label: registration.descriptor.label,
       }),
       profile: Option.none(),
+      descriptor: registration.descriptor,
       freshness: { lastSeenAt: registration.lastSeenAt },
     });
   }

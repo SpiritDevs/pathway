@@ -23,6 +23,9 @@ import {
   staticAndDevRouteLayer,
   browserApiCorsLayer,
   httpCompressionLayer,
+  // #region DEBUG
+  cloudSyncDebugRouteLayer,
+  // #endregion DEBUG
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
@@ -596,6 +599,9 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
+    // #region DEBUG
+    cloudSyncDebugRouteLayer,
+    // #endregion DEBUG
     assetRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,

@@ -88,7 +88,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-teams": "Teams",
   "/settings/company-roles": "Roles",
   "/settings/environments": "Environments",
-  "/settings/integrations": "Integrations",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -98,6 +97,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-milestones": "Milestones",
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
+  "/settings/integrations": "Integrations",
   "/settings/email": "Capture",
   "/settings/archived": "Archive",
   "/settings/diagnostics": "Diagnostics",
@@ -130,7 +130,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/company-teams",
       "/settings/company-roles",
       "/settings/environments",
-      "/settings/integrations",
     ],
   },
   {
@@ -150,6 +149,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/issues-milestones",
       "/settings/issues-import",
       "/settings/issues-enrichment",
+      "/settings/integrations",
     ],
   },
   // Email is its own group rather than a System page: direct mailbox integration (Gmail, Outlook)

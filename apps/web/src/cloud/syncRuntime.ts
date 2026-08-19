@@ -30,6 +30,7 @@ import {
   makeWebLeaderElection,
   SyncStore,
   SyncTransport,
+  SyncTransportError,
   SYNC_INDEXED_DB_PREFIX,
   whileLeader,
   type WebLeaderElection,
@@ -92,13 +93,61 @@ import { makeClerkConvexTokenFetcher, managedRelayClerkTokenFetcher } from "./sy
 import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
 import { useEnvironmentControl } from "./useEnvironmentControl";
 import { automaticCloudRetryDelayMs, useAlwaysOnCloudLink } from "./useCloudLinkController";
-import type { SyncTransportError } from "@spiritdevs/client-runtime/sync";
 
 /** How long a stopped engine waits before it is started again (a lost socket, a lost lock). */
 const ENGINE_RESTART_DELAY = Duration.seconds(5);
 
 /** How long the company subscription waits before reconnecting after a retryable failure. */
 const COMPANIES_RETRY_DELAY = Duration.seconds(15);
+
+// #region DEBUG
+type CloudSyncDebugField = string | number | boolean | null;
+
+function debugCloudSync(
+  hypothesis: `H${number}`,
+  event: string,
+  fields: Readonly<Record<string, CloudSyncDebugField>> = {},
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+
+function debugCloudSyncErrorFields(error: unknown): Readonly<Record<string, CloudSyncDebugField>> {
+  if (typeof error !== "object" || error === null) return { kind: typeof error };
+  const record = error as Record<string, unknown>;
+  return {
+    tag: typeof record._tag === "string" ? record._tag : null,
+    reason: typeof record.reason === "string" ? record.reason : null,
+    name: typeof record.name === "string" ? record.name : null,
+  };
+}
+
+function debugBootstrapCursorFields(
+  cursor: string | null,
+): Readonly<Record<string, CloudSyncDebugField>> {
+  if (cursor === null) return { cursorPresent: false, cursorLength: 0 };
+  try {
+    const parsed: unknown = JSON.parse(cursor);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { cursorPresent: true, cursorLength: cursor.length, cursorShape: "non-object" };
+    }
+    const record = parsed as Record<string, unknown>;
+    return {
+      cursorPresent: true,
+      cursorLength: cursor.length,
+      cursorKind: typeof record.k === "string" ? record.k : null,
+      afterIdLength: typeof record.a === "string" ? record.a.length : null,
+      snapshotVersionIsInteger:
+        typeof record.v === "number" ? Number.isSafeInteger(record.v) : false,
+    };
+  } catch {
+    return { cursorPresent: true, cursorLength: cursor.length, cursorShape: "invalid-json" };
+  }
+}
+// #endregion DEBUG
 
 // ---------------------------------------------------------------------------
 // Scope and client identity
@@ -454,6 +503,9 @@ interface CloudSyncEngineStop {
 export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* (
   options: CloudSyncEnginesOptions,
 ) {
+  // #region DEBUG
+  yield* Effect.sync(() => debugCloudSync("H1", "engines-entered"));
+  // #endregion DEBUG
   const clock = yield* Clock.clockWith(Effect.succeed);
   const store = yield* SyncStore;
   const restartDelay = options.restartDelay ?? ENGINE_RESTART_DELAY;
@@ -481,15 +533,25 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       const publishStatus = options.publishCompanySyncStatus;
       if (publishReplica !== undefined || publishStatus !== undefined) {
         yield* SubscriptionRef.changes(engine.state).pipe(
-          Stream.runForEach((state) =>
-            Effect.all(
+          Stream.runForEach((state) => {
+            const status = deriveCompanySyncStatus(state);
+            return Effect.all(
               [
+                // #region DEBUG
+                Effect.sync(() =>
+                  debugCloudSync("H3", "engine-state-published", {
+                    phase: status.phase,
+                    pendingCount: status.pendingCount,
+                    errorClassification: status.lastError?.classification ?? null,
+                  }),
+                ),
+                // #endregion DEBUG
                 publishReplica?.(company.companyId, state),
-                publishStatus?.(company.companyId, deriveCompanySyncStatus(state)),
+                publishStatus?.(company.companyId, status),
               ].filter((effect): effect is Effect.Effect<void> => effect !== undefined),
               { discard: true },
-            ),
-          ),
+            );
+          }),
           Effect.forkChild,
         );
       }
@@ -556,6 +618,9 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
 
   /** One pass of leadership: the connection, and the engine set reconciled against its listing. */
   const leadershipBody = Effect.gen(function* () {
+    // #region DEBUG
+    yield* Effect.sync(() => debugCloudSync("H1", "leadership-body-entered"));
+    // #endregion DEBUG
     const connection = yield* options.connect;
     const running = yield* Ref.make(new Map<CompanyId, RunningEngine>());
 
@@ -574,6 +639,9 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
     const startCompany = Effect.fn("web.cloudSync.startCompany")(function* (
       company: CloudSyncCompany,
     ) {
+      // #region DEBUG
+      yield* Effect.sync(() => debugCloudSync("H3", "company-engine-starting"));
+      // #endregion DEBUG
       const scope = yield* Scope.make();
       yield* Scope.addFinalizer(
         scope,
@@ -620,6 +688,15 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
     const reconcile = Effect.fn("web.cloudSync.reconcile")(function* (
       listing: CloudSyncCompanyListing,
     ) {
+      // #region DEBUG
+      yield* Effect.sync(() =>
+        debugCloudSync("H3", "company-listing-received", {
+          companyCount: listing.companies.length,
+          decodedCleanly: listing.decodedCleanly,
+          droppedRows: listing.droppedRows,
+        }),
+      );
+      // #endregion DEBUG
       const current = yield* Ref.get(running);
       if (!listing.decodedCleanly) {
         yield* Effect.logWarning(
@@ -704,6 +781,23 @@ function isRetryableTransportError(error: SyncTransportError): boolean {
 }
 
 /**
+ * A real authorization refusal is terminal, but a request made before Clerk can supply any token
+ * is a startup condition. Convex reports both as `not-authenticated`, so retain the fetcher's last
+ * answer at the connection boundary and only make the token-less case retryable.
+ */
+export function classifyCloudSyncConnectionError(
+  error: SyncTransportError,
+  tokenAvailable: boolean | null,
+): SyncTransportError {
+  return error.reason === "unauthorized" && tokenAvailable === false
+    ? new SyncTransportError({
+        reason: "transport",
+        message: "Cloud sync authentication is not ready yet.",
+      })
+    : error;
+}
+
+/**
  * The complete browser runtime: one leader election, one IndexedDB store, and — only once this tab
  * is the leader — one Convex connection with an engine per company, all owned by the surrounding
  * scope.
@@ -718,38 +812,115 @@ function isRetryableTransportError(error: SyncTransportError): boolean {
 export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   options: CloudSyncRuntimeOptions,
 ) {
+  // #region DEBUG
+  yield* Effect.sync(() => debugCloudSync("H1", "runtime-started"));
+  // #endregion DEBUG
   const store = yield* makeIndexedDbSyncStore({
     scope: options.scope,
     ...(options.indexedDb === undefined ? {} : { factory: options.indexedDb }),
   });
   yield* Effect.addFinalizer(() => store.close);
   const election = yield* makeWebLeaderElection({ scope: options.scope });
-  yield* Effect.addFinalizer(() => publishCloudSyncTabState(null));
+  // #region DEBUG
+  yield* Effect.sync(() =>
+    debugCloudSync("H1", "runtime-prerequisites-ready", {
+      crossContext: election.crossContext,
+    }),
+  );
+  // #endregion DEBUG
+  yield* Effect.addFinalizer(
+    () =>
+      // #region DEBUG
+      Effect.sync(() => debugCloudSync("H1", "runtime-finalized")).pipe(
+        Effect.andThen(publishCloudSyncTabState(null)),
+      ),
+    // #endregion DEBUG
+  );
   yield* election.changes.pipe(
-    Stream.runForEach((isLeader) =>
-      publishCloudSyncTabState({
+    Stream.runForEach((isLeader) => {
+      // #region DEBUG
+      debugCloudSync("H1", "leadership-changed", {
         role: isLeader ? "leader" : "follower",
         crossContext: election.crossContext,
-      }),
-    ),
+      });
+      // #endregion DEBUG
+      return publishCloudSyncTabState({
+        role: isLeader ? "leader" : "follower",
+        crossContext: election.crossContext,
+      });
+    }),
     Effect.forkScoped,
   );
   const clientId = options.clientId ?? readCloudSyncClientId({ scope: options.scope });
 
   const connect = Effect.gen(function* () {
+    // #region DEBUG
+    yield* Effect.sync(() => debugCloudSync("H2", "connection-started"));
+    // #endregion DEBUG
+    let tokenAvailable: boolean | null = null;
+    const fetchToken: ConvexAuthTokenFetcher = async (args) => {
+      const token = await options.fetchToken(args);
+      tokenAvailable = Boolean(token);
+      // #region DEBUG
+      debugCloudSync("H2", "token-fetch-completed", {
+        tokenAvailable,
+        forceRefresh: args.forceRefreshToken,
+      });
+      // #endregion DEBUG
+      return token;
+    };
     const client =
       options.client ??
       (yield* Effect.acquireRelease(
         Effect.sync(() => new ConvexClient(options.convexUrl) as ConvexClientLike),
         (owned) => Effect.tryPromise(() => owned.close()).pipe(Effect.ignore),
       ));
+    // #region DEBUG
+    yield* Effect.sync(() => debugCloudSync("H2", "convex-client-ready"));
+    // #endregion DEBUG
     const transport = yield* makeConvexSyncTransport({
       convexUrl: options.convexUrl,
-      fetchToken: options.fetchToken,
+      fetchToken,
       client,
     });
-    yield* repairCloudSyncCurrentUserWorkspace(client);
-    return { transport, companies: cloudSyncCompaniesStream(client) } satisfies CloudSyncConnection;
+    // #region DEBUG
+    yield* Effect.sync(() => debugCloudSync("H2", "transport-ready"));
+    // #endregion DEBUG
+    yield* repairCloudSyncCurrentUserWorkspace(client).pipe(
+      Effect.mapError((error) => classifyCloudSyncConnectionError(error, tokenAvailable)),
+    );
+    // #region DEBUG
+    yield* Effect.sync(() => debugCloudSync("H2", "workspace-repair-completed"));
+    // #endregion DEBUG
+    // #region DEBUG
+    const tracedTransport = SyncTransport.of({
+      ...transport,
+      bootstrap: (input) =>
+        transport.bootstrap(input).pipe(
+          Effect.tap((page) =>
+            Effect.sync(() =>
+              debugCloudSync("H3", "bootstrap-page-completed", {
+                entityCount: page.entities.length,
+                isDone: page.isDone,
+                ...debugBootstrapCursorFields(page.cursor),
+              }),
+            ),
+          ),
+          Effect.tapError((error) =>
+            Effect.sync(() =>
+              debugCloudSync("H3", "bootstrap-page-failed", {
+                ...debugCloudSyncErrorFields(error),
+                unrecognizedCursor: /unrecognized bootstrap cursor/i.test(error.message),
+              }),
+            ),
+          ),
+        ),
+    });
+    // #endregion DEBUG
+    return {
+      transport: tracedTransport,
+      companies: cloudSyncCompaniesStream(client),
+    } satisfies CloudSyncConnection;
   });
 
   const engines = runCloudSyncEngines({
@@ -765,8 +936,17 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
 
   const reconnecting = Effect.retry(
     engines.pipe(
-      Effect.tapError((error) =>
-        Effect.logWarning("Cloud sync company subscription stopped.", { error }),
+      Effect.tapError(
+        (error) =>
+          // #region DEBUG
+          Effect.sync(() =>
+            debugCloudSync("H2", "company-subscription-stopped", debugCloudSyncErrorFields(error)),
+          ).pipe(
+            Effect.andThen(
+              Effect.logWarning("Cloud sync company subscription stopped.", { error }),
+            ),
+          ),
+        // #endregion DEBUG
       ),
     ),
     {
@@ -776,7 +956,14 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   );
 
   yield* reconnecting.pipe(
-    Effect.catch((error) => Effect.logError("Cloud sync stopped.", { error })),
+    Effect.catch(
+      (error) =>
+        // #region DEBUG
+        Effect.sync(() =>
+          debugCloudSync("H2", "runtime-stopped", debugCloudSyncErrorFields(error)),
+        ).pipe(Effect.andThen(Effect.logError("Cloud sync stopped.", { error }))),
+      // #endregion DEBUG
+    ),
   );
 });
 
@@ -877,7 +1064,25 @@ export function useCloudSyncRuntime(enabled = true): void {
     enabled && scope !== null && hasCloudSyncPublicConfig()
       ? cloudSyncRuntimeAtom(scope)
       : CLOUD_SYNC_IDLE_ATOM;
-  useEffect(() => mountCloudSyncRuntimeAtom(atom), [atom]);
+  useEffect(() => {
+    // #region DEBUG
+    debugCloudSync("H1", "runtime-atom-mounted", {
+      enabled,
+      scopeAvailable: scope !== null,
+      publicConfigAvailable: hasCloudSyncPublicConfig(),
+      idle: atom === CLOUD_SYNC_IDLE_ATOM,
+    });
+    // #endregion DEBUG
+    const unmount = mountCloudSyncRuntimeAtom(atom);
+    return () => {
+      // #region DEBUG
+      debugCloudSync("H1", "runtime-atom-unmounted", {
+        idle: atom === CLOUD_SYNC_IDLE_ATOM,
+      });
+      // #endregion DEBUG
+      unmount();
+    };
+  }, [atom, enabled, scope]);
 }
 
 /**
@@ -1057,6 +1262,14 @@ export function discoverCompanyEnvironmentConnections(
  */
 export function CloudSyncRuntime(): null {
   const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+
+  useEffect(() => {
+    // #region DEBUG
+    debugCloudSync("H1", "runtime-component-auth-state", {
+      isSignedIn: isSignedIn ?? null,
+    });
+    // #endregion DEBUG
+  }, [isSignedIn]);
 
   useEffect(() => {
     activateCloudSyncConvexTokenFetcher(makeClerkConvexTokenFetcher(getToken));

@@ -1,16 +1,23 @@
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
+  Code2Icon,
   CopyIcon,
+  HardDriveIcon,
+  LaptopIcon,
+  MonitorIcon,
   MoreVerticalIcon,
+  PencilIcon,
   PlugIcon,
   PlugZapIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
+  ServerIcon,
   TerminalIcon,
   Trash2Icon,
 } from "lucide-react";
+import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card";
 import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
 import { type ReactNode, memo, useCallback, useId, useMemo, useState } from "react";
@@ -33,6 +40,7 @@ import {
   type DesktopSshEnvironmentTarget,
   type DesktopWslState,
   type EnvironmentId,
+  type ExecutionEnvironmentDeviceKind,
 } from "@spiritdevs/contracts";
 import { connectionNoticeText, connectionStatusText } from "@spiritdevs/client-runtime/connection";
 import {
@@ -49,7 +57,7 @@ import { resolveRelayClerkTokenOptions } from "../../cloud/publicConfig";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
   applyWslEnableSelection,
-  excludeRegisteredEnvironmentClientSessions,
+  excludeRepresentedEnvironmentClientSessions,
   isQrShareableEndpoint,
   partitionClientSessionsByConnection,
   partitionEnvironmentsByConnection,
@@ -92,6 +100,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { AnimatedHeight } from "../AnimatedHeight";
 import { Textarea } from "../ui/textarea";
@@ -150,6 +159,16 @@ import {
 } from "~/cloud/useCloudLinkController";
 import { unlinkRelayEnvironment } from "~/cloud/linkEnvironmentAtoms";
 import { relayEnvironmentDiscovery } from "~/state/relay";
+import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
+import {
+  Sheet,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetPanel,
+  SheetPopup,
+  SheetTitle,
+} from "../ui/sheet";
 
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
@@ -1421,6 +1440,178 @@ type SavedBackendListRowProps = {
   onRemove: (environmentId: EnvironmentId) => void;
 };
 
+function inferredEnvironmentDeviceKind(
+  environment: EnvironmentPresentation,
+): ExecutionEnvironmentDeviceKind {
+  const advertised = environment.descriptor?.device?.kind;
+  if (advertised && advertised !== "unknown") return advertised;
+  const candidate =
+    `${environment.descriptor?.device?.model ?? ""} ${environment.label}`.toLowerCase();
+  if (candidate.includes("macbook") || candidate.includes("laptop")) return "laptop";
+  if (
+    candidate.includes("mac studio") ||
+    candidate.includes("mac mini") ||
+    candidate.includes("mac pro") ||
+    candidate.includes("imac") ||
+    candidate.includes("desktop")
+  ) {
+    return "desktop";
+  }
+  return advertised ?? "unknown";
+}
+
+function isDevelopmentEnvironment(environment: EnvironmentPresentation): boolean {
+  return (
+    environment.descriptor?.runtime?.mode === "development" ||
+    (import.meta.env.DEV && environment.entry.target._tag === "PrimaryConnectionTarget")
+  );
+}
+
+function EnvironmentDeviceIcon({ environment }: { environment: EnvironmentPresentation }) {
+  const className = "size-4";
+  if (isDevelopmentEnvironment(environment)) {
+    return <Code2Icon className={className} />;
+  }
+  switch (inferredEnvironmentDeviceKind(environment)) {
+    case "desktop":
+      return <MonitorIcon className={className} />;
+    case "laptop":
+      return <LaptopIcon className={className} />;
+    case "server":
+      return <ServerIcon className={className} />;
+    case "virtual":
+    case "unknown":
+      return <HardDriveIcon className={className} />;
+  }
+}
+
+function environmentRuntimeLabel(environment: EnvironmentPresentation): string {
+  if (isDevelopmentEnvironment(environment)) return "Development server";
+  switch (environment.descriptor?.runtime?.mode) {
+    case "desktop":
+      return "Pathway desktop";
+    case "server":
+      return "Pathway server";
+    default:
+      return "Pathway environment";
+  }
+}
+
+function environmentDeviceLabel(environment: EnvironmentPresentation): string {
+  const model = environment.descriptor?.device?.model;
+  if (model) return model;
+  switch (inferredEnvironmentDeviceKind(environment)) {
+    case "desktop":
+      return "Desktop";
+    case "laptop":
+      return "Laptop";
+    case "server":
+      return "Server";
+    case "virtual":
+      return "Virtual machine";
+    case "unknown":
+      return "Device details unavailable";
+  }
+}
+
+function environmentPlatformLabel(environment: EnvironmentPresentation): string {
+  const platform = environment.descriptor?.platform;
+  if (!platform) return "Unavailable";
+  const os =
+    platform.os === "darwin"
+      ? "macOS"
+      : platform.os === "windows"
+        ? "Windows"
+        : platform.os === "linux"
+          ? "Linux"
+          : "Unknown OS";
+  const arch = platform.arch === "arm64" ? "ARM64" : platform.arch === "x64" ? "x64" : "Other";
+  return `${os} · ${arch}`;
+}
+
+function EnvironmentPreviewCard({
+  environment,
+  status,
+  onOpenDetails,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly status: string;
+  readonly onOpenDetails: () => void;
+}) {
+  const isDevelopment = isDevelopmentEnvironment(environment);
+  return (
+    <PreviewCardPrimitive.Root>
+      <PreviewCardPrimitive.Trigger
+        delay={350}
+        closeDelay={150}
+        render={
+          <button
+            type="button"
+            className="group flex min-w-0 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onOpenDetails}
+          />
+        }
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
+          <EnvironmentDeviceIcon environment={environment} />
+        </span>
+        <span className="min-w-0">
+          <span className="flex min-h-5 min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-foreground">
+              {environment.label}
+            </span>
+            {isDevelopment ? (
+              <span className="shrink-0 text-xs font-normal text-muted-foreground">(dev mode)</span>
+            ) : null}
+          </span>
+        </span>
+      </PreviewCardPrimitive.Trigger>
+      <PreviewCardPrimitive.Portal>
+        <PreviewCardPrimitive.Positioner
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="z-[135] max-w-(--available-width)"
+        >
+          <PreviewCardPrimitive.Popup className="w-72 origin-(--transform-origin) rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg/10 outline-none transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0">
+            <div className="flex items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                <EnvironmentDeviceIcon environment={environment} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">{environment.label}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {environmentDeviceLabel(environment)} · {status}
+                </p>
+              </div>
+            </div>
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border/60 pt-3 text-xs">
+              <dt className="text-muted-foreground">System</dt>
+              <dd className="truncate text-right text-foreground">
+                {environmentPlatformLabel(environment)}
+              </dd>
+              <dt className="text-muted-foreground">Runtime</dt>
+              <dd className="truncate text-right text-foreground">
+                {environmentRuntimeLabel(environment)}
+              </dd>
+            </dl>
+            <p className="mt-3 text-xs text-muted-foreground">Click to view details and rename.</p>
+          </PreviewCardPrimitive.Popup>
+        </PreviewCardPrimitive.Positioner>
+      </PreviewCardPrimitive.Portal>
+    </PreviewCardPrimitive.Root>
+  );
+}
+
+function EnvironmentDetail({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border/70 p-3">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 break-words text-sm font-medium text-foreground">{value}</dd>
+    </div>
+  );
+}
+
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
@@ -1430,6 +1621,14 @@ function SavedBackendListRow({
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
+  const environmentControl = useEnvironmentControl();
+  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    label: "refresh renamed Pathway Connect environment",
+    reportFailure: false,
+  });
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [draftName, setDraftName] = useState(environment.label);
+  const [renamePending, setRenamePending] = useState(false);
   const connection = environment.connection;
   const connectionState = connection.phase;
   const isConnected = connectionState === "connected";
@@ -1486,7 +1685,11 @@ function SavedBackendListRow({
       ? environment.entry.profile.value.target
       : null;
   const metadataBits = [
-    environment.entry.target._tag === "PrimaryConnectionTarget" ? "This device" : null,
+    environment.entry.target._tag === "PrimaryConnectionTarget"
+      ? isDevelopmentEnvironment(environment)
+        ? "Direct browser connection"
+        : "This device"
+      : null,
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "Pathway Connect" : null,
   ].filter((value): value is string => value !== null);
@@ -1507,6 +1710,69 @@ function SavedBackendListRow({
     ? "Disconnected. Reconnect from that machine — it can't be reached from here."
     : connectionNoticeText(connection);
   const busy = disableActions || removingEnvironmentId === environmentId;
+  const automaticName = environment.descriptor?.label ?? environment.entry.target.label;
+  const canRename = environment.relayAccountManaged && environmentControl !== null;
+  const openDetails = useCallback(() => {
+    setDraftName(environment.label);
+    setDetailsOpen(true);
+  }, [environment.label]);
+  const saveEnvironmentName = useCallback(async () => {
+    const nextName = draftName.trim();
+    if (!nextName || !canRename || renamePending || environmentControl === null) return;
+    setRenamePending(true);
+    try {
+      await environmentControl.renameEnvironment({
+        environmentId,
+        displayName: nextName === automaticName ? null : nextName,
+      });
+      setDetailsOpen(false);
+      toastManager.add({
+        type: "success",
+        title: "Environment renamed",
+        description: `${nextName} is saved to your Pathway Connect account.`,
+      });
+      void refreshRelayEnvironments(undefined);
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not rename environment",
+          description:
+            error instanceof Error ? error.message : "The environment name was not saved.",
+        }),
+      );
+    } finally {
+      setRenamePending(false);
+    }
+  }, [
+    automaticName,
+    canRename,
+    draftName,
+    environmentControl,
+    environmentId,
+    refreshRelayEnvironments,
+    renamePending,
+  ]);
+  const resetEnvironmentName = useCallback(async () => {
+    if (!canRename || renamePending || environmentControl === null) return;
+    setRenamePending(true);
+    try {
+      await environmentControl.renameEnvironment({ environmentId, displayName: null });
+      setDetailsOpen(false);
+      void refreshRelayEnvironments(undefined);
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not restore automatic name",
+          description:
+            error instanceof Error ? error.message : "The environment name was not reset.",
+        }),
+      );
+    } finally {
+      setRenamePending(false);
+    }
+  }, [canRename, environmentControl, environmentId, refreshRelayEnvironments, renamePending]);
 
   return (
     <div className={ITEM_ROW_CLASSNAME}>
@@ -1525,7 +1791,11 @@ function SavedBackendListRow({
                     : null
               }
             />
-            <h3 className="text-sm font-medium text-foreground">{environment.label}</h3>
+            <EnvironmentPreviewCard
+              environment={environment}
+              status={connectionStatusText({ ...connection, error: null })}
+              onOpenDetails={openDetails}
+            />
           </div>
           {metadataBits.length > 0 ? (
             <p className="text-xs text-muted-foreground">{metadataBits.join(" · ")}</p>
@@ -1638,6 +1908,116 @@ function SavedBackendListRow({
           )}
         </div>
       </div>
+      <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <SheetPopup className="max-w-lg">
+          <SheetHeader className="border-b border-border/60">
+            <div className="flex items-center gap-3 pr-8">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/70 bg-muted/45 text-muted-foreground">
+                <EnvironmentDeviceIcon environment={environment} />
+              </span>
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <SheetTitle className="truncate text-lg">{environment.label}</SheetTitle>
+                  {isDevelopmentEnvironment(environment) ? (
+                    <Badge variant="info">Dev mode</Badge>
+                  ) : null}
+                </div>
+                <SheetDescription className="mt-1">
+                  {environmentDeviceLabel(environment)} ·{" "}
+                  {connectionStatusText({ ...connection, error: null })}
+                </SheetDescription>
+              </div>
+            </div>
+          </SheetHeader>
+          <SheetPanel className="space-y-5">
+            <section className="space-y-2">
+              <div className="flex items-center gap-2">
+                <PencilIcon className="size-3.5 text-muted-foreground" />
+                <h3 className="text-sm font-medium text-foreground">Environment name</h3>
+              </div>
+              <Input
+                value={draftName}
+                disabled={!canRename || renamePending}
+                maxLength={120}
+                aria-label="Environment name"
+                onValueChange={setDraftName}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveEnvironmentName();
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                {canRename
+                  ? "Saved to your Pathway Connect account and shown on every signed-in device."
+                  : "Link this environment to Pathway Connect before renaming it."}
+              </p>
+            </section>
+
+            <section className="space-y-2">
+              <h3 className="text-sm font-medium text-foreground">Device information</h3>
+              <dl className="grid gap-2 sm:grid-cols-2">
+                <EnvironmentDetail label="Device" value={environmentDeviceLabel(environment)} />
+                <EnvironmentDetail
+                  label="Hostname"
+                  value={environment.descriptor?.device?.hostname ?? "Unavailable"}
+                />
+                <EnvironmentDetail label="System" value={environmentPlatformLabel(environment)} />
+                <EnvironmentDetail label="Runtime" value={environmentRuntimeLabel(environment)} />
+                <EnvironmentDetail
+                  label="Model identifier"
+                  value={environment.descriptor?.device?.modelIdentifier ?? "Unavailable"}
+                />
+                <EnvironmentDetail
+                  label="Server version"
+                  value={environment.descriptor?.serverVersion ?? "Unavailable"}
+                />
+              </dl>
+            </section>
+
+            <section className="space-y-2">
+              <h3 className="text-sm font-medium text-foreground">Connection</h3>
+              <dl className="grid gap-2 sm:grid-cols-2">
+                <EnvironmentDetail
+                  label="Method"
+                  value={
+                    environment.entry.target._tag === "PrimaryConnectionTarget"
+                      ? "Direct"
+                      : sshTarget
+                        ? "SSH"
+                        : environment.relayManaged
+                          ? "Pathway Connect"
+                          : "Saved connection"
+                  }
+                />
+                <EnvironmentDetail
+                  label="Status"
+                  value={connectionStatusText({ ...connection, error: null })}
+                />
+                <div className="min-w-0 rounded-lg border border-border/70 p-3 sm:col-span-2">
+                  <dt className="text-xs text-muted-foreground">Environment ID</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-foreground">
+                    {environmentId}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+          </SheetPanel>
+          <SheetFooter>
+            <Button
+              variant="outline"
+              disabled={!canRename || renamePending}
+              onClick={() => void resetEnvironmentName()}
+            >
+              Use automatic name
+            </Button>
+            <Button
+              disabled={!canRename || renamePending || draftName.trim().length === 0}
+              onClick={() => void saveEnvironmentName()}
+            >
+              {renamePending ? "Saving…" : "Save name"}
+            </Button>
+          </SheetFooter>
+        </SheetPopup>
+      </Sheet>
     </div>
   );
 }
@@ -1919,12 +2299,12 @@ export function EnvironmentConnectionSettings({
   }, [authAccessChanges.data]);
   const visibleDesktopClientSessions = useMemo(
     () =>
-      excludeRegisteredEnvironmentClientSessions(
+      excludeRepresentedEnvironmentClientSessions(
         desktopClientSessions,
-        excludeEnvironmentIds,
+        environments,
         desktopBridge !== undefined,
       ),
-    [desktopBridge, desktopClientSessions, excludeEnvironmentIds],
+    [desktopBridge, desktopClientSessions, environments],
   );
   const isLocalBackendNetworkAccessible = desktopBridge
     ? desktopServerExposureState?.mode === "network-accessible"
@@ -3187,30 +3567,6 @@ export function EnvironmentConnectionSettings({
                 }
               />
             ) : null}
-            {cloudLinkStatus.phase !== "idle" || cloudLinkStatus.error !== null ? (
-              <SettingsRow
-                title={
-                  isCloudAccountLinkConflict(cloudLinkStatus.error)
-                    ? "Linked to another account"
-                    : "Pathway Connect"
-                }
-                description={
-                  isCloudAccountLinkConflict(cloudLinkStatus.error)
-                    ? "Re-link this environment to the Pathway Connect account you are signed into now."
-                    : "Sever the current managed tunnel and create a fresh Pathway Connect link for this environment."
-                }
-                control={
-                  <Button
-                    size="xs"
-                    variant="destructive-outline"
-                    onClick={() => setRelinkConfirmOpen(true)}
-                  >
-                    <RefreshCwIcon className="size-3.5" />
-                    Re-link
-                  </Button>
-                }
-              />
-            ) : null}
             {desktopBridge ? (
               <>
                 {renderEndpointRows("endpoint-rail")}
@@ -3379,6 +3735,35 @@ export function EnvironmentConnectionSettings({
       </AlertDialog>
 
       {environmentSection}
+
+      {canManageLocalBackend &&
+      (cloudLinkStatus.phase !== "idle" || cloudLinkStatus.error !== null) ? (
+        <SettingsSection title="Danger zone">
+          <SettingsRow
+            className="border border-destructive/30 bg-destructive/5"
+            title={
+              isCloudAccountLinkConflict(cloudLinkStatus.error)
+                ? "Linked to another account"
+                : "Pathway Connect"
+            }
+            description={
+              isCloudAccountLinkConflict(cloudLinkStatus.error)
+                ? "Re-link this environment to the Pathway Connect account you are signed into now."
+                : "Sever the current managed tunnel and create a fresh Pathway Connect link for this environment."
+            }
+            control={
+              <Button
+                size="xs"
+                variant="destructive-outline"
+                onClick={() => setRelinkConfirmOpen(true)}
+              >
+                <RefreshCwIcon className="size-3.5" />
+                Re-link
+              </Button>
+            }
+          />
+        </SettingsSection>
+      ) : null}
     </>
   );
 }

@@ -34,6 +34,7 @@ function registration(input: {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly lastSeenAt: number | null;
+  readonly deviceKind?: "desktop" | "laptop";
 }) {
   return Schema.decodeUnknownSync(EnvironmentRegistrationEntity)({
     entityKind: "environmentRegistration",
@@ -44,6 +45,7 @@ function registration(input: {
       environmentId: input.environmentId,
       label: input.label,
       platform: { os: "darwin", arch: "arm64" },
+      ...(input.deviceKind ? { device: { kind: input.deviceKind, model: "MacBook Pro" } } : {}),
       serverVersion: "2026.8.0",
       capabilities: { repositoryIdentity: true },
     },
@@ -90,6 +92,7 @@ describe("effective connection catalog", () => {
           environmentId: REGISTRY_ENVIRONMENT_ID,
           label: "Company environment",
           lastSeenAt: 12_345,
+          deviceKind: "laptop",
         }),
       ),
     });
@@ -102,6 +105,9 @@ describe("effective connection catalog", () => {
         label: "Company environment",
       },
       freshness: { lastSeenAt: 12_345 },
+      descriptor: {
+        device: { kind: "laptop", model: "MacBook Pro" },
+      },
     });
   });
 
@@ -120,6 +126,7 @@ describe("effective connection catalog", () => {
       source: "local",
       target: LOCAL_ENTRY.target,
       freshness: { lastSeenAt: 12_345 },
+      descriptor: discovered.descriptor,
     });
 
     const localFreshness = { ...LOCAL_ENTRY, freshness: { lastSeenAt: 99_999 } };

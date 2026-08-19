@@ -47,6 +47,7 @@ import {
 import {
   cloudSyncClientIdStorageKey,
   cloudSyncScope,
+  classifyCloudSyncConnectionError,
   decodeCloudSyncCompanies,
   discoverCompanyEnvironmentConnections,
   repairCloudSyncCurrentUserWorkspace,
@@ -149,6 +150,24 @@ describe("cloudSyncScope", () => {
     expect(cloudSyncScope(session("user_123"))).toBe("user_123");
     expect(cloudSyncScope(null)).toBeNull();
     expect(cloudSyncScope(session("   "))).toBeNull();
+  });
+});
+
+describe("classifyCloudSyncConnectionError", () => {
+  it("retries only an authentication refusal caused by Clerk returning no token", () => {
+    const unauthorized = new SyncTransportError({
+      reason: "unauthorized",
+      message: "not-authenticated",
+    });
+
+    expect(classifyCloudSyncConnectionError(unauthorized, false)).toMatchObject({
+      reason: "transport",
+    });
+    expect(classifyCloudSyncConnectionError(unauthorized, true)).toBe(unauthorized);
+    expect(classifyCloudSyncConnectionError(unauthorized, null)).toBe(unauthorized);
+
+    const offline = new SyncTransportError({ reason: "offline", message: "no network" });
+    expect(classifyCloudSyncConnectionError(offline, false)).toBe(offline);
   });
 });
 

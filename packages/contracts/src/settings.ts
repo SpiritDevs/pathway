@@ -739,6 +739,8 @@ export const DEFAULT_ISSUE_AUTOMATION_SETTINGS: IssueAutomationSettings = {
 };
 
 export const ServerSettings = Schema.Struct({
+  /** A user-chosen environment name. Empty keeps the host-derived automatic name. */
+  environmentName: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior opt-ins, resets to the buffered default.
@@ -909,6 +911,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
 
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
+  environmentName: Schema.optionalKey(TrimmedString),
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(

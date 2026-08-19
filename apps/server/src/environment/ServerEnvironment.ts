@@ -1,5 +1,9 @@
 import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import {
+  HostProcessArchitecture,
+  HostProcessHostname,
+  HostProcessPlatform,
+} from "@spiritdevs/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -14,6 +18,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import { resolveServerEnvironmentDevice } from "./ServerEnvironmentDevice.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -69,6 +74,7 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const hostPlatform = yield* HostProcessPlatform;
   const hostArchitecture = yield* HostProcessArchitecture;
+  const hostname = yield* HostProcessHostname;
 
   const readPersistedEnvironmentId = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(serverConfig.environmentIdPath).pipe(
@@ -126,6 +132,7 @@ export const make = Effect.gen(function* () {
   const environmentId = EnvironmentId.make(environmentIdRaw);
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
+  const device = yield* resolveServerEnvironmentDevice(hostname);
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -138,6 +145,15 @@ export const make = Effect.gen(function* () {
     platform: {
       os: platformOs(hostPlatform),
       arch: platformArch(hostArchitecture),
+    },
+    device,
+    runtime: {
+      mode:
+        serverConfig.devUrl !== undefined
+          ? "development"
+          : serverConfig.mode === "desktop"
+            ? "desktop"
+            : "server",
     },
     serverVersion: packageJson.version,
     capabilities: {

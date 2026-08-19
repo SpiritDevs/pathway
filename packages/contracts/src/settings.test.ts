@@ -354,6 +354,14 @@ describe("ServerSettingsPatch.providerInstances", () => {
 });
 
 describe("ServerSettingsPatch string normalization", () => {
+  it("normalizes an environment name while preserving empty as automatic naming", () => {
+    expect(decodeServerSettings({ environmentName: "  Studio  " }).environmentName).toBe("Studio");
+    expect(decodeServerSettings({}).environmentName).toBe("");
+    expect(decodeServerSettingsPatch({ environmentName: "  Laptop  " }).environmentName).toBe(
+      "Laptop",
+    );
+  });
+
   it("trims string settings while decoding patches", () => {
     const patch = decodeServerSettingsPatch({
       addProjectBaseDirectory: "  ~/Development  ",

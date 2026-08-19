@@ -1,4 +1,8 @@
-import { DesktopSshEnvironmentTargetSchema, EnvironmentId } from "@spiritdevs/contracts";
+import {
+  DesktopSshEnvironmentTargetSchema,
+  EnvironmentId,
+  type ExecutionEnvironmentDescriptor,
+} from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -39,6 +43,8 @@ export type ConnectionProfile = typeof ConnectionProfile.Type;
 export interface ConnectionCatalogEntry {
   readonly target: ConnectionTarget;
   readonly profile: Option.Option<ConnectionProfile>;
+  /** Last advertised host metadata, when a local session or company registry has supplied it. */
+  readonly descriptor?: ExecutionEnvironmentDescriptor;
   /** Optional reachability observation supplied by a catalog source, never connection config. */
   readonly freshness?: ConnectionCatalogFreshness;
 }
