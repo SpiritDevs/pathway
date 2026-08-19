@@ -68,11 +68,17 @@ stepper so the lossy parts are chosen rather than guessed:
   dropped.
 - **Milestones** move with the project rather than being remapped, because `IssueMilestone.projectId`
   is required.
+- **Environment bindings, agent-thread metadata, captured email, and issue child records** move
+  with the project. Child records include todos, comments, attachments, audit events, thread links,
+  and relations whose two issues both move.
 - **Issue keys are re-issued** under the destination company's prefix. This is destructive to any
   key a user has quoted or linked, so the review step states it plainly before anything is written.
 - **Cycles do not travel.** A cycle spans a whole company rather than one project, so a moved issue
   leaves its cycle behind rather than pointing at one the destination does not have. Team visibility
   resets for the same reason: issues arrive company-wide instead of inventing a team nobody chose.
+- **Company-local operations do not cross the boundary.** Active automation jobs are canceled as
+  they move, Slack provenance is cleared, and Slack channel watches stay with their source
+  integration while detaching from the project.
 
 The move runs as one Convex transaction (`projectMigration.moveProjectToCompany`) and refuses
 before writing anything if a status it was not told how to translate is in use. Both companies'

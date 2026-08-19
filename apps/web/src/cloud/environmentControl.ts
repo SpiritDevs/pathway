@@ -141,6 +141,11 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly movedIssues: number;
       readonly movedMilestones: number;
       readonly movedBindings: number;
+      readonly movedThreads: number;
+      readonly movedEmails: number;
+      readonly movedIssueAssets: number;
+      readonly canceledAutomationJobs: number;
+      readonly detachedSlackWatches: number;
       readonly droppedLabels: number;
     }
   >("projectMigration:moveProjectToCompany"),
@@ -282,6 +287,11 @@ export interface EnvironmentControlClient {
     readonly movedIssues: number;
     readonly movedMilestones: number;
     readonly movedBindings: number;
+    readonly movedThreads: number;
+    readonly movedEmails: number;
+    readonly movedIssueAssets: number;
+    readonly canceledAutomationJobs: number;
+    readonly detachedSlackWatches: number;
     readonly droppedLabels: number;
   }>;
   /**

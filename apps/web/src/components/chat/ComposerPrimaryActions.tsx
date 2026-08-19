@@ -1,5 +1,21 @@
-import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import {
+  memo,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type PointerEventHandler,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  CornerDownRightIcon,
+  ListEndIcon,
+  MessageSquarePlusIcon,
+  PanelRightOpenIcon,
+} from "lucide-react";
 import type { ActiveTurnSendMode } from "@spiritdevs/contracts/settings";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
@@ -30,9 +46,31 @@ interface ComposerPrimaryActionsProps {
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
+  sideChatAvailable?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onSendWithMode?: (mode: "queue" | "steer") => void;
+  onSendInNewChat?: () => void;
+  onSendInSideChat?: () => void;
+}
+
+export type ComposerSendMenuAction = "queue" | "steer" | "new-chat" | "side-chat";
+
+export function composerSendMenuActions(input: {
+  readonly isRunning: boolean;
+  readonly sideChatAvailable: boolean;
+}): ReadonlyArray<{ action: ComposerSendMenuAction; disabled: boolean }> {
+  return [
+    ...(input.isRunning
+      ? ([
+          { action: "queue", disabled: false },
+          { action: "steer", disabled: false },
+        ] as const)
+      : []),
+    { action: "new-chat", disabled: false },
+    { action: "side-chat", disabled: !input.sideChatAvailable },
+  ];
 }
 
 export const formatPendingPrimaryActionLabel = (input: {
@@ -70,9 +108,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
+  sideChatAvailable = false,
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
+  onSendWithMode,
+  onSendInNewChat,
+  onSendInSideChat,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -81,6 +123,74 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
   );
+  const [sendOptionsOpen, setSendOptionsOpen] = useState(false);
+  const sendButtonRef = useRef<HTMLButtonElement | null>(null);
+  const holdTimerRef = useRef<number | null>(null);
+  const holdOpenedRef = useRef(false);
+  const pointerOriginRef = useRef<{ x: number; y: number } | null>(null);
+
+  const cancelHoldTimer = useCallback(() => {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    pointerOriginRef.current = null;
+  }, []);
+
+  useEffect(() => cancelHoldTimer, [cancelHoldTimer]);
+
+  const openSendOptions = useCallback(() => {
+    if (isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent) {
+      return;
+    }
+    holdOpenedRef.current = true;
+    setSendOptionsOpen(true);
+  }, [hasSendableContent, isConnecting, isEnvironmentUnavailable, isSendBusy]);
+
+  const handleSendPointerDown: PointerEventHandler<HTMLButtonElement> = (event) => {
+    if (preserveComposerFocusOnPointerDown) {
+      event.preventDefault();
+    }
+    if (event.button !== 0 || event.currentTarget.disabled) return;
+    cancelHoldTimer();
+    holdOpenedRef.current = false;
+    pointerOriginRef.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null;
+      pointerOriginRef.current = null;
+      openSendOptions();
+    }, 450);
+  };
+
+  const handleSendPointerMove: PointerEventHandler<HTMLButtonElement> = (event) => {
+    const origin = pointerOriginRef.current;
+    if (!origin) return;
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 8) {
+      cancelHoldTimer();
+    }
+  };
+
+  const handleSendPointerEnd: PointerEventHandler<HTMLButtonElement> = () => {
+    cancelHoldTimer();
+  };
+
+  const handleSendClick: MouseEventHandler<HTMLButtonElement> = (event) => {
+    if (!holdOpenedRef.current) return;
+    event.preventDefault();
+    holdOpenedRef.current = false;
+  };
+
+  const handleSendKeyDown: KeyboardEventHandler<HTMLButtonElement> = (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ContextMenu") return;
+    event.preventDefault();
+    openSendOptions();
+  };
+
+  const handleSendContextMenu: MouseEventHandler<HTMLButtonElement> = (event) => {
+    event.preventDefault();
+    openSendOptions();
+  };
 
   const renderStopGenerationButton = (insidePendingAction: boolean) => (
     <button
@@ -211,6 +321,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   const sendButton = (
     <button
+      ref={sendButtonRef}
       type="submit"
       className={cn(
         "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
@@ -218,8 +329,16 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
           : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",
       )}
-      {...pointerFocusProps}
+      onPointerDown={handleSendPointerDown}
+      onPointerMove={handleSendPointerMove}
+      onPointerUp={handleSendPointerEnd}
+      onPointerCancel={handleSendPointerEnd}
+      onClick={handleSendClick}
+      onKeyDown={handleSendKeyDown}
+      onContextMenu={handleSendContextMenu}
       disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+      aria-expanded={sendOptionsOpen}
+      aria-haspopup="menu"
       aria-label={
         isEnvironmentUnavailable
           ? "Environment disconnected"
@@ -257,16 +376,74 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
-  if (!isRunning) return sendButton;
+  const sendMenuActions = composerSendMenuActions({ isRunning, sideChatAvailable });
+  const sendButtonTooltip = isRunning
+    ? activeTurnSendMode === "queue"
+      ? "Queue behind the active turn. Hold for send options"
+      : "Send now to steer the active turn. Hold for send options"
+    : "Send message. Hold for send options";
 
   return (
-    <Tooltip>
-      <TooltipTrigger render={sendButton} />
-      <TooltipPopup side="top">
-        {activeTurnSendMode === "queue"
-          ? "Queue behind the active turn"
-          : "Send now to steer the active turn"}
-      </TooltipPopup>
-    </Tooltip>
+    <Menu
+      open={sendOptionsOpen}
+      onOpenChange={(open) => {
+        setSendOptionsOpen(open);
+        if (!open) holdOpenedRef.current = false;
+      }}
+    >
+      <MenuTrigger
+        className="pointer-events-none fixed size-0"
+        nativeButton={false}
+        render={<span />}
+        tabIndex={-1}
+      >
+        <span className="sr-only">Send options</span>
+      </MenuTrigger>
+      <Tooltip>
+        <TooltipTrigger render={sendButton} />
+        <TooltipPopup side="top">{sendButtonTooltip}</TooltipPopup>
+      </Tooltip>
+      <MenuPopup align="end" anchor={sendButtonRef} className="min-w-48" side="top">
+        {sendMenuActions.map(({ action, disabled }) => {
+          if (action === "queue") {
+            return (
+              <MenuItem key={action} onClick={() => onSendWithMode?.("queue")}>
+                <ListEndIcon />
+                Queue message
+              </MenuItem>
+            );
+          }
+          if (action === "steer") {
+            return (
+              <MenuItem key={action} onClick={() => onSendWithMode?.("steer")}>
+                <CornerDownRightIcon />
+                Steer conversation
+              </MenuItem>
+            );
+          }
+          if (action === "new-chat") {
+            return (
+              <MenuItem key={action} onClick={() => onSendInNewChat?.()}>
+                <MessageSquarePlusIcon />
+                Send in a new chat
+              </MenuItem>
+            );
+          }
+          return (
+            <MenuItem key={action} disabled={disabled} onClick={() => onSendInSideChat?.()}>
+              <PanelRightOpenIcon />
+              <span className="grid">
+                <span>Send in a side chat</span>
+                {disabled ? (
+                  <span className="text-muted-foreground text-xs">
+                    Available after a completed turn
+                  </span>
+                ) : null}
+              </span>
+            </MenuItem>
+          );
+        })}
+      </MenuPopup>
+    </Menu>
   );
 });

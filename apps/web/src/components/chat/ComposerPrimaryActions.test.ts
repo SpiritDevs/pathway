@@ -15,7 +15,11 @@ vi.mock("../SidebarStageBackdrop", () => ({
   useSidebarStageBackdropVariant: (enabled = true) => (enabled ? stageArtworkState.variant : null),
 }));
 
-import { ComposerPrimaryActions, formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
+import {
+  ComposerPrimaryActions,
+  composerSendMenuActions,
+  formatPendingPrimaryActionLabel,
+} from "./ComposerPrimaryActions";
 
 function renderPendingActions(isRunning: boolean) {
   return renderToStaticMarkup(
@@ -268,5 +272,44 @@ describe("active-turn primary action", () => {
 
     expect(markup).toContain('aria-label="Queue message behind active turn"');
     expect(markup).not.toContain("steer active turn");
+  });
+});
+
+describe("composer send menu", () => {
+  it("offers queue and steer only while a turn is running", () => {
+    expect(composerSendMenuActions({ isRunning: false, sideChatAvailable: true })).toEqual([
+      { action: "new-chat", disabled: false },
+      { action: "side-chat", disabled: false },
+    ]);
+    expect(composerSendMenuActions({ isRunning: true, sideChatAvailable: true })).toEqual([
+      { action: "queue", disabled: false },
+      { action: "steer", disabled: false },
+      { action: "new-chat", disabled: false },
+      { action: "side-chat", disabled: false },
+    ]);
+  });
+
+  it("keeps side chat visible but unavailable without a completed source turn", () => {
+    expect(composerSendMenuActions({ isRunning: true, sideChatAvailable: false })).toEqual([
+      { action: "queue", disabled: false },
+      { action: "steer", disabled: false },
+      { action: "new-chat", disabled: false },
+      { action: "side-chat", disabled: true },
+    ]);
+  });
+
+  it("marks the send button as the accessible menu control", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        ...activeTurnProps,
+        isRunning: true,
+        hasSendableContent: true,
+        sideChatAvailable: false,
+      }),
+    );
+
+    expect(markup).toContain('aria-haspopup="menu"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain('aria-label="Send message to steer active turn"');
   });
 });

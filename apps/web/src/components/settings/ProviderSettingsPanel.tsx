@@ -890,7 +890,7 @@ export function EnvironmentProviderSettings({
         </div>
       </SettingsSection>
 
-      <ProviderUsageSettingsSection environmentId={environmentId} />
+      <ProviderUsageSettingsSection />
 
       {isAddInstanceDialogOpen ? (
         <AddProviderInstanceDialog

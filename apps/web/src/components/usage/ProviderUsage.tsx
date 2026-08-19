@@ -17,7 +17,7 @@ import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEnvironments } from "~/state/environments";
-import { serverEnvironment } from "~/state/server";
+import { environmentServerConfigsAtom, serverEnvironment } from "~/state/server";
 import { useEnvironmentQuery, type EnvironmentQueryView } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { SettingsSection } from "../settings/settingsLayout";
@@ -37,23 +37,24 @@ import {
   shouldCollapseProviderUsage,
   type ProviderUsageDisplayLimit,
 } from "./providerUsageDisplay";
+import {
+  deriveConnectedProviderUsageAccounts,
+  isProviderUsageDriver,
+  type ConnectedProviderUsageAccount,
+} from "./providerUsageAccounts";
 
-const SUPPORTED_PROVIDERS = new Set<ProviderUsageDriver>(["codex", "claudeAgent", "cursor"]);
 const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
 const AUTOMATIC_REFRESH_BUTTON_CLASS =
   "group-has-[[data-provider-usage-pending]]/usage:pointer-events-auto group-has-[[data-provider-usage-pending]]/usage:opacity-100";
 const AUTOMATIC_REFRESH_SPIN_CLASS =
   "group-has-[[data-provider-usage-pending]]/usage:animate-spin group-has-[[data-provider-usage-pending]]/usage:[animation-duration:2s] motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none";
 
-function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
-  return SUPPORTED_PROVIDERS.has(driver as ProviderUsageDriver);
-}
-
 function providerName(provider: ProviderUsageDriver): string {
   return PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make(provider)] ?? provider;
 }
 
 interface ProviderUsageRefreshTarget {
+  readonly environmentId: EnvironmentId;
   readonly instanceId: ProviderInstanceId;
   readonly provider: ProviderUsageDriver;
   readonly label: string;
@@ -70,10 +71,7 @@ function refreshFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The provider did not return updated usage.";
 }
 
-function useForcedProviderUsageRefresh(
-  environmentId: EnvironmentId,
-  targets: ReadonlyArray<ProviderUsageRefreshTarget>,
-) {
+function useForcedProviderUsageRefresh(targets: ReadonlyArray<ProviderUsageRefreshTarget>) {
   const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
     reportFailure: false,
   });
@@ -93,7 +91,7 @@ function useForcedProviderUsageRefresh(
       await Promise.all(
         targets.map(async (target) => {
           const result = await refreshUsage({
-            environmentId,
+            environmentId: target.environmentId,
             input: {
               instanceId: target.instanceId,
               provider: target.provider,
@@ -103,7 +101,10 @@ function useForcedProviderUsageRefresh(
           if (result._tag === "Success") {
             setRefreshedSnapshots((current) => {
               const next = new Map(current);
-              next.set(providerUsageSnapshotKey(environmentId, target.instanceId), result.value);
+              next.set(
+                providerUsageSnapshotKey(target.environmentId, target.instanceId),
+                result.value,
+              );
               return next;
             });
           } else if (!isAtomCommandInterrupted(result)) {
@@ -130,7 +131,7 @@ function useForcedProviderUsageRefresh(
       inFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [environmentId, refreshUsage, targets]);
+  }, [refreshUsage, targets]);
 
   return { isRefreshing, refresh, refreshedSnapshots };
 }
@@ -347,10 +348,17 @@ export function EnvironmentProviderUsage({
   });
   const displayName = iconDisplayName ?? provider.displayName ?? providerName(usageProvider);
   const refreshTargets = useMemo(
-    () => [{ instanceId: provider.instanceId, provider: usageProvider, label: displayName }],
-    [displayName, provider.instanceId, usageProvider],
+    () => [
+      {
+        environmentId,
+        instanceId: provider.instanceId,
+        provider: usageProvider,
+        label: displayName,
+      },
+    ],
+    [displayName, environmentId, provider.instanceId, usageProvider],
   );
-  const singleRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
+  const singleRefresh = useForcedProviderUsageRefresh(refreshTargets);
   const snapshot =
     refreshedSnapshot ??
     singleRefresh.refreshedSnapshots.get(
@@ -540,13 +548,14 @@ export function EnvironmentProviderUsageList({
   const refreshTargets = useMemo(
     () =>
       supported.map((entry) => ({
+        environmentId,
         instanceId: entry.instanceId,
         provider: entry.driverKind as ProviderUsageDriver,
         label: entry.displayName,
       })),
-    [supported],
+    [environmentId, supported],
   );
-  const usageRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
+  const usageRefresh = useForcedProviderUsageRefresh(refreshTargets);
 
   if (providers !== null && supported.length === 0) return null;
 
@@ -591,14 +600,13 @@ export function EnvironmentProviderUsageList({
 }
 
 function ProviderUsageCard({
-  environmentId,
-  provider,
+  account,
   refreshedSnapshot,
 }: {
-  environmentId: EnvironmentId;
-  provider: ServerProvider;
+  account: ConnectedProviderUsageAccount;
   refreshedSnapshot?: ServerProviderUsageSnapshot;
 }) {
+  const { displayName, environmentId, provider } = account;
   const usageProvider = provider.driver as ProviderUsageDriver;
   const usage = useProviderUsage({
     environmentId,
@@ -630,17 +638,15 @@ function ProviderUsageCard({
           <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60">
             <ProviderInstanceIcon
               driverKind={provider.driver}
-              displayName={provider.displayName ?? providerName(usageProvider)}
+              displayName={displayName}
               accentColor={provider.accentColor}
               className="size-4"
               iconClassName="size-4"
             />
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-foreground">
-              {provider.displayName ?? providerName(usageProvider)}
-            </p>
-            {provider.displayName ? (
+            <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+            {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
             ) : null}
           </div>
@@ -661,37 +667,33 @@ function ProviderUsageCard({
   );
 }
 
-function EnvironmentProviderUsageCards({
-  environmentId,
-  providers,
+function ConnectedProviderUsageCards({
+  accounts,
+  loading,
   refreshedSnapshots,
 }: {
-  environmentId: EnvironmentId;
-  providers: ReadonlyArray<ServerProvider> | null;
+  accounts: ReadonlyArray<ConnectedProviderUsageAccount>;
+  loading: boolean;
   refreshedSnapshots: ReadonlyMap<string, ServerProviderUsageSnapshot>;
 }) {
-  const supported = (providers ?? []).filter(
-    (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
-  );
-  if (providers !== null && supported.length === 0) return null;
+  if (!loading && accounts.length === 0) return null;
 
   return (
     <div className="space-y-3">
-      {providers === null ? (
+      {loading ? (
         <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground">
           Loading provider accounts…
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {supported.map((provider) => {
+          {accounts.map((account) => {
             const refreshedSnapshot = refreshedSnapshots.get(
-              providerUsageSnapshotKey(environmentId, provider.instanceId),
+              providerUsageSnapshotKey(account.environmentId, account.provider.instanceId),
             );
             return (
               <ProviderUsageCard
-                key={provider.instanceId}
-                environmentId={environmentId}
-                provider={provider}
+                key={account.key}
+                account={account}
                 {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
               />
             );
@@ -702,47 +704,8 @@ function EnvironmentProviderUsageCards({
   );
 }
 
-function ConnectedEnvironmentProviderUsage({
-  environmentId,
-  label,
-}: {
-  environmentId: EnvironmentId;
-  label: string;
-}) {
-  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
-  const supported = (providers ?? []).filter(
-    (provider) => provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
-  );
-
-  return (
-    <section aria-label={`${label} provider usage`} className="space-y-2 px-2 py-2">
-      <p className="truncate px-1 text-[11px] font-medium text-muted-foreground">{label}</p>
-      {providers === null ? (
-        <p className="px-1 py-1 text-xs text-muted-foreground">Loading provider accounts…</p>
-      ) : supported.length === 0 ? (
-        <p className="px-1 py-1 text-xs text-muted-foreground">No supported accounts found.</p>
-      ) : (
-        <div className="space-y-1">
-          {supported.map((provider) => (
-            <ConnectedProviderUsageRow
-              key={provider.instanceId}
-              environmentId={environmentId}
-              provider={provider}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function ConnectedProviderUsageRow({
-  environmentId,
-  provider,
-}: {
-  environmentId: EnvironmentId;
-  provider: ServerProvider;
-}) {
+function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsageAccount }) {
+  const { displayName, environmentId, provider } = account;
   const usageProvider = provider.driver as ProviderUsageDriver;
   const usage = useProviderUsage({
     environmentId,
@@ -750,19 +713,20 @@ function ConnectedProviderUsageRow({
     provider: usageProvider,
     enabled: true,
   });
-  const label = provider.displayName ?? providerName(usageProvider);
 
   return (
     <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
       <div className="mb-2 flex min-w-0 items-center gap-2">
         <ProviderInstanceIcon
           driverKind={provider.driver}
-          displayName={label}
+          displayName={displayName}
           accentColor={provider.accentColor}
           className="size-4"
           iconClassName="size-4"
         />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+          {displayName}
+        </span>
         {usage.data?.status === "ok" && usage.data.planName ? (
           <span className="shrink-0 text-[10px] text-muted-foreground">{usage.data.planName}</span>
         ) : null}
@@ -777,33 +741,53 @@ function ConnectedProviderUsageRow({
   );
 }
 
-export function ConnectedProviderUsageMenu() {
+function useConnectedProviderUsageAccounts() {
   const { isReady, environments } = useEnvironments();
-  const connected = environments.filter(
-    (environment) => environment.connection.phase === "connected",
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const connected = useMemo(
+    () => environments.filter((environment) => environment.connection.phase === "connected"),
+    [environments],
   );
+  const accounts = useMemo(
+    () =>
+      deriveConnectedProviderUsageAccounts(
+        connected.map((environment) => ({
+          environmentId: environment.environmentId,
+          providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+        })),
+      ),
+    [connected, serverConfigs],
+  );
+  const loading =
+    !isReady ||
+    (connected.length > 0 &&
+      accounts.length === 0 &&
+      connected.some((environment) => !serverConfigs.has(environment.environmentId)));
+  return { accounts, connectedCount: connected.length, loading };
+}
+
+export function ConnectedProviderUsageMenu() {
+  const { accounts, connectedCount, loading } = useConnectedProviderUsageAccounts();
 
   return (
     <div className="min-w-0">
       <div className="px-3 pb-2 pt-2">
         <p className="text-sm font-medium text-foreground">Provider usage</p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
-          Live subscription limits from connected environments.
+          Live subscription limits from connected accounts.
         </p>
       </div>
       <div className="mx-2 h-px bg-border" />
-      {!isReady ? (
-        <p className="px-3 py-3 text-xs text-muted-foreground">Loading environments…</p>
-      ) : connected.length === 0 ? (
+      {loading ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">Loading provider accounts…</p>
+      ) : connectedCount === 0 ? (
         <p className="px-3 py-3 text-xs text-muted-foreground">No environments connected.</p>
+      ) : accounts.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-muted-foreground">No supported accounts found.</p>
       ) : (
-        <div className="divide-y divide-border/70">
-          {connected.map((environment) => (
-            <ConnectedEnvironmentProviderUsage
-              key={environment.environmentId}
-              environmentId={environment.environmentId}
-              label={environment.label}
-            />
+        <div className="space-y-1 px-2 py-2">
+          {accounts.map((account) => (
+            <ConnectedProviderUsageRow key={account.key} account={account} />
           ))}
         </div>
       )}
@@ -811,30 +795,19 @@ export function ConnectedProviderUsageMenu() {
   );
 }
 
-export function ProviderUsageSettingsSection({
-  environmentId,
-}: {
-  readonly environmentId: EnvironmentId;
-}) {
-  const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
-  const supported = useMemo(
-    () =>
-      (providers ?? []).filter(
-        (provider) =>
-          provider.enabled && provider.installed && isProviderUsageDriver(provider.driver),
-      ),
-    [providers],
-  );
+export function ProviderUsageSettingsSection() {
+  const { accounts, loading } = useConnectedProviderUsageAccounts();
   const refreshTargets = useMemo(
     () =>
-      supported.map((provider) => ({
-        instanceId: provider.instanceId,
-        provider: provider.driver as ProviderUsageDriver,
-        label: provider.displayName ?? providerName(provider.driver as ProviderUsageDriver),
+      accounts.map((account) => ({
+        environmentId: account.environmentId,
+        instanceId: account.provider.instanceId,
+        provider: account.provider.driver as ProviderUsageDriver,
+        label: account.displayName,
       })),
-    [supported],
+    [accounts],
   );
-  const usageRefresh = useForcedProviderUsageRefresh(environmentId, refreshTargets);
+  const usageRefresh = useForcedProviderUsageRefresh(refreshTargets);
 
   return (
     <SettingsSection
@@ -845,7 +818,7 @@ export function ProviderUsageSettingsSection({
           className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
           aria-label="Refresh provider usage"
           aria-busy={usageRefresh.isRefreshing}
-          disabled={usageRefresh.isRefreshing || supported.length === 0}
+          disabled={usageRefresh.isRefreshing || accounts.length === 0}
           onClick={() => void usageRefresh.refresh()}
         >
           <RefreshCwIcon
@@ -858,18 +831,18 @@ export function ProviderUsageSettingsSection({
     >
       <div className="space-y-4 px-3 sm:px-4">
         <p className="text-xs text-muted-foreground">
-          Live subscription quota from each provider account on this environment.
+          Live subscription quota from each connected provider account.
         </p>
         <div className="space-y-5">
-          <EnvironmentProviderUsageCards
-            environmentId={environmentId}
-            providers={providers}
+          <ConnectedProviderUsageCards
+            accounts={accounts}
+            loading={loading}
             refreshedSnapshots={usageRefresh.refreshedSnapshots}
           />
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Pathway reads the CLI&apos;s stored sign-in on this environment and sends only the quota
-          summary to this client. Credentials stay on that environment.
+          Pathway reads each CLI&apos;s stored sign-in on its connected environment and sends only
+          the quota summary to this client. Credentials stay on that environment.
         </p>
       </div>
     </SettingsSection>

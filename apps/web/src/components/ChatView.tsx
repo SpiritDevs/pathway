@@ -5855,6 +5855,7 @@ function ChatViewContent(props: ChatViewProps) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    target: "current" | "new-chat" | "side-chat" = "current",
   ) => {
     e?.preventDefault();
     const notifyDirectAnnotationAttached = () => {
@@ -5872,7 +5873,8 @@ function ChatViewContent(props: ChatViewProps) {
       isSendBusy ||
       isConnecting ||
       activeEnvironmentUnavailable ||
-      sendInFlightRef.current
+      sendInFlightRef.current ||
+      (target === "side-chat" && (!isServerThread || latestSideChatSourceRun === null))
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -6005,8 +6007,9 @@ function ChatViewContent(props: ChatViewProps) {
     if (projectWorkspaceRootForSend === null) {
       return;
     }
-    const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeMessageCount === 0;
+    const sendsToCurrentThread = target === "current";
+    const threadIdForSend = sendsToCurrentThread ? activeThread.id : newThreadId();
+    const isFirstMessage = sendsToCurrentThread && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -6088,7 +6091,7 @@ function ChatViewContent(props: ChatViewProps) {
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
     }));
-    if (!shouldQueueBehindActiveRun) {
+    if (sendsToCurrentThread && !shouldQueueBehindActiveRun) {
       // A sent turn returns to the live edge and anchors its new transcript
       // row. Queued input stays in the composer queue and must not move the
       // timeline away from the provider work already in flight.
@@ -6105,25 +6108,27 @@ function ChatViewContent(props: ChatViewProps) {
         messageId: messageIdForSend,
       });
     }
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        runId: null,
-        createdAt: messageCreatedAt,
-        updatedAt: messageCreatedAt,
-        streaming: false,
-        ...(shouldQueueBehindActiveRun
-          ? { inputIntent: "queued_turn" as const }
-          : phase === "running" && dispatchMode === "steer"
-            ? { inputIntent: "steer" as const }
-            : {}),
-      },
-    ]);
-    setThreadError(threadIdForSend, null);
+    if (sendsToCurrentThread) {
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          runId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+          ...(shouldQueueBehindActiveRun
+            ? { inputIntent: "queued_turn" as const }
+            : phase === "running" && dispatchMode === "steer"
+              ? { inputIntent: "steer" as const }
+              : {}),
+        },
+      ]);
+    }
+    setThreadError(activeThread.id, null);
     if (expiredTerminalContextCount > 0) {
       const toastCopy = buildExpiredTerminalContextToastCopy(
         expiredTerminalContextCount,
@@ -6164,7 +6169,7 @@ function ChatViewContent(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
-    if (failure === null && isServerThread) {
+    if (failure === null && sendsToCurrentThread && isServerThread) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
@@ -6187,38 +6192,76 @@ function ChatViewContent(props: ChatViewProps) {
       failure = turnAttachmentsResult;
     }
 
+    let forkedSideChat = false;
+    if (
+      failure === null &&
+      target === "side-chat" &&
+      latestSideChatSourceRun !== null &&
+      turnAttachmentsResult._tag === "Success"
+    ) {
+      const forkResult = await forkThreadFromRun({
+        environmentId,
+        input: {
+          sourceThreadId: activeThread.id,
+          targetThreadId: threadIdForSend,
+          runId: latestSideChatSourceRun.id,
+          forkKind: "side_chat",
+          title: `${activeThread.title} side chat`,
+        },
+      });
+      if (forkResult._tag === "Failure") {
+        failure = forkResult;
+      } else {
+        forkedSideChat = true;
+      }
+    }
+
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        target === "new-chat"
           ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      locations: activeThread.locations ?? ["agents"],
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: projectWorkspaceRootForSend,
-                      baseBranch: baseBranchForWorktree,
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
+              createThread: {
+                projectId: activeProject.id,
+                title,
+                modelSelection: threadCreateModelSelection,
+                runtimeMode,
+                interactionMode,
+                locations: ["agents" as const],
+                branch: activeThreadBranch,
+                worktreePath: activeThread.worktreePath,
+                createdAt: messageCreatedAt,
+              },
             }
-          : undefined;
+          : isLocalDraftThread || baseBranchForWorktree
+            ? {
+                ...(isLocalDraftThread
+                  ? {
+                      createThread: {
+                        projectId: activeProject.id,
+                        title,
+                        modelSelection: threadCreateModelSelection,
+                        runtimeMode,
+                        interactionMode,
+                        locations: activeThread.locations ?? ["agents"],
+                        branch: activeThreadBranch,
+                        worktreePath: activeThread.worktreePath,
+                        createdAt: activeThread.createdAt,
+                      },
+                    }
+                  : {}),
+                ...(baseBranchForWorktree
+                  ? {
+                      prepareWorktree: {
+                        projectCwd: projectWorkspaceRootForSend,
+                        baseBranch: baseBranchForWorktree,
+                        ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }
+                  : {}),
+              }
+            : undefined;
       beginLocalDispatch({ preparingWorktree: false });
       const startResult = await startThreadTurn({
         environmentId,
@@ -6234,7 +6277,7 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
-          dispatchMode,
+          dispatchMode: sendsToCurrentThread ? dispatchMode : "auto",
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -6243,6 +6286,56 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+      }
+    }
+
+    let targetPresentationFailure: unknown = null;
+    if (turnStartSucceeded && target === "new-chat") {
+      const startedResult = await settlePromise(() =>
+        waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+      );
+      if (startedResult._tag === "Failure") {
+        targetPresentationFailure = squashAtomCommandFailure(startedResult);
+      } else {
+        const navigateResult = await settlePromise(() =>
+          navigate({
+            to: "/threads/$environmentId/$threadId",
+            params: {
+              environmentId: activeThread.environmentId,
+              threadId: threadIdForSend,
+            },
+          }),
+        );
+        if (navigateResult._tag === "Failure") {
+          targetPresentationFailure = squashAtomCommandFailure(navigateResult);
+        }
+      }
+    }
+
+    if (turnStartSucceeded && target === "side-chat") {
+      const ownerThreadRef = panelOwnerThreadRef ?? activeThreadRef;
+      if (ownerThreadRef) {
+        let unavailableMessage: string | null = null;
+        const openedResult = await settlePromise(() =>
+          openForkedThreadSideChatWhenReady({
+            parentThreadRef: ownerThreadRef,
+            targetThreadRef: scopeThreadRef(environmentId, threadIdForSend),
+            waitForThreadShell,
+            openThread: (parentRef, childThreadId) => {
+              useRightPanelStore.getState().openThread(parentRef, childThreadId);
+            },
+            onThreadUnavailable: (message) => {
+              unavailableMessage = message;
+            },
+          }),
+        );
+        if (openedResult._tag === "Failure") {
+          targetPresentationFailure = squashAtomCommandFailure(openedResult);
+        } else if (!openedResult.value) {
+          targetPresentationFailure = new Error(
+            unavailableMessage ?? "The side chat did not appear in time.",
+          );
+        }
       }
     }
 
@@ -6259,14 +6352,16 @@ function ChatViewContent(props: ChatViewProps) {
         (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
           .length ?? 0) === 0
       ) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
-          }
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
+        if (sendsToCurrentThread) {
+          setOptimisticUserMessages((existing) => {
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
+        }
         promptRef.current = promptForSend;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
@@ -6287,19 +6382,67 @@ function ChatViewContent(props: ChatViewProps) {
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);
-        setThreadError(
-          threadIdForSend,
-          error instanceof Error ? error.message : "Failed to send message.",
+        const description = error instanceof Error ? error.message : "Failed to send message.";
+        if (sendsToCurrentThread) {
+          setThreadError(activeThread.id, description);
+        } else {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title:
+                target === "side-chat"
+                  ? "Could not send in a side chat"
+                  : "Could not send in a new chat",
+              description,
+            }),
+          );
+        }
+      }
+    }
+    if (!sendsToCurrentThread) {
+      for (const image of composerImagesSnapshot) {
+        revokeBlobPreviewUrl(image.previewUrl);
+      }
+    }
+    if (failure !== null && forkedSideChat) {
+      const cleanupResult = await deleteThread({
+        environmentId,
+        input: { threadId: threadIdForSend },
+      });
+      if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+        console.warn(
+          "Failed to clean up side chat after send failure.",
+          squashAtomCommandFailure(cleanupResult),
         );
       }
     }
+    if (failure === null && targetPresentationFailure !== null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: target === "side-chat" ? "Side chat sent" : "New chat started",
+          description:
+            targetPresentationFailure instanceof Error
+              ? `The message was sent, but the chat could not be opened: ${targetPresentationFailure.message}`
+              : "The message was sent, but the chat could not be opened.",
+        }),
+      );
+    }
     sendInFlightRef.current = false;
-    if (!turnStartSucceeded) {
+    if (!turnStartSucceeded || !sendsToCurrentThread) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       resetLocalDispatch();
     }
+  };
+
+  const onSendInNewChat = () => {
+    void onSend(undefined, "auto", undefined, "new-chat");
+  };
+
+  const onSendInSideChat = () => {
+    void onSend(undefined, "auto", undefined, "side-chat");
   };
 
   const onRecoverPushFailure = useCallback(
@@ -7693,6 +7836,13 @@ function ChatViewContent(props: ChatViewProps) {
                             onSend={onSend}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
+                            sideChatAvailable={
+                              isServerThread &&
+                              latestSideChatSourceRun !== null &&
+                              !activeEnvironmentUnavailable
+                            }
+                            onSendInNewChat={onSendInNewChat}
+                            onSendInSideChat={onSendInSideChat}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={
                               onSelectActivePendingUserInputOption

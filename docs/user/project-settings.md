@@ -15,9 +15,10 @@ move a project to another company.
 
 ## Moving a project to another company
 
-A project can move, and its issues and milestones move with it. Because statuses, labels, and issue
-keys all belong to the company, the move is a migration rather than a setting, so it runs as a
-stepper: choose the destination, map each status and label onto one in the new company, then review.
+A project can move, and its connections, issues, milestones, thread metadata, captured email, and
+issue activity move with it. Because statuses, labels, and issue keys all belong to the company, the
+move is a migration rather than a simple setting, so it runs as a stepper: choose the destination,
+map each status and label onto one in the new company, then review.
 
 Pathway fills in the mappings whose names match and leaves the rest blank — a wrong guess that looks
 confident is worse than an empty field. What does not survive is stated on the review step:
@@ -27,6 +28,9 @@ confident is worse than an empty field. What does not survive is stated on the r
 - **Cycles are left behind**, because a cycle spans a whole company rather than one project.
 - **Team visibility resets** — issues arrive company-wide.
 - **Unmapped labels are removed** from their issues.
+- **In-flight automation is canceled**, so work cannot finish against the old company after the
+  move.
+- **Slack channel watches remain with their Slack integration** and detach from the project.
 
 AI usage is attributed by working directory, which is how the provider CLIs organise their
 transcripts. Session time is wall clock from a session's first message to its last — a session left
@@ -36,9 +40,9 @@ cannot be attributed to a project.
 
 ## Settings → Projects
 
-Open **Settings → Projects** to see every project and how many machine connections it has. Hover
-the connection count to see each environment name, directory, platform, Pathway version, and
-binding status.
+Open **Settings → Projects** to see every project, its owning company, and how many machine
+connections it has. The company appears beside the project name as a badge. Hover the connection
+count to see each environment name, directory, platform, Pathway version, and binding status.
 
 The profile or company selector at the top of Settings only filters what Settings shows. Deleting
 a project uses its recorded company ownership, so you do not need to select an owning company
@@ -51,6 +55,10 @@ the directory path or remove that connection; Pathway disables removal when it i
 only connection.
 When a project has several active connections, **New-thread default** marks the environment Pathway
 will use automatically.
+
+Use the **Company** dropdown above Connections to move the project. Choosing a different company
+opens the migration review; nothing changes until you accept it. While the move is running, Pathway
+keeps the dialog open and shows the data included in the atomic migration.
 
 Removing a project does not require any of its machines to be online. Pathway removes the shared
 company project immediately; each offline checkout removes its local project and conversation

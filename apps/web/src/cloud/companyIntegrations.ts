@@ -7,6 +7,21 @@ import { makeFunctionReference, type FunctionReference } from "convex/server";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
 
 type Args = Record<string, unknown>;
+export const COMPANY_INTEGRATIONS_QUERY_TIMEOUT_MS = 10_000;
+
+export function withCompanyIntegrationsQueryTimeout<R>(
+  request: Promise<R>,
+  operation: string,
+  timeoutMs = COMPANY_INTEGRATIONS_QUERY_TIMEOUT_MS,
+): Promise<R> {
+  return new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => {
+      reject(new Error(`${operation} timed out. Check your cloud connection, then try again.`));
+    }, timeoutMs);
+    void request.then(resolve, reject).finally(() => globalThis.clearTimeout(timeout));
+  });
+}
+
 const queryRef = <A extends Args, R>(name: string) => makeFunctionReference<"query", A, R>(name);
 const mutationRef = <A extends Args, R>(name: string) =>
   makeFunctionReference<"mutation", A, R>(name);
@@ -191,14 +206,14 @@ export function makeCompanyIntegrationsClient(options: {
 }): CompanyIntegrationsClient {
   const client = new ConvexClient(options.convexUrl);
   client.setAuth(options.fetchToken);
-  const query = <R>(reference: FunctionReference<"query">, args: Args) =>
-    client.query(reference, args) as Promise<R>;
+  const query = <R>(reference: FunctionReference<"query">, args: Args, operation: string) =>
+    withCompanyIntegrationsQueryTimeout(client.query(reference, args) as Promise<R>, operation);
   const mutation = <R>(reference: FunctionReference<"mutation">, args: Args) =>
     client.mutation(reference, args) as Promise<R>;
   const action = <R>(reference: FunctionReference<"action">, args: Args) =>
     client.action(reference, args) as Promise<R>;
   return {
-    list: (companyId) => query(refs.list, { companyId }),
+    list: (companyId) => query(refs.list, { companyId }, "Loading integrations"),
     connect: (companyId, token, expectedIntegrationId) =>
       action(refs.connect, {
         companyId,
@@ -210,16 +225,19 @@ export function makeCompanyIntegrationsClient(options: {
     disconnect: (args) => mutation(refs.disconnect, args),
     remove: (args) => mutation<null>(refs.remove, args).then(() => undefined),
     listWatches: (companyId, integrationId) =>
-      query(refs.listWatches, { companyId, integrationId }),
+      query(refs.listWatches, { companyId, integrationId }, "Loading watched channels"),
     createWatch: (args) => mutation(refs.createWatch, args),
     updateWatch: (args) => mutation(refs.updateWatch, args),
     deleteWatch: (args) => mutation<null>(refs.deleteWatch, args).then(() => undefined),
-    getAutomation: (companyId) => query(refs.getAutomation, { companyId }),
+    getAutomation: (companyId) =>
+      query(refs.getAutomation, { companyId }, "Loading issue automation"),
     saveAutomation: (args) => mutation(refs.saveAutomation, args),
     setAutomationEnabled: (companyId, enabled) =>
       mutation(refs.setAutomationEnabled, { companyId, enabled }),
-    listJobs: (companyId) => query(refs.listJobs, { companyId, limit: 100 }),
-    attentionCount: (companyId) => query(refs.attentionCount, { companyId }),
+    listJobs: (companyId) =>
+      query(refs.listJobs, { companyId, limit: 100 }, "Loading automation jobs"),
+    attentionCount: (companyId) =>
+      query(refs.attentionCount, { companyId }, "Loading integration alerts"),
     retryJob: (companyId, jobId) =>
       mutation<null>(refs.retryJob, { companyId, jobId }).then(() => undefined),
     cancelJob: (companyId, jobId) =>

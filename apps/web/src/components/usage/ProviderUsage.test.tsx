@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerConfig,
   type ServerProvider,
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
@@ -16,6 +17,8 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 const atoms = vi.hoisted(() => ({
   providers: null as ReadonlyArray<ServerProvider> | null,
   providersAtom: Symbol("providers"),
+  serverConfigs: new Map<EnvironmentId, ServerConfig>(),
+  serverConfigsAtom: Symbol("serverConfigs"),
   refreshProviderUsage: Symbol("refreshProviderUsage"),
 }));
 
@@ -24,6 +27,11 @@ const testState = vi.hoisted(() => ({
   pendingQueries: new Set<string>(),
   refresh: vi.fn(),
   toast: vi.fn(),
+  environments: [] as ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly label: string;
+    readonly connection: { readonly phase: "connected" | "offline" };
+  }>,
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -44,10 +52,19 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => atoms.providers,
+  useAtomValue: (atom: unknown) =>
+    atom === atoms.serverConfigsAtom ? atoms.serverConfigs : atoms.providers,
+}));
+
+vi.mock("~/state/environments", () => ({
+  useEnvironments: () => ({
+    isReady: true,
+    environments: testState.environments,
+  }),
 }));
 
 vi.mock("~/state/server", () => ({
+  environmentServerConfigsAtom: atoms.serverConfigsAtom,
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
     providerUsage: (target: unknown) => target,
@@ -84,6 +101,7 @@ vi.mock("../ui/toast", () => ({
 import {
   EnvironmentProviderUsage,
   EnvironmentProviderUsageList,
+  ConnectedProviderUsageMenu,
   ProviderUsageSettingsSection,
 } from "./ProviderUsage";
 
@@ -91,14 +109,39 @@ const environmentId = EnvironmentId.make("usage-environment");
 const codexId = ProviderInstanceId.make("codex");
 const claudeId = ProviderInstanceId.make("claudeAgent");
 
-function provider(driver: "codex" | "claudeAgent", instanceId: ProviderInstanceId): ServerProvider {
+function provider(
+  driver: "codex" | "claudeAgent",
+  instanceId: ProviderInstanceId,
+  options: { readonly displayName?: string; readonly email?: string } = {},
+): ServerProvider {
   return {
     driver: ProviderDriverKind.make(driver),
     instanceId,
-    displayName: driver === "codex" ? "Codex" : "Claude",
+    displayName: options.displayName ?? (driver === "codex" ? "Codex" : "Claude"),
     enabled: true,
     installed: true,
+    auth: {
+      status: "authenticated",
+      email: options.email ?? `${driver}@example.com`,
+    },
   } as ServerProvider;
+}
+
+function setConnectedProviders(
+  entries: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly label: string;
+    readonly providers: ReadonlyArray<ServerProvider>;
+  }>,
+) {
+  testState.environments = entries.map(({ environmentId, label }) => ({
+    environmentId,
+    label,
+    connection: { phase: "connected" as const },
+  }));
+  atoms.serverConfigs = new Map(
+    entries.map(({ environmentId, providers }) => [environmentId, { providers } as ServerConfig]),
+  );
 }
 
 function snapshot(
@@ -166,6 +209,8 @@ describe("provider usage panel refresh", () => {
   beforeEach(() => {
     hooks.reset();
     atoms.providers = null;
+    atoms.serverConfigs = new Map();
+    testState.environments = [];
     testState.queries.clear();
     testState.pendingQueries.clear();
     testState.refresh.mockReset();
@@ -353,7 +398,13 @@ describe("provider usage panel refresh", () => {
   });
 
   it("spins the provider-settings refresh icon only while all usage refreshes are pending", async () => {
-    atoms.providers = [provider("codex", codexId), provider("claudeAgent", claudeId)];
+    setConnectedProviders([
+      {
+        environmentId,
+        label: "Studio",
+        providers: [provider("codex", codexId), provider("claudeAgent", claudeId)],
+      },
+    ]);
     let finishRefresh: (() => void) | undefined;
     testState.refresh.mockImplementation(
       ({ input }: { readonly input: { readonly instanceId: ProviderInstanceId } }) =>
@@ -373,9 +424,7 @@ describe("provider usage panel refresh", () => {
     );
 
     hooks.beginRender();
-    const settings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
-      Record<string, unknown>
-    >;
+    const settings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
     const button = visitElements(
       settings,
       (element) => element.props["aria-label"] === "Refresh provider usage",
@@ -383,9 +432,7 @@ describe("provider usage panel refresh", () => {
     (button?.props.onClick as (() => void) | undefined)?.();
 
     hooks.beginRender();
-    const pendingSettings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
-      Record<string, unknown>
-    >;
+    const pendingSettings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
     const pendingButton = visitElements(
       pendingSettings,
       (element) => element.props["aria-label"] === "Refresh provider usage",
@@ -398,9 +445,52 @@ describe("provider usage panel refresh", () => {
     finishRefresh?.();
     await flushPromises();
     hooks.beginRender();
-    const settledSettings = ProviderUsageSettingsSection({ environmentId }) as ReactElement<
-      Record<string, unknown>
-    >;
+    const settledSettings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
     expect(findSpinningRefreshIcon(settledSettings)).toBeNull();
+  });
+
+  it("shows one row per provider account instead of grouping rows by environment", () => {
+    const laptopId = EnvironmentId.make("usage-laptop");
+    const laptopClaudeId = ProviderInstanceId.make("laptop-claude");
+    const laptopCodexId = ProviderInstanceId.make("laptop-codex");
+    const workCodexId = ProviderInstanceId.make("work");
+    setConnectedProviders([
+      {
+        environmentId,
+        label: "Studio",
+        providers: [
+          provider("claudeAgent", claudeId, { email: "corey@example.com" }),
+          provider("codex", codexId, { email: "corey@openai.example" }),
+          provider("codex", workCodexId, {
+            displayName: "Work",
+            email: "work@openai.example",
+          }),
+        ],
+      },
+      {
+        environmentId: laptopId,
+        label: "Laptop",
+        providers: [
+          provider("claudeAgent", laptopClaudeId, { email: "COREY@example.com" }),
+          provider("codex", laptopCodexId, { email: "corey@openai.example" }),
+        ],
+      },
+    ]);
+
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    const rows: Array<ReactElement<Record<string, unknown>>> = [];
+    visitElements(menu, (element) => {
+      if (element.props.account) rows.push(element);
+      return false;
+    });
+
+    expect(rows.map((row) => (row.props.account as { displayName: string }).displayName)).toEqual([
+      "Claude",
+      "Codex",
+      "Work",
+    ]);
+    expect(visitElements(menu, (element) => element.props.children === "Studio")).toBeNull();
+    expect(visitElements(menu, (element) => element.props.children === "Laptop")).toBeNull();
   });
 });

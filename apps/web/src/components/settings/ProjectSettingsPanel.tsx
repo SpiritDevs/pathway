@@ -50,6 +50,7 @@ import { usePathwayProjectFileState } from "../../hooks/usePathwayProjectFileScr
 import { shortcutLabelForCommand } from "../../keybindings";
 import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { readLocalApi } from "../../localApi";
+import { companyListAtom } from "../../cloud/activeCompany";
 import type { EnvironmentControlClient } from "../../cloud/environmentControl";
 import {
   buildProjectScript,
@@ -79,6 +80,7 @@ import { ProjectEmailCaptureSection } from "../email/ProjectEmailCaptureSection"
 import { ProjectFavicon } from "../ProjectFavicon";
 import { AddProjectConnectionDialog } from "../projects/AddProjectConnectionDialog";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
+import { MoveProjectWizard } from "../projects/MoveProjectWizard";
 import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
@@ -258,6 +260,14 @@ export function ProjectDetail({
     group.memberProjects.find((member) => member.environmentId === primaryEnvironmentId)?.id ??
     null;
   const faviconPath = representative.faviconPath ?? null;
+  const companies = useAtomValue(companyListAtom) ?? [];
+  const owningCompany =
+    workspaceProject === null
+      ? null
+      : (companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
+        null);
+  const [moveDestination, setMoveDestination] = useState<CompanyId | null>(null);
+  const [moveWizardOpen, setMoveWizardOpen] = useState(false);
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
     [companyContext?.replica],
@@ -943,6 +953,41 @@ export function ProjectDetail({
           </SettingsSection>
         </div>
 
+        {workspaceProject !== null ? (
+          <SettingsSection title="Company">
+            <SettingsRow
+              title="Company"
+              description="The company owns this project and everything filed against it."
+              control={
+                <Select
+                  value={owningCompany?.id ?? null}
+                  disabled={
+                    workspaceProject.cloudProjectId === null ||
+                    owningCompany === null ||
+                    companies.length < 2
+                  }
+                  onValueChange={(value) => {
+                    if (value === null || value === owningCompany?.id) return;
+                    setMoveDestination(value as CompanyId);
+                    setMoveWizardOpen(true);
+                  }}
+                >
+                  <SelectTrigger aria-label="Project company" className="w-full sm:w-64">
+                    <SelectValue placeholder="No company" />
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    {companies.map((company) => (
+                      <SelectItem key={company.id} value={company.id}>
+                        {company.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              }
+            />
+          </SettingsSection>
+        ) : null}
+
         <SettingsSection
           title="Connections"
           headerAction={
@@ -1403,6 +1448,17 @@ export function ProjectDetail({
         project={selectedCheckout}
         reason="Threads, git actions, and the file explorer all run inside this directory."
       />
+      {workspaceProject !== null && moveDestination !== null ? (
+        <MoveProjectWizard
+          project={workspaceProject}
+          initialDestination={moveDestination}
+          open={moveWizardOpen}
+          onOpenChange={(open) => {
+            setMoveWizardOpen(open);
+            if (!open) setMoveDestination(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }

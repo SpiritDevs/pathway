@@ -66,12 +66,12 @@ provider picker does not refresh these limits. After the thread starts, **Usage*
 provider. Providers with multiple limits can be expanded to see every window and any credit balance
 reported by that provider.
 
-The bottom of **Settings → Providers** shows the same limits for every supported account on the
-selected environment. Provider credentials remain on the environment that owns them.
+The bottom of **Settings → Providers** shows the same limits once for every supported account across
+your connected environments. Provider credentials remain on the environment that owns them.
 
-The profile menu's **Provider usage** submenu shows supported accounts from every environment that
-is currently connected. Accounts stay grouped by environment so limits from different machines or
-sign-ins are not combined.
+The profile menu's **Provider usage** submenu shows each supported account once across all currently
+connected environments. Pathway matches the provider's authenticated account identity, so the same
+sign-in on multiple machines is deduplicated while separate accounts remain separate.
 
 For remote projects, both lists describe processes running in the remote environment rather than on
 the device displaying Pathway.

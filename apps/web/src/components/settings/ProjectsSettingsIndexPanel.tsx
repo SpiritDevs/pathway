@@ -7,10 +7,12 @@
  *
  * @module components/settings/ProjectsSettingsIndexPanel
  */
+import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
 import { ChevronRightIcon, FolderIcon, PlusIcon } from "lucide-react";
 import { useMemo } from "react";
 
+import { companyListAtom } from "../../cloud/activeCompany";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
@@ -20,6 +22,7 @@ import {
   projectConnectionPlatformLabel,
 } from "../projects/projectConnectionMetadata";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -27,6 +30,7 @@ import { useCompanySettings } from "./company/useCompanySettings";
 
 export function ProjectsSettingsIndexPanel() {
   const projects = useWorkspaceProjects();
+  const companies = useAtomValue(companyListAtom) ?? [];
   const companySettings = useCompanySettings();
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companySettings.replica?.view.values() ?? []),
@@ -52,6 +56,9 @@ export function ProjectsSettingsIndexPanel() {
         ) : (
           projects.map((project) => {
             const group = project.group;
+            const owners = companies.filter((company) =>
+              project.companyIds.includes(String(company.id)),
+            );
             const connections = deriveProjectConnectionMetadata({
               members: group?.memberProjects ?? [],
               catalog: connectionCatalog,
@@ -74,8 +81,21 @@ export function ProjectsSettingsIndexPanel() {
                   />
                 )}
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium tracking-[-0.005em] text-foreground">
-                    {project.displayName}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-sm font-medium tracking-[-0.005em] text-foreground">
+                      {project.displayName}
+                    </span>
+                    {(owners.length > 0 ? owners : [{ id: "unowned", name: "No company" }]).map(
+                      (company) => (
+                        <Badge
+                          key={String(company.id)}
+                          variant="secondary"
+                          className="max-w-40 shrink-0 truncate px-1.5 py-0 text-[10px] font-medium"
+                        >
+                          {company.name}
+                        </Badge>
+                      ),
+                    )}
                   </span>
                   <span className="block truncate text-[13px] leading-[1.45] text-muted-foreground/80">
                     {group?.workspaceRoot ?? "No directory attached"}

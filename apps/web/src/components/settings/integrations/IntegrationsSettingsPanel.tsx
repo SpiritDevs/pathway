@@ -1149,6 +1149,7 @@ export function IntegrationsSettingsPanel() {
   const [sheet, setSheet] = useState<SheetState>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [automationLoadError, setAutomationLoadError] = useState<string | null>(null);
   const refreshVersionRef = useRef(0);
   const companyIdRef = useRef(company.companyId);
   companyIdRef.current = company.companyId;
@@ -1195,32 +1196,50 @@ export function IntegrationsSettingsPanel() {
     if (client === null || company.companyId === null || !readGate.enabled) return;
     const companyId = company.companyId;
     const refreshVersion = ++refreshVersionRef.current;
-    let result;
-    try {
-      result = await Promise.all([
-        client.list(companyId),
-        client.getAutomation(companyId),
-        client.listJobs(companyId),
-      ]);
-    } catch (error) {
-      if (refreshVersion !== refreshVersionRef.current || companyIdRef.current !== companyId)
-        return;
-      throw error;
-    }
-    const [nextIntegrations, nextAutomation, nextJobs] = result;
-    if (refreshVersion !== refreshVersionRef.current || companyIdRef.current !== companyId) return;
-    setIntegrations(nextIntegrations);
-    setAutomation(nextAutomation);
-    setJobs(nextJobs);
-    setLoadedCompanyId(companyId);
+    setLoading(true);
     setLoadError(null);
-    setLoading(false);
+    setAutomationLoadError(null);
+    const isCurrent = () =>
+      refreshVersion === refreshVersionRef.current && companyIdRef.current === companyId;
+    const loadIntegrations = client
+      .list(companyId)
+      .then((nextIntegrations) => {
+        if (!isCurrent()) return;
+        setIntegrations(nextIntegrations);
+        setLoadedCompanyId(companyId);
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return;
+        setLoadError(error instanceof Error ? error.message : "Could not load integrations.");
+        reportError("Could not load integrations", error);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
+    const loadAutomation = Promise.all([
+      client.getAutomation(companyId),
+      client.listJobs(companyId),
+    ])
+      .then(([nextAutomation, nextJobs]) => {
+        if (!isCurrent()) return;
+        setAutomation(nextAutomation);
+        setJobs(nextJobs);
+      })
+      .catch((error: unknown) => {
+        if (!isCurrent()) return;
+        setAutomationLoadError(
+          error instanceof Error ? error.message : "Could not load issue automation.",
+        );
+        reportError("Could not load issue automation", error);
+      });
+    await Promise.all([loadIntegrations, loadAutomation]);
   }, [client, company.companyId, readGate.enabled]);
   useEffect(() => {
     refreshVersionRef.current += 1;
     setSheet(null);
     setLoading(true);
     setLoadError(null);
+    setAutomationLoadError(null);
     if (workspaceKind !== "organization" || company.companyId === null) {
       setLoading(false);
       return;
@@ -1234,12 +1253,7 @@ export function IntegrationsSettingsPanel() {
       );
       return;
     }
-    void refresh().catch((error) => {
-      if (companyIdRef.current !== company.companyId) return;
-      setLoading(false);
-      setLoadError(error instanceof Error ? error.message : "Could not load integrations.");
-      reportError("Could not load integrations", error);
-    });
+    void refresh();
   }, [client, company.companyId, readGate.enabled, readGate.tooltip, refresh, workspaceKind]);
   if (workspaceKind !== "organization") return <PersonalIntegrationsPanel />;
   if (!readGate.enabled)
@@ -1296,7 +1310,12 @@ export function IntegrationsSettingsPanel() {
               Loading integrations…
             </div>
           ) : loadError !== null ? (
-            <div className="p-8 text-center text-xs text-muted-foreground">{loadError}</div>
+            <div className="flex flex-col items-center gap-3 p-8 text-center">
+              <p className="text-xs text-muted-foreground">{loadError}</p>
+              <Button size="sm" variant="outline" onClick={() => void refresh()}>
+                <RefreshCwIcon className="size-3.5" /> Retry
+              </Button>
+            </div>
           ) : visibleIntegrations.length === 0 ? (
             <div className="p-8 text-center text-xs text-muted-foreground">
               No Slack workspaces connected.
@@ -1350,23 +1369,41 @@ export function IntegrationsSettingsPanel() {
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="text-sm font-medium">Issue automation</span>
-                <Badge variant={visibleAutomation?.enabled ? "success" : "secondary"}>
-                  {visibleAutomation?.enabled ? "Enabled" : "Paused"}
+                <Badge
+                  variant={
+                    automationLoadError !== null
+                      ? "error"
+                      : visibleAutomation?.enabled
+                        ? "success"
+                        : "secondary"
+                  }
+                >
+                  {automationLoadError !== null
+                    ? "Unavailable"
+                    : visibleAutomation?.enabled
+                      ? "Enabled"
+                      : "Paused"}
                 </Badge>
               </span>
               <span className="block text-xs text-muted-foreground">
-                {
-                  visibleJobs.filter(
-                    (job) =>
-                      job.state === "pending" || job.state === "running" || job.state === "claimed",
-                  ).length
-                }{" "}
-                active ·{" "}
-                {
-                  visibleJobs.filter((job) => job.state === "blocked" || job.state === "failed")
-                    .length
-                }{" "}
-                need attention
+                {automationLoadError ?? (
+                  <>
+                    {
+                      visibleJobs.filter(
+                        (job) =>
+                          job.state === "pending" ||
+                          job.state === "running" ||
+                          job.state === "claimed",
+                      ).length
+                    }{" "}
+                    active ·{" "}
+                    {
+                      visibleJobs.filter((job) => job.state === "blocked" || job.state === "failed")
+                        .length
+                    }{" "}
+                    need attention
+                  </>
+                )}
               </span>
             </span>
             <RefreshCwIcon className="size-4 text-muted-foreground" />

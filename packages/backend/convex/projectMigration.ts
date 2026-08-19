@@ -17,8 +17,25 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation } from "./_generated/server.js";
-import { appendCompanyChanges, encodeCloudProject } from "./lib/companyApply.ts";
-import { encodeIssue, encodeIssueMilestone } from "./lib/issueApply.ts";
+import {
+  appendCompanyChanges,
+  type CompanyChange,
+  encodeAgentThread,
+  encodeCapturedEmail,
+  encodeCloudProject,
+  encodeEnvironmentBinding,
+  encodeEnvironmentCommand,
+} from "./lib/companyApply.ts";
+import {
+  encodeIssue,
+  encodeIssueAttachment,
+  encodeIssueAuditEvent,
+  encodeIssueComment,
+  encodeIssueMilestone,
+  encodeIssueRelation,
+  encodeIssueThreadLink,
+  encodeIssueTodo,
+} from "./lib/issueApply.ts";
 import { backendError } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor, requirePermission } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
@@ -49,6 +66,145 @@ async function requireBothCompanies(ctx: MutationCtx, fromCompanyId: string, toC
   return { from, to };
 }
 
+interface MovingIssueAssets {
+  readonly todos: ReadonlyArray<Doc<"issueTodos">>;
+  readonly comments: ReadonlyArray<Doc<"issueComments">>;
+  readonly attachments: ReadonlyArray<Doc<"issueAttachments">>;
+  readonly auditEvents: ReadonlyArray<Doc<"issueAuditEvents">>;
+  readonly threadLinks: ReadonlyArray<Doc<"issueThreadLinks">>;
+  readonly relations: ReadonlyArray<Doc<"issueRelations">>;
+  readonly detachedRelations: ReadonlyArray<Doc<"issueRelations">>;
+}
+
+/** Collects every live row whose visibility and tenancy follow one of the moving issues. */
+async function collectIssueAssets(
+  ctx: MutationCtx,
+  companyId: Id<"companies">,
+  issues: ReadonlyArray<Doc<"issues">>,
+): Promise<MovingIssueAssets> {
+  const todos: Doc<"issueTodos">[] = [];
+  const comments: Doc<"issueComments">[] = [];
+  const attachments: Doc<"issueAttachments">[] = [];
+  const auditEvents: Doc<"issueAuditEvents">[] = [];
+  const threadLinks: Doc<"issueThreadLinks">[] = [];
+  const relationsById = new Map<string, Doc<"issueRelations">>();
+  const movingIssueIds = new Set(issues.map((issue) => issue.id));
+
+  for (const issue of issues) {
+    const [issueTodos, issueComments, issueAttachments, issueAudits, issueLinks, from, to] =
+      await Promise.all([
+        ctx.db
+          .query("issueTodos")
+          .withIndex("by_company_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+        ctx.db
+          .query("issueComments")
+          .withIndex("by_company_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+        ctx.db
+          .query("issueAttachments")
+          .withIndex("by_company_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+        ctx.db
+          .query("issueAuditEvents")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueThreadLinks")
+          .withIndex("by_company_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+        ctx.db
+          .query("issueRelations")
+          .withIndex("by_company_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+        ctx.db
+          .query("issueRelations")
+          .withIndex("by_company_related_issue_and_deleted", (q) =>
+            q.eq("companyId", companyId).eq("relatedIssueId", issue.id).eq("deletedAt", null),
+          )
+          .collect(),
+      ]);
+    todos.push(...issueTodos);
+    comments.push(...issueComments);
+    attachments.push(...issueAttachments);
+    auditEvents.push(...issueAudits);
+    threadLinks.push(...issueLinks);
+    for (const relation of [...from, ...to]) relationsById.set(relation.id, relation);
+  }
+
+  const relations = [...relationsById.values()];
+  return {
+    todos,
+    comments,
+    attachments,
+    auditEvents,
+    threadLinks,
+    relations: relations.filter(
+      (relation) =>
+        movingIssueIds.has(relation.issueId) && movingIssueIds.has(relation.relatedIssueId),
+    ),
+    // A relation cannot cross a company boundary. Preserve relations wholly inside the moving
+    // project and tombstone every edge that would otherwise point back into the source company.
+    detachedRelations: relations.filter(
+      (relation) =>
+        !movingIssueIds.has(relation.issueId) || !movingIssueIds.has(relation.relatedIssueId),
+    ),
+  };
+}
+
+function issueAssetCount(assets: MovingIssueAssets): number {
+  return (
+    assets.todos.length +
+    assets.comments.length +
+    assets.attachments.length +
+    assets.auditEvents.length +
+    assets.threadLinks.length +
+    assets.relations.length +
+    assets.detachedRelations.length
+  );
+}
+
+async function moveIssueAssets(
+  ctx: MutationCtx,
+  companyId: Id<"companies">,
+  assets: MovingIssueAssets,
+  now: number,
+): Promise<void> {
+  for (const row of assets.todos) {
+    await ctx.db.patch(row._id, { companyId, updatedAt: now });
+  }
+  for (const row of assets.comments) {
+    await ctx.db.patch(row._id, { companyId, updatedAt: now });
+  }
+  for (const row of assets.attachments) {
+    await ctx.db.patch(row._id, { companyId, updatedAt: now });
+  }
+  for (const row of assets.auditEvents) {
+    await ctx.db.patch(row._id, { companyId });
+  }
+  for (const row of assets.threadLinks) {
+    await ctx.db.patch(row._id, { companyId });
+  }
+  for (const row of assets.relations) {
+    await ctx.db.patch(row._id, { companyId });
+  }
+  for (const row of assets.detachedRelations) {
+    await ctx.db.patch(row._id, { deletedAt: now });
+  }
+}
+
 export const moveProjectToCompany = mutation({
   args: {
     fromCompanyId: domainIdArg,
@@ -63,6 +219,11 @@ export const moveProjectToCompany = mutation({
     movedIssues: v.number(),
     movedMilestones: v.number(),
     movedBindings: v.number(),
+    movedThreads: v.number(),
+    movedEmails: v.number(),
+    movedIssueAssets: v.number(),
+    canceledAutomationJobs: v.number(),
+    detachedSlackWatches: v.number(),
     droppedLabels: v.number(),
   }),
   handler: async (ctx, args) => {
@@ -101,6 +262,7 @@ export const moveProjectToCompany = mutation({
         )
         .collect()
     ).filter((issue) => issue.deletedAt === null);
+    const movingIssueIds = new Set(issues.map((issue) => issue.id));
 
     // Refuse before writing anything: a partial mapping discovered halfway would leave issues
     // pointing at a status their new company has never heard of.
@@ -128,21 +290,62 @@ export const moveProjectToCompany = mutation({
       }
     }
 
-    const milestones = (
-      await ctx.db
+    const [
+      milestones,
+      bindings,
+      commands,
+      agentThreads,
+      capturedEmails,
+      automationJobs,
+      slackWatches,
+    ] = await Promise.all([
+      ctx.db
         .query("issueMilestones")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", from.company._id).eq("cloudProjectId", args.projectId),
         )
         .collect()
-    ).filter((milestone) => milestone.deletedAt === null);
-
-    const bindings = (
-      await ctx.db
+        .then((rows) => rows.filter((row) => row.deletedAt === null)),
+      ctx.db
         .query("environmentBindings")
-        .withIndex("by_company_and_environment", (q) => q.eq("companyId", from.company._id))
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", from.company._id).eq("cloudProjectId", project._id),
+        )
         .collect()
-    ).filter((binding) => binding.cloudProjectId === project._id && binding.status !== "revoked");
+        .then((rows) => rows.filter((row) => row.status !== "revoked")),
+      ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
+        .collect()
+        .then((rows) => rows.filter((row) => row.cloudProjectId === project._id)),
+      ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", from.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
+      ctx.db
+        .query("capturedEmails")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", from.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
+      ctx.db
+        .query("issueAutomationJobs")
+        .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
+        .collect()
+        .then((rows) =>
+          rows.filter(
+            (row) => movingIssueIds.has(row.issueId) || row.cloudProjectId === project._id,
+          ),
+        ),
+      ctx.db
+        .query("slackChannelWatches")
+        .withIndex("by_company", (q) => q.eq("companyId", from.company._id))
+        .collect()
+        .then((rows) => rows.filter((row) => row.cloudProjectId === project._id)),
+    ]);
+    const issueAssets = await collectIssueAssets(ctx, from.company._id, issues);
 
     const now = Date.now();
     // One contiguous block so the moved issues read in their original order under the new prefix.
@@ -155,7 +358,6 @@ export const moveProjectToCompany = mutation({
       updatedAt: now,
     });
 
-    const movingIssueIds = new Set(issues.map((issue) => issue.id));
     let droppedLabels = 0;
 
     const ordered = [...issues].sort((left, right) => left.keyNumber - right.keyNumber);
@@ -169,6 +371,7 @@ export const moveProjectToCompany = mutation({
       }
       await ctx.db.patch(issue._id, {
         companyId: to.company._id,
+        issueImportRunId: undefined,
         statusId: statusMap.get(issue.statusId) ?? issue.statusId,
         labelIds,
         key: formatIssueKey(to.company.issueKeyPrefix, keyNumber),
@@ -176,12 +379,17 @@ export const moveProjectToCompany = mutation({
         // Cycles span a whole company and do not travel with one project, so a moved issue leaves
         // its cycle behind rather than pointing at a cycle the new company does not have.
         cycleId: null,
+        // Slack integrations are company-owned and remain in the source company.
+        slackSource: null,
         // A parent outside this project stays where it is, so the link would cross companies.
         parentId:
           issue.parentId !== null && movingIssueIds.has(issue.parentId) ? issue.parentId : null,
         // Teams are company-owned. The move lands the issue company-wide rather than inventing a
         // team membership nobody chose.
         teamIds: [],
+        assignee: null,
+        workflowOwner: { kind: "company" },
+        automationAssignment: null,
         updatedAt: now,
       });
     }
@@ -192,9 +400,66 @@ export const moveProjectToCompany = mutation({
     for (const binding of bindings) {
       await ctx.db.patch(binding._id, { companyId: to.company._id, updatedAt: now });
     }
+    for (const command of commands) {
+      const cancel = command.state === "pending" || command.state === "claimed";
+      await ctx.db.patch(command._id, {
+        companyId: to.company._id,
+        ...(cancel
+          ? {
+              state: "canceled" as const,
+              claimedByEnvironmentId: null,
+              claimExpiresAt: null,
+              error: "Canceled because the project moved to another company.",
+            }
+          : {}),
+        updatedAt: now,
+      });
+    }
+    for (const thread of agentThreads) {
+      await ctx.db.patch(thread._id, { companyId: to.company._id, updatedAt: now });
+    }
+    for (const email of capturedEmails) {
+      // Email tags belong to the source company. The capture moves, while its source-only labels
+      // are cleared rather than becoming dangling references in the destination.
+      await ctx.db.patch(email._id, { companyId: to.company._id, tagIds: [], updatedAt: now });
+    }
+    for (const job of automationJobs) {
+      const isActive =
+        job.state === "pending" ||
+        job.state === "blocked" ||
+        job.state === "claimed" ||
+        job.state === "running";
+      await ctx.db.patch(job._id, {
+        companyId: to.company._id,
+        ...(isActive
+          ? {
+              state: "canceled" as const,
+              blockCode: null,
+              diagnostic: "Canceled because the project moved to another company.",
+              claimHolderEnvironmentId: null,
+              claimExpiresAt: null,
+              nextRetryAt: null,
+              completedAt: now,
+            }
+          : {}),
+        updatedAt: now,
+      });
+    }
+    for (const watch of slackWatches) {
+      // A Slack integration belongs to its source company and cannot follow one project. Keep the
+      // channel watch there, but remove the cross-company project and cycle references.
+      await ctx.db.patch(watch._id, {
+        cloudProjectId: null,
+        cycleId: null,
+        revision: watch.revision + 1,
+        updatedAt: now,
+      });
+    }
+    await moveIssueAssets(ctx, to.company._id, issueAssets, now);
     await ctx.db.patch(project._id, {
       companyId: to.company._id,
       teamIds: [],
+      defaultWorkflowOwner: null,
       updatedAt: now,
     });
 
@@ -202,17 +467,38 @@ export const moveProjectToCompany = mutation({
       project,
       issues: ordered,
       milestones,
+      bindings,
+      commands,
+      agentThreads,
+      capturedEmails,
+      issueAssets,
     });
     await appendDestinationUpserts(ctx, to.company._id, actorRecord(to), {
       projectDocId: project._id,
       issueDocIds: ordered.map((issue) => issue._id),
       milestoneDocIds: milestones.map((milestone) => milestone._id),
+      bindingDocIds: bindings.map((binding) => binding._id),
+      commandDocIds: commands.map((command) => command._id),
+      agentThreadDocIds: agentThreads.map((thread) => thread._id),
+      capturedEmailDocIds: capturedEmails.map((email) => email._id),
+      issueAssets,
     });
 
     return {
       movedIssues: ordered.length,
       movedMilestones: milestones.length,
       movedBindings: bindings.length,
+      movedThreads: agentThreads.length,
+      movedEmails: capturedEmails.length,
+      movedIssueAssets: issueAssetCount(issueAssets),
+      canceledAutomationJobs: automationJobs.filter(
+        (job) =>
+          job.state === "pending" ||
+          job.state === "blocked" ||
+          job.state === "claimed" ||
+          job.state === "running",
+      ).length,
+      detachedSlackWatches: slackWatches.length,
       droppedLabels,
     };
   },
@@ -227,33 +513,60 @@ async function appendSourceTombstones(
     readonly project: Doc<"cloudProjects">;
     readonly issues: ReadonlyArray<Doc<"issues">>;
     readonly milestones: ReadonlyArray<Doc<"issueMilestones">>;
+    readonly bindings: ReadonlyArray<Doc<"environmentBindings">>;
+    readonly commands: ReadonlyArray<Doc<"environmentCommands">>;
+    readonly agentThreads: ReadonlyArray<Doc<"agentThreads">>;
+    readonly capturedEmails: ReadonlyArray<Doc<"capturedEmails">>;
+    readonly issueAssets: MovingIssueAssets;
   },
 ): Promise<void> {
+  const issueTeams = new Map(moved.issues.map((issue) => [issue.id, issue.teamIds] as const));
+  const teamsForIssue = (issueId: string) => issueTeams.get(issueId) ?? [];
+  const tombstone = (
+    entityKind: CompanyChange["entityKind"],
+    entityId: string,
+    versionDocId: CompanyChange["versionDocId"],
+    teamIds: readonly string[] = moved.project.teamIds,
+  ): CompanyChange => ({
+    entityKind,
+    entityId,
+    changeKind: "tombstone",
+    teamIds,
+    versionDocId,
+    payload: null,
+  });
+
   await appendCompanyChanges(ctx, {
     companyId,
     actor,
     changes: [
-      ...moved.issues.map((issue) => ({
-        entityKind: "issue" as const,
-        entityId: issue.id,
-        changeKind: "tombstone" as const,
-        versionDocId: issue._id,
-        payload: null,
-      })),
-      ...moved.milestones.map((milestone) => ({
-        entityKind: "issueMilestone" as const,
-        entityId: milestone.id,
-        changeKind: "tombstone" as const,
-        versionDocId: milestone._id,
-        payload: null,
-      })),
-      {
-        entityKind: "cloudProject" as const,
-        entityId: moved.project.id,
-        changeKind: "tombstone" as const,
-        versionDocId: moved.project._id,
-        payload: null,
-      },
+      ...moved.issueAssets.todos.map((row) =>
+        tombstone("issueTodo", row.id, row._id, teamsForIssue(row.issueId)),
+      ),
+      ...moved.issueAssets.comments.map((row) =>
+        tombstone("issueComment", row.id, row._id, teamsForIssue(row.issueId)),
+      ),
+      ...moved.issueAssets.attachments.map((row) =>
+        tombstone("issueAttachment", row.id, row._id, teamsForIssue(row.issueId)),
+      ),
+      ...moved.issueAssets.auditEvents.map((row) =>
+        tombstone("issueAuditEvent", row.id, row._id, teamsForIssue(row.issueId)),
+      ),
+      ...moved.issueAssets.threadLinks.map((row) =>
+        tombstone("issueThreadLink", row.id, row._id, teamsForIssue(row.issueId)),
+      ),
+      ...[...moved.issueAssets.relations, ...moved.issueAssets.detachedRelations].map((row) =>
+        tombstone("issueRelation", row.id, row._id, [
+          ...new Set([...teamsForIssue(row.issueId), ...teamsForIssue(row.relatedIssueId)]),
+        ]),
+      ),
+      ...moved.issues.map((issue) => tombstone("issue", issue.id, issue._id, issue.teamIds)),
+      ...moved.milestones.map((row) => tombstone("issueMilestone", row.id, row._id)),
+      ...moved.bindings.map((row) => tombstone("environmentBinding", row.id, row._id)),
+      ...moved.commands.map((row) => tombstone("environmentCommand", row.id, row._id)),
+      ...moved.agentThreads.map((row) => tombstone("agentThread", row.id, row._id)),
+      ...moved.capturedEmails.map((row) => tombstone("capturedEmail", row.id, row._id)),
+      tombstone("cloudProject", moved.project.id, moved.project._id),
     ],
   });
 }
@@ -272,12 +585,17 @@ async function appendDestinationUpserts(
     readonly projectDocId: Id<"cloudProjects">;
     readonly issueDocIds: ReadonlyArray<Id<"issues">>;
     readonly milestoneDocIds: ReadonlyArray<Id<"issueMilestones">>;
+    readonly bindingDocIds: ReadonlyArray<Id<"environmentBindings">>;
+    readonly commandDocIds: ReadonlyArray<Id<"environmentCommands">>;
+    readonly agentThreadDocIds: ReadonlyArray<Id<"agentThreads">>;
+    readonly capturedEmailDocIds: ReadonlyArray<Id<"capturedEmails">>;
+    readonly issueAssets: MovingIssueAssets;
   },
 ): Promise<void> {
   const company = await ctx.db.get(companyId);
   if (company === null) throw backendError("entity-not-found", "Destination company is missing.");
 
-  const changes = [];
+  const changes: CompanyChange[] = [];
   const project = await ctx.db.get(moved.projectDocId);
   if (project !== null) {
     changes.push({
@@ -308,6 +626,118 @@ async function appendDestinationUpserts(
       changeKind: "upsert" as const,
       versionDocId: issue._id,
       payload: encodeIssue(company, issue),
+    });
+  }
+
+  for (const docId of moved.bindingDocIds) {
+    const row = await ctx.db.get(docId);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "environmentBinding",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeEnvironmentBinding(ctx, row),
+    });
+  }
+  for (const docId of moved.commandDocIds) {
+    const row = await ctx.db.get(docId);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "environmentCommand",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeEnvironmentCommand(ctx, row),
+    });
+  }
+  for (const docId of moved.agentThreadDocIds) {
+    const row = await ctx.db.get(docId);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "agentThread",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeAgentThread(ctx, row),
+    });
+  }
+  for (const docId of moved.capturedEmailDocIds) {
+    const row = await ctx.db.get(docId);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "capturedEmail",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeCapturedEmail(ctx, row),
+    });
+  }
+
+  for (const before of moved.issueAssets.todos) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueTodo",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: encodeIssueTodo(company, row),
+    });
+  }
+  for (const before of moved.issueAssets.comments) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueComment",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: encodeIssueComment(company, row),
+    });
+  }
+  for (const before of moved.issueAssets.attachments) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueAttachment",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeIssueAttachment(ctx, company, row),
+    });
+  }
+  for (const before of moved.issueAssets.auditEvents) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueAuditEvent",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: encodeIssueAuditEvent(company, row),
+    });
+  }
+  for (const before of moved.issueAssets.threadLinks) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueThreadLink",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: await encodeIssueThreadLink(ctx, company, row),
+    });
+  }
+  for (const before of moved.issueAssets.relations) {
+    const row = await ctx.db.get(before._id);
+    if (row === null) continue;
+    changes.push({
+      entityKind: "issueRelation",
+      entityId: row.id,
+      changeKind: "upsert",
+      versionDocId: row._id,
+      payload: encodeIssueRelation(company, row),
     });
   }
 

@@ -18,6 +18,7 @@ const atoms = vi.hoisted(() => ({
   upsertKeybinding: Symbol("upsertKeybinding"),
   removeKeybinding: Symbol("removeKeybinding"),
   providers: Symbol("providers"),
+  companies: Symbol("companies"),
   keybindings: Symbol("keybindings"),
 }));
 
@@ -43,6 +44,14 @@ const threadState = vi.hoisted(() => ({
 }));
 const dialogState = vi.hoisted(() => ({ confirm: vi.fn() }));
 const cloudState = vi.hoisted(() => ({ deleteCompanyProject: vi.fn() }));
+const companyState = vi.hoisted(() => ({
+  companies: [] as Array<{
+    id: CompanyId;
+    name: string;
+    workspaceKind: "personal" | "organization";
+    issueKeyPrefix: string;
+  }>,
+}));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -62,8 +71,14 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: symbol) => (atom === atoms.providers ? [] : null),
+  useAtomValue: (atom: symbol) => {
+    if (atom === atoms.providers) return [];
+    if (atom === atoms.companies) return companyState.companies;
+    return null;
+  },
 }));
+
+vi.mock("../../cloud/activeCompany", () => ({ companyListAtom: atoms.companies }));
 
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children?: unknown }) => children,
@@ -137,8 +152,10 @@ vi.mock("../ui/toast", () => ({
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { MoveProjectWizard } from "../projects/MoveProjectWizard";
 import { Button } from "../ui/button";
 import { MenuItem } from "../ui/menu";
+import { Select } from "../ui/select";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { ProjectDetail } from "./ProjectSettingsPanel";
 
@@ -230,6 +247,7 @@ describe("Project settings favicon selection", () => {
     ];
     dialogState.confirm.mockReset().mockResolvedValue(true);
     cloudState.deleteCompanyProject.mockReset().mockResolvedValue(undefined);
+    companyState.companies = [];
   });
 
   it("fans the selected relative path out to every member and renders projected state", async () => {
@@ -367,6 +385,57 @@ describe("Project settings favicon selection", () => {
       [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
       [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
     ]);
+  });
+
+  it("opens the migration warning flow when the project company changes", () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    companyState.companies = [
+      {
+        id: companyA,
+        name: "Source Co",
+        workspaceKind: "organization",
+        issueKeyPrefix: "SRC",
+      },
+      {
+        id: companyB,
+        name: "Target Co",
+        workspaceKind: "organization",
+        issueKeyPrefix: "TGT",
+      },
+    ];
+    const group = makeGroup(null);
+    const renderCompanyProject = () => {
+      hooks.beginRender();
+      return ProjectDetail({
+        group,
+        workspaceProject: {
+          projectKey: group.projectKey,
+          displayName: group.displayName,
+          companyIds: [companyA],
+          group,
+          checkoutCount: group.memberProjects.length,
+          cloudProjectId: "cloud-pathway",
+        },
+        companyContext: { replica: null, environmentControl: {} as never },
+      }) as ReactElement<Record<string, unknown>>;
+    };
+
+    const companySelect = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === Select && element.props.value === companyA,
+    );
+    expect(companySelect).not.toBeNull();
+    (companySelect?.props.onValueChange as ((value: CompanyId) => void) | undefined)?.(companyB);
+
+    const wizard = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === MoveProjectWizard,
+    );
+    expect(wizard?.props).toMatchObject({
+      initialDestination: companyB,
+      open: true,
+    });
   });
 
   it("uses one retained picker action for pointer and Enter activation", async () => {

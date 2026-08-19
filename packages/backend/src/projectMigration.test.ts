@@ -33,6 +33,9 @@ const FROM_LABEL = "0198c0de-ffff-7fff-8fff-000000000001";
 const TO_LABEL = "0198c0de-ffff-7fff-8fff-000000000002";
 const MILESTONE_ID = "0198c0de-1111-7111-8111-000000000001";
 const CYCLE_ID = "0198c0de-2222-7222-8222-000000000001";
+const SLACK_INTEGRATION_ID = "0198c0de-9999-7999-8999-000000000001";
+const SLACK_WATCH_ID = "0198c0de-aaaa-7aaa-8aaa-000000000001";
+const AUTOMATION_JOB_ID = "0198c0de-abcd-7abc-8abc-000000000001";
 
 type Harness = ReturnType<typeof convexTest>;
 
@@ -153,7 +156,7 @@ async function seed(t: Harness) {
       });
     }
 
-    await ctx.db.insert("cloudProjects", {
+    const projectDocId = await ctx.db.insert("cloudProjects", {
       id: PROJECT_ID,
       companyId: fromDocId,
       name: "Moving Project",
@@ -166,6 +169,79 @@ async function seed(t: Harness) {
       updatedAt: NOW,
       deletedAt: null,
       version: 0,
+    });
+
+    await ctx.db.insert("environmentBindings", {
+      id: "0198c0de-4444-7444-8444-000000000001",
+      companyId: fromDocId,
+      cloudProjectId: projectDocId,
+      environmentId: "environment-1",
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/work/moving-project",
+      status: "active",
+      lastSeenAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      version: 0,
+    });
+    await ctx.db.insert("agentThreads", {
+      id: "environment-1:thread-1",
+      companyId: fromDocId,
+      environmentId: "environment-1",
+      cloudProjectId: projectDocId,
+      localProjectId: PROJECT_ID,
+      threadId: "thread-1",
+      shell: { id: "thread-1", projectId: PROJECT_ID },
+      updatedAt: NOW,
+      version: 0,
+    });
+    await ctx.db.insert("capturedEmails", {
+      id: "environment-1:message-1",
+      companyId: fromDocId,
+      environmentId: "environment-1",
+      cloudProjectId: projectDocId,
+      localProjectId: PROJECT_ID,
+      messageId: "message-1",
+      message: { subject: "Move me" },
+      tagIds: [FROM_LABEL],
+      updatedAt: NOW,
+      version: 0,
+    });
+    const slackIntegrationDocId = await ctx.db.insert("slackIntegrations", {
+      id: SLACK_INTEGRATION_ID,
+      companyId: fromDocId,
+      workspaceId: "workspace-1",
+      workspaceName: "Source Slack",
+      workspaceDomain: "source",
+      botUserId: "bot-user-1",
+      botId: "bot-1",
+      state: "active",
+      activatedAt: NOW,
+      credentialPresent: true,
+      preferredEnvironmentId: "environment-1",
+      backupEnvironmentIds: [],
+      configurationRevision: 1,
+      lastPollAt: NOW,
+      currentError: null,
+      blockedReason: null,
+      watchCount: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    await ctx.db.insert("slackChannelWatches", {
+      id: SLACK_WATCH_ID,
+      companyId: fromDocId,
+      integrationId: slackIntegrationDocId,
+      channelId: "channel-1",
+      channelName: "issues",
+      cloudProjectId: projectDocId,
+      cycleId: CYCLE_ID,
+      autoInvestigate: true,
+      autoAssign: true,
+      trigger: { kind: "mention" },
+      revision: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
     });
 
     await ctx.db.insert("issueMilestones", {
@@ -215,10 +291,86 @@ async function seed(t: Harness) {
       });
 
     const first = await issue("0198c0de-3333-7333-8333-000000000001", 1, FROM_TODO);
-    await issue("0198c0de-3333-7333-8333-000000000002", 2, FROM_DONE, {
+    const second = await issue("0198c0de-3333-7333-8333-000000000002", 2, FROM_DONE, {
       parentId: "0198c0de-3333-7333-8333-000000000001",
     });
-    return { fromDocId, toDocId, first };
+    await ctx.db.insert("issueAutomationJobs", {
+      id: AUTOMATION_JOB_ID,
+      companyId: fromDocId,
+      issueId: "0198c0de-3333-7333-8333-000000000001",
+      kind: "automatic-assignment",
+      triggerKey: "project-move-test",
+      settingsRevision: 1,
+      modelSelection: null,
+      ruleId: null,
+      ruleSnapshot: null,
+      targetKind: "project",
+      cloudProjectId: projectDocId,
+      threadId: null,
+      targetEnvironmentId: "environment-1",
+      requiredProviderInstanceId: null,
+      requiredModel: null,
+      state: "running",
+      blockCode: null,
+      diagnostic: null,
+      claimHolderEnvironmentId: "environment-1",
+      claimGeneration: 1,
+      claimExpiresAt: NOW + 60_000,
+      attempts: 1,
+      nextRetryAt: null,
+      result: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      completedAt: null,
+    });
+    await ctx.db.insert("issueTodos", {
+      id: "0198c0de-5555-7555-8555-000000000001",
+      companyId: fromDocId,
+      issueId: "0198c0de-3333-7333-8333-000000000001",
+      text: "Move the checklist",
+      done: false,
+      sortOrder: "a",
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      version: 0,
+    });
+    await ctx.db.insert("issueComments", {
+      id: "0198c0de-6666-7666-8666-000000000001",
+      companyId: fromDocId,
+      issueId: "0198c0de-3333-7333-8333-000000000001",
+      body: "Move the discussion",
+      author: { kind: "member", membershipId: `${FROM_COMPANY}-m` },
+      attachmentIds: [],
+      mentions: [],
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      version: 0,
+    });
+    await ctx.db.insert("issueThreadLinks", {
+      id: "0198c0de-7777-7777-8777-000000000001",
+      companyId: fromDocId,
+      issueId: "0198c0de-3333-7333-8333-000000000001",
+      environmentId: "environment-1",
+      threadId: "thread-1",
+      origin: "start-work",
+      createdByMembershipId: null,
+      createdAt: NOW,
+      deletedAt: null,
+      version: 0,
+    });
+    await ctx.db.insert("issueRelations", {
+      id: "0198c0de-8888-7888-8888-000000000001",
+      companyId: fromDocId,
+      issueId: "0198c0de-3333-7333-8333-000000000001",
+      relatedIssueId: "0198c0de-3333-7333-8333-000000000002",
+      kind: "relates",
+      createdAt: NOW,
+      deletedAt: null,
+      version: 0,
+    });
+    return { fromDocId, toDocId, first, second };
   });
 }
 
@@ -244,7 +396,17 @@ describe("projectMigration.moveProjectToCompany", () => {
         ...FULL_MAPPING,
       },
     );
-    expect(result).toMatchObject({ movedIssues: 2, movedMilestones: 1, droppedLabels: 0 });
+    expect(result).toMatchObject({
+      movedIssues: 2,
+      movedMilestones: 1,
+      movedBindings: 1,
+      movedThreads: 1,
+      movedEmails: 1,
+      movedIssueAssets: 4,
+      canceledAutomationJobs: 1,
+      detachedSlackWatches: 1,
+      droppedLabels: 0,
+    });
 
     await t.run(async (ctx) => {
       const to = await ctx.db
@@ -264,6 +426,28 @@ describe("projectMigration.moveProjectToCompany", () => {
       expect(milestone?.companyId).toBe(to?._id);
       const project = await ctx.db.query("cloudProjects").first();
       expect(project?.companyId).toBe(to?._id);
+      expect((await ctx.db.query("environmentBindings").first())?.companyId).toBe(to?._id);
+      expect((await ctx.db.query("agentThreads").first())?.companyId).toBe(to?._id);
+      expect(await ctx.db.query("capturedEmails").first()).toMatchObject({
+        companyId: to?._id,
+        tagIds: [],
+      });
+      expect((await ctx.db.query("issueTodos").first())?.companyId).toBe(to?._id);
+      expect((await ctx.db.query("issueComments").first())?.companyId).toBe(to?._id);
+      expect((await ctx.db.query("issueThreadLinks").first())?.companyId).toBe(to?._id);
+      expect((await ctx.db.query("issueRelations").first())?.companyId).toBe(to?._id);
+      expect(await ctx.db.query("issueAutomationJobs").first()).toMatchObject({
+        companyId: to?._id,
+        state: "canceled",
+        completedAt: expect.any(Number),
+      });
+      const slackWatch = await ctx.db.query("slackChannelWatches").first();
+      expect(slackWatch?.companyId).not.toBe(to?._id);
+      expect(slackWatch).toMatchObject({
+        cloudProjectId: null,
+        cycleId: null,
+        revision: 2,
+      });
     });
   });
 
