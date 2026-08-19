@@ -56,8 +56,14 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
                 LIMIT 1
               `;
         const runOrdinal = suppliedRunOrdinal ?? runRows[0]?.ordinal ?? null;
+        // Run items live in their run's band so a run's own items stay together
+        // even when they arrive out of order. Run-less items (source-control
+        // markers, subagent-thread items) have no band of their own: confining
+        // them to [0, 999_999] filed them ahead of every run, which sank a push
+        // marker recorded after a turn to the top of the timeline. Append them
+        // after everything the thread already holds instead.
         const lowerBound = runOrdinal === null ? 0 : runOrdinal * 1_000_000;
-        const upperBound = runOrdinal === null ? 999_999 : lowerBound + 999_999;
+        const upperBound = runOrdinal === null ? Number.MAX_SAFE_INTEGER : lowerBound + 999_999;
         yield* sql`
           INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
           SELECT
