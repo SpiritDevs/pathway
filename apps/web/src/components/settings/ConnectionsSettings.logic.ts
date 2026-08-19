@@ -5,8 +5,6 @@ import type {
   EnvironmentId,
 } from "@spiritdevs/contracts";
 
-const ACTIVE_ENVIRONMENT_CONNECTION_PHASES = new Set(["connected", "connecting", "reconnecting"]);
-
 export function partitionEnvironmentsByConnection<
   T extends { readonly connection: { readonly phase: string } },
 >(
@@ -19,10 +17,7 @@ export function partitionEnvironmentsByConnection<
   const disconnected: Array<T> = [];
 
   for (const environment of environments) {
-    (ACTIVE_ENVIRONMENT_CONNECTION_PHASES.has(environment.connection.phase)
-      ? connected
-      : disconnected
-    ).push(environment);
+    (environment.connection.phase === "connected" ? connected : disconnected).push(environment);
   }
 
   return { connected, disconnected };

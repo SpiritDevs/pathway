@@ -87,7 +87,6 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { AnimatedHeight } from "../AnimatedHeight";
 import { Textarea } from "../ui/textarea";
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "../../pairingUrl";
@@ -141,6 +140,44 @@ import { relayEnvironmentDiscovery } from "~/state/relay";
 
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
+
+// #region DEBUG environment connection lifecycle
+const ENVIRONMENT_DEBUG_STORAGE_KEY = "pathway:debug:environment-operations";
+
+function environmentDebugError(error: unknown) {
+  if (!(error instanceof Error)) return { value: String(error) };
+  const tagged = error as Error & { readonly _tag?: string; readonly traceId?: string };
+  return {
+    name: error.name,
+    message: error.message,
+    tag: tagged._tag ?? null,
+    traceId: tagged.traceId ?? null,
+  };
+}
+
+function recordEnvironmentDebug(event: string, data: Readonly<Record<string, unknown>>): void {
+  const record = { at: new Date().toISOString(), event, data };
+  console.info("[environment-debug]", record);
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ENVIRONMENT_DEBUG_STORAGE_KEY) ?? "[]");
+    const current = Array.isArray(parsed) ? parsed : [];
+    localStorage.setItem(
+      ENVIRONMENT_DEBUG_STORAGE_KEY,
+      JSON.stringify([...current.slice(-99), record]),
+    );
+  } catch {
+    // Diagnostics must never interfere with environment actions.
+  }
+}
+
+function readEnvironmentDebug(): string {
+  try {
+    return localStorage.getItem(ENVIRONMENT_DEBUG_STORAGE_KEY) ?? "[]";
+  } catch {
+    return "[]";
+  }
+}
+// #endregion DEBUG
 
 // Sentinels for the consolidated WSL backend picker. The colon is
 // rejected by DISTRO_NAME_PATTERN (validated on the desktop side) so
@@ -1362,6 +1399,7 @@ type SavedBackendListRowProps = {
   removingEnvironmentId: EnvironmentId | null;
   disableActions?: boolean;
   onConnect: (environmentId: EnvironmentId) => void;
+  onDisconnect: (environmentId: EnvironmentId) => void;
   onRemove: (environmentId: EnvironmentId) => void;
 };
 
@@ -1370,6 +1408,7 @@ function SavedBackendListRow({
   removingEnvironmentId,
   disableActions = false,
   onConnect,
+  onDisconnect,
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
@@ -1422,6 +1461,7 @@ function SavedBackendListRow({
       ? environment.entry.profile.value.target
       : null;
   const metadataBits = [
+    environment.entry.target._tag === "PrimaryConnectionTarget" ? "This device" : null,
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "Pathway Connect" : null,
   ].filter((value): value is string => value !== null);
@@ -1499,7 +1539,11 @@ function SavedBackendListRow({
               label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
             />
           ) : null}
-          {isWslEnvironment ? (
+          {environment.entry.target._tag === "PrimaryConnectionTarget" ? (
+            <Button size="xs" variant="outline" disabled>
+              Current
+            </Button>
+          ) : isWslEnvironment ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1529,7 +1573,7 @@ function SavedBackendListRow({
                 variant="outline"
                 disabled={disableActions || removingEnvironmentId === environmentId}
                 onClick={() =>
-                  void (isConnected ? onRemove(environmentId) : onConnect(environmentId))
+                  void (isConnected ? onDisconnect(environmentId) : onConnect(environmentId))
                 }
               >
                 {isConnected
@@ -1588,22 +1632,6 @@ const DesktopSshHostRow = memo(function DesktopSshHostRow({
   );
 });
 
-function EmptySavedEnvironments() {
-  return (
-    <Empty className="min-h-52">
-      <EmptyMedia variant="icon">
-        <ChevronsLeftRightEllipsisIcon />
-      </EmptyMedia>
-      <EmptyHeader>
-        <EmptyTitle>No other environments</EmptyTitle>
-        <EmptyDescription>
-          Click “Add environment” to pair an ad-hoc remote or SSH environment.
-        </EmptyDescription>
-      </EmptyHeader>
-    </Empty>
-  );
-}
-
 export interface EnvironmentSectionSlot {
   readonly addEnvironmentAction: ReactNode;
   readonly savedEnvironmentRows: ReactNode;
@@ -1627,6 +1655,9 @@ export function EnvironmentConnectionSettings({
   });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const disconnectEnvironment = useAtomCommand(environmentCatalog.disconnectNow, {
+    reportFailure: false,
+  });
   const unlinkAccountEnvironment = useAtomCommand(unlinkRelayEnvironment, {
     reportFailure: false,
   });
@@ -1644,15 +1675,8 @@ export function EnvironmentConnectionSettings({
       : null;
   const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironments = useMemo(
-    () =>
-      environments
-        .filter(
-          (environment) =>
-            environment.entry.target._tag !== "PrimaryConnectionTarget" &&
-            environment.environmentId !== primaryEnvironmentId,
-        )
-        .toSorted((left, right) => left.label.localeCompare(right.label)),
-    [environments, primaryEnvironmentId],
+    () => environments.toSorted((left, right) => left.label.localeCompare(right.label)),
+    [environments],
   );
   const visibleSavedEnvironments = useMemo(
     () =>
@@ -1737,7 +1761,8 @@ export function EnvironmentConnectionSettings({
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
-  const [disconnectedEnvironmentsOpen, setDisconnectedEnvironmentsOpen] = useState(false);
+  const [connectedEnvironmentsOpen, setConnectedEnvironmentsOpen] = useState(true);
+  const [disconnectedEnvironmentsOpen, setDisconnectedEnvironmentsOpen] = useState(true);
   const [removeAllDisconnectedDialogOpen, setRemoveAllDisconnectedDialogOpen] = useState(false);
   const [isRemovingDisconnectedEnvironments, setIsRemovingDisconnectedEnvironments] =
     useState(false);
@@ -2047,7 +2072,22 @@ export function EnvironmentConnectionSettings({
   const handleConnectSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
       setSavedBackendError(null);
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === environmentId,
+      );
+      recordEnvironmentDebug("retry-started", {
+        environmentId,
+        phase: environment?.connection.phase ?? "missing",
+        relayAccountRecordPresent: relayDiscovery.environments.has(environmentId),
+      });
       const result = await retryEnvironment(environmentId);
+      recordEnvironmentDebug("retry-finished", {
+        environmentId,
+        result: result._tag,
+        ...(result._tag === "Failure"
+          ? { error: environmentDebugError(squashAtomCommandFailure(result)) }
+          : {}),
+      });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         const message = error instanceof Error ? error.message : "Failed to connect backend.";
@@ -2061,17 +2101,38 @@ export function EnvironmentConnectionSettings({
         );
       }
     },
-    [retryEnvironment],
+    [environments, relayDiscovery.environments, retryEnvironment],
   );
 
   const unlinkAccountOwnedEnvironment = useCallback(
     async (environmentId: EnvironmentId) => {
       if (!relayDiscovery.environments.has(environmentId)) return;
-      const clerkToken = await getToken();
+      recordEnvironmentDebug("relay-unlink-started", { environmentId });
+      let clerkToken: string | null;
+      try {
+        clerkToken = await getToken();
+      } catch (error) {
+        recordEnvironmentDebug("relay-token-failed", {
+          environmentId,
+          error: environmentDebugError(error),
+        });
+        throw error;
+      }
+      recordEnvironmentDebug("relay-token-read", {
+        environmentId,
+        authenticated: clerkToken !== null,
+      });
       if (!clerkToken) {
         throw new Error("Sign in to remove this environment from Pathway Connect.");
       }
       const result = await unlinkAccountEnvironment({ clerkToken, environmentId });
+      recordEnvironmentDebug("relay-unlink-finished", {
+        environmentId,
+        result: result._tag,
+        ...(result._tag === "Failure"
+          ? { error: environmentDebugError(squashAtomCommandFailure(result)) }
+          : {}),
+      });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         throw squashAtomCommandFailure(result);
       }
@@ -2079,10 +2140,41 @@ export function EnvironmentConnectionSettings({
     [getToken, relayDiscovery.environments, unlinkAccountEnvironment],
   );
 
+  const handleDisconnectSavedBackend = useCallback(
+    async (environmentId: EnvironmentId) => {
+      recordEnvironmentDebug("disconnect-started", { environmentId });
+      const result = await disconnectEnvironment(environmentId);
+      recordEnvironmentDebug("disconnect-finished", {
+        environmentId,
+        result: result._tag,
+        ...(result._tag === "Failure"
+          ? { error: environmentDebugError(squashAtomCommandFailure(result)) }
+          : {}),
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        const message = error instanceof Error ? error.message : "Failed to disconnect backend.";
+        setSavedBackendError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not disconnect backend",
+            description: message,
+          }),
+        );
+      }
+    },
+    [disconnectEnvironment],
+  );
+
   const handleRemoveSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
+      recordEnvironmentDebug("remove-started", {
+        environmentId,
+        relayAccountRecordPresent: relayDiscovery.environments.has(environmentId),
+      });
       try {
         await unlinkAccountOwnedEnvironment(environmentId);
       } catch (error) {
@@ -2099,6 +2191,13 @@ export function EnvironmentConnectionSettings({
         return;
       }
       const result = await removeEnvironment(environmentId);
+      recordEnvironmentDebug("local-remove-finished", {
+        environmentId,
+        result: result._tag,
+        ...(result._tag === "Failure"
+          ? { error: environmentDebugError(squashAtomCommandFailure(result)) }
+          : {}),
+      });
       setRemovingSavedEnvironmentId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -2113,7 +2212,14 @@ export function EnvironmentConnectionSettings({
         );
         return;
       }
-      void refreshRelayEnvironments();
+      const refreshResult = await refreshRelayEnvironments();
+      recordEnvironmentDebug("relay-refresh-finished", {
+        environmentId,
+        result: refreshResult._tag,
+        ...(refreshResult._tag === "Failure"
+          ? { error: environmentDebugError(squashAtomCommandFailure(refreshResult)) }
+          : {}),
+      });
     },
     [refreshRelayEnvironments, removeEnvironment, unlinkAccountOwnedEnvironment],
   );
@@ -2838,6 +2944,7 @@ export function EnvironmentConnectionSettings({
       removingEnvironmentId={removingSavedEnvironmentId}
       disableActions={isRemovingDisconnectedEnvironments}
       onConnect={handleConnectSavedBackend}
+      onDisconnect={handleDisconnectSavedBackend}
       onRemove={handleRemoveSavedBackend}
     />
   );
@@ -2845,102 +2952,117 @@ export function EnvironmentConnectionSettings({
     savedEnvironmentsByConnection.connected.map(renderSavedEnvironmentRow);
   const disconnectedEnvironmentRows =
     savedEnvironmentsByConnection.disconnected.map(renderSavedEnvironmentRow);
+  const connectedEnvironmentCount = savedEnvironmentsByConnection.connected.length;
   const disconnectedEnvironmentCount = savedEnvironmentsByConnection.disconnected.length;
-  const savedEnvironmentRows =
-    visibleSavedEnvironments.length === 0 ? null : (
-      <div className="space-y-1">
-        <div className="flex min-h-7 items-center gap-2 px-3 pt-1 text-xs font-medium text-muted-foreground sm:px-4">
+  const savedEnvironmentRows = (
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-card">
+      <Collapsible open={connectedEnvironmentsOpen} onOpenChange={setConnectedEnvironmentsOpen}>
+        <CollapsibleTrigger className="group flex min-h-10 w-full items-center gap-2 px-3 text-left text-xs font-medium text-muted-foreground outline-hidden ring-inset ring-ring hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 sm:px-4">
+          <ChevronRightIcon
+            aria-hidden
+            className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+          />
           <span>Connected</span>
-          <span className="tabular-nums text-muted-foreground/60">
-            {savedEnvironmentsByConnection.connected.length}
-          </span>
-        </div>
-        {connectedEnvironmentRows.length > 0 ? (
-          connectedEnvironmentRows
-        ) : (
-          <p className="px-3 py-3 text-xs text-muted-foreground/70 sm:px-4">
-            No other environments are connected.
-          </p>
-        )}
-        {disconnectedEnvironmentCount > 0 ? (
-          <Collapsible
-            open={disconnectedEnvironmentsOpen}
-            onOpenChange={setDisconnectedEnvironmentsOpen}
-            className="pt-1"
-          >
-            <div className="flex min-h-9 items-center justify-between gap-3 px-3 sm:px-4">
-              <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs font-medium text-muted-foreground outline-hidden ring-ring hover:text-foreground focus-visible:ring-2">
-                <ChevronRightIcon
-                  aria-hidden
-                  className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
-                />
-                <span>Disconnected</span>
-                <span className="tabular-nums text-muted-foreground/60">
-                  {disconnectedEnvironmentCount}
-                </span>
-              </CollapsibleTrigger>
-              {removableDisconnectedEnvironments.length > 0 ? (
-                <AlertDialog
-                  open={removeAllDisconnectedDialogOpen}
-                  onOpenChange={setRemoveAllDisconnectedDialogOpen}
-                >
-                  <AlertDialogTrigger
+          <span className="tabular-nums text-muted-foreground/60">{connectedEnvironmentCount}</span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div className="border-t border-border/70">
+            {connectedEnvironmentRows.length > 0 ? (
+              connectedEnvironmentRows
+            ) : (
+              <p className="px-3 py-4 text-xs text-muted-foreground/70 sm:px-4">
+                No environments are connected.
+              </p>
+            )}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+
+      <Collapsible
+        open={disconnectedEnvironmentsOpen}
+        onOpenChange={setDisconnectedEnvironmentsOpen}
+        className="border-t border-border/70"
+      >
+        <div className="flex min-h-10 items-center justify-between gap-3 px-3 sm:px-4">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1 text-left text-xs font-medium text-muted-foreground outline-hidden ring-ring hover:text-foreground focus-visible:ring-2">
+            <ChevronRightIcon
+              aria-hidden
+              className="size-3.5 shrink-0 transition-transform duration-200 group-data-panel-open:rotate-90 motion-reduce:transition-none"
+            />
+            <span>Disconnected</span>
+            <span className="tabular-nums text-muted-foreground/60">
+              {disconnectedEnvironmentCount}
+            </span>
+          </CollapsibleTrigger>
+          {removableDisconnectedEnvironments.length > 0 ? (
+            <AlertDialog
+              open={removeAllDisconnectedDialogOpen}
+              onOpenChange={setRemoveAllDisconnectedDialogOpen}
+            >
+              <AlertDialogTrigger
+                render={
+                  <Button
+                    size="xs"
+                    variant="destructive-outline"
+                    disabled={isRemovingDisconnectedEnvironments}
+                  />
+                }
+              >
+                Remove all
+              </AlertDialogTrigger>
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Remove disconnected environments?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This removes {removableDisconnectedEnvironments.length} saved{" "}
+                    {removableDisconnectedEnvironments.length === 1
+                      ? "environment"
+                      : "environments"}{" "}
+                    from this client. Their servers and data will not be deleted.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose
+                    disabled={isRemovingDisconnectedEnvironments}
                     render={
-                      <Button
-                        size="xs"
-                        variant="destructive-outline"
-                        disabled={isRemovingDisconnectedEnvironments}
-                      />
+                      <Button variant="outline" disabled={isRemovingDisconnectedEnvironments} />
                     }
                   >
-                    Remove all
-                  </AlertDialogTrigger>
-                  <AlertDialogPopup>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Remove disconnected environments?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        This removes {removableDisconnectedEnvironments.length} saved{" "}
-                        {removableDisconnectedEnvironments.length === 1
-                          ? "environment"
-                          : "environments"}{" "}
-                        from this client. Their servers and data will not be deleted.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogClose
-                        disabled={isRemovingDisconnectedEnvironments}
-                        render={
-                          <Button variant="outline" disabled={isRemovingDisconnectedEnvironments} />
-                        }
-                      >
-                        Cancel
-                      </AlertDialogClose>
-                      <Button
-                        variant="destructive"
-                        disabled={isRemovingDisconnectedEnvironments}
-                        onClick={() => void handleRemoveAllDisconnectedEnvironments()}
-                      >
-                        {isRemovingDisconnectedEnvironments ? (
-                          <>
-                            <Spinner className="size-3.5" />
-                            Removing…
-                          </>
-                        ) : (
-                          "Remove all"
-                        )}
-                      </Button>
-                    </AlertDialogFooter>
-                  </AlertDialogPopup>
-                </AlertDialog>
-              ) : null}
-            </div>
-            <CollapsiblePanel>
-              <div className="space-y-1">{disconnectedEnvironmentRows}</div>
-            </CollapsiblePanel>
-          </Collapsible>
-        ) : null}
-      </div>
-    );
+                    Cancel
+                  </AlertDialogClose>
+                  <Button
+                    variant="destructive"
+                    disabled={isRemovingDisconnectedEnvironments}
+                    onClick={() => void handleRemoveAllDisconnectedEnvironments()}
+                  >
+                    {isRemovingDisconnectedEnvironments ? (
+                      <>
+                        <Spinner className="size-3.5" />
+                        Removing…
+                      </>
+                    ) : (
+                      "Remove all"
+                    )}
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
+          ) : null}
+        </div>
+        <CollapsiblePanel>
+          <div className="border-t border-border/70">
+            {disconnectedEnvironmentRows.length > 0 ? (
+              disconnectedEnvironmentRows
+            ) : (
+              <p className="px-3 py-4 text-xs text-muted-foreground/70 sm:px-4">
+                No environments are disconnected.
+              </p>
+            )}
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
+  );
   const environmentSection = renderEnvironmentSection ? (
     renderEnvironmentSection({ addEnvironmentAction, savedEnvironmentRows })
   ) : (
@@ -2949,7 +3071,21 @@ export function EnvironmentConnectionSettings({
       title="Environments"
       headerAction={addEnvironmentAction}
     >
-      {visibleSavedEnvironments.length === 0 ? <EmptySavedEnvironments /> : savedEnvironmentRows}
+      {savedBackendError ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <span className="min-w-0 truncate">{savedBackendError}</span>
+          <Button
+            size="xs"
+            variant="destructive-outline"
+            onClick={() => {
+              void navigator.clipboard?.writeText(readEnvironmentDebug());
+            }}
+          >
+            Copy diagnostics
+          </Button>
+        </div>
+      ) : null}
+      {savedEnvironmentRows}
     </SettingsSection>
   );
 

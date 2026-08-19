@@ -90,6 +90,7 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly disconnectNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly state: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<SupervisorConnectionState, EnvironmentNotRegisteredError>;
@@ -632,6 +633,12 @@ export const make = Effect.gen(function* () {
       Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
+  const disconnectNow = (environmentId: EnvironmentId) =>
+    acquireSupervisor(environmentId).pipe(
+      Effect.flatMap((supervisor) => supervisor.disconnect),
+      Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
+      Effect.withSpan("EnvironmentRegistry.disconnectNow"),
+    );
   const state = Effect.fn("EnvironmentRegistry.state")(function* (environmentId: EnvironmentId) {
     const supervisor = yield* acquireSupervisor(environmentId);
     return yield* SubscriptionRef.get(supervisor.state);
@@ -671,6 +678,7 @@ export const make = Effect.gen(function* () {
     remove,
     removeRelayEnvironments,
     retryNow,
+    disconnectNow,
     state,
     stateChanges,
     run,

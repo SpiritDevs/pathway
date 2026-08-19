@@ -663,6 +663,34 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect("disconnects a registered environment without removing it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([RELAY_TARGET]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.start;
+        yield* awaitConnectionState(
+          registry,
+          RELAY_TARGET.environmentId,
+          (state) => state.phase === "connected",
+        );
+
+        yield* registry.disconnectNow(RELAY_TARGET.environmentId);
+        yield* awaitConnectionState(
+          registry,
+          RELAY_TARGET.environmentId,
+          (state) => state.phase === "available",
+        );
+
+        expect((yield* Ref.get(harness.storedTargets)).has(RELAY_TARGET.environmentId)).toBe(true);
+        expect((yield* SubscriptionRef.get(registry.entries)).has(RELAY_TARGET.environmentId)).toBe(
+          true,
+        );
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("treats removal of an already removed environment as successful", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([RELAY_TARGET]);

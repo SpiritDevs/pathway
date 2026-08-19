@@ -12,7 +12,7 @@ import {
 describe("partitionEnvironmentsByConnection", () => {
   const environment = (label: string, phase: string) => ({ label, connection: { phase } });
 
-  it("keeps connected and in-flight environments visible above the disconnected fold", () => {
+  it("only classifies live environments as connected", () => {
     const result = partitionEnvironmentsByConnection([
       environment("Connected", "connected"),
       environment("Connecting", "connecting"),
@@ -21,12 +21,13 @@ describe("partitionEnvironmentsByConnection", () => {
       environment("Failed", "error"),
     ]);
 
-    expect(result.connected.map(({ label }) => label)).toEqual([
-      "Connected",
+    expect(result.connected.map(({ label }) => label)).toEqual(["Connected"]);
+    expect(result.disconnected.map(({ label }) => label)).toEqual([
       "Connecting",
       "Reconnecting",
+      "Idle",
+      "Failed",
     ]);
-    expect(result.disconnected.map(({ label }) => label)).toEqual(["Idle", "Failed"]);
   });
 
   it("returns empty groups when the catalog is empty", () => {
