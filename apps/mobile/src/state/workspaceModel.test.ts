@@ -41,6 +41,7 @@ function environment(
       phase,
       error: phase === "error" ? "Connection failed." : null,
       traceId: phase === "error" ? "trace-1" : null,
+      severity: phase === "error" ? "error" : "quiet",
     },
     serverConfig: null,
   };

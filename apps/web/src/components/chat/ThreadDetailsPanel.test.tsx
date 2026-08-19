@@ -164,7 +164,7 @@ describe("ThreadDetailsPanel", () => {
     const props: ThreadDetailsPanelProps = {
       mode: "popover",
       environmentId,
-      environmentConnection: { phase: "connected", error: null, traceId: null },
+      environmentConnection: { phase: "connected", error: null, traceId: null, severity: "quiet" },
       threadId: "thread:thread-details" as ThreadId,
       draftId: "draft:new-thread" as NonNullable<ThreadDetailsPanelProps["draftId"]>,
       activeProjectName: "Pathway",

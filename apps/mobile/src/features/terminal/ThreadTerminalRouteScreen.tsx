@@ -1212,6 +1212,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 phase: "available",
                 error: null,
                 traceId: null,
+                severity: "quiet",
               }
             }
             resourceName="terminal"

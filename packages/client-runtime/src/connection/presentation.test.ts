@@ -5,11 +5,13 @@ import * as Option from "effect/Option";
 import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import {
   BearerConnectionTarget,
+  ConnectionBlockedError,
   ConnectionTransientError,
   type SupervisorConnectionState,
 } from "./model.ts";
 import {
   connectionCatalogDisplayUrl,
+  connectionNoticeText,
   connectionPhaseMessage,
   connectionStatusText,
   connectionStatusTitle,
@@ -60,6 +62,7 @@ describe("connection presentation", () => {
       phase: "connecting",
       error: null,
       traceId: null,
+      severity: "quiet",
     });
     expect(
       presentConnectionState(
@@ -77,6 +80,7 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Socket closed.",
       traceId: "trace-previous",
+      severity: "notice",
     });
     expect(
       presentConnectionState(
@@ -95,6 +99,7 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Disconnected.",
       traceId: "trace-1",
+      severity: "notice",
     });
   });
 
@@ -116,6 +121,7 @@ describe("connection presentation", () => {
       phase: "reconnecting",
       error: "Relay connection timed out.",
       traceId: "trace-retry",
+      severity: "notice",
     });
   });
 
@@ -135,6 +141,80 @@ describe("connection presentation", () => {
     expect(connectionStatusTitle(connection)).toBe("Failed to connect. Reconnecting...");
   });
 
+  it("keeps an unreachable peer a notice however long it retries", () => {
+    const unreachable = presentConnectionState(
+      supervisorState({
+        phase: "backoff",
+        attempt: 27,
+        retryAt: 1,
+        lastFailure: new ConnectionTransientError({
+          reason: "relay-unavailable",
+          detail: "Relay environment endpoint is unavailable: endpoint_request_failed",
+          traceId: "trace-gone",
+        }),
+      }),
+    );
+    expect(unreachable.severity).toBe("notice");
+    expect(connectionStatusTitle(unreachable)).toBe("Disconnected");
+    expect(connectionStatusText(unreachable)).toBe(
+      "Disconnected. Reason: Relay environment endpoint is unavailable: endpoint_request_failed",
+    );
+    expect(connectionNoticeText(unreachable)).toBe(
+      "Disconnected. Pathway will reconnect when it is reachable again.",
+    );
+    // The reason is still recoverable for debugging, just not shouted in the row.
+    expect(unreachable.error).toBe(
+      "Relay environment endpoint is unavailable: endpoint_request_failed",
+    );
+    expect(unreachable.traceId).toBe("trace-gone");
+  });
+
+  it("escalates a non-unreachable transient failure once the grace attempts run out", () => {
+    const failure = new ConnectionTransientError({
+      reason: "transport",
+      detail: "Socket closed.",
+      traceId: "trace-flaky",
+    });
+    expect(
+      presentConnectionState(
+        supervisorState({ phase: "backoff", attempt: 3, lastFailure: failure }),
+      ).severity,
+    ).toBe("notice");
+    expect(
+      presentConnectionState(
+        supervisorState({ phase: "backoff", attempt: 9, lastFailure: failure }),
+      ).severity,
+    ).toBe("error");
+  });
+
+  it("reports a blocked connection as an error immediately", () => {
+    const blocked = presentConnectionState(
+      supervisorState({
+        phase: "blocked",
+        attempt: 1,
+        lastFailure: new ConnectionBlockedError({
+          reason: "authentication",
+          detail: "Pairing token was rejected.",
+        }),
+      }),
+    );
+    expect(blocked.severity).toBe("error");
+    expect(connectionNoticeText(blocked)).toBe(
+      "Connection failed. Reason: Pairing token was rejected.",
+    );
+  });
+
+  it("says nothing at all while a connection is healthy or first attempting", () => {
+    expect(
+      connectionNoticeText(presentConnectionState(supervisorState({ phase: "connected" }))),
+    ).toBe(null);
+    expect(
+      connectionNoticeText(
+        presentConnectionState(supervisorState({ phase: "connecting", attempt: 1 })),
+      ),
+    ).toBe(null);
+  });
+
   it("presents the supervisor's offline state without consulting shell state", () => {
     expect(
       presentEnvironmentConnection(
@@ -148,6 +228,7 @@ describe("connection presentation", () => {
       phase: "offline",
       error: null,
       traceId: null,
+      severity: "quiet",
     });
   });
 
@@ -164,6 +245,7 @@ describe("connection presentation", () => {
       phase: "connected",
       error: null,
       traceId: null,
+      severity: "quiet",
     });
   });
 
@@ -182,6 +264,7 @@ describe("connection presentation", () => {
       phase: "available",
       error: null,
       traceId: null,
+      severity: "quiet",
     });
   });
 });

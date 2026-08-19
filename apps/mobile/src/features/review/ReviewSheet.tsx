@@ -772,6 +772,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
                   phase: "available",
                   error: null,
                   traceId: null,
+                  severity: "quiet",
                 }
               }
               resourceName="review"

@@ -27,24 +27,38 @@ type ConnectionStatusDotProps = {
   tooltipText?: string | null;
   dotClassName: string;
   pingClassName?: string | null;
+  /**
+   * `ping` is the urgent burst used while an attempt is in flight. `breathe` is
+   * the slow swell an unreachable environment gets — still alive, still
+   * retrying, but not asking for attention.
+   */
+  halo?: "ping" | "breathe";
 };
 
 export function ConnectionStatusDot({
   tooltipText,
   dotClassName,
   pingClassName,
+  halo = "ping",
 }: ConnectionStatusDotProps) {
   const dotContent = (
     <>
       {pingClassName ? (
         <span
           className={cn(
-            "absolute inline-flex h-full w-full animate-status-ping rounded-full",
+            "absolute inline-flex h-full w-full rounded-full",
+            halo === "breathe" ? "animate-status-breathe" : "animate-status-ping",
             pingClassName,
           )}
         />
       ) : null}
-      <span className={cn("relative inline-flex size-2 rounded-full", dotClassName)} />
+      <span
+        className={cn(
+          "relative inline-flex size-2 rounded-full",
+          halo === "breathe" ? "animate-status-dim" : null,
+          dotClassName,
+        )}
+      />
     </>
   );
 

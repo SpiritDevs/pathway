@@ -1,10 +1,15 @@
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
+  CopyIcon,
+  MoreVerticalIcon,
+  PlugIcon,
+  PlugZapIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
   TerminalIcon,
+  Trash2Icon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { useAuth } from "@clerk/react";
@@ -29,7 +34,7 @@ import {
   type DesktopWslState,
   type EnvironmentId,
 } from "@spiritdevs/contracts";
-import { connectionStatusText } from "@spiritdevs/client-runtime/connection";
+import { connectionNoticeText, connectionStatusText } from "@spiritdevs/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -129,6 +134,13 @@ import {
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/menu";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
@@ -1418,19 +1430,26 @@ function SavedBackendListRow({
   onRemove,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
-  const connectionState = environment.connection.phase;
+  const connection = environment.connection;
+  const connectionState = connection.phase;
   const isConnected = connectionState === "connected";
   const isConnecting = connectionState === "connecting" || connectionState === "reconnecting";
+  // An environment whose peer is simply not there is disconnected, not broken:
+  // it keeps the amber dot and a slow breath rather than the destructive red an
+  // actual fault (bad credentials, bad config) earns.
+  const isUnreachable = connection.severity === "notice";
   const stateDotClassName =
     connectionState === "connected"
       ? "bg-success"
-      : connectionState === "connecting" || connectionState === "reconnecting"
-        ? "bg-warning"
-        : connectionState === "error"
-          ? "bg-destructive"
-          : "bg-muted-foreground/40";
-  const statusTooltip = connectionStatusText(environment.connection);
-  const errorTraceId = environment.connection.traceId;
+      : isUnreachable
+        ? "bg-warning/70"
+        : connectionState === "connecting" || connectionState === "reconnecting"
+          ? "bg-warning"
+          : connectionState === "error"
+            ? "bg-destructive"
+            : "bg-muted-foreground/40";
+  const statusTooltip = connectionStatusText(connection);
+  const errorTraceId = connection.traceId;
   const { copyToClipboard: copyTraceIdToClipboard } = useCopyToClipboard<{ traceId: string }>({
     target: "trace ID",
     onCopy: ({ traceId }) => {
@@ -1478,6 +1497,17 @@ function SavedBackendListRow({
   // WSL on/off + distro picker on this page.
   const isWslEnvironment = isDesktopLocalConnectionTarget(environment.entry.target);
 
+  // A Pathway Connect environment is reachable only while the machine hosting it
+  // keeps its side of the tunnel open. Once that machine goes away there is
+  // nothing for a retry from here to talk to, so offering one would only invite
+  // the user to click it repeatedly — the reconnect has to come from that
+  // machine. Retries on other targets stay useful: the fault may be this side.
+  const reconnectIsRemoteOnly = environment.relayManaged && isUnreachable;
+  const connectionNotice = reconnectIsRemoteOnly
+    ? "Disconnected. Reconnect from that machine — it can't be reached from here."
+    : connectionNoticeText(connection);
+  const busy = disableActions || removingEnvironmentId === environmentId;
+
   return (
     <div className={ITEM_ROW_CLASSNAME}>
       <div className={ITEM_ROW_INNER_CLASSNAME}>
@@ -1486,10 +1516,13 @@ function SavedBackendListRow({
             <ConnectionStatusDot
               tooltipText={statusTooltip}
               dotClassName={stateDotClassName}
+              halo={isUnreachable ? "breathe" : "ping"}
               pingClassName={
-                connectionState === "connecting" || connectionState === "reconnecting"
-                  ? "bg-warning/60 duration-2000"
-                  : null
+                isUnreachable
+                  ? "bg-warning/40"
+                  : connectionState === "connecting" || connectionState === "reconnecting"
+                    ? "bg-warning/60 duration-2000"
+                    : null
               }
             />
             <h3 className="text-sm font-medium text-foreground">{environment.label}</h3>
@@ -1519,18 +1552,14 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : null}
-          {environment.connection.error && !resumingServerUpdate ? (
-            <p className="flex min-w-0 items-center gap-2 text-destructive text-xs">
-              <span className="truncate">{connectionStatusText(environment.connection)}</span>
-              {errorTraceId ? (
-                <button
-                  type="button"
-                  className="shrink-0 underline underline-offset-2"
-                  onClick={() => copyTraceId(errorTraceId)}
-                >
-                  Copy trace ID
-                </button>
-              ) : null}
+          {connectionNotice && !resumingServerUpdate ? (
+            <p
+              className={cn(
+                "min-w-0 text-xs",
+                isUnreachable ? "text-muted-foreground" : "text-destructive",
+              )}
+            >
+              {connectionNotice}
             </p>
           ) : null}
         </div>
@@ -1563,34 +1592,49 @@ function SavedBackendListRow({
               </TooltipPopup>
             </Tooltip>
           ) : (
-            <>
-              {!isConnected ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={disableActions || removingEnvironmentId === environmentId}
-                  onClick={() => void onRemove(environmentId)}
-                >
-                  {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
-                </Button>
-              ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={disableActions || removingEnvironmentId === environmentId}
-                onClick={() =>
-                  void (isConnected ? onDisconnect(environmentId) : onConnect(environmentId))
-                }
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label={`Actions for ${environment.label}`}
+                className="-me-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {isConnected
-                  ? removingEnvironmentId === environmentId
-                    ? "Disconnecting…"
-                    : "Disconnect"
-                  : isConnecting
-                    ? "Retry now"
-                    : "Connect"}
-              </Button>
-            </>
+                <MoreVerticalIcon className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {isConnected ? (
+                  <DropdownMenuItem
+                    disabled={busy}
+                    onClick={() => void onDisconnect(environmentId)}
+                  >
+                    <PlugIcon />
+                    {removingEnvironmentId === environmentId ? "Disconnecting…" : "Disconnect"}
+                  </DropdownMenuItem>
+                ) : reconnectIsRemoteOnly ? null : (
+                  <DropdownMenuItem disabled={busy} onClick={() => void onConnect(environmentId)}>
+                    <PlugZapIcon />
+                    {isConnecting ? "Retry now" : "Connect"}
+                  </DropdownMenuItem>
+                )}
+                {errorTraceId ? (
+                  <DropdownMenuItem onClick={() => copyTraceId(errorTraceId)}>
+                    <CopyIcon />
+                    Copy trace ID
+                  </DropdownMenuItem>
+                ) : null}
+                {!isConnected ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      disabled={busy}
+                      onClick={() => void onRemove(environmentId)}
+                    >
+                      <Trash2Icon />
+                      {removingEnvironmentId === environmentId ? "Removing…" : "Remove"}
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </div>

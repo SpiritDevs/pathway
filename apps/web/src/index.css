@@ -165,6 +165,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-ghost-pulse: ghost-pulse 2.4s infinite;
   --animate-status-ping: status-ping 2s infinite;
+  --animate-status-breathe: status-breathe 4s infinite;
+  --animate-status-dim: status-dim 4s infinite;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
@@ -263,6 +265,44 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     }
     100% {
       opacity: 1;
+    }
+  }
+  @keyframes status-breathe {
+    /* The offline halo. status-ping's calmer sibling: it swells slowly and
+       never reaches full opacity, so a machine that is simply switched off
+       reads as resting rather than alarming. Stepped on the same duty cycle as
+       the other indicators. */
+    0% {
+      opacity: 0;
+      scale: 0.9;
+      animation-timing-function: steps(6);
+    }
+    45% {
+      opacity: 0.35;
+      scale: 1.7;
+      animation-timing-function: steps(6);
+    }
+    80%,
+    100% {
+      opacity: 0;
+      scale: 2.1;
+    }
+  }
+  @keyframes status-dim {
+    /* Paired with status-breathe: the core dot fades with the halo so the two
+       read as one slow breath instead of a static dot inside a moving ring. */
+    0%,
+    20% {
+      opacity: 0.9;
+      animation-timing-function: steps(6);
+    }
+    50%,
+    70% {
+      opacity: 0.5;
+      animation-timing-function: steps(6);
+    }
+    100% {
+      opacity: 0.9;
     }
   }
   @keyframes status-ping {
@@ -2567,6 +2607,14 @@ label:has(> select#reasoning-effort) select {
   }
   [data-slot="skeleton"]::after {
     content: none;
+  }
+  /* The offline breath is decoration; hold it at its resting frame. */
+  .animate-status-breathe {
+    animation: none;
+    opacity: 0;
+  }
+  .animate-status-dim {
+    animation: none;
   }
 }
 
