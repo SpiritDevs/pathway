@@ -158,6 +158,42 @@ export function buildProjectActionItems(input: {
   }));
 }
 
+/** The fields a checkoutless project offers a palette row: a name, and a key to act on. */
+export interface CheckoutlessProjectItem {
+  readonly projectKey: string;
+  readonly displayName: string;
+}
+
+/**
+ * Palette rows for company projects no machine has a checkout of.
+ *
+ * Their own builder rather than a widened {@link buildProjectActionItems}: every identity in that
+ * one is `environmentId:id`, and a project with no checkout has neither. Inventing a placeholder
+ * pair would put a ref into the palette that navigation could follow somewhere that does not exist.
+ */
+export function buildCheckoutlessProjectActionItems(input: {
+  projects: ReadonlyArray<CheckoutlessProjectItem>;
+  valuePrefix: string;
+  icon: ReactNode;
+  description?: string;
+  runProject: (project: CheckoutlessProjectItem) => Promise<void>;
+  shortcutCommand?: KeybindingCommand;
+}): CommandPaletteActionItem[] {
+  return input.projects.map((project) => ({
+    kind: "action",
+    value: `${input.valuePrefix}:${project.projectKey}`,
+    // Only the name to match on — there is no path yet, and an empty term matches every query.
+    searchTerms: [project.displayName],
+    title: project.displayName,
+    description: input.description ?? "No checkout yet",
+    icon: input.icon,
+    ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
+    run: async () => {
+      await input.runProject(project);
+    },
+  }));
+}
+
 export type BuildThreadActionItemsThread = Pick<
   SidebarThreadSummary,
   "archivedAt" | "branch" | "createdAt" | "environmentId" | "id" | "projectId" | "title"

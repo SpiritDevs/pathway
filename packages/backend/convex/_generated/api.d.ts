@@ -32,6 +32,7 @@ import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as memberships from "../memberships.js";
+import type * as projectMigration from "../projectMigration.js";
 import type * as relayPersistence from "../relayPersistence.js";
 import type * as roles from "../roles.js";
 import type * as slackIntegrations from "../slackIntegrations.js";
@@ -68,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/validators": typeof lib_validators;
   memberships: typeof memberships;
+  projectMigration: typeof projectMigration;
   relayPersistence: typeof relayPersistence;
   roles: typeof roles;
   slackIntegrations: typeof slackIntegrations;

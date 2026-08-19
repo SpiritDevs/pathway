@@ -21,6 +21,60 @@ function trimmed(value: string, label: string): string {
 }
 
 /**
+ * Creates a company project that no machine has a checkout of yet.
+ *
+ * A project is company-owned (ADR 0011): it exists to plan against, and a checkout is something
+ * you attach later, on as many machines as you like, or never. Unlike `ensureEnvironmentProject`
+ * this mints a fresh domain id rather than borrowing a local project id, because there is no local
+ * project to borrow from.
+ */
+export const createCompanyProject = mutation({
+  args: {
+    companyId: domainIdArg,
+    name: v.string(),
+    description: v.optional(v.string()),
+  },
+  returns: domainIdArg,
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "projects.manage");
+    const name = trimmed(args.name, "A project name");
+
+    const now = Date.now();
+    const projectDocId = await ctx.db.insert("cloudProjects", {
+      id: mintDomainId(now),
+      companyId: actor.company._id,
+      name,
+      description: args.description?.trim() ?? "",
+      teamIds: [],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      archivedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+    const project = await ctx.db.get(projectDocId);
+    if (project === null) throw backendError("entity-not-found", "The project insert vanished.");
+
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "cloudProject" as const,
+          entityId: project.id,
+          changeKind: "upsert" as const,
+          versionDocId: project._id,
+          payload: encodeCloudProject(project),
+        },
+      ],
+    });
+    return project.id;
+  },
+});
+
+/**
  * Makes one environment project available to the company issue tracker.
  *
  * The local project id is deliberately reused as the cloud id. That keeps issue associations

@@ -202,3 +202,69 @@ describe("UsageAggregator", () => {
     expect(result.buckets).toHaveLength(3);
   });
 });
+
+describe("per-project attribution", () => {
+  const options = {
+    timeZone: "UTC",
+    sinceDay: "2026-08-01",
+    untilDay: "2026-08-31",
+    rates,
+  } as const;
+
+  it("sums tokens, cost, and session wall-clock per working directory", () => {
+    const aggregator = new UsageAggregator(options);
+    const slug = "-Users-ada-src-pathway";
+    aggregator.add(
+      record({ sessionId: "s1", timestampMs: Date.parse("2026-08-07T10:00:00.000Z") }),
+      slug,
+    );
+    aggregator.add(
+      record({ sessionId: "s1", timestampMs: Date.parse("2026-08-07T10:30:00.000Z") }),
+      slug,
+    );
+    aggregator.add(
+      record({ sessionId: "s2", timestampMs: Date.parse("2026-08-08T09:00:00.000Z") }),
+      slug,
+    );
+
+    const { projects } = aggregator.finish();
+    expect(projects).toHaveLength(1);
+    expect(projects[0]).toMatchObject({
+      workspaceSlug: slug,
+      provider: "claude",
+      records: 3,
+      sessions: 2,
+      // 30 minutes for s1; a single-record session spans nothing.
+      activeMs: 30 * 60 * 1000,
+    });
+    expect(projects[0]?.totals.outputTokens).toBe(150);
+  });
+
+  it("keeps two directories apart", () => {
+    const aggregator = new UsageAggregator(options);
+    aggregator.add(record({ sessionId: "s1" }), "-Users-ada-src-one");
+    aggregator.add(record({ sessionId: "s2" }), "-Users-ada-src-two");
+    expect(aggregator.finish().projects.map((project) => project.workspaceSlug)).toEqual([
+      "-Users-ada-src-one",
+      "-Users-ada-src-two",
+    ]);
+  });
+
+  it("attributes nothing when the transcript carries no directory", () => {
+    const aggregator = new UsageAggregator(options);
+    // Codex stores sessions by date, so its files sit at the scan root with no project context.
+    aggregator.add(record({ provider: "codex" }), null);
+    const result = aggregator.finish();
+    expect(result.projects).toEqual([]);
+    expect(result.buckets).toHaveLength(1);
+  });
+
+  it("does not attribute a record that fell outside the window", () => {
+    const aggregator = new UsageAggregator(options);
+    aggregator.add(
+      record({ timestampMs: Date.parse("2026-07-01T10:00:00.000Z") }),
+      "-Users-ada-src-pathway",
+    );
+    expect(aggregator.finish().projects).toEqual([]);
+  });
+});

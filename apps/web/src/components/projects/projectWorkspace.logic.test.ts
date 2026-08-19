@@ -2,9 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import {
-  attachProjectDirectoryUpdateInput,
   EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
   EMPTY_QUICK_CREATE_PROJECT_DRAFT,
+  attachProjectDirectoryUpdateInput,
   ensureProjectWorkspaceDecision,
   planAttachProjectDirectory,
   planQuickCreateProject,
@@ -12,6 +12,8 @@ import {
   projectWorkspaceLabel,
   projectWorkspaceRuntimeEnv,
   resolveEnsuredWorkspaceRoot,
+  scratchWorkspaceFolderName,
+  scratchWorkspaceRoot,
   shouldInitializeGitBeforeAttach,
   type AttachProjectDirectoryPlan,
   type ProjectWorkspaceTarget,
@@ -36,14 +38,14 @@ describe("ensureProjectWorkspaceDecision", () => {
     });
   });
 
-  it("prompts for a rootless project, carrying the project so the caller stays a one-liner", () => {
+  it("provisions for a rootless project, carrying the project so the caller stays a one-liner", () => {
     const decision = ensureProjectWorkspaceDecision(project(null));
-    expect(decision.kind).toBe("prompt");
-    expect(decision.kind === "prompt" && decision.project.id).toBe("proj-1");
+    expect(decision.kind).toBe("provision");
+    expect(decision.kind === "provision" && decision.project.id).toBe("proj-1");
   });
 
   it("treats a whitespace-only root as absent rather than as a path", () => {
-    expect(ensureProjectWorkspaceDecision(project("   ")).kind).toBe("prompt");
+    expect(ensureProjectWorkspaceDecision(project("   ")).kind).toBe("provision");
   });
 
   it("is unavailable — not a prompt — when there is no project to prompt about", () => {
@@ -287,5 +289,49 @@ describe("resolveEnsuredWorkspaceRoot", () => {
 
   it("answers null on a cancel, which every call site reads as do-nothing", () => {
     expect(resolveEnsuredWorkspaceRoot({ workspaceRoot: null, promptResult: null })).toBeNull();
+  });
+});
+
+describe("scratch workspaces", () => {
+  it("provisions a folder for a project with no directory rather than asking", () => {
+    const decision = ensureProjectWorkspaceDecision({
+      environmentId: "env-1" as never,
+      id: "project-1" as never,
+      title: "Scratch Ideas",
+      workspaceRoot: null,
+    });
+    expect(decision).toEqual({
+      kind: "provision",
+      project: expect.objectContaining({ title: "Scratch Ideas" }),
+      workspaceRoot: "~/Pathway Projects/Scratch Ideas",
+    });
+  });
+
+  it("leaves a rooted project alone", () => {
+    expect(
+      ensureProjectWorkspaceDecision({
+        environmentId: "env-1" as never,
+        id: "project-1" as never,
+        title: "Rooted",
+        workspaceRoot: "/Users/ada/src/rooted",
+      }),
+    ).toEqual({ kind: "ready", workspaceRoot: "/Users/ada/src/rooted" });
+  });
+
+  it("keeps the folder name usable on Windows", () => {
+    // Reserved punctuation becomes a space, and a trailing dot or space is stripped rather than
+    // left for the shell to remove silently — which would fold two names into one directory.
+    expect(scratchWorkspaceFolderName('Quotes: "v2"/beta', "project-1")).toBe("Quotes v2 beta");
+    expect(scratchWorkspaceFolderName("trailing dot.", "project-1")).toBe("trailing dot");
+    expect(scratchWorkspaceFolderName("a  b", "project-1")).toBe("a b");
+  });
+
+  it("falls back to the id when a title names no folder at all", () => {
+    expect(scratchWorkspaceFolderName("///", "0198c0de-aaaa")).toBe("project-0198c0de");
+  });
+
+  it("is stable for a project, so files left there are still there next time", () => {
+    const project = { id: "project-1", title: "Notes" };
+    expect(scratchWorkspaceRoot(project)).toBe(scratchWorkspaceRoot(project));
   });
 });

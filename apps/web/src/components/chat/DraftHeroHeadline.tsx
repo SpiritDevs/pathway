@@ -1,5 +1,5 @@
 import type { ScopedProjectRef } from "@spiritdevs/contracts";
-import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { scopedProjectKey } from "@spiritdevs/client-runtime/environment";
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
@@ -7,12 +7,10 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
-import {
-  buildSidebarProjectPickerEntries,
-  buildSidebarProjectSnapshots,
-} from "~/sidebarProjectGrouping";
+import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { useWorkspaceProjectPicker } from "../projects/useWorkspaceProjectPicker";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
@@ -71,16 +69,12 @@ export function DraftHeroHeadline({
       threads,
     ],
   );
-  const projectPickerEntries = useMemo(
-    () =>
-      buildSidebarProjectPickerEntries({
-        groups: projectGroups,
-        preferredProjectRef: activeProjectRef,
-      }),
-    [activeProjectRef, projectGroups],
-  );
+  const { entries: projectPickerEntries, resolveProjectRef } = useWorkspaceProjectPicker({
+    groups: projectGroups,
+    preferredProjectRef: activeProjectRef,
+  });
   const projectEntryByKey = useMemo(
-    () => new Map(projectPickerEntries.map((entry) => [entry.group.projectKey, entry] as const)),
+    () => new Map(projectPickerEntries.map((entry) => [entry.projectKey, entry] as const)),
     [projectPickerEntries],
   );
   const activeProjectGroup =
@@ -114,17 +108,20 @@ export function DraftHeroHeadline({
             if (!entry || value === activeProjectKey) {
               return;
             }
-            const project = entry.targetProject;
-            void handleNewThread(scopeProjectRef(project.environmentId, project.id), {
-              replace: true,
-            });
+            void (async () => {
+              // A project with no checkout gets one made on the way through, so picking it starts
+              // a thread rather than dead-ending on a directory it does not have yet.
+              const projectRef = await resolveProjectRef(entry);
+              if (projectRef === null) return;
+              await handleNewThread(projectRef, { replace: true });
+            })();
           }}
         >
-          {projectPickerEntries.map(({ group }) => {
+          {projectPickerEntries.map((entry) => {
             return (
-              <MenuRadioItem key={group.projectKey} value={group.projectKey} closeOnClick>
-                <span className="block min-w-0 truncate" title={group.displayName}>
-                  {group.displayName}
+              <MenuRadioItem key={entry.projectKey} value={entry.projectKey} closeOnClick>
+                <span className="block min-w-0 truncate" title={entry.displayName}>
+                  {entry.displayName}
                 </span>
               </MenuRadioItem>
             );

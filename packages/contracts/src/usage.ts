@@ -179,6 +179,47 @@ export const UsageSummaryInput = Schema.Struct({
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
+/**
+ * Usage attributed to one project, over the whole requested window.
+ *
+ * Kept as its own list rather than as a dimension on {@link UsageBucket}: a project dimension would
+ * multiply every `(day, provider, model)` cell by the number of projects on the machine, and a
+ * dashboard only ever asks for the window total.
+ *
+ * `workspaceSlug` is the transcript directory name, which is the provider CLI's encoding of the
+ * working directory it ran in. The server does not try to decode it back into a path — that
+ * encoding is lossy — so a client matches by encoding its own project roots the same way with
+ * {@link transcriptWorkspaceSlug}.
+ */
+export const UsageProjectTotals = Schema.Struct({
+  workspaceSlug: TrimmedNonEmptyString,
+  provider: UsageProviderKind,
+  totals: UsageTokenTotals,
+  costUsd: Schema.Number,
+  records: NonNegativeInt,
+  sessions: NonNegativeInt,
+  /**
+   * Summed wall-clock span of the sessions that touched this project, first record to last.
+   *
+   * This is the closest honest answer to "how long was the AI working on this". It is not billed
+   * time and it is not token count: a session left open over lunch reads as a long one.
+   */
+  activeMs: NonNegativeInt,
+});
+export type UsageProjectTotals = typeof UsageProjectTotals.Type;
+
+/**
+ * Encodes a working directory the way the provider CLIs name their transcript directories, so a
+ * project root can be matched against a scan result.
+ *
+ * Claude Code writes `~/.claude/projects/-Users-ada-src-pathway` for `/Users/ada/src/pathway`.
+ * The mapping is not reversible — a directory whose real name contains a dash is indistinguishable
+ * from a separator — which is why matching goes in this direction only.
+ */
+export function transcriptWorkspaceSlug(workspaceRoot: string): string {
+  return workspaceRoot.replaceAll(/[/\\.:_ ]/g, "-");
+}
+
 export const UsageSummary = Schema.Struct({
   contractVersion: Schema.Number,
   readAt: Schema.String,
@@ -186,6 +227,11 @@ export const UsageSummary = Schema.Struct({
   sinceDay: UsageDay,
   untilDay: UsageDay,
   buckets: Schema.Array(UsageBucket),
+  /**
+   * Per-project totals, for providers whose transcripts record which directory they ran in.
+   * Codex stores sessions by date rather than by project, so it contributes nothing here.
+   */
+  projects: Schema.Array(UsageProjectTotals),
   sources: Schema.Array(UsageSource),
   pricing: UsagePricing,
   /** Wall-clock cost of the scan, surfaced in diagnostics. */

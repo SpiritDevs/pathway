@@ -103,6 +103,7 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildBrowseGroups,
+  buildCheckoutlessProjectActionItems,
   buildProjectActionItems,
   buildRootGroups,
   buildThreadActionItems,
@@ -125,6 +126,7 @@ import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { useWorkspaceProjectPicker } from "./projects/useWorkspaceProjectPicker";
 import { QuickCreateProjectDialog } from "./projects/QuickCreateProjectDialog";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
@@ -717,6 +719,10 @@ function OpenCommandPaletteDialog(props: {
       }),
     [activeDraftThread, activeThread, defaultProjectRef, handleNewThread],
   );
+  const { entries: workspacePickerEntries, resolveProjectRef } = useWorkspaceProjectPicker({
+    groups: projectGroups,
+    preferredProjectRef: contextualProjectRef,
+  });
   const projectPickerEntries = useMemo(
     () =>
       buildSidebarProjectPickerEntries({
@@ -732,6 +738,27 @@ function OpenCommandPaletteDialog(props: {
         title: group.displayName,
       })),
     [projectPickerEntries],
+  );
+  // Company projects nothing has checked out. They carry no environment/project pair, so they get
+  // their own rows rather than being forced through maps keyed on one.
+  const checkoutlessProjects = useMemo(
+    () =>
+      workspacePickerEntries
+        .filter((entry) => entry.needsCheckout)
+        .map((entry) => ({ projectKey: entry.projectKey, displayName: entry.displayName })),
+    [workspacePickerEntries],
+  );
+  const openCheckoutlessProject = useCallback(
+    async (item: { readonly projectKey: string }) => {
+      const entry = workspacePickerEntries.find(
+        (candidate) => candidate.projectKey === item.projectKey,
+      );
+      if (entry === undefined) return;
+      const projectRef = await resolveProjectRef(entry);
+      if (projectRef === null) return;
+      await handleNewThread(projectRef);
+    },
+    [handleNewThread, resolveProjectRef, workspacePickerEntries],
   );
   const projectGroupByTargetKey = useMemo(
     () =>
@@ -994,8 +1021,21 @@ function OpenCommandPaletteDialog(props: {
         },
         icon: projectFaviconIcon,
         runProject: openProjectFromSearch,
-      }),
-    [openProjectFromSearch, pickerProjects, projectGroupByTargetKey],
+      }).concat(
+        buildCheckoutlessProjectActionItems({
+          projects: checkoutlessProjects,
+          valuePrefix: "project",
+          icon: <FolderIcon />,
+          runProject: openCheckoutlessProject,
+        }),
+      ),
+    [
+      checkoutlessProjects,
+      openCheckoutlessProject,
+      openProjectFromSearch,
+      pickerProjects,
+      projectGroupByTargetKey,
+    ],
   );
 
   const projectThreadItems = useMemo(
@@ -1030,9 +1070,24 @@ function OpenCommandPaletteDialog(props: {
                 : scopeProjectRef(project.environmentId, project.id),
             );
           },
-        }),
+        }).concat(
+          buildCheckoutlessProjectActionItems({
+            projects: checkoutlessProjects,
+            valuePrefix: "new-thread-in",
+            icon: <FolderIcon />,
+            description: "Creates a folder for it",
+            runProject: openCheckoutlessProject,
+          }),
+        ),
       ),
-    [contextualProjectRef, handleNewThread, pickerProjects, projectGroupByTargetKey],
+    [
+      checkoutlessProjects,
+      contextualProjectRef,
+      handleNewThread,
+      openCheckoutlessProject,
+      pickerProjects,
+      projectGroupByTargetKey,
+    ],
   );
 
   const allThreadItems = useMemo(

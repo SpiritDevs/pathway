@@ -4,6 +4,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
   buildBrowseGroups,
+  buildCheckoutlessProjectActionItems,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
@@ -324,5 +325,51 @@ describe("buildBrowseGroups", () => {
     finishNavigation?.();
     await action;
     expect(actionSettled).toBe(true);
+  });
+});
+
+describe("checkoutless project palette rows", () => {
+  const projects = [
+    { projectKey: "cloud:a", displayName: "Planned work" },
+    { projectKey: "cloud:b", displayName: "Side project" },
+  ];
+
+  it("keys rows on the project key, since there is no environment pair to key on", () => {
+    const items = buildCheckoutlessProjectActionItems({
+      projects,
+      valuePrefix: "new-thread-in",
+      icon: null,
+      runProject: async () => undefined,
+    });
+    expect(items.map((item) => item.value)).toEqual([
+      "new-thread-in:cloud:a",
+      "new-thread-in:cloud:b",
+    ]);
+  });
+
+  it("matches on the name alone rather than an empty term that matches everything", () => {
+    const [item] = buildCheckoutlessProjectActionItems({
+      projects: [projects[0]!],
+      valuePrefix: "project",
+      icon: null,
+      runProject: async () => undefined,
+    });
+    expect(item?.searchTerms).toEqual(["Planned work"]);
+    expect(item?.title).toBe("Planned work");
+    expect(item?.description).toBe("No checkout yet");
+  });
+
+  it("runs the handler with the project it was built from", async () => {
+    const ran: string[] = [];
+    const [item] = buildCheckoutlessProjectActionItems({
+      projects: [projects[1]!],
+      valuePrefix: "project",
+      icon: null,
+      runProject: async (project) => {
+        ran.push(project.projectKey);
+      },
+    });
+    await item?.run?.();
+    expect(ran).toEqual(["cloud:b"]);
   });
 });

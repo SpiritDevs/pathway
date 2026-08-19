@@ -106,10 +106,9 @@ export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
     { readonly id: CompanyId; readonly name: string; readonly issueKeyPrefix?: string },
     CurrentCompanySummary
   >("companies:create"),
-  upgradeToOrganization: mutationReference<
-    { readonly companyId: CompanyId; readonly name: string },
-    CurrentCompanySummary
-  >("companies:upgradeToOrganization"),
+  createOrganizationWorkspace: mutationReference<{ readonly name: string }, CurrentCompanySummary>(
+    "companies:createOrganizationWorkspace",
+  ),
   listInvitations: queryReference<
     { readonly companyId: CompanyId },
     ReadonlyArray<CompanyInvitationSummary>
@@ -235,10 +234,7 @@ export interface CompanyAdminClient {
     readonly name: string;
     readonly issueKeyPrefix?: string;
   }) => Promise<CurrentCompanySummary>;
-  readonly upgradeToOrganization: (args: {
-    readonly companyId: CompanyId;
-    readonly name: string;
-  }) => Promise<void>;
+  readonly createOrganizationWorkspace: (args: { readonly name: string }) => Promise<void>;
   readonly listInvitations: (
     companyId: CompanyId,
   ) => Promise<ReadonlyArray<CompanyInvitationSummary>>;
@@ -324,8 +320,8 @@ export function makeCompanyAdminClient(options: {
     listMine: () => query(COMPANY_ADMIN_FUNCTION_REFERENCES.listMine, {}),
     createCompany: (args) =>
       mutationResult<CurrentCompanySummary>(COMPANY_ADMIN_FUNCTION_REFERENCES.createCompany, args),
-    upgradeToOrganization: (args) =>
-      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.upgradeToOrganization, args),
+    createOrganizationWorkspace: (args) =>
+      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.createOrganizationWorkspace, args),
     listInvitations: (companyId) =>
       query(COMPANY_ADMIN_FUNCTION_REFERENCES.listInvitations, { companyId }),
     createInvitation: (args) => action(COMPANY_ADMIN_FUNCTION_REFERENCES.createInvitation, args),

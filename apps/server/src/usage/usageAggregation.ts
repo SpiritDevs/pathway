@@ -15,6 +15,7 @@
 import type {
   UsageBucket,
   UsageDay,
+  UsageProjectTotals,
   UsageResolution,
   UsageTokenTotals,
 } from "@spiritdevs/contracts";
@@ -71,8 +72,18 @@ export interface AggregateOptions {
   readonly untilTimeMs?: number;
 }
 
+interface MutableProjectTotals {
+  totals: UsageTokenTotals;
+  costUsd: number;
+  records: number;
+  /** First and last record instant per session, which is where wall-clock time comes from. */
+  sessionSpans: Map<string, { first: number; last: number }>;
+}
+
 export interface AggregateResult {
   readonly buckets: readonly UsageBucket[];
+  /** Per-project totals for the whole window. Empty when nothing was attributable. */
+  readonly projects: readonly UsageProjectTotals[];
   /** Records dropped because an earlier record carried the same dedupe key. */
   readonly duplicatesDropped: number;
   /** Records whose day fell outside the requested window. */
@@ -88,6 +99,7 @@ export interface AggregateResult {
  */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
+  readonly #projects = new Map<string, MutableProjectTotals>();
   readonly #seen = new Set<string>();
   readonly #toDay: (timestampMs: number) => string;
   readonly #hourlyWindow: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null;
@@ -116,7 +128,7 @@ export class UsageAggregator {
    * can derive per-window facts (distinct sessions, for one) from the records
    * that landed rather than everything the mtime prefilter happened to admit.
    */
-  add(record: UsageRecord): boolean {
+  add(record: UsageRecord, workspaceSlug: string | null = null): boolean {
     if (record.dedupeKey !== null) {
       if (this.#seen.has(record.dedupeKey)) {
         this.#duplicatesDropped += 1;
@@ -179,6 +191,30 @@ export class UsageAggregator {
     if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
+
+    if (workspaceSlug !== null && workspaceSlug.length > 0) {
+      const projectKey = `${workspaceSlug}\u0000${record.provider}`;
+      let project = this.#projects.get(projectKey);
+      if (project === undefined) {
+        project = { totals: EMPTY_TOTALS, costUsd: 0, records: 0, sessionSpans: new Map() };
+        this.#projects.set(projectKey, project);
+      }
+      project.totals = addTotals(project.totals, record.totals);
+      project.costUsd += priced.costUsd;
+      project.records += 1;
+      if (record.sessionId.length > 0) {
+        const span = project.sessionSpans.get(record.sessionId);
+        if (span === undefined) {
+          project.sessionSpans.set(record.sessionId, {
+            first: record.timestampMs,
+            last: record.timestampMs,
+          });
+        } else {
+          span.first = Math.min(span.first, record.timestampMs);
+          span.last = Math.max(span.last, record.timestampMs);
+        }
+      }
+    }
     return true;
   }
 
@@ -209,8 +245,29 @@ export class UsageAggregator {
         a.model.localeCompare(b.model),
     );
 
+    const projects: UsageProjectTotals[] = [];
+    for (const [key, project] of this.#projects) {
+      const [workspaceSlug = "", provider = ""] = key.split("\u0000");
+      let activeMs = 0;
+      for (const span of project.sessionSpans.values()) activeMs += span.last - span.first;
+      projects.push({
+        workspaceSlug,
+        provider: provider as UsageProjectTotals["provider"],
+        totals: project.totals,
+        costUsd: project.costUsd,
+        records: project.records,
+        sessions: project.sessionSpans.size,
+        activeMs,
+      });
+    }
+    projects.sort(
+      (a, b) =>
+        a.workspaceSlug.localeCompare(b.workspaceSlug) || a.provider.localeCompare(b.provider),
+    );
+
     return {
       buckets,
+      projects,
       duplicatesDropped: this.#duplicatesDropped,
       outOfWindow: this.#outOfWindow,
     };

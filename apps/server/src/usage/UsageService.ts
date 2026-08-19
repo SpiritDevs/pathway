@@ -105,6 +105,7 @@ export const layerTest = Layer.succeed(
         sinceDay: input.sinceDay,
         untilDay: input.untilDay,
         buckets: [],
+        projects: [],
         sources: [],
         pricing: {
           status: "unavailable",
@@ -183,6 +184,22 @@ export const make = Effect.gen(function* () {
       Effect.catchCause(() => Effect.void),
     );
   });
+
+  /**
+   * The transcript directory name a session file sits in, which the provider CLI derives from the
+   * working directory it ran in.
+   *
+   * Only the segment directly below the scan root counts. A file sitting at the root has no
+   * project context at all, which is Codex's layout, and returns null rather than a guess.
+   */
+  const transcriptWorkspaceSlugForFile = (root: string, filePath: string): string | null => {
+    const relative = path.relative(root, filePath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    const [segment] = relative.split(path.sep);
+    return segment === undefined || segment === "" || segment === path.basename(filePath)
+      ? null
+      : segment;
+  };
 
   /**
    * Claude's config dir is the home itself when overridden, but a default
@@ -388,10 +405,14 @@ export const make = Effect.gen(function* () {
           continue;
         }
         scannedFiles += 1;
+        // Claude nests each session under a directory named for the working directory it ran in,
+        // which is the only per-project signal a transcript carries. Codex files sit directly
+        // under `sessions`, so they attribute to nothing and the slug comes back null.
+        const workspaceSlug = transcriptWorkspaceSlugForFile(dir, file.path);
         for (const record of records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
-          if (aggregator.add(record) && record.sessionId.length > 0) {
+          if (aggregator.add(record, workspaceSlug) && record.sessionId.length > 0) {
             sessionIds.add(record.sessionId);
           }
         }
@@ -428,6 +449,7 @@ export const make = Effect.gen(function* () {
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
       buckets: aggregated.buckets,
+      projects: aggregated.projects,
       sources,
       pricing: {
         status: ratesStatus,

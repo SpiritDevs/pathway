@@ -42,6 +42,7 @@ function summary(
     distinctSessions?: number;
   }[],
   contractVersion: number = USAGE_CONTRACT_VERSION,
+  projects: UsageSummary["projects"] = [],
 ): UsageSummary {
   return {
     contractVersion,
@@ -50,6 +51,7 @@ function summary(
     sinceDay: "2026-08-01" as UsageDay,
     untilDay: "2026-08-31" as UsageDay,
     buckets,
+    projects,
     sources: sources.map((source) => ({
       fingerprint: {
         hostId: source.hostId,

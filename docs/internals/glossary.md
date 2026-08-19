@@ -22,11 +22,19 @@ This is a living glossary for Pathway. It explains what common terms mean in thi
 
 #### Project
 
-The top-level workspace record in the app. In [the orchestration contracts][1], a project has a `workspaceRoot` and a title. It does not contain threads: `OrchestrationProject` and `OrchestrationThread` are separate arrays on the read model, and a project can have zero threads. See [workspace-layout.md][2].
+"Project" names three related things, and which one is meant depends on the layer.
+
+A **company project** is the identity issues attach to. It is owned by one company, carries a name and description, and has no environment and no filesystem path. It exists whether or not any machine has a checkout of it: you can plan against one and file issues on it before the repository exists anywhere. Defined in [cloudProject.ts][34]; authoritative in Convex per [ADR 0011][35].
+
+An **environment checkout** is one machine's copy of a project on disk. It has a `workspaceRoot`, scripts, a favicon path, and thread defaults, and it is what agents actually run in. Defined in [the orchestration contracts][1]. An `environmentBinding` joins one checkout to one company project; a company project may have zero, one, or many.
+
+A **logical project** is the client-side grouping that presents several checkouts of the same repository as one row. It is pure presentation, derived from `physicalProjectKey` and the configured grouping mode, and is never persisted. See `packages/client-runtime/src/state/projectGrouping.ts` and [workspace-layout.md][2].
+
+A project does not contain threads: `OrchestrationProject` and `OrchestrationThread` are separate arrays on the read model, and a project can have zero threads.
 
 #### Workspace root
 
-The root filesystem path for a project. In [the orchestration model][1], it is the base directory for branches and optional worktrees. See [workspace-layout.md][2].
+The root filesystem path for an **environment checkout**, not for a company project. In [the orchestration model][1], it is the base directory for branches and optional worktrees. A checkout with no root is a rootless project, which prompts for a directory the first time it needs one. See [workspace-layout.md][2].
 
 #### Worktree
 
@@ -405,3 +413,5 @@ that change lands.
 [31]: ../../apps/server/src/mcp/PreviewAutomationTakeover.ts
 [32]: ../../apps/server/src/mcp/PreviewAutomationBroker.ts
 [33]: ../user/browser-takeover.md
+[34]: ../../packages/contracts/src/cloudProject.ts
+[35]: decisions/0011-company-owned-projects.md

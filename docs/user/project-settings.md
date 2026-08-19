@@ -1,5 +1,41 @@
 # Project settings
 
+## The project dashboard
+
+Open **Projects** in the sidebar and select one. The dashboard shows where the project lives (every
+machine and directory that has a checkout), its issue and milestone progress, who is carrying the
+work, recent agent threads, open pull requests, and AI usage.
+
+A project belongs to a company, not to a machine, so it appears here whether or not anything is
+checked out. A project with no checkout is marked **No checkout**: you can plan and file issues
+against it, and attach a directory later to run agents in it.
+
+**Configure** opens the same editor as Settings → Projects, in a side panel. It is also where you
+move a project to another company.
+
+## Moving a project to another company
+
+A project can move, and its issues and milestones move with it. Because statuses, labels, and issue
+keys all belong to the company, the move is a migration rather than a setting, so it runs as a
+stepper: choose the destination, map each status and label onto one in the new company, then review.
+
+Pathway fills in the mappings whose names match and leaves the rest blank — a wrong guess that looks
+confident is worse than an empty field. What does not survive is stated on the review step:
+
+- **Issue keys are re-issued** under the new company's prefix. Any key you have linked or quoted
+  stops resolving, and this cannot be undone.
+- **Cycles are left behind**, because a cycle spans a whole company rather than one project.
+- **Team visibility resets** — issues arrive company-wide.
+- **Unmapped labels are removed** from their issues.
+
+AI usage is attributed by working directory, which is how the provider CLIs organise their
+transcripts. Session time is wall clock from a session's first message to its last — a session left
+open reads as a long one — and cost is what those tokens would bill at API rates, not what a
+subscription charged. Codex stores its sessions by date rather than by directory, so its usage
+cannot be attributed to a project.
+
+## Settings → Projects
+
 Open **Settings → Projects** to see every project and how many machine connections it has. Hover
 the connection count to see each environment name, directory, platform, Pathway version, and
 binding status.
