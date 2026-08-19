@@ -155,7 +155,6 @@ describe("ClientSettings environment identification", () => {
 describe("ClientSettings sidebar", () => {
   it("defaults to the current sidebar with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
-    expect(settings.legacySidebarEnabled).toBe(false);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
   });
 
@@ -164,16 +163,15 @@ describe("ClientSettings sidebar", () => {
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
-  it("preserves an explicit legacy sidebar opt-in", () => {
-    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
-      true,
-    );
+  it("ignores a retired setting rather than failing to decode", () => {
+    // The legacy sidebar is gone. A stored opt-in from before it was removed must decode as an
+    // ordinary unknown key, not throw and take the whole settings document with it.
+    expect(() => decodeClientSettings({ legacySidebarEnabled: true })).not.toThrow();
+    expect(() => decodeClientSettingsPatch({ legacySidebarEnabled: true })).not.toThrow();
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {

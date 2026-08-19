@@ -14,8 +14,7 @@ import { useIsMobile } from "../hooks/useMediaQuery";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { cn } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
-import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
-import LegacyThreadSidebar from "./LegacySidebar";
+import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { CalendarSidebar } from "./calendar/CalendarSidebar";
@@ -152,7 +151,6 @@ function ProjectProjectionRetention() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  const legacySidebarEnabled = useLegacySidebarEnabled();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   // Seeds server-side visited tracking from this browser's localStorage the
@@ -256,8 +254,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                       <IssuesSidebar />
                     ) : secondarySidebarKind === "source-control" ? (
                       <SourceControlSidebar />
-                    ) : legacySidebarEnabled ? (
-                      <LegacyThreadSidebar />
                     ) : (
                       <ThreadSidebar />
                     )}
