@@ -611,7 +611,9 @@ function ConnectSlackStep({
           value={draft.ownerId}
         >
           <SelectTrigger>
-            <SelectValue placeholder="Choose personal or company" />
+            <SelectValue placeholder="Choose personal or company">
+              {selectedOwner?.name}
+            </SelectValue>
           </SelectTrigger>
           <SelectPopup>
             {owners.map((owner) => (
