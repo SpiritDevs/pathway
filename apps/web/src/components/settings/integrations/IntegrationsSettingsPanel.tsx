@@ -1,9 +1,22 @@
 import {
   CloudProjectSyncEntity,
+  EnvironmentBindingEntity,
   IssueCycleEntity,
   IssueEntity,
+  IssueStatusEntity,
+  TeamEntity,
 } from "@spiritdevs/client-runtime/sync";
-import type { IssueAutomationSettings } from "@spiritdevs/contracts";
+import {
+  CompanySlackRoutingRuleId,
+  IssueCycleId,
+  IssueStatusId,
+  SlackEmojiName,
+  type CompanySlackRoutingCondition,
+  type CompanySlackRoutingRule,
+  type IssueAutomationSettings,
+} from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
+import { CompanyId, TeamId } from "@spiritdevs/contracts/company";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowDownIcon,
@@ -23,10 +36,12 @@ import {
   type CompanyAutomationSettingsSummary,
   type CompanyIntegrationsClient,
   type CompanySlackIntegrationSummary,
+  type CompanySlackWatchDefinitionSummary,
   type CompanySlackWatchSummary,
 } from "../../../cloud/companyIntegrations";
 import { useCompanyIntegrationsClient } from "../../../cloud/useCompanyIntegrationsClient";
 import { usePrimarySettings } from "../../../hooks/useSettings";
+import { randomUUID } from "../../../lib/utils";
 import { useSlackStatus, useSlackWatches } from "../../../state/issues";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -38,22 +53,48 @@ import { IntakeSettingsPanel } from "../issues/IntakeSettingsPanel";
 import { IssueAutomationSettingsSection } from "../issues/IssueAutomationSettingsSection";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
-import { permissionGate } from "../company/companySettings.logic";
+import {
+  companyDirectoryFromReplicaValues,
+  deriveCurrentMemberPermissions,
+  permissionGate,
+} from "../company/companySettings.logic";
 import { environmentRegistrationsFromReplicaValues } from "../company/environmentSettings.logic";
 import { CompanySectionCard, CompanySettingsEmptyState } from "../company/CompanySettingsShared";
 import { CompanySettingsSheet } from "../company/CompanySettingsSheet";
 import { useCompanySettings } from "../company/useCompanySettings";
+import {
+  createEmptySlackWorkspaceDraft,
+  normalizeSlackPrefix,
+  normalizeSlackReaction,
+  type SlackConditionNode,
+  type SlackOwnerCatalog,
+  type SlackOwnerOption,
+  type SlackRoutingRule,
+  type SlackWorkspaceWizardDraft,
+  type SlackWizardReadiness,
+} from "./slackWorkspaceWizard.logic";
+import {
+  SlackWorkspaceWizardSheet,
+  type SlackWorkspaceActivationResult,
+} from "./SlackWorkspaceWizardSheet";
 
 type SheetState =
-  | { readonly kind: "add" }
+  | {
+      readonly kind: "add";
+      readonly ownerId: CompanyId;
+      readonly integrationId: string | null;
+    }
   | { readonly kind: "slack"; readonly integrationId: string; readonly view: SlackView }
   | { readonly kind: "automation" }
   | null;
 type SlackView = "overview" | "channels" | "channel" | "controllers" | "health" | "danger";
 
 const isProject = Schema.is(CloudProjectSyncEntity);
+const isBinding = Schema.is(EnvironmentBindingEntity);
 const isCycle = Schema.is(IssueCycleEntity);
 const isIssue = Schema.is(IssueEntity);
+const isStatus = Schema.is(IssueStatusEntity);
+const isTeam = Schema.is(TeamEntity);
 
 function reportError(title: string, error: unknown): void {
   toastManager.add(
@@ -87,68 +128,496 @@ function integrationBadge(integration: CompanySlackIntegrationSummary) {
   );
 }
 
-function AddIntegrationSheet({
+function conditionFromContract(
+  condition: CompanySlackRoutingCondition,
+  id: string,
+): SlackConditionNode {
+  switch (condition.kind) {
+    case "all":
+    case "any":
+      return {
+        id,
+        type: "group",
+        operator: condition.kind,
+        children: condition.conditions.map((child, index) =>
+          conditionFromContract(child, `${id}:${index}`),
+        ),
+      };
+    case "text-prefix":
+      return { id, type: "prefix", prefixes: condition.prefixes };
+    case "reaction":
+      return { id, type: "reaction", emoji: condition.emoji };
+    case "bot-mention":
+      return { id, type: "botMention" };
+    case "every-message":
+      return { id, type: "everyMessage" };
+  }
+}
+
+function conditionToContract(condition: SlackConditionNode): CompanySlackRoutingCondition {
+  switch (condition.type) {
+    case "group":
+      return {
+        kind: condition.operator,
+        conditions: condition.children.map(conditionToContract),
+      };
+    case "prefix":
+      return {
+        kind: "text-prefix",
+        prefixes: condition.prefixes.map(normalizeSlackPrefix).filter(Boolean),
+      };
+    case "reaction":
+      return {
+        kind: "reaction",
+        emoji: SlackEmojiName.make(normalizeSlackReaction(condition.emoji)),
+      };
+    case "botMention":
+      return { kind: "bot-mention" };
+    case "everyMessage":
+      return { kind: "every-message" };
+  }
+}
+
+function ruleFromContract(rule: CompanySlackRoutingRule): SlackRoutingRule {
+  const condition = conditionFromContract(rule.condition, `${rule.id}:condition`);
+  return {
+    id: rule.id,
+    name: rule.name,
+    condition:
+      condition.type === "group"
+        ? condition
+        : {
+            id: `${rule.id}:condition-root`,
+            type: "group",
+            operator: "all",
+            children: [condition],
+          },
+    teamId: rule.teamId,
+    projectId: rule.cloudProjectId,
+    cycleId: rule.cycleId,
+    initialPlacement:
+      rule.initialStatusId === null
+        ? { kind: "triage" }
+        : { kind: "status", statusId: rule.initialStatusId },
+    investigation:
+      rule.investigation.timing === "off"
+        ? { kind: "off" }
+        : rule.investigation.timing === "immediate"
+          ? {
+              kind: "immediate",
+              successStatusId: rule.investigation.successStatusId,
+            }
+          : {
+              kind: "status",
+              triggerStatusId: rule.investigation.triggerStatusId ?? "",
+              successStatusId: rule.investigation.successStatusId,
+            },
+    assignment: rule.assignmentTiming,
+  };
+}
+
+function ruleToContract(rule: SlackRoutingRule): CompanySlackRoutingRule {
+  return {
+    id: CompanySlackRoutingRuleId.make(rule.id),
+    name: rule.name.trim(),
+    condition: conditionToContract(rule.condition),
+    teamId: rule.teamId === null ? null : TeamId.make(rule.teamId),
+    cloudProjectId: rule.projectId === null ? null : CloudProjectId.make(rule.projectId),
+    cycleId: rule.cycleId === null ? null : IssueCycleId.make(rule.cycleId),
+    initialStatusId:
+      rule.initialPlacement.kind === "triage"
+        ? null
+        : IssueStatusId.make(rule.initialPlacement.statusId),
+    investigation:
+      rule.investigation.kind === "off"
+        ? { timing: "off", triggerStatusId: null, successStatusId: null }
+        : rule.investigation.kind === "immediate"
+          ? {
+              timing: "immediate",
+              triggerStatusId: null,
+              successStatusId:
+                rule.investigation.successStatusId === null
+                  ? null
+                  : IssueStatusId.make(rule.investigation.successStatusId),
+            }
+          : {
+              timing: "on-status",
+              triggerStatusId: IssueStatusId.make(rule.investigation.triggerStatusId),
+              successStatusId:
+                rule.investigation.successStatusId === null
+                  ? null
+                  : IssueStatusId.make(rule.investigation.successStatusId),
+            },
+    assignmentTiming: rule.assignment,
+  };
+}
+
+function legacyRulesFromWatch(watch: CompanySlackWatchSummary): readonly SlackRoutingRule[] {
+  const shared = {
+    teamId: null,
+    cycleId: watch.cycleId,
+    initialPlacement: { kind: "triage" } as const,
+    investigation: watch.autoInvestigate
+      ? ({ kind: "immediate", successStatusId: null } as const)
+      : ({ kind: "off" } as const),
+    assignment: watch.autoAssign ? ("immediate" as const) : ("off" as const),
+  };
+  const rules: SlackRoutingRule[] = watch.trigger.reactionRoutes.map((route, index) => ({
+    id: `${watch.id}:reaction:${index}`,
+    name: `Reaction :${route.emoji}:`,
+    condition: {
+      id: `${watch.id}:reaction:${index}:root`,
+      type: "group",
+      operator: "all",
+      children: [
+        { id: `${watch.id}:reaction:${index}:leaf`, type: "reaction", emoji: route.emoji },
+      ],
+    },
+    ...shared,
+    projectId: route.cloudProjectId ?? watch.cloudProjectId,
+    investigation:
+      route.autoInvestigate === null
+        ? shared.investigation
+        : route.autoInvestigate
+          ? { kind: "immediate", successStatusId: null }
+          : { kind: "off" },
+  }));
+  if (watch.trigger.botMention) {
+    rules.push({
+      id: `${watch.id}:mention`,
+      name: "Bot mentions",
+      condition: {
+        id: `${watch.id}:mention:root`,
+        type: "group",
+        operator: "all",
+        children: [{ id: `${watch.id}:mention:leaf`, type: "botMention" }],
+      },
+      ...shared,
+      projectId: watch.cloudProjectId,
+    });
+  }
+  if (watch.trigger.everyMessage) {
+    rules.push({
+      id: `${watch.id}:every-message`,
+      name: "Everything else",
+      condition: {
+        id: `${watch.id}:every-message:root`,
+        type: "group",
+        operator: "all",
+        children: [{ id: `${watch.id}:every-message:leaf`, type: "everyMessage" }],
+      },
+      ...shared,
+      projectId: watch.cloudProjectId,
+    });
+  }
+  return rules;
+}
+
+function draftFromIntegration(
+  ownerId: CompanyId,
+  integration: CompanySlackIntegrationSummary,
+  definitions: readonly CompanySlackWatchDefinitionSummary[],
+): SlackWorkspaceWizardDraft {
+  const definition = definitions[0] ?? null;
+  return {
+    integrationId: integration.id,
+    integrationRevision: integration.configurationRevision,
+    ownerId,
+    workspace: {
+      id: integration.workspaceId,
+      name: integration.workspaceName,
+      domain: integration.workspaceDomain,
+    },
+    channelId: definition?.channelId ?? null,
+    channelName: definition?.channelName ?? null,
+    watchId: definition?.id ?? null,
+    watchRevision: definition?.revision ?? null,
+    rules:
+      definition === null
+        ? []
+        : "configurationVersion" in definition
+          ? definition.rules.map(ruleFromContract)
+          : legacyRulesFromWatch(definition),
+  };
+}
+
+function wizardEntityId(prefix: string): string {
+  return `${prefix}-${randomUUID()}`;
+}
+
+function SlackWorkspaceWizardController({
   client,
-  companyId,
-  open,
+  ownerId,
+  integrationId,
+  owners,
+  ownerCatalogs,
+  ownerEnvironmentIds,
   onClose,
-  onConnected,
   onChanged,
 }: {
   readonly client: CompanyIntegrationsClient;
-  readonly companyId: NonNullable<ReturnType<typeof useCompanySettings>["companyId"]>;
-  readonly open: boolean;
+  readonly ownerId: CompanyId;
+  readonly integrationId: string | null;
+  readonly owners: readonly SlackOwnerOption[];
+  readonly ownerCatalogs: ReadonlyMap<string, SlackOwnerCatalog>;
+  readonly ownerEnvironmentIds: ReadonlyMap<string, readonly string[]>;
   readonly onClose: () => void;
-  readonly onConnected: (integrationId: string) => void;
-  readonly onChanged: () => Promise<void>;
+  readonly onChanged: (ownerId: CompanyId) => Promise<void>;
 }) {
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const connect = async () => {
-    if (token.trim().length === 0 || busy) return;
-    setBusy(true);
-    try {
-      const integration = await client.connect(companyId, token.trim());
-      setToken("");
-      await onChanged();
-      onConnected(integration.id);
-    } catch (error) {
-      reportError("Could not connect Slack", error);
-    } finally {
-      setBusy(false);
+  const [initialDraft, setInitialDraft] = useState<SlackWorkspaceWizardDraft | null>(
+    integrationId === null ? { ...createEmptySlackWorkspaceDraft(), ownerId } : null,
+  );
+  const [integrationState, setIntegrationState] = useState<"draft" | "active" | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (integrationId === null) {
+      setInitialDraft({ ...createEmptySlackWorkspaceDraft(), ownerId });
+      setIntegrationState(null);
+      return () => {
+        cancelled = true;
+      };
     }
-  };
-  return (
-    <CompanySettingsSheet
-      open={open}
-      onOpenChange={(next) => !next && onClose()}
-      title="Add Slack workspace"
-      description="The token is validated by Slack, encrypted, and stored for this company. It is never written to an environment."
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button disabled={busy || token.trim().length === 0} onClick={() => void connect()}>
-            {busy ? "Connecting…" : "Connect workspace"}
-          </Button>
-        </>
+    setInitialDraft(null);
+    setLoadError(null);
+    void Promise.all([
+      client.getIntegration(ownerId, integrationId),
+      client.listWatchDefinitions(ownerId, integrationId),
+    ])
+      .then(([integration, definitions]) => {
+        if (cancelled) return;
+        if (integration === null) throw new Error("This Slack integration no longer exists.");
+        setIntegrationState(integration.state === "active" ? "active" : "draft");
+        setInitialDraft(draftFromIntegration(ownerId, integration, definitions));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "Could not load the Slack draft.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, integrationId, ownerId]);
+
+  const saveDraft = useCallback(
+    async (draft: SlackWorkspaceWizardDraft): Promise<SlackWorkspaceWizardDraft> => {
+      if (draft.ownerId === null || draft.integrationId === null) {
+        throw new Error("Connect Slack before saving routing rules.");
       }
-    >
-      <label className="space-y-1.5">
-        <span className="text-xs font-medium">Slack bot token</span>
-        <Input
-          autoFocus
-          type="password"
-          value={token}
-          onChange={(event) => setToken(event.currentTarget.value)}
-          placeholder="xoxb-…"
-        />
-        <span className="block text-[11px] text-muted-foreground">
-          Pathway stores no plaintext token or reversible token hint.
-        </span>
-      </label>
-    </CompanySettingsSheet>
+      if (draft.channelId === null || draft.channelName === null) {
+        throw new Error("Choose a Slack channel before saving routing rules.");
+      }
+      const saved = await client.saveV2Watch({
+        companyId: CompanyId.make(draft.ownerId),
+        integrationId: draft.integrationId,
+        id: draft.watchId ?? wizardEntityId("slack-watch"),
+        channelId: draft.channelId,
+        channelName: draft.channelName,
+        rules: draft.rules.map(ruleToContract),
+        expectedRevision: draft.watchRevision,
+      });
+      const nextDraft = {
+        ...draft,
+        watchId: saved.id,
+        watchRevision: saved.revision,
+      };
+      await onChanged(CompanyId.make(draft.ownerId));
+      return nextDraft;
+    },
+    [client, onChanged],
+  );
+
+  if (initialDraft === null) {
+    return (
+      <CompanySettingsSheet
+        description="Loading the saved Slack workspace and routing draft."
+        footer={
+          <Button onClick={onClose} variant="outline">
+            Close
+          </Button>
+        }
+        onOpenChange={(open) => !open && onClose()}
+        open
+        title="Slack workspace"
+      >
+        {loadError === null ? (
+          <div className="p-8 text-center text-xs text-muted-foreground">Loading Slack setup…</div>
+        ) : (
+          <CompanySettingsEmptyState title="Could not load Slack setup" description={loadError} />
+        )}
+      </CompanySettingsSheet>
+    );
+  }
+
+  return (
+    <SlackWorkspaceWizardSheet
+      getOwnerCatalog={(selectedOwnerId) =>
+        ownerCatalogs.get(selectedOwnerId) ?? { teams: [], statuses: [], projects: [], cycles: [] }
+      }
+      initialDraft={initialDraft}
+      mode={
+        integrationState === "active" ? "active" : integrationState === "draft" ? "draft" : "new"
+      }
+      onActivate={async (draft, reportProgress): Promise<SlackWorkspaceActivationResult> => {
+        reportProgress("configuration", "running", "Saving the latest workspace settings.");
+        const saved = await saveDraft(draft);
+        reportProgress("configuration", "complete");
+        reportProgress("routing", "complete", `${saved.rules.length} routing rules published.`);
+
+        const selectedOwnerId = CompanyId.make(saved.ownerId!);
+        const integration = await client.getIntegration(selectedOwnerId, saved.integrationId!);
+        if (integration === null) throw new Error("The Slack integration no longer exists.");
+        reportProgress("controller", "running", "Selecting a healthy Pathway environment.");
+        const candidates = ownerEnvironmentIds.get(selectedOwnerId) ?? [];
+        const preferred =
+          integration.preferredEnvironmentId !== null &&
+          candidates.includes(integration.preferredEnvironmentId)
+            ? integration.preferredEnvironmentId
+            : (candidates[0] ?? null);
+        if (preferred === null)
+          throw new Error("No connected Pathway environment can control Slack.");
+        await client.setControllerPool({
+          companyId: selectedOwnerId,
+          integrationId: saved.integrationId,
+          preferredEnvironmentId: preferred,
+          backupEnvironmentIds: [],
+        });
+        reportProgress("controller", "complete", "Controller selected.");
+        await client.activate({
+          companyId: selectedOwnerId,
+          integrationId: saved.integrationId!,
+          legacyWatchersAcknowledged: true,
+          enableAutomation: true,
+        });
+
+        reportProgress("health", "running", "Waiting for the first healthy Slack poll.");
+        const startedAt = Date.now();
+        for (let attempt = 0; attempt < 15; attempt += 1) {
+          const current = await client.getIntegration(selectedOwnerId, saved.integrationId!);
+          if (
+            current?.lastPollAt !== null &&
+            current?.lastPollAt !== undefined &&
+            current.lastPollAt >= startedAt
+          ) {
+            if (current.currentError === null) {
+              reportProgress("health", "complete", "The controller completed a healthy poll.");
+              return { outcome: "healthy" };
+            }
+            reportProgress("health", "warning", current.currentError);
+            return { outcome: "active-warning", message: current.currentError };
+          }
+          await new Promise((resolve) => globalThis.setTimeout(resolve, 1_000));
+        }
+        reportProgress("health", "warning", "The first poll is still pending.");
+        return {
+          outcome: "active-warning",
+          message: "Slack intake is active. The first health check is still pending.",
+        };
+      }}
+      onCheckReadiness={async (draft): Promise<readonly SlackWizardReadiness[]> => {
+        if (draft.ownerId === null) return [];
+        const selectedOwnerId = CompanyId.make(draft.ownerId);
+        const catalog = ownerCatalogs.get(selectedOwnerId);
+        const automationRules = draft.rules.filter(
+          (rule) => rule.investigation.kind !== "off" || rule.assignment !== "off",
+        );
+        const unavailableProjects = automationRules.filter((rule) => {
+          const project = catalog?.projects.find((candidate) => candidate.id === rule.projectId);
+          return project?.ready !== true;
+        });
+        const automation =
+          automationRules.length === 0 ? null : await client.getAutomation(selectedOwnerId);
+        const environments = ownerEnvironmentIds.get(selectedOwnerId) ?? [];
+        return [
+          {
+            id: "projects",
+            label: "Automation projects",
+            state: unavailableProjects.length === 0 ? "ready" : "blocked",
+            detail:
+              unavailableProjects.length === 0
+                ? "Every automated route has an available project checkout."
+                : `${unavailableProjects.length} automated routes need an available project checkout.`,
+          },
+          {
+            id: "automation",
+            label: "Issue automation",
+            state:
+              automationRules.length === 0 || automation?.enabled === true
+                ? "ready"
+                : automation === null
+                  ? "blocked"
+                  : "warning",
+            detail:
+              automationRules.length === 0
+                ? "No route requires investigation or assignment."
+                : automation === null
+                  ? "Configure issue automation before activating these routes."
+                  : automation.enabled
+                    ? "Issue automation is enabled."
+                    : "Issue automation will be enabled during activation.",
+          },
+          {
+            id: "controller",
+            label: "Pathway controller",
+            state: environments.length > 0 ? "ready" : "blocked",
+            detail:
+              environments.length > 0
+                ? `${environments.length} connected environment${environments.length === 1 ? " is" : "s are"} available for validation.`
+                : "Connect a Pathway environment before activating Slack intake.",
+          },
+        ];
+      }}
+      onComplete={(draft) => {
+        if (draft.ownerId !== null) void onChanged(CompanyId.make(draft.ownerId));
+      }}
+      onConnect={async ({ ownerId: selectedOwnerId, token }) => {
+        const companyId = CompanyId.make(selectedOwnerId);
+        if (integrationId !== null && companyId !== ownerId) {
+          throw new Error(
+            "This Slack workspace is already owned by another account. Cross-owner moves require a separate migration.",
+          );
+        }
+        const result = await client.connect(
+          companyId,
+          token,
+          companyId === ownerId && integrationId !== null ? integrationId : undefined,
+        );
+        await onChanged(companyId);
+        return {
+          integrationId: result.id,
+          workspace: {
+            id: result.workspaceId,
+            name: result.workspaceName,
+            domain: result.workspaceDomain,
+          },
+        };
+      }}
+      {...(integrationState === "draft"
+        ? {
+            onDeleteDraft: async (draft: SlackWorkspaceWizardDraft) => {
+              if (draft.ownerId === null || draft.integrationId === null) return;
+              const companyId = CompanyId.make(draft.ownerId);
+              const current = await client.getIntegration(companyId, draft.integrationId);
+              if (current === null) return;
+              await client.deleteDraft({
+                companyId,
+                integrationId: draft.integrationId,
+                expectedRevision: current.configurationRevision,
+              });
+              await onChanged(companyId);
+            },
+          }
+        : {})}
+      onListChannels={({ ownerId: selectedOwnerId, integrationId: selectedIntegrationId }) =>
+        client.discoverChannels(CompanyId.make(selectedOwnerId), selectedIntegrationId)
+      }
+      onOpenChange={(open) => !open && onClose()}
+      onSaveDraft={saveDraft}
+      open
+      owners={owners}
+    />
   );
 }
 
@@ -178,7 +647,10 @@ function ChannelEditor({
   const [autoInvestigate, setAutoInvestigate] = useState(watch?.autoInvestigate ?? false);
   const [autoAssign, setAutoAssign] = useState(watch?.autoAssign ?? false);
   const [reactionRoutes, setReactionRoutes] = useState(
-    watch?.trigger.reactionRoutes.map((route) => ({ ...route })) ?? [],
+    watch?.trigger.reactionRoutes.map((route) => ({
+      ...route,
+      clientKey: wizardEntityId("route"),
+    })) ?? [],
   );
   const [busy, setBusy] = useState(false);
   const submit = async () => {
@@ -197,7 +669,11 @@ function ChannelEditor({
           everyMessage,
           botMention,
           reactionRoutes: reactionRoutes
-            .map((route) => ({ ...route, emoji: route.emoji.trim().replaceAll(":", "") }))
+            .map((route) => ({
+              emoji: route.emoji.trim().replaceAll(":", ""),
+              cloudProjectId: route.cloudProjectId,
+              autoInvestigate: route.autoInvestigate,
+            }))
             .filter((route) => route.emoji.length > 0),
         },
       });
@@ -276,7 +752,12 @@ function ChannelEditor({
             onClick={() =>
               setReactionRoutes((current) => [
                 ...current,
-                { emoji: "", cloudProjectId: null, autoInvestigate: null },
+                {
+                  emoji: "",
+                  cloudProjectId: null,
+                  autoInvestigate: null,
+                  clientKey: wizardEntityId("route"),
+                },
               ])
             }
           >
@@ -290,7 +771,7 @@ function ChannelEditor({
         ) : (
           reactionRoutes.map((route, index) => (
             <div
-              key={index}
+              key={route.clientKey}
               className="grid gap-2 rounded-lg border p-2 sm:grid-cols-[0.65fr_1fr_0.8fr_auto]"
             >
               <Input
@@ -692,7 +1173,7 @@ function SlackIntegrationSheet({
             </p>
           ) : (
             <div className="divide-y rounded-lg border">
-              {[...integration.healthHistory].reverse().map((event) => (
+              {integration.healthHistory.toReversed().map((event) => (
                 <div key={`${event.at}-${event.state}`} className="flex gap-3 p-3 text-xs">
                   <Badge variant={event.state === "healthy" ? "success" : "error"}>
                     {event.state}
@@ -1041,25 +1522,21 @@ function AutomationSheet({
   );
 }
 
-function PersonalIntegrationsPanel() {
+function LegacyPersonalIntegrationsPanel() {
   const status = useSlackStatus();
   const watches = useSlackWatches();
   const [open, setOpen] = useState<"slack" | "automation" | null>(null);
+  if (!status.configured) return null;
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection {...searchableSetting("issue-intake")}>
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">Personal integrations</p>
+            <p className="text-sm font-medium">Legacy local integration</p>
             <p className="text-xs text-muted-foreground">
-              Configuration and execution remain on this environment.
+              This older Slack setup remains on this environment until you migrate or remove it.
             </p>
           </div>
-          {!status.configured ? (
-            <Button size="sm" onClick={() => setOpen("slack")}>
-              <PlusIcon className="size-4" /> Add integration
-            </Button>
-          ) : null}
         </div>
         <CompanySectionCard>
           <button
@@ -1073,9 +1550,7 @@ function PersonalIntegrationsPanel() {
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="text-sm font-medium">Slack</span>
-                <Badge variant={status.configured ? "success" : "secondary"}>
-                  {status.configured ? "Connected" : "Disconnected"}
-                </Badge>
+                <Badge variant="success">Connected locally</Badge>
               </span>
               <span className="block text-xs text-muted-foreground">
                 {watches.length} watched {watches.length === 1 ? "channel" : "channels"} · Local
@@ -1130,7 +1605,7 @@ function PersonalIntegrationsPanel() {
       >
         <IssueAutomationSettingsSection />
       </CompanySettingsSheet>
-    </SettingsPageContainer>
+    </>
   );
 }
 
@@ -1138,22 +1613,160 @@ export function IntegrationsSettingsPanel() {
   const company = useCompanySettings();
   const localSettings = usePrimarySettings();
   const client = useCompanyIntegrationsClient();
-  const workspaceKind =
-    company.activeCompany?.workspaceKind ?? company.directory.company?.workspaceKind ?? "personal";
+  const filteredCompany = company.activeCompany ?? company.personalCompany;
+  const filteredCompanyId = filteredCompany?.id ?? null;
   const [integrations, setIntegrations] = useState<ReadonlyArray<CompanySlackIntegrationSummary>>(
     [],
   );
   const [automation, setAutomation] = useState<CompanyAutomationSettingsSummary | null>(null);
   const [jobs, setJobs] = useState<ReadonlyArray<CompanyAutomationJobSummary>>([]);
-  const [loadedCompanyId, setLoadedCompanyId] = useState(company.companyId);
+  const [loadedCompanyId, setLoadedCompanyId] = useState(filteredCompanyId);
   const [sheet, setSheet] = useState<SheetState>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [automationLoadError, setAutomationLoadError] = useState<string | null>(null);
+  const [openingIntegrationId, setOpeningIntegrationId] = useState<string | null>(null);
   const refreshVersionRef = useRef(0);
-  const companyIdRef = useRef(company.companyId);
-  companyIdRef.current = company.companyId;
-  const values = company.replica?.view.values() ?? [];
+  const companyIdRef = useRef(filteredCompanyId);
+  companyIdRef.current = filteredCompanyId;
+  const ownerContexts = useMemo(() => {
+    const contexts = new Map<
+      string,
+      {
+        readonly catalog: SlackOwnerCatalog;
+        readonly environmentIds: readonly string[];
+        readonly permissions: ReturnType<typeof deriveCurrentMemberPermissions>;
+      }
+    >();
+    for (const owner of company.companies) {
+      const replica = company.registryReplicas.get(owner.id);
+      const ownerValues = [...(replica?.view.values() ?? [])];
+      const directory = companyDirectoryFromReplicaValues(ownerValues);
+      const membershipId = company.registryMembershipIds.get(owner.id) ?? null;
+      const permissions = deriveCurrentMemberPermissions({
+        directory,
+        membershipId,
+        isOwner:
+          membershipId === null
+            ? null
+            : (directory.company?.owners.some((entry) => entry.membershipId === membershipId) ??
+              false),
+      });
+      const environmentIds = environmentRegistrationsFromReplicaValues(ownerValues)
+        .filter((row) => row.state === "active")
+        .map((row) => row.environmentId);
+      const activeEnvironmentIds = new Set(environmentIds);
+      const activeBindings = ownerValues
+        .filter(isBinding)
+        .filter(
+          (binding) =>
+            binding.status === "active" && activeEnvironmentIds.has(binding.environmentId),
+        );
+      const teams = ownerValues
+        .filter(isTeam)
+        .filter((team) => team.archivedAt === null)
+        .map((team) => ({ id: team.id, name: team.name }));
+      const rawStatuses = ownerValues.filter(isStatus).filter((status) => !status.hidden);
+      const baseStatuses = rawStatuses.filter(
+        (status) => status.teamId === null && status.name !== null,
+      );
+      const baseStatusById = new Map(baseStatuses.map((status) => [status.id, status]));
+      const teamStatuses = rawStatuses
+        .filter((status) => status.teamId !== null)
+        .flatMap((status) => {
+          const base =
+            status.baseStatusId === null ? null : baseStatusById.get(status.baseStatusId);
+          const name = status.name ?? base?.name ?? null;
+          if (name === null) return [];
+          return [
+            {
+              id: status.id,
+              name,
+              teamId: status.teamId,
+              color: status.color ?? base?.color ?? null,
+            },
+          ];
+        });
+      const inheritedStatuses = teams.flatMap((team) =>
+        baseStatuses
+          .filter(
+            (base) =>
+              !rawStatuses.some(
+                (candidate) => candidate.teamId === team.id && candidate.baseStatusId === base.id,
+              ),
+          )
+          .map((status) => ({
+            id: status.id,
+            name: status.name!,
+            teamId: team.id,
+            color: status.color ?? null,
+          })),
+      );
+      contexts.set(owner.id, {
+        catalog: {
+          teams,
+          statuses: [
+            ...baseStatuses.map((status) => ({
+              id: status.id,
+              name: status.name!,
+              teamId: null,
+              color: status.color ?? null,
+            })),
+            ...teamStatuses,
+            ...inheritedStatuses,
+          ],
+          projects: ownerValues
+            .filter(isProject)
+            .filter((project) => project.archivedAt === null)
+            .map((project) => ({
+              id: project.id,
+              name: project.name,
+              ready: activeBindings.some((binding) => binding.cloudProjectId === project.id),
+              readinessDetail: activeBindings.some(
+                (binding) => binding.cloudProjectId === project.id,
+              )
+                ? "An active checkout is available."
+                : "No connected environment has an active checkout.",
+            })),
+          cycles: ownerValues
+            .filter(isCycle)
+            .filter((cycle) => cycle.completedAt === null)
+            .map((cycle) => ({ id: cycle.id, name: cycle.name, teamId: cycle.teamId })),
+        },
+        environmentIds,
+        permissions,
+      });
+    }
+    return contexts;
+  }, [company.companies, company.registryMembershipIds, company.registryReplicas]);
+  const owners = useMemo<readonly SlackOwnerOption[]>(
+    () =>
+      company.companies.map((owner) => {
+        const gate = permissionGate(
+          ownerContexts.get(owner.id)?.permissions ?? { status: "unknown" },
+          "integrations.manage",
+        );
+        return {
+          id: owner.id,
+          name: owner.workspaceKind === "personal" ? "Personal" : owner.name,
+          kind: owner.workspaceKind,
+          canManage: gate.enabled,
+          unavailableReason: gate.enabled ? null : gate.tooltip,
+        };
+      }),
+    [company.companies, ownerContexts],
+  );
+  const ownerCatalogs = useMemo(
+    () => new Map([...ownerContexts].map(([id, context]) => [id, context.catalog])),
+    [ownerContexts],
+  );
+  const ownerEnvironmentIds = useMemo(
+    () => new Map([...ownerContexts].map(([id, context]) => [id, context.environmentIds])),
+    [ownerContexts],
+  );
+  const filteredReplica =
+    filteredCompanyId === null ? null : (company.registryReplicas.get(filteredCompanyId) ?? null);
+  const values = useMemo(() => [...(filteredReplica?.view.values() ?? [])], [filteredReplica]);
   const environments = useMemo(
     () =>
       environmentRegistrationsFromReplicaValues(values)
@@ -1190,57 +1803,73 @@ export function IntegrationsSettingsPanel() {
     () => new Map([...values].filter(isIssue).map((issue) => [issue.id, issue.key])),
     [values],
   );
-  const readGate = permissionGate(company.permissions, "integrations.read");
-  const manageGate = permissionGate(company.permissions, "integrations.manage");
-  const refresh = useCallback(async () => {
-    if (client === null || company.companyId === null || !readGate.enabled) return;
-    const companyId = company.companyId;
-    const refreshVersion = ++refreshVersionRef.current;
-    setLoading(true);
-    setLoadError(null);
-    setAutomationLoadError(null);
-    const isCurrent = () =>
-      refreshVersion === refreshVersionRef.current && companyIdRef.current === companyId;
-    const loadIntegrations = client
-      .list(companyId)
-      .then((nextIntegrations) => {
-        if (!isCurrent()) return;
-        setIntegrations(nextIntegrations);
-        setLoadedCompanyId(companyId);
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent()) return;
-        setLoadError(error instanceof Error ? error.message : "Could not load integrations.");
-        reportError("Could not load integrations", error);
-      })
-      .finally(() => {
-        if (isCurrent()) setLoading(false);
-      });
-    const loadAutomation = Promise.all([
-      client.getAutomation(companyId),
-      client.listJobs(companyId),
-    ])
-      .then(([nextAutomation, nextJobs]) => {
-        if (!isCurrent()) return;
-        setAutomation(nextAutomation);
-        setJobs(nextJobs);
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent()) return;
-        setAutomationLoadError(
-          error instanceof Error ? error.message : "Could not load issue automation.",
-        );
-        reportError("Could not load issue automation", error);
-      });
-    await Promise.all([loadIntegrations, loadAutomation]);
-  }, [client, company.companyId, readGate.enabled]);
+  const filteredPermissions =
+    filteredCompanyId === null
+      ? ({ status: "unknown" } as const)
+      : (ownerContexts.get(filteredCompanyId)?.permissions ?? { status: "unknown" });
+  const readGate = permissionGate(filteredPermissions, "integrations.read");
+  const manageGate = permissionGate(filteredPermissions, "integrations.manage");
+  const refresh = useCallback(
+    async (requestedCompanyId = filteredCompanyId) => {
+      if (client === null || requestedCompanyId === null) return;
+      const requestedContext = ownerContexts.get(requestedCompanyId);
+      if (
+        !permissionGate(requestedContext?.permissions ?? { status: "unknown" }, "integrations.read")
+          .enabled
+      )
+        return;
+      const companyId = requestedCompanyId;
+      const refreshVersion = ++refreshVersionRef.current;
+      const refreshesVisibleCompany = companyId === companyIdRef.current;
+      if (refreshesVisibleCompany) {
+        setLoading(true);
+        setLoadError(null);
+        setAutomationLoadError(null);
+      }
+      const isCurrent = () =>
+        refreshVersion === refreshVersionRef.current && companyIdRef.current === companyId;
+      const loadIntegrations = client
+        .list(companyId)
+        .then((nextIntegrations) => {
+          if (!isCurrent()) return;
+          setIntegrations(nextIntegrations);
+          setLoadedCompanyId(companyId);
+        })
+        .catch((error: unknown) => {
+          if (!isCurrent()) return;
+          setLoadError(error instanceof Error ? error.message : "Could not load integrations.");
+          reportError("Could not load integrations", error);
+        })
+        .finally(() => {
+          if (isCurrent()) setLoading(false);
+        });
+      const loadAutomation = Promise.all([
+        client.getAutomation(companyId),
+        client.listJobs(companyId),
+      ])
+        .then(([nextAutomation, nextJobs]) => {
+          if (!isCurrent()) return;
+          setAutomation(nextAutomation);
+          setJobs(nextJobs);
+        })
+        .catch((error: unknown) => {
+          if (!isCurrent()) return;
+          setAutomationLoadError(
+            error instanceof Error ? error.message : "Could not load issue automation.",
+          );
+          reportError("Could not load issue automation", error);
+        });
+      await Promise.all([loadIntegrations, loadAutomation]);
+    },
+    [client, filteredCompanyId, ownerContexts],
+  );
   useEffect(() => {
     refreshVersionRef.current += 1;
     setSheet(null);
     setLoading(true);
     setLoadError(null);
     setAutomationLoadError(null);
-    if (workspaceKind !== "organization" || company.companyId === null) {
+    if (filteredCompanyId === null) {
       setLoading(false);
       return;
     }
@@ -1254,9 +1883,48 @@ export function IntegrationsSettingsPanel() {
       return;
     }
     void refresh();
-  }, [client, company.companyId, readGate.enabled, readGate.tooltip, refresh, workspaceKind]);
-  if (workspaceKind !== "organization") return <PersonalIntegrationsPanel />;
-  if (!readGate.enabled)
+  }, [client, filteredCompanyId, readGate.enabled, readGate.tooltip, refresh]);
+
+  const openIntegration = useCallback(
+    async (integration: CompanySlackIntegrationSummary) => {
+      if (client === null || filteredCompanyId === null || openingIntegrationId !== null) return;
+      setOpeningIntegrationId(integration.id);
+      try {
+        if (integration.state === "draft") {
+          setSheet({
+            kind: "add",
+            ownerId: filteredCompanyId,
+            integrationId: integration.id,
+          });
+          return;
+        }
+        const definitions = await client.listWatchDefinitions(filteredCompanyId, integration.id);
+        const usesV2Routing = definitions.some(
+          (definition) => "configurationVersion" in definition,
+        );
+        setSheet(
+          usesV2Routing
+            ? {
+                kind: "add",
+                ownerId: filteredCompanyId,
+                integrationId: integration.id,
+              }
+            : {
+                kind: "slack",
+                integrationId: integration.id,
+                view: "overview",
+              },
+        );
+      } catch (error) {
+        reportError("Could not open Slack workspace", error);
+      } finally {
+        setOpeningIntegrationId(null);
+      }
+    },
+    [client, filteredCompanyId, openingIntegrationId],
+  );
+
+  if (filteredCompanyId !== null && !readGate.enabled)
     return (
       <SettingsPageContainer>
         <CompanySettingsEmptyState
@@ -1265,9 +1933,10 @@ export function IntegrationsSettingsPanel() {
             readGate.tooltip ?? "You do not have permission to view company integrations."
           }
         />
+        <LegacyPersonalIntegrationsPanel />
       </SettingsPageContainer>
     );
-  const dataMatchesCompany = loadedCompanyId === company.companyId;
+  const dataMatchesCompany = loadedCompanyId === filteredCompanyId;
   const visibleIntegrations = dataMatchesCompany ? integrations : [];
   const visibleAutomation = dataMatchesCompany ? automation : null;
   const visibleJobs = dataMatchesCompany ? jobs : [];
@@ -1288,17 +1957,24 @@ export function IntegrationsSettingsPanel() {
       <SettingsSection {...searchableSetting("issue-intake")}>
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">Company integrations</p>
+            <p className="text-sm font-medium">Slack workspaces</p>
             <p className="text-xs text-muted-foreground">
-              Shared configuration, central deduplication and one controller per Slack workspace.
+              {filteredCompany === undefined || filteredCompany === null
+                ? "Choose an owner while connecting a Slack workspace."
+                : `Showing integrations owned by ${
+                    filteredCompany.workspaceKind === "personal" ? "Personal" : filteredCompany.name
+                  }. The Settings company selector only filters this list.`}
             </p>
           </div>
           <div className="flex items-center gap-2">
             {attention > 0 ? <Badge variant="warning">{attention} need attention</Badge> : null}
             <Button
               size="sm"
-              disabled={!manageGate.enabled || client === null}
-              onClick={() => setSheet({ kind: "add" })}
+              disabled={!manageGate.enabled || client === null || filteredCompanyId === null}
+              onClick={() => {
+                if (filteredCompanyId === null) return;
+                setSheet({ kind: "add", ownerId: filteredCompanyId, integrationId: null });
+              }}
             >
               <PlusIcon className="size-4" /> Add integration
             </Button>
@@ -1326,9 +2002,8 @@ export function IntegrationsSettingsPanel() {
                 key={integration.id}
                 type="button"
                 className="flex w-full items-center gap-3 border-b p-4 text-left last:border-b-0 hover:bg-muted/40"
-                onClick={() =>
-                  setSheet({ kind: "slack", integrationId: integration.id, view: "overview" })
-                }
+                disabled={openingIntegrationId !== null}
+                onClick={() => void openIntegration(integration)}
               >
                 <span className="flex size-9 items-center justify-center rounded-lg bg-muted">
                   <SlackIcon className="size-4" />
@@ -1341,9 +2016,15 @@ export function IntegrationsSettingsPanel() {
                     {integrationBadge(integration)}
                   </span>
                   <span className="block truncate text-xs text-muted-foreground">
-                    {integration.watchCount} watched channels ·{" "}
-                    {integration.controllerEnvironmentId ?? "No controller"} · Polled{" "}
-                    {formatAge(integration.lastPollAt)}
+                    {openingIntegrationId === integration.id
+                      ? "Opening workspace…"
+                      : `${integration.watchCount} watched channels · `}
+                    {openingIntegrationId === integration.id ? null : (
+                      <>
+                        {integration.controllerEnvironmentId ?? "No controller"} · Polled{" "}
+                        {formatAge(integration.lastPollAt)}
+                      </>
+                    )}
                   </span>
                   {integration.currentError !== null || integration.blockedReason !== null ? (
                     <span className="block truncate text-[11px] text-destructive">
@@ -1410,22 +2091,27 @@ export function IntegrationsSettingsPanel() {
           </button>
         </CompanySectionCard>
       </SettingsSection>
-      {client !== null && company.companyId !== null ? (
+      <LegacyPersonalIntegrationsPanel />
+      {client !== null && filteredCompanyId !== null ? (
         <>
-          <AddIntegrationSheet
-            client={client}
-            companyId={company.companyId}
-            open={sheet?.kind === "add"}
-            onClose={() => setSheet(null)}
-            onConnected={(integrationId) =>
-              setSheet({ kind: "slack", integrationId, view: "overview" })
-            }
-            onChanged={refresh}
-          />
+          {sheet?.kind === "add" ? (
+            <SlackWorkspaceWizardController
+              client={client}
+              integrationId={sheet.integrationId}
+              onChanged={async (ownerId) => {
+                if (ownerId === filteredCompanyId) await refresh(ownerId);
+              }}
+              onClose={() => setSheet(null)}
+              ownerCatalogs={ownerCatalogs}
+              ownerEnvironmentIds={ownerEnvironmentIds}
+              ownerId={sheet.ownerId}
+              owners={owners}
+            />
+          ) : null}
           {selected !== null && sheet?.kind === "slack" ? (
             <SlackIntegrationSheet
               client={client}
-              companyId={company.companyId}
+              companyId={filteredCompanyId}
               integration={selected}
               environments={environments}
               projects={projects}
@@ -1434,20 +2120,20 @@ export function IntegrationsSettingsPanel() {
               state={sheet}
               onState={(view) => setSheet({ ...sheet, view })}
               onClose={() => setSheet(null)}
-              onChanged={refresh}
+              onChanged={() => refresh(filteredCompanyId)}
             />
           ) : null}
           {sheet?.kind === "automation" ? (
             <AutomationSheet
               client={client}
-              companyId={company.companyId}
+              companyId={filteredCompanyId}
               summary={visibleAutomation}
               jobs={visibleJobs}
               fallback={localSettings.issueAutomation}
               issueKeys={issueKeys}
               canManage={manageGate.enabled}
               onClose={() => setSheet(null)}
-              onChanged={refresh}
+              onChanged={() => refresh(filteredCompanyId)}
             />
           ) : null}
         </>

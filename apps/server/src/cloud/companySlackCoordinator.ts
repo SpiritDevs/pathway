@@ -3,6 +3,7 @@
 import { api } from "@spiritdevs/backend/convexApi";
 import {
   CommandId,
+  type CompanySlackChannelWatchV2,
   Issue,
   IssueAutomationAuditRule,
   IssueAutomationSettings,
@@ -64,11 +65,30 @@ import {
   superviseCloudSyncCompanies,
 } from "./syncDaemon.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
+import {
+  compileCompanySlackRules,
+  evaluateCompanySlackRules,
+  type CompiledCompanySlackRules,
+} from "./companySlackRules.ts";
 
 export const COMPANY_SLACK_POLL_INTERVAL_MS = 30_000;
 const MAX_HISTORY_PAGES = 10;
 const REACTION_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 const REACTION_WINDOW_MESSAGES = 100;
+
+const decodeModelSelectionOption = Schema.decodeUnknownOption(ModelSelection);
+const decodeIssue = Schema.decodeUnknownEffect(Issue);
+const decodeIssueAutomationSettingsJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(IssueAutomationSettings),
+);
+const decodeIssueAutomationAuditRuleJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(IssueAutomationAuditRule),
+);
+const decodeRemediationSnapshotJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ worker: Schema.Unknown, findings: Schema.Array(Schema.String) }),
+  ),
+);
 
 type Integration = FunctionReturnType<typeof api.slackIntegrations.list>[number];
 type Lease = FunctionReturnType<typeof api.slackIntegrations.heartbeat>;
@@ -90,6 +110,7 @@ export interface CompanySlackBackend {
     revision: number;
     supportsSlackCoordination: boolean;
     supportsAutomationJobs: boolean;
+    slackProtocolVersion: 2;
     providers: ReadonlyArray<{
       readonly instanceId: string;
       readonly driverKind: string;
@@ -162,6 +183,29 @@ export interface CompanySlackBackend {
     messageCursor: string | null;
     reactionCursor: string | null;
   }) => Effect.Effect<void, unknown>;
+  readonly deferMessage: (input: {
+    companyId: string;
+    integrationId: string;
+    generation: number;
+    channelId: string;
+    messageTs: string;
+    watchRevision: number;
+    candidateRuleId: string;
+    eligibleAt: number;
+  }) => Effect.Effect<FunctionReturnType<typeof api.slackOperations.deferMessage>, unknown>;
+  readonly listDueMessages: (input: {
+    companyId: string;
+    integrationId: string;
+    generation: number;
+    limit?: number;
+  }) => Effect.Effect<FunctionReturnType<typeof api.slackOperations.listDueMessages>, unknown>;
+  readonly clearDeferredMessage: (input: {
+    companyId: string;
+    integrationId: string;
+    generation: number;
+    channelId: string;
+    messageTs: string;
+  }) => Effect.Effect<void, unknown>;
   readonly createIssue: (input: {
     companyId: string;
     integrationId: string;
@@ -173,6 +217,8 @@ export interface CompanySlackBackend {
     description: string;
     permalink: string | null;
     authorName: string | null;
+    ruleId?: string;
+    watchRevision?: number;
   }) => Effect.Effect<
     { readonly created: boolean; readonly issueId: string; readonly issueKey: string },
     unknown
@@ -312,6 +358,12 @@ export const makeCompanySlackBackend = Effect.fn("cloud.company_slack.backend")(
       authorized((convex) => convex.query(api.slackOperations.readCursor, args)),
     updateCursor: (args) =>
       authorized((convex) => convex.mutation(api.slackOperations.updateCursor, args)),
+    deferMessage: (args) =>
+      authorized((convex) => convex.mutation(api.slackOperations.deferMessage, args)),
+    listDueMessages: (args) =>
+      authorized((convex) => convex.query(api.slackOperations.listDueMessages, args)),
+    clearDeferredMessage: (args) =>
+      authorized((convex) => convex.mutation(api.slackOperations.clearDeferredMessage, args)),
     createIssue: (args) =>
       authorized((convex) => convex.mutation(api.slackOperations.createIssue, args)),
     addReply: (args) => authorized((convex) => convex.mutation(api.slackOperations.addReply, args)),
@@ -371,6 +423,69 @@ function messageRoute(watch: RuntimeWatch, message: SlackMessage, identity: Slac
     return { matched: true as const, emoji: null };
   }
   return { matched: false as const, emoji: null };
+}
+
+type RuntimeWatchV2 = RuntimeWatch & CompanySlackChannelWatchV2;
+
+function isRuntimeWatchV2(watch: RuntimeWatch): watch is RuntimeWatchV2 {
+  return (watch as { readonly configurationVersion?: unknown }).configurationVersion === 2;
+}
+
+function botMentioned(message: SlackMessage, identity: SlackIdentity): boolean {
+  return identity.botUserId !== null && (message.text ?? "").includes(`<@${identity.botUserId}>`);
+}
+
+type ResolvedMessageRoute =
+  | {
+      readonly kind: "match";
+      readonly routeEmoji: string | null;
+      readonly ruleId?: string;
+      readonly watchRevision?: number;
+      readonly titleText: string;
+      readonly matchedUsingReaction: boolean;
+    }
+  | {
+      readonly kind: "defer";
+      readonly untilMs: number;
+      readonly candidateRuleId: string;
+    }
+  | { readonly kind: "ignore" };
+
+function resolveMessageRoute(input: {
+  readonly watch: RuntimeWatch;
+  readonly compiledRules: CompiledCompanySlackRules | null;
+  readonly message: SlackMessage;
+  readonly identity: SlackIdentity;
+  readonly nowMs: number;
+}): ResolvedMessageRoute {
+  if (!isRuntimeWatchV2(input.watch)) {
+    const route = messageRoute(input.watch, input.message, input.identity);
+    return route.matched
+      ? {
+          kind: "match",
+          routeEmoji: route.emoji,
+          titleText: input.message.text ?? "",
+          matchedUsingReaction: route.emoji !== null,
+        }
+      : { kind: "ignore" };
+  }
+  if (input.compiledRules === null) return { kind: "ignore" };
+  const evaluation = evaluateCompanySlackRules(input.compiledRules, {
+    text: input.message.text ?? "",
+    reactions: (input.message.reactions ?? []).map((reaction) => reaction.name),
+    botMentioned: botMentioned(input.message, input.identity),
+    messageTs: input.message.ts,
+    nowMs: input.nowMs,
+  });
+  if (evaluation.kind !== "match") return evaluation;
+  return {
+    kind: "match",
+    routeEmoji: null,
+    ruleId: evaluation.rule.id,
+    watchRevision: input.watch.revision,
+    titleText: evaluation.titleText,
+    matchedUsingReaction: evaluation.matchedUsingReaction,
+  };
 }
 
 const displayName = (
@@ -490,6 +605,72 @@ const attachThreadReplies = Effect.fn("cloud.company_slack.attach_thread_replies
   },
 );
 
+type MatchedMessageRoute = Extract<ResolvedMessageRoute, { readonly kind: "match" }>;
+
+const createRoutedSlackIssue = Effect.fn("cloud.company_slack.create_routed_issue")(
+  function* (input: {
+    readonly runtime: CompanySlackRuntime;
+    readonly integrationId: string;
+    readonly generation: number;
+    readonly token: string;
+    readonly identity: SlackIdentity;
+    readonly channelId: string;
+    readonly message: SlackMessage;
+    readonly route: MatchedMessageRoute;
+    readonly body: string;
+    readonly authorName: string | null;
+    readonly includePermalink: boolean;
+  }) {
+    const permalink = input.includePermalink
+      ? yield* input.runtime.slack
+          .permalink({
+            token: input.token,
+            channelId: input.channelId,
+            messageTs: input.message.ts,
+          })
+          .pipe(Effect.orElseSucceed(() => null))
+      : null;
+    const created = yield* input.runtime.backend.createIssue({
+      companyId: input.runtime.companyId,
+      integrationId: input.integrationId,
+      generation: input.generation,
+      channelId: input.channelId,
+      messageTs: input.message.ts,
+      routeEmoji: input.route.routeEmoji,
+      title: slackTitleFromText(slackMrkdwnToMarkdown(input.route.titleText)),
+      description: input.body.trim().length === 0 ? "" : `**Slack comment:**\n\n${input.body}`,
+      permalink,
+      authorName: input.authorName,
+      ...(input.route.ruleId === undefined
+        ? {}
+        : { ruleId: input.route.ruleId, watchRevision: input.route.watchRevision }),
+    });
+    if (!created.created) return created;
+    if ((input.message.reply_count ?? 0) > 0) {
+      yield* attachThreadReplies({
+        runtime: input.runtime,
+        integrationId: input.integrationId,
+        generation: input.generation,
+        token: input.token,
+        identity: input.identity,
+        channelId: input.channelId,
+        threadTs: input.message.ts,
+      });
+    }
+    yield* confirmCreatedIssue({
+      runtime: input.runtime,
+      integrationId: input.integrationId,
+      generation: input.generation,
+      token: input.token,
+      channelId: input.channelId,
+      messageTs: input.message.ts,
+      issueId: created.issueId,
+      issueKey: created.issueKey,
+    });
+    return created;
+  },
+);
+
 type PublishedProviderCapability = {
   readonly instanceId: string;
   readonly driverKind: string;
@@ -543,7 +724,7 @@ export interface CompanyAutomationExecutor {
 }
 
 function decodeJobSelection(value: unknown): ModelSelection | null {
-  return Schema.decodeUnknownOption(ModelSelection)(value).pipe(
+  return decodeModelSelectionOption(value).pipe(
     // This boundary deliberately does not invent a provider/model fallback.
     (option) => (option._tag === "Some" ? option.value : null),
   );
@@ -618,7 +799,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
     const execute: CompanyAutomationExecutor["execute"] = Effect.fn(
       "cloud.company_automation.execute",
     )(function* (job, context) {
-      const issue = yield* Schema.decodeUnknownEffect(Issue)(context.issue);
+      const issue = yield* decodeIssue(context.issue);
       const cwd = yield* jobWorkspace(job, context, threads);
       if (cwd === null && job.kind !== "remediation-dispatch") {
         return {
@@ -651,9 +832,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
             diagnostic: "The immutable routing snapshot is missing.",
           };
         }
-        const settings = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(IssueAutomationSettings),
-        )(job.ruleSnapshot);
+        const settings = yield* decodeIssueAutomationSettingsJson(job.ruleSnapshot);
         const generated = yield* textGeneration.investigate({
           cwd: cwd!,
           prompt: buildIssueAutomationClassificationPrompt({
@@ -705,9 +884,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
             diagnostic: "The immutable audit rule snapshot is missing.",
           };
         }
-        const rule = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(IssueAutomationAuditRule),
-        )(job.ruleSnapshot);
+        const rule = yield* decodeIssueAutomationAuditRuleJson(job.ruleSnapshot);
         const generated = yield* textGeneration.investigate({
           cwd: cwd!,
           prompt: buildIssueAutomationAuditPrompt({ issue, rule, remediationCycle: 0 }),
@@ -736,11 +913,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
           };
         }
         const projection = yield* threads.getThreadProjection(ThreadId.make(job.threadId));
-        const snapshot = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(
-            Schema.Struct({ worker: Schema.Unknown, findings: Schema.Array(Schema.String) }),
-          ),
-        )(job.ruleSnapshot);
+        const snapshot = yield* decodeRemediationSnapshotJson(job.ruleSnapshot);
         yield* threads.sendToThread({
           projectId: projection.thread.projectId,
           commandId: CommandId.make(`company-automation:${job.id}`),
@@ -867,6 +1040,7 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
     revision: providerCapabilityRevision,
     supportsSlackCoordination: true,
     supportsAutomationJobs: runtime.automation !== undefined,
+    slackProtocolVersion: 2,
     providers,
   });
   const [integrations, ownedWorkspaceIds] = yield* Effect.all([
@@ -938,13 +1112,28 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
       continue;
     }
     const config = configResult.success;
+    const dueMessages = config.watches.some(isRuntimeWatchV2)
+      ? yield* runtime.backend.listDueMessages({
+          companyId: runtime.companyId,
+          integrationId: integration.id,
+          generation,
+          limit: 100,
+        })
+      : [];
     let firstError: string | null = null;
     for (const watch of config.watches) {
-      const trigger = watch.trigger as Record<string, unknown>;
-      const active =
-        trigger["everyMessage"] === true ||
-        trigger["botMention"] === true ||
-        (Array.isArray(trigger["reactionRoutes"]) && trigger["reactionRoutes"].length > 0);
+      const trigger = isRuntimeWatchV2(watch) ? null : (watch.trigger as Record<string, unknown>);
+      const compiledResult = isRuntimeWatchV2(watch) ? compileCompanySlackRules(watch.rules) : null;
+      if (compiledResult !== null && !compiledResult.ok) {
+        firstError ??= `#${watch.channelName}: ${compiledResult.issues[0]?.message ?? "The Slack routing rules are invalid."}`;
+        continue;
+      }
+      const compiledRules = compiledResult?.ok === true ? compiledResult.value : null;
+      const active = isRuntimeWatchV2(watch)
+        ? watch.rules.length > 0
+        : trigger!["everyMessage"] === true ||
+          trigger!["botMention"] === true ||
+          (Array.isArray(trigger!["reactionRoutes"]) && trigger!["reactionRoutes"].length > 0);
       if (!active) continue;
       const pass = Effect.gen(function* () {
         const cursor = yield* runtime.backend.readCursor({
@@ -967,6 +1156,7 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
           if (pageCursor === null) break;
         }
         const ordered = collected.sort((left, right) => compareSlackTs(left.ts, right.ts));
+        const handledMessageTimestamps = new Set<string>();
         for (const message of ordered) {
           if (!isReadable(message) || isBot(message, identity)) continue;
           const authorName = yield* displayName(runtime.slack, credential.token, message);
@@ -986,63 +1176,80 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
               .pipe(Effect.catch(() => Effect.void));
             continue;
           }
-          const route = messageRoute(watch, message, identity);
-          if (!route.matched) {
+          const route = resolveMessageRoute({
+            watch,
+            compiledRules,
+            message,
+            identity,
+            nowMs: runtime.now(),
+          });
+          if (route.kind === "defer") {
+            if (isRuntimeWatchV2(watch)) {
+              yield* runtime.backend.deferMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: watch.channelId,
+                messageTs: message.ts,
+                watchRevision: watch.revision,
+                candidateRuleId: route.candidateRuleId,
+                eligibleAt: route.untilMs,
+              });
+            }
+            continue;
+          }
+          if (route.kind === "ignore") {
             yield* runtime.backend.recordIgnored({
               companyId: runtime.companyId,
               integrationId: integration.id,
               generation,
               channelId: watch.channelId,
               messageTs: message.ts,
-              reason: "no-trigger",
+              reason: isRuntimeWatchV2(watch) ? "no-rule" : "no-trigger",
             });
+            if (isRuntimeWatchV2(watch)) {
+              yield* runtime.backend.clearDeferredMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: watch.channelId,
+                messageTs: message.ts,
+              });
+            }
             continue;
           }
-          const permalink = yield* runtime.slack
-            .permalink({
-              token: credential.token,
-              channelId: watch.channelId,
-              messageTs: message.ts,
-            })
-            .pipe(Effect.orElseSucceed(() => null));
-          const created = yield* runtime.backend.createIssue({
-            companyId: runtime.companyId,
-            integrationId: integration.id,
-            generation,
-            channelId: watch.channelId,
-            messageTs: message.ts,
-            routeEmoji: route.emoji,
-            title: slackTitleFromText(body),
-            description: body.trim().length === 0 ? "" : `**Slack comment:**\n\n${body}`,
-            permalink,
-            authorName,
-          });
-          if (!created.created) continue;
-          if ((message.reply_count ?? 0) > 0) {
-            yield* attachThreadReplies({
-              runtime,
-              integrationId: integration.id,
-              generation,
-              token: credential.token,
-              identity,
-              channelId: watch.channelId,
-              threadTs: message.ts,
-            });
-          }
-          yield* confirmCreatedIssue({
+          yield* createRoutedSlackIssue({
             runtime,
             integrationId: integration.id,
             generation,
             token: credential.token,
+            identity,
             channelId: watch.channelId,
-            messageTs: message.ts,
-            issueId: created.issueId,
-            issueKey: created.issueKey,
+            message,
+            route,
+            body,
+            authorName,
+            includePermalink: true,
           });
+          handledMessageTimestamps.add(message.ts);
+          if (isRuntimeWatchV2(watch)) {
+            yield* runtime.backend.clearDeferredMessage({
+              companyId: runtime.companyId,
+              integrationId: integration.id,
+              generation,
+              channelId: watch.channelId,
+              messageTs: message.ts,
+            });
+          }
         }
 
         const reactionFloor = cursor.reactionCursor;
-        if (Array.isArray(trigger["reactionRoutes"]) && trigger["reactionRoutes"].length > 0) {
+        if (
+          compiledRules?.hasReactionConditions === true ||
+          (trigger !== null &&
+            Array.isArray(trigger["reactionRoutes"]) &&
+            trigger["reactionRoutes"].length > 0)
+        ) {
           const page = yield* runtime.slack.history({
             token: credential.token,
             channelId: watch.channelId,
@@ -1050,45 +1257,137 @@ export const runCompanySlackCycle = Effect.fn("cloud.company_slack.cycle")(funct
             limit: REACTION_WINDOW_MESSAGES,
           });
           for (const message of [...page.messages].sort((a, b) => compareSlackTs(a.ts, b.ts))) {
-            if (message.thread_ts !== undefined || reactionRoute(watch, message) === null) continue;
+            if (message.thread_ts !== undefined) continue;
             if (!isReadable(message) || isBot(message, identity)) continue;
+            const route = resolveMessageRoute({
+              watch,
+              compiledRules,
+              message,
+              identity,
+              nowMs: runtime.now(),
+            });
+            if (route.kind !== "match") continue;
+            if (!route.matchedUsingReaction) continue;
             const body = slackMrkdwnToMarkdown(message.text ?? "");
             const authorName = yield* displayName(runtime.slack, credential.token, message);
-            const created = yield* runtime.backend.createIssue({
+            yield* createRoutedSlackIssue({
+              runtime,
+              integrationId: integration.id,
+              generation,
+              token: credential.token,
+              identity,
+              channelId: watch.channelId,
+              message,
+              route,
+              body,
+              authorName,
+              includePermalink: false,
+            });
+            handledMessageTimestamps.add(message.ts);
+            if (isRuntimeWatchV2(watch)) {
+              yield* runtime.backend.clearDeferredMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: watch.channelId,
+                messageTs: message.ts,
+              });
+            }
+          }
+        }
+
+        if (isRuntimeWatchV2(watch)) {
+          const pendingForWatch = dueMessages.filter(
+            (pending) => pending.channelId === watch.channelId,
+          );
+          for (const pending of pendingForWatch) {
+            if (handledMessageTimestamps.has(pending.messageTs)) continue;
+            if (pending.watchRevision !== watch.revision) {
+              yield* runtime.backend.clearDeferredMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: pending.channelId,
+                messageTs: pending.messageTs,
+              });
+              continue;
+            }
+            const replies = yield* runtime.slack.replies({
+              token: credential.token,
+              channelId: pending.channelId,
+              threadTs: pending.messageTs,
+            });
+            const message = replies.find((candidate) => candidate.ts === pending.messageTs);
+            if (message === undefined || !isReadable(message) || isBot(message, identity)) {
+              yield* runtime.backend.clearDeferredMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: pending.channelId,
+                messageTs: pending.messageTs,
+              });
+              continue;
+            }
+            const route = resolveMessageRoute({
+              watch,
+              compiledRules,
+              message,
+              identity,
+              nowMs: runtime.now(),
+            });
+            if (route.kind === "defer") {
+              yield* runtime.backend.deferMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: pending.channelId,
+                messageTs: pending.messageTs,
+                watchRevision: watch.revision,
+                candidateRuleId: route.candidateRuleId,
+                eligibleAt: route.untilMs,
+              });
+              continue;
+            }
+            if (route.kind === "ignore") {
+              yield* runtime.backend.recordIgnored({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: pending.channelId,
+                messageTs: pending.messageTs,
+                reason: "no-rule-after-grace",
+              });
+              yield* runtime.backend.clearDeferredMessage({
+                companyId: runtime.companyId,
+                integrationId: integration.id,
+                generation,
+                channelId: pending.channelId,
+                messageTs: pending.messageTs,
+              });
+              continue;
+            }
+            const body = slackMrkdwnToMarkdown(message.text ?? "");
+            const authorName = yield* displayName(runtime.slack, credential.token, message);
+            yield* createRoutedSlackIssue({
+              runtime,
+              integrationId: integration.id,
+              generation,
+              token: credential.token,
+              identity,
+              channelId: pending.channelId,
+              message,
+              route,
+              body,
+              authorName,
+              includePermalink: true,
+            });
+            yield* runtime.backend.clearDeferredMessage({
               companyId: runtime.companyId,
               integrationId: integration.id,
               generation,
-              channelId: watch.channelId,
-              messageTs: message.ts,
-              routeEmoji: reactionRoute(watch, message),
-              title: slackTitleFromText(body),
-              description: body.trim().length === 0 ? "" : `**Slack comment:**\n\n${body}`,
-              permalink: null,
-              authorName,
+              channelId: pending.channelId,
+              messageTs: pending.messageTs,
             });
-            if (created.created) {
-              if ((message.reply_count ?? 0) > 0) {
-                yield* attachThreadReplies({
-                  runtime,
-                  integrationId: integration.id,
-                  generation,
-                  token: credential.token,
-                  identity,
-                  channelId: watch.channelId,
-                  threadTs: message.ts,
-                });
-              }
-              yield* confirmCreatedIssue({
-                runtime,
-                integrationId: integration.id,
-                generation,
-                token: credential.token,
-                channelId: watch.channelId,
-                messageTs: message.ts,
-                issueId: created.issueId,
-                issueKey: created.issueKey,
-              });
-            }
           }
         }
         const replyThreads = yield* runtime.backend.threadsForReplyScan({

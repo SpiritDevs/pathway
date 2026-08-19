@@ -63,6 +63,7 @@ keeps the dialog open and shows the data included in the atomic migration.
 Removing a project does not require any of its machines to be online. Pathway removes the shared
 company project immediately; each offline checkout removes its local project and conversation
 history when that environment reconnects. Project files and directories on disk are never deleted.
+A project with no connections still has the same **Remove project** action in its settings.
 
 ## Customize a project icon
 

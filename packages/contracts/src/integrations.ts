@@ -9,10 +9,23 @@
  */
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { CloudProjectId } from "./cloudProject.ts";
-import { CloudTimestamp, CompanyId } from "./company.ts";
-import { IssueCycleId, IssueId, SlackChannelId, SlackEmojiName, SlackMessageTs } from "./issues.ts";
+import { CloudTimestamp, CompanyId, TeamId } from "./company.ts";
+import {
+  IssueCycleId,
+  IssueId,
+  IssueStatusId,
+  SlackChannelId,
+  SlackEmojiName,
+  SlackMessageTs,
+} from "./issues.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { IssueAutomationSettings } from "./settings.ts";
@@ -33,6 +46,13 @@ export const SLACK_CONTROLLER_MAX_BACKUPS = 10;
 export const SLACK_CONTROLLER_HEARTBEAT_INTERVAL_MS = 30_000;
 export const SLACK_CONTROLLER_LEASE_TTL_MS = 90_000;
 export const SLACK_CONTROLLER_FAILBACK_HEARTBEATS = 2;
+
+export const SLACK_ROUTING_MAX_RULES_PER_CHANNEL = 25;
+export const SLACK_ROUTING_MAX_NODES_PER_RULE = 50;
+export const SLACK_ROUTING_MAX_NODES_PER_WATCH = 250;
+export const SLACK_ROUTING_MAX_PREFIXES_PER_LEAF = 10;
+export const SLACK_ROUTING_MAX_PREFIX_CHARS = 80;
+export const SLACK_ROUTING_MAX_SERIALIZED_BYTES = 32 * 1_024;
 
 export const SlackIntegrationState = Schema.Literals(["draft", "active", "disconnected"]);
 export type SlackIntegrationState = typeof SlackIntegrationState.Type;
@@ -124,6 +144,151 @@ export const CompanySlackChannelWatch = Schema.Struct({
 });
 export type CompanySlackChannelWatch = typeof CompanySlackChannelWatch.Type;
 
+export const CompanySlackRoutingRuleId = makeIntegrationEntityId("CompanySlackRoutingRuleId");
+export type CompanySlackRoutingRuleId = typeof CompanySlackRoutingRuleId.Type;
+
+export type CompanySlackRoutingCondition =
+  | {
+      readonly kind: "all";
+      readonly conditions: ReadonlyArray<CompanySlackRoutingCondition>;
+    }
+  | {
+      readonly kind: "any";
+      readonly conditions: ReadonlyArray<CompanySlackRoutingCondition>;
+    }
+  | {
+      readonly kind: "text-prefix";
+      readonly prefixes: ReadonlyArray<string>;
+    }
+  | { readonly kind: "reaction"; readonly emoji: SlackEmojiName }
+  | { readonly kind: "bot-mention" }
+  | { readonly kind: "every-message" };
+
+const CompanySlackRoutingConditionRef = Schema.suspend(
+  (): Schema.Codec<CompanySlackRoutingCondition> => CompanySlackRoutingCondition,
+);
+
+const CompanySlackRoutingConditionGroup = (kind: "all" | "any") =>
+  Schema.Struct({
+    kind: Schema.Literal(kind),
+    conditions: Schema.Array(CompanySlackRoutingConditionRef).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(SLACK_ROUTING_MAX_NODES_PER_RULE),
+    ),
+  });
+
+export const CompanySlackRoutingCondition: Schema.Codec<CompanySlackRoutingCondition> =
+  Schema.Union([
+    CompanySlackRoutingConditionGroup("all"),
+    CompanySlackRoutingConditionGroup("any"),
+    Schema.Struct({
+      kind: Schema.Literal("text-prefix"),
+      prefixes: Schema.Array(
+        TrimmedNonEmptyString.check(Schema.isMaxLength(SLACK_ROUTING_MAX_PREFIX_CHARS)),
+      ).check(Schema.isMinLength(1), Schema.isMaxLength(SLACK_ROUTING_MAX_PREFIXES_PER_LEAF)),
+    }),
+    Schema.Struct({ kind: Schema.Literal("reaction"), emoji: SlackEmojiName }),
+    Schema.Struct({ kind: Schema.Literal("bot-mention") }),
+    Schema.Struct({ kind: Schema.Literal("every-message") }),
+  ]);
+
+export const CompanySlackInvestigationTiming = Schema.Literals(["off", "immediate", "on-status"]);
+export type CompanySlackInvestigationTiming = typeof CompanySlackInvestigationTiming.Type;
+
+export const CompanySlackInvestigationPolicy = Schema.Struct({
+  timing: CompanySlackInvestigationTiming,
+  triggerStatusId: Schema.NullOr(IssueStatusId),
+  successStatusId: Schema.NullOr(IssueStatusId),
+});
+export type CompanySlackInvestigationPolicy = typeof CompanySlackInvestigationPolicy.Type;
+
+export const CompanySlackAssignmentTiming = Schema.Literals([
+  "off",
+  "immediate",
+  "after-investigation",
+]);
+export type CompanySlackAssignmentTiming = typeof CompanySlackAssignmentTiming.Type;
+
+const slackRoutingConditionNodeCount = (condition: CompanySlackRoutingCondition): number =>
+  condition.kind === "all" || condition.kind === "any"
+    ? 1 +
+      condition.conditions.reduce(
+        (count, child) => count + slackRoutingConditionNodeCount(child),
+        0,
+      )
+    : 1;
+
+const slackRoutingRuleNodeLimit = Schema.makeFilter(
+  (rule: { readonly condition: CompanySlackRoutingCondition }) =>
+    slackRoutingConditionNodeCount(rule.condition) <= SLACK_ROUTING_MAX_NODES_PER_RULE ||
+    `Slack routing rules cannot contain more than ${SLACK_ROUTING_MAX_NODES_PER_RULE} condition nodes.`,
+);
+
+export const CompanySlackRoutingRule = Schema.Struct({
+  id: CompanySlackRoutingRuleId,
+  name: TrimmedNonEmptyString,
+  condition: CompanySlackRoutingCondition,
+  teamId: Schema.NullOr(TeamId),
+  cloudProjectId: Schema.NullOr(CloudProjectId),
+  cycleId: Schema.NullOr(IssueCycleId),
+  initialStatusId: Schema.NullOr(IssueStatusId),
+  investigation: CompanySlackInvestigationPolicy,
+  assignmentTiming: CompanySlackAssignmentTiming,
+}).check(slackRoutingRuleNodeLimit);
+export type CompanySlackRoutingRule = typeof CompanySlackRoutingRule.Type;
+
+const slackRoutingWatchLimits = Schema.makeFilter(
+  (configuration: {
+    readonly configurationVersion: 2;
+    readonly rules: ReadonlyArray<CompanySlackRoutingRule>;
+  }) => {
+    const totalNodes = configuration.rules.reduce(
+      (count, rule) => count + slackRoutingConditionNodeCount(rule.condition),
+      0,
+    );
+    if (totalNodes > SLACK_ROUTING_MAX_NODES_PER_WATCH) {
+      return `Slack channel watches cannot contain more than ${SLACK_ROUTING_MAX_NODES_PER_WATCH} condition nodes.`;
+    }
+
+    const serializedBytes = new TextEncoder().encode(JSON.stringify(configuration)).byteLength;
+    return (
+      serializedBytes <= SLACK_ROUTING_MAX_SERIALIZED_BYTES ||
+      `Slack channel watch configuration cannot exceed ${SLACK_ROUTING_MAX_SERIALIZED_BYTES} serialized bytes.`
+    );
+  },
+);
+
+export const CompanySlackRoutingConfigurationV2 = Schema.Struct({
+  configurationVersion: Schema.Literal(2),
+  rules: Schema.Array(CompanySlackRoutingRule).check(
+    Schema.isMaxLength(SLACK_ROUTING_MAX_RULES_PER_CHANNEL),
+  ),
+}).check(slackRoutingWatchLimits);
+export type CompanySlackRoutingConfigurationV2 = typeof CompanySlackRoutingConfigurationV2.Type;
+
+export const CompanySlackChannelWatchV2 = Schema.Struct({
+  id: makeIntegrationEntityId("CompanySlackChannelWatchId"),
+  companyId: CompanyId,
+  integrationId: SlackIntegrationId,
+  channelId: SlackChannelId,
+  channelName: TrimmedNonEmptyString,
+  configurationVersion: Schema.Literal(2),
+  rules: Schema.Array(CompanySlackRoutingRule).check(
+    Schema.isMaxLength(SLACK_ROUTING_MAX_RULES_PER_CHANNEL),
+  ),
+  revision: NonNegativeInt,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+}).check(slackRoutingWatchLimits);
+export type CompanySlackChannelWatchV2 = typeof CompanySlackChannelWatchV2.Type;
+
+/** V1 remains decodable while V2 controllers roll out across environments. */
+export const CompanySlackChannelWatchDefinition = Schema.Union([
+  CompanySlackChannelWatch,
+  CompanySlackChannelWatchV2,
+]);
+export type CompanySlackChannelWatchDefinition = typeof CompanySlackChannelWatchDefinition.Type;
+
 export const SlackControllerLease = Schema.Struct({
   integrationId: SlackIntegrationId,
   holderEnvironmentId: Schema.NullOr(EnvironmentId),
@@ -147,6 +312,8 @@ export const EnvironmentProviderCapabilitySnapshot = Schema.Struct({
   revision: NonNegativeInt,
   supportsSlackCoordination: Schema.Boolean,
   supportsAutomationJobs: Schema.Boolean,
+  /** Missing snapshots predate the versioned Slack protocol and therefore mean V1. */
+  slackProtocolVersion: Schema.optional(PositiveInt),
   providers: Schema.Array(ProviderCapability),
   publishedAt: CloudTimestamp,
 });

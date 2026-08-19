@@ -11,6 +11,7 @@ import { backendError } from "./lib/errors.ts";
 import { encodeIssue } from "./lib/issueApply.ts";
 import { requireCompanyActor, requirePermission, type EnvironmentActor } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import { completeSlackInvestigationIntent } from "./lib/automationJobs.ts";
 
 const CLAIM_TTL_MS = 90_000;
 const MAX_SETTINGS_BYTES = 256 * 1_024;
@@ -160,15 +161,6 @@ function encodeJob(row: Doc<"issueAutomationJobs">) {
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
   };
-}
-
-async function encodeJobWithProject(
-  ctx: MutationCtx | Parameters<typeof query>[0],
-  row: Doc<"issueAutomationJobs">,
-) {
-  const project =
-    row.cloudProjectId === null ? null : await (ctx as MutationCtx).db.get(row.cloudProjectId);
-  return { ...encodeJob(row), cloudProjectId: project?.id ?? null };
 }
 
 function requireEnvironment(
@@ -856,9 +848,30 @@ export const report = mutation({
     const updated = { ...row, ...patch } as Doc<"issueAutomationJobs">;
     if (updated.state === "failed") {
       await addTerminalFailureComment(ctx, actor, updated, updated.diagnostic ?? "Unknown failure");
+      if (updated.kind === "slack-investigation") {
+        await completeSlackInvestigationIntent(ctx, actor.company._id, updated.issueId, false, now);
+      }
     }
     if (updated.state === "succeeded") {
       await applySuccessfulResult(ctx, actor, updated, args.result);
+      if (updated.kind === "slack-investigation") {
+        const intent = await completeSlackInvestigationIntent(
+          ctx,
+          actor.company._id,
+          updated.issueId,
+          true,
+          now,
+        );
+        if (intent !== null && intent.investigationSuccessStatusId !== null) {
+          await applyDirectIssueOperation(ctx, actor, {
+            operationId: `automation-result/${updated.id}/status`,
+            kind: "issue.update",
+            entityId: updated.issueId,
+            source: "automation",
+            args: { statusId: intent.investigationSuccessStatusId, triage: false },
+          });
+        }
+      }
       await reduceAudits(ctx, actor, updated, now);
     }
     const project =

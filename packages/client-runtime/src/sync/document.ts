@@ -38,9 +38,10 @@ export const SYNC_DOCUMENT_SCHEMA_VERSION = 1 as const;
  * the seed. Generation 1 was implicit. Generation 2 covers the expanded 19-kind replica;
  * generation 3 adds company environment registrations to the client replica; generation 4 adds
  * cloud projects. Older clients quarantined those rows while still advancing their cursor, so an
- * upgrade must reseed to materialize projects that have not changed since bootstrap.
+ * upgrade must reseed to materialize projects that have not changed since bootstrap. Generation 5
+ * repairs bootstrap snapshots that incorrectly retained soft-deleted cloud projects as live rows.
  */
-export const SYNC_BOOTSTRAP_GENERATION = 4 as const;
+export const SYNC_BOOTSTRAP_GENERATION = 5 as const;
 
 export const StoredSyncCheckpoint = Schema.Struct({
   schemaVersion: Schema.Literal(SYNC_DOCUMENT_SCHEMA_VERSION),

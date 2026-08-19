@@ -588,6 +588,7 @@ export default defineSchema({
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_workspace", ["companyId", "workspaceId"])
+    .index("by_workspace", ["workspaceId"])
     .index("by_company_and_state", ["companyId", "state"]),
 
   /** AES-256-GCM material only. Public functions never return rows from this table. */
@@ -626,6 +627,10 @@ export default defineSchema({
     autoInvestigate: v.boolean(),
     autoAssign: v.boolean(),
     trigger: v.any(),
+    /** Missing means the original V1 trigger shape. */
+    configurationVersion: v.optional(v.literal(2)),
+    /** `CompanySlackRoutingRule[]`; validated at the mutation boundary. */
+    rules: v.optional(v.any()),
     revision: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -634,6 +639,55 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_integration", ["integrationId"])
     .index("by_integration_and_channel", ["integrationId", "channelId"]),
+
+  /** Minimal reaction-grace state. Message content is re-fetched from Slack when the row is due. */
+  slackPendingIntake: defineTable({
+    companyId: v.id("companies"),
+    integrationId: v.id("slackIntegrations"),
+    channelId: v.string(),
+    messageTs: v.string(),
+    watchRevision: v.number(),
+    candidateRuleId: domainId,
+    eligibleAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_integration", ["integrationId"])
+    .index("by_integration_and_due", ["integrationId", "eligibleAt"])
+    .index("by_integration_channel_and_message", ["integrationId", "channelId", "messageTs"]),
+
+  /** Immutable workflow decision captured when a V2 Slack rule creates an issue. */
+  slackIssueAutomationIntents: defineTable({
+    companyId: v.id("companies"),
+    issueId: domainId,
+    integrationId: v.id("slackIntegrations"),
+    watchId: domainId,
+    watchRevision: v.number(),
+    ruleId: domainId,
+    ruleSnapshot: v.string(),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    investigationTiming: v.union(v.literal("off"), v.literal("immediate"), v.literal("on-status")),
+    investigationTriggerStatusId: v.union(domainId, v.null()),
+    investigationSuccessStatusId: v.union(domainId, v.null()),
+    investigationState: v.union(
+      v.literal("off"),
+      v.literal("waiting"),
+      v.literal("scheduled"),
+      v.literal("succeeded"),
+      v.literal("failed"),
+    ),
+    assignmentTiming: v.union(
+      v.literal("off"),
+      v.literal("immediate"),
+      v.literal("after-investigation"),
+    ),
+    assignmentState: v.union(v.literal("off"), v.literal("waiting"), v.literal("scheduled")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_issue", ["companyId", "issueId"])
+    .index("by_integration", ["integrationId"]),
 
   /** A lease row is stable; generation increases whenever ownership is acquired or fenced. */
   slackCoordinatorLeases: defineTable({
@@ -821,6 +875,8 @@ export default defineSchema({
     revision: v.number(),
     supportsSlackCoordination: v.boolean(),
     supportsAutomationJobs: v.boolean(),
+    /** Missing snapshots predate V2 routing and are treated as Slack protocol V1. */
+    slackProtocolVersion: v.optional(v.number()),
     providers: v.array(
       v.object({
         instanceId: v.string(),

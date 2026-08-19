@@ -172,17 +172,23 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 
   if (!selected) {
     // A company project with no checkout has no group to edit — everything on this page belongs to
-    // a directory on a machine. Say which state it is in rather than claiming the project is gone.
-    const isCheckoutless = workspaceProjects.some(
+    // a directory on a machine. Its shared identity can still be deleted from Convex here.
+    const checkoutlessProject = workspaceProjects.find(
       (project) => project.projectKey === projectKey && project.group === null,
     );
+    if (checkoutlessProject !== undefined) {
+      return (
+        <CheckoutlessProjectSettings
+          project={checkoutlessProject}
+          environmentControl={environmentControl}
+        />
+      );
+    }
     return (
       <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
-        {isCheckoutless
-          ? "No machine has a checkout of this project yet. Attach a directory to configure its icon, scripts, and new-thread defaults."
-          : groups.length === 0
-            ? "Add a project from the sidebar to configure it here."
-            : "This project is no longer available."}
+        {groups.length === 0
+          ? "Add a project from the sidebar to configure it here."
+          : "This project is no longer available."}
       </div>
     );
   }
@@ -208,6 +214,99 @@ interface ProjectCompanyContext {
 
 function owningCompanyIds(workspaceProject: WorkspaceProject): ReadonlyArray<CompanyId> {
   return [...new Set(workspaceProject.companyIds)].map((companyId) => companyId as CompanyId);
+}
+
+/** The company-owned settings that still apply when no environment has a local checkout. */
+export function CheckoutlessProjectSettings({
+  project,
+  environmentControl,
+}: {
+  readonly project: WorkspaceProject;
+  readonly environmentControl: EnvironmentControlClient | null;
+}) {
+  const navigate = useNavigate();
+  const [isRemoving, setIsRemoving] = useState(false);
+
+  const removeProject = useCallback(async () => {
+    const api = readLocalApi();
+    if (!api || project.cloudProjectId === null || isRemoving) return;
+
+    const confirmed = await settlePromise(() =>
+      api.dialogs.confirm(
+        [
+          `Remove project "${project.displayName}"?`,
+          "This removes the company project from every Pathway app. Files on disk are not touched.",
+          "This action cannot be undone.",
+        ].join("\n"),
+        { variant: "destructive" },
+      ),
+    );
+    if (confirmed._tag === "Failure" || !confirmed.value) return;
+
+    const companyIds = owningCompanyIds(project);
+    if (environmentControl === null || companyIds.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to remove "${project.displayName}"`,
+          description:
+            companyIds.length === 0
+              ? "The project's company ownership is still syncing. Try again shortly."
+              : "Company project controls are not available.",
+        }),
+      );
+      return;
+    }
+
+    setIsRemoving(true);
+    try {
+      for (const companyId of companyIds) {
+        await environmentControl.deleteCompanyProject({
+          companyId,
+          cloudProjectId: project.cloudProjectId,
+        });
+      }
+      void navigate({ to: "/settings/projects", replace: true });
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Failed to remove "${project.displayName}"`,
+          description:
+            error instanceof Error ? error.message : "The cloud project could not be removed.",
+        }),
+      );
+    } finally {
+      setIsRemoving(false);
+    }
+  }, [environmentControl, isRemoving, navigate, project]);
+
+  return (
+    <SettingsPageContainer className="max-w-3xl">
+      <SettingsSection title="Project">
+        <SettingsRow
+          title={project.displayName}
+          description="No machine has a checkout of this project yet. Attach a directory to configure its icon, scripts, and new-thread defaults."
+        />
+      </SettingsSection>
+      <SettingsSection title="Danger">
+        <SettingsRow
+          title="Remove project"
+          description="Deletes the company project from every Pathway app. Files on disk are not touched."
+          control={
+            <Button
+              variant="destructive-outline"
+              disabled={isRemoving}
+              onClick={() => void removeProject()}
+            >
+              <Trash2Icon />
+              {isRemoving ? "Removing…" : "Remove project"}
+            </Button>
+          }
+        />
+      </SettingsSection>
+    </SettingsPageContainer>
+  );
 }
 
 export function ProjectDetail({

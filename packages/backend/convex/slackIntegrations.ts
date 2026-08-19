@@ -37,6 +37,8 @@ const MAX_TOKEN_CHARS = 4_096;
 const MAX_ERROR_CHARS = 500;
 const MAX_PROVIDER_INSTANCES = 50;
 const MAX_PROVIDER_MODELS = 500;
+const MAX_DISCOVERED_CHANNELS = 1_000;
+const SLACK_REQUEST_TIMEOUT_MS = 10_000;
 
 const integrationState = v.union(
   v.literal("draft"),
@@ -215,6 +217,66 @@ async function fenceLease(
   });
 }
 
+async function v2WatchRequirements(ctx: QueryCtx, integrationId: Id<"slackIntegrations">) {
+  const watches = await ctx.db
+    .query("slackChannelWatches")
+    .withIndex("by_integration", (q) => q.eq("integrationId", integrationId))
+    .collect();
+  const v2 = watches.filter((watch) => watch.configurationVersion === 2);
+  const usesAutomation = v2.some((watch) => {
+    const rules = Array.isArray(watch.rules) ? (watch.rules as readonly unknown[]) : [];
+    return rules.some((raw) => {
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+      const rule = raw as Record<string, unknown>;
+      const investigation =
+        typeof rule["investigation"] === "object" &&
+        rule["investigation"] !== null &&
+        !Array.isArray(rule["investigation"])
+          ? (rule["investigation"] as Record<string, unknown>)
+          : null;
+      return investigation?.["timing"] !== "off" || rule["assignmentTiming"] !== "off";
+    });
+  });
+  return { requiresV2: v2.length > 0, usesAutomation };
+}
+
+async function requireControllerProtocol(
+  ctx: QueryCtx,
+  companyId: Doc<"companies">["_id"],
+  environmentId: string,
+  requiredVersion: number,
+) {
+  const capabilities = await ctx.db
+    .query("environmentProviderCapabilities")
+    .withIndex("by_company_and_environment", (q) =>
+      q.eq("companyId", companyId).eq("environmentId", environmentId),
+    )
+    .unique();
+  if ((capabilities?.slackProtocolVersion ?? 1) < requiredVersion) {
+    throw backendError(
+      "activation-unsafe",
+      `Environment ${environmentId} does not support Slack workflow protocol V${requiredVersion}.`,
+    );
+  }
+  return capabilities;
+}
+
+async function controllerSupportsProtocol(
+  ctx: QueryCtx,
+  companyId: Doc<"companies">["_id"],
+  environmentId: string,
+  requiredVersion: number,
+): Promise<boolean> {
+  if (requiredVersion <= 1) return true;
+  const capabilities = await ctx.db
+    .query("environmentProviderCapabilities")
+    .withIndex("by_company_and_environment", (q) =>
+      q.eq("companyId", companyId).eq("environmentId", environmentId),
+    )
+    .unique();
+  return (capabilities?.slackProtocolVersion ?? 1) >= requiredVersion;
+}
+
 /** Redacted configuration and health for members with integrations.read. */
 export const list = query({
   args: { companyId: domainIdArg },
@@ -369,6 +431,142 @@ export const connect = action({
   },
 });
 
+export const channelCredentialRecord = internalQuery({
+  args: { companyId: domainIdArg, integrationId: domainIdArg },
+  returns: v.object({
+    workspaceId: v.string(),
+    keyId: v.string(),
+    iv: v.string(),
+    ciphertext: v.string(),
+    authenticationTag: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "integrations.manage");
+    if (actor.kind !== "member") {
+      throw backendError("permission-denied", "Only a company member may browse Slack channels.");
+    }
+    const owner = await integrationByDomainId(ctx, actor.company._id, args.integrationId);
+    if (owner === null) throw backendError("entity-not-found", "The Slack integration is missing.");
+    const credential = await ctx.db
+      .query("slackIntegrationCredentials")
+      .withIndex("by_integration", (q) => q.eq("integrationId", owner._id))
+      .unique();
+    if (credential === null) throw backendError("credential-missing", "Slack is disconnected.");
+    return {
+      workspaceId: credential.workspaceId,
+      keyId: credential.keyId,
+      iv: credential.iv,
+      ciphertext: credential.ciphertext,
+      authenticationTag: credential.authenticationTag,
+    };
+  },
+});
+
+const channelCredentialRecordReference = makeFunctionReference<
+  "query",
+  { companyId: string; integrationId: string },
+  {
+    workspaceId: string;
+    keyId: string;
+    iv: string;
+    ciphertext: string;
+    authenticationTag: string;
+  }
+>("slackIntegrations:channelCredentialRecord");
+
+const discoveredChannel = v.object({
+  id: v.string(),
+  name: v.string(),
+  isPrivate: v.boolean(),
+});
+
+/** Manage-only channel discovery. Plaintext credentials remain inside this Convex action. */
+export const listJoinedChannels = action({
+  args: { companyId: domainIdArg, integrationId: domainIdArg },
+  returns: v.array(discoveredChannel),
+  handler: async (ctx, args) => {
+    const credential = await ctx.runQuery(channelCredentialRecordReference, args);
+    const token = await decryptIntegrationCredential(
+      credential,
+      {
+        companyId: args.companyId,
+        integrationId: args.integrationId,
+        workspaceId: credential.workspaceId,
+      },
+      integrationCredentialKeyringFromEnv(),
+    );
+    const channels: Array<{ id: string; name: string; isPrivate: boolean }> = [];
+    let cursor: string | null = null;
+    do {
+      const url = new URL("https://slack.com/api/conversations.list");
+      url.searchParams.set("types", "public_channel,private_channel");
+      url.searchParams.set("exclude_archived", "true");
+      url.searchParams.set("limit", "200");
+      if (cursor !== null) url.searchParams.set("cursor", cursor);
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(SLACK_REQUEST_TIMEOUT_MS),
+        });
+      } catch {
+        throw backendError(
+          "integration-connection-failed",
+          "Slack channel discovery could not be reached.",
+        );
+      }
+      const body: unknown = await response.json();
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw backendError(
+          "integration-connection-failed",
+          "Slack returned an invalid channel response.",
+        );
+      }
+      const record = body as Record<string, unknown>;
+      if (record["ok"] !== true || !Array.isArray(record["channels"])) {
+        throw backendError(
+          "integration-connection-failed",
+          "Slack could not list channels. Check the bot scopes and channel membership.",
+        );
+      }
+      for (const raw of record["channels"]) {
+        if (
+          channels.length >= MAX_DISCOVERED_CHANNELS ||
+          typeof raw !== "object" ||
+          raw === null ||
+          Array.isArray(raw)
+        ) {
+          continue;
+        }
+        const channel = raw as Record<string, unknown>;
+        if (
+          channel["is_member"] !== true ||
+          channel["is_archived"] === true ||
+          typeof channel["id"] !== "string" ||
+          typeof channel["name"] !== "string"
+        ) {
+          continue;
+        }
+        channels.push({
+          id: requireTrimmed(channel["id"], "Slack channel id"),
+          name: requireTrimmed(channel["name"], "Slack channel name"),
+          isPrivate: channel["is_private"] === true,
+        });
+      }
+      const metadata =
+        typeof record["response_metadata"] === "object" &&
+        record["response_metadata"] !== null &&
+        !Array.isArray(record["response_metadata"])
+          ? (record["response_metadata"] as Record<string, unknown>)
+          : null;
+      const next = metadata?.["next_cursor"];
+      cursor = typeof next === "string" && next.trim().length > 0 ? next : null;
+    } while (cursor !== null && channels.length < MAX_DISCOVERED_CHANNELS);
+    return channels.sort((left, right) => left.name.localeCompare(right.name));
+  },
+});
+
 /** Reserves the canonical company/workspace identity atomically before encryption. */
 export const reserveConnection = internalMutation({
   args: {
@@ -399,6 +597,16 @@ export const reserveConnection = internalMutation({
           "This token belongs to a different Slack workspace. Add it as a separate integration.",
         );
       }
+    }
+    const reservations = await ctx.db
+      .query("slackIntegrations")
+      .withIndex("by_workspace", (q) => q.eq("workspaceId", args.workspaceId))
+      .collect();
+    if (reservations.some((row) => row.companyId !== actor.company._id)) {
+      throw backendError(
+        "entity-conflict",
+        "This Slack workspace is already connected to another company.",
+      );
     }
     const existing = await ctx.db
       .query("slackIntegrations")
@@ -536,6 +744,14 @@ export const setControllerPool = mutation({
     for (const environmentId of preferred === null ? backups : [preferred, ...backups]) {
       await requireActiveRegistration(ctx, actor.company._id, environmentId);
     }
+    if (integration.state === "active") {
+      const { requiresV2 } = await v2WatchRequirements(ctx, integration._id);
+      if (requiresV2) {
+        for (const environmentId of preferred === null ? backups : [preferred, ...backups]) {
+          await requireControllerProtocol(ctx, actor.company._id, environmentId, 2);
+        }
+      }
+    }
     const now = Date.now();
     await ctx.db.patch(integration._id, {
       preferredEnvironmentId: preferred,
@@ -561,6 +777,7 @@ export const activate = mutation({
     companyId: domainIdArg,
     integrationId: domainIdArg,
     legacyWatchersAcknowledged: v.boolean(),
+    enableAutomation: v.optional(v.boolean()),
   },
   returns: integrationRecord,
   handler: async (ctx, args) => {
@@ -582,6 +799,7 @@ export const activate = mutation({
       );
     }
     const selected = [integration.preferredEnvironmentId, ...integration.backupEnvironmentIds];
+    const requirements = await v2WatchRequirements(ctx, integration._id);
     const now = Date.now();
     for (const environmentId of selected) {
       const registration = await requireActiveRegistration(ctx, actor.company._id, environmentId);
@@ -602,6 +820,44 @@ export const activate = mutation({
           "activation-unsafe",
           `Environment ${environmentId} is not Slack-capable and healthy.`,
         );
+      }
+      if (requirements.requiresV2 && (capabilities.slackProtocolVersion ?? 1) < 2) {
+        throw backendError(
+          "activation-unsafe",
+          `Environment ${environmentId} does not support Slack workflow protocol V2.`,
+        );
+      }
+      if (requirements.usesAutomation && !capabilities.supportsAutomationJobs) {
+        throw backendError(
+          "activation-unsafe",
+          `Environment ${environmentId} cannot execute issue automation jobs.`,
+        );
+      }
+    }
+    if (requirements.usesAutomation) {
+      const automation = await ctx.db
+        .query("issueAutomationSettings")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .unique();
+      if (automation === null) {
+        throw backendError(
+          "activation-unsafe",
+          "Configure issue automation before activating Slack workflow automation.",
+        );
+      }
+      if (!automation.enabled && args.enableAutomation !== true) {
+        throw backendError(
+          "activation-unsafe",
+          "Confirm that issue automation may be enabled for this Slack workflow.",
+        );
+      }
+      if (!automation.enabled) {
+        await ctx.db.patch(automation._id, {
+          enabled: true,
+          activatedAt: automation.activatedAt ?? now,
+          revision: automation.revision + 1,
+          updatedAt: now,
+        });
       }
     }
     await ctx.db.patch(integration._id, {
@@ -643,6 +899,62 @@ export const disconnect = mutation({
     const updated = await ctx.db.get(integration._id);
     if (updated === null) throw new Error("The Slack integration vanished.");
     return await encodeIntegration(ctx, updated);
+  },
+});
+
+/** Deletes an unactivated wizard draft without requiring the workspace-name danger confirmation. */
+export const deleteDraft = mutation({
+  args: {
+    companyId: domainIdArg,
+    integrationId: domainIdArg,
+    expectedRevision: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requirePermission(actor, "integrations.manage");
+    const row = await integrationByDomainId(ctx, actor.company._id, args.integrationId);
+    if (row === null) return null;
+    if (row.state !== "draft" || row.activatedAt != null) {
+      throw backendError(
+        "invalid-command-state",
+        "Only an unactivated Slack draft can be deleted.",
+      );
+    }
+    if (row.configurationRevision !== args.expectedRevision) {
+      throw backendError("entity-conflict", "The Slack draft changed; reload it before deleting.");
+    }
+    const [credentials, watches, cursors, pending, leases, contenders] = await Promise.all([
+      ctx.db
+        .query("slackIntegrationCredentials")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+      ctx.db
+        .query("slackChannelWatches")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+      ctx.db
+        .query("slackChannelCursors")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+      ctx.db
+        .query("slackPendingIntake")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+      ctx.db
+        .query("slackCoordinatorLeases")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+      ctx.db
+        .query("slackCoordinatorContenders")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
+    ]);
+    for (const related of [credentials, watches, cursors, pending, leases, contenders]) {
+      for (const item of related) await ctx.db.delete(item._id);
+    }
+    await ctx.db.delete(row._id);
+    return null;
   },
 });
 
@@ -693,6 +1005,10 @@ export const remove = mutation({
         .query("slackOutboundDeliveries")
         .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
         .collect(),
+      ctx.db
+        .query("slackPendingIntake")
+        .withIndex("by_integration", (q) => q.eq("integrationId", row._id))
+        .collect(),
     ]);
     for (const rows of related) for (const relatedRow of rows) await ctx.db.delete(relatedRow._id);
     const tombstone = await ctx.db
@@ -736,6 +1052,15 @@ export const heartbeat = mutation({
       throw backendError("permission-denied", "This environment is not in the controller pool.");
     }
     const now = Date.now();
+    const requirements = await v2WatchRequirements(ctx, integration._id);
+    const requiredProtocol = requirements.requiresV2 ? 2 : 1;
+    const protocolEligible = await controllerSupportsProtocol(
+      ctx,
+      actor.company._id,
+      environmentId,
+      requiredProtocol,
+    );
+    const effectiveHealthy = args.healthy && protocolEligible;
     const existingContender = await ctx.db
       .query("slackCoordinatorContenders")
       .withIndex("by_integration_and_environment", (q) =>
@@ -743,7 +1068,7 @@ export const heartbeat = mutation({
       )
       .unique();
     const contenderValues = {
-      healthy: args.healthy,
+      healthy: effectiveHealthy,
       capabilityRevision: args.capabilityRevision,
       lastHeartbeatAt: now,
     };
@@ -775,14 +1100,23 @@ export const heartbeat = mutation({
 
     const preferredHeartbeatCount =
       integration.preferredEnvironmentId === environmentId
-        ? args.healthy
+        ? effectiveHealthy
           ? lease.preferredHealthyHeartbeats + 1
           : 0
         : lease.preferredHealthyHeartbeats;
+    const holderProtocolEligible =
+      lease.holderEnvironmentId !== null &&
+      (await controllerSupportsProtocol(
+        ctx,
+        actor.company._id,
+        lease.holderEnvironmentId,
+        requiredProtocol,
+      ));
     const holderStillEligible =
       integration.state === "active" &&
       lease.holderEnvironmentId !== null &&
       pool.includes(lease.holderEnvironmentId) &&
+      holderProtocolEligible &&
       lease.expiresAt !== null &&
       lease.expiresAt > now;
     if (holderStillEligible) {
@@ -791,7 +1125,11 @@ export const heartbeat = mutation({
         preferredHeartbeatCount >= FAILBACK_HEARTBEATS;
       const shouldYieldToPreferred =
         lease.holderEnvironmentId !== integration.preferredEnvironmentId && preferredReady;
-      if (lease.holderEnvironmentId === environmentId && !shouldYieldToPreferred && args.healthy) {
+      if (
+        lease.holderEnvironmentId === environmentId &&
+        !shouldYieldToPreferred &&
+        effectiveHealthy
+      ) {
         await ctx.db.patch(lease._id, {
           expiresAt: now + LEASE_TTL_MS,
           preferredHealthyHeartbeats: preferredHeartbeatCount,
@@ -820,11 +1158,21 @@ export const heartbeat = mutation({
       .query("slackCoordinatorContenders")
       .withIndex("by_integration", (q) => q.eq("integrationId", integration._id))
       .collect();
-    const fresh = new Set(
-      contenders
-        .filter((item) => item.healthy && now - item.lastHeartbeatAt <= CONTENDER_FRESH_MS)
-        .map((item) => item.environmentId),
-    );
+    const fresh = new Set<string>();
+    for (const contender of contenders) {
+      if (
+        contender.healthy &&
+        now - contender.lastHeartbeatAt <= CONTENDER_FRESH_MS &&
+        (await controllerSupportsProtocol(
+          ctx,
+          actor.company._id,
+          contender.environmentId,
+          requiredProtocol,
+        ))
+      ) {
+        fresh.add(contender.environmentId);
+      }
+    }
     const selected = pool.find(
       (candidate) =>
         fresh.has(candidate) &&
@@ -832,7 +1180,7 @@ export const heartbeat = mutation({
           (lease!.holderEnvironmentId === null && lease!.generation === 0) ||
           preferredHeartbeatCount >= FAILBACK_HEARTBEATS),
     );
-    if (integration.state === "active" && selected === environmentId && args.healthy) {
+    if (integration.state === "active" && selected === environmentId && effectiveHealthy) {
       const generation = lease.generation + 1;
       await ctx.db.patch(lease._id, {
         holderEnvironmentId: environmentId,
@@ -888,6 +1236,21 @@ export const runtimeCredentialRecord = internalQuery({
     const integration = await integrationByDomainId(ctx, actor.company._id, args.integrationId);
     if (integration === null || integration.state !== "active") {
       throw backendError("entity-not-found", "The active Slack integration is missing.");
+    }
+    const requirements = await v2WatchRequirements(ctx, integration._id);
+    const requiredProtocol = requirements.requiresV2 ? 2 : 1;
+    if (
+      !(await controllerSupportsProtocol(
+        ctx,
+        actor.company._id,
+        actor.registration.environmentId,
+        requiredProtocol,
+      ))
+    ) {
+      throw backendError(
+        "stale-controller-lease",
+        `The Slack controller does not support workflow protocol V${requiredProtocol}.`,
+      );
     }
     const lease = await leaseForIntegration(ctx, integration._id);
     const now = Date.now();
@@ -1120,6 +1483,7 @@ export const publishCapabilities = mutation({
     revision: v.number(),
     supportsSlackCoordination: v.boolean(),
     supportsAutomationJobs: v.boolean(),
+    slackProtocolVersion: v.optional(v.number()),
     providers: v.array(
       v.object({
         instanceId: v.string(),
@@ -1153,10 +1517,15 @@ export const publishCapabilities = mutation({
         q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
       )
       .unique();
+    const slackProtocolVersion = args.slackProtocolVersion ?? 1;
+    if (!Number.isInteger(slackProtocolVersion) || slackProtocolVersion <= 0) {
+      throw backendError("invalid-arguments", "Slack protocol version must be a positive integer.");
+    }
     const values = {
       revision: args.revision,
       supportsSlackCoordination: args.supportsSlackCoordination,
       supportsAutomationJobs: args.supportsAutomationJobs,
+      slackProtocolVersion,
       providers: args.providers.map((provider) => ({
         ...provider,
         instanceId: requireTrimmed(provider.instanceId, "Provider instance id"),

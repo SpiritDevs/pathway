@@ -19,5 +19,6 @@ Status values: `Proposed`, `Accepted`, `Superseded by NNNN`.
 | [0007](0007-convex-company-local-first-sync.md)             | Convex company authority and local-first issue sync      | Accepted           |
 | [0008](0008-cross-environment-agent-control.md)             | Cross-environment agent control                          | Accepted           |
 | [0009](0009-convex-relay-persistence.md)                    | Convex relay persistence                                 | Accepted           |
-| [0010](0010-company-integrations-and-durable-automation.md) | Company integrations and durable automation              | Accepted           |
+| [0010](0010-company-integrations-and-durable-automation.md) | Company integrations and durable automation              | Superseded by 0012 |
 | [0011](0011-company-owned-projects.md)                      | Company-owned projects and permanent personal workspaces | Accepted           |
+| [0012](0012-workspace-owned-slack-workflows.md)             | Workspace-owned Slack intake workflows                   | Accepted           |

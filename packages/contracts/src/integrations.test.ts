@@ -4,6 +4,15 @@ import * as Schema from "effect/Schema";
 import { EnvironmentId } from "./baseSchemas.ts";
 import {
   SLACK_CONTROLLER_MAX_BACKUPS,
+  SLACK_ROUTING_MAX_NODES_PER_RULE,
+  SLACK_ROUTING_MAX_PREFIX_CHARS,
+  SLACK_ROUTING_MAX_PREFIXES_PER_LEAF,
+  SLACK_ROUTING_MAX_RULES_PER_CHANNEL,
+  SLACK_ROUTING_MAX_SERIALIZED_BYTES,
+  CompanySlackChannelWatchDefinition,
+  CompanySlackRoutingConfigurationV2,
+  CompanySlackRoutingRule,
+  EnvironmentProviderCapabilitySnapshot,
   IssueAutomationJobResult,
   SlackControllerPool,
   SlackIntegration,
@@ -11,6 +20,31 @@ import {
 import { Issue } from "./issues.ts";
 
 const decodePool = Schema.decodeUnknownSync(SlackControllerPool);
+const decodeRoutingRule = Schema.decodeUnknownSync(CompanySlackRoutingRule);
+const decodeRoutingConfiguration = Schema.decodeUnknownSync(CompanySlackRoutingConfigurationV2);
+const decodeSlackIntegration = Schema.decodeUnknownSync(SlackIntegration);
+const decodeIssue = Schema.decodeUnknownSync(Issue);
+const decodeAutomationJobResult = Schema.decodeUnknownSync(IssueAutomationJobResult);
+const decodeChannelWatchDefinition = Schema.decodeUnknownSync(CompanySlackChannelWatchDefinition);
+const decodeProviderCapabilitySnapshot = Schema.decodeUnknownSync(
+  EnvironmentProviderCapabilitySnapshot,
+);
+
+const routingRule = (id: string, condition: unknown = { kind: "every-message" }) => ({
+  id,
+  name: `Rule ${id}`,
+  condition,
+  teamId: null,
+  cloudProjectId: null,
+  cycleId: null,
+  initialStatusId: null,
+  investigation: {
+    timing: "off",
+    triggerStatusId: null,
+    successStatusId: null,
+  },
+  assignmentTiming: "off",
+});
 
 describe("company integration contracts", () => {
   it("bounds and de-duplicates the ordered controller backups", () => {
@@ -35,7 +69,7 @@ describe("company integration contracts", () => {
   });
 
   it("keeps credentials out of public Slack integration metadata", () => {
-    const decoded = Schema.decodeUnknownSync(SlackIntegration)({
+    const decoded = decodeSlackIntegration({
       id: "integration-1",
       companyId: "company-1",
       workspaceId: "T1",
@@ -63,7 +97,7 @@ describe("company integration contracts", () => {
   });
 
   it("decodes historical Slack sources without company integration identity", () => {
-    const decoded = Schema.decodeUnknownSync(Issue)({
+    const decoded = decodeIssue({
       id: "issue-1",
       key: "PAT-1",
       title: "Legacy Slack issue",
@@ -100,12 +134,142 @@ describe("company integration contracts", () => {
   });
 
   it("decodes typed durable automation results", () => {
-    const decoded = Schema.decodeUnknownSync(IssueAutomationJobResult)({
+    const decoded = decodeAutomationJobResult({
       kind: "audit",
       outcome: "changes-requested",
       summary: "Two findings need work.",
       findings: ["Add a lease fence test", "Reconcile the outbound delivery"],
     });
     expect(decoded.kind).toBe("audit");
+  });
+
+  it("decodes ordered V2 rules with nested conditions and nullable draft destinations", () => {
+    const decoded = decodeRoutingConfiguration({
+      configurationVersion: 2,
+      rules: [
+        {
+          ...routingRule("triage"),
+          condition: {
+            kind: "all",
+            conditions: [
+              { kind: "bot-mention" },
+              {
+                kind: "any",
+                conditions: [
+                  { kind: "text-prefix", prefixes: ["bug:", "urgent bug:"] },
+                  { kind: "reaction", emoji: "ticket" },
+                ],
+              },
+            ],
+          },
+          investigation: {
+            timing: "on-status",
+            triggerStatusId: null,
+            successStatusId: null,
+          },
+          assignmentTiming: "after-investigation",
+        },
+        routingRule("fallback"),
+      ],
+    });
+
+    expect(decoded.rules.map((rule) => rule.id)).toEqual(["triage", "fallback"]);
+    expect(decoded.rules[0]?.teamId).toBeNull();
+    expect(decoded.rules[0]?.investigation.timing).toBe("on-status");
+  });
+
+  it("bounds prefixes and condition nodes at the schema boundary", () => {
+    expect(() =>
+      decodeRoutingRule(
+        routingRule("prefix-count", {
+          kind: "text-prefix",
+          prefixes: Array.from(
+            { length: SLACK_ROUTING_MAX_PREFIXES_PER_LEAF + 1 },
+            (_, index) => `prefix-${index}`,
+          ),
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeRoutingRule(
+        routingRule("prefix-length", {
+          kind: "text-prefix",
+          prefixes: ["x".repeat(SLACK_ROUTING_MAX_PREFIX_CHARS + 1)],
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      decodeRoutingRule(
+        routingRule("node-count", {
+          kind: "all",
+          conditions: Array.from({ length: SLACK_ROUTING_MAX_NODES_PER_RULE }, () => ({
+            kind: "every-message",
+          })),
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it("bounds V2 rule count, aggregate nodes, and serialized configuration size", () => {
+    expect(() =>
+      decodeRoutingConfiguration({
+        configurationVersion: 2,
+        rules: Array.from({ length: SLACK_ROUTING_MAX_RULES_PER_CHANNEL + 1 }, (_, index) =>
+          routingRule(`rule-${index}`),
+        ),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeRoutingConfiguration({
+        configurationVersion: 2,
+        rules: Array.from({ length: 6 }, (_, index) =>
+          routingRule(`nodes-${index}`, {
+            kind: "all",
+            conditions: Array.from({ length: 41 }, () => ({ kind: "every-message" })),
+          }),
+        ),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeRoutingConfiguration({
+        configurationVersion: 2,
+        rules: [
+          {
+            ...routingRule("oversized"),
+            name: "x".repeat(SLACK_ROUTING_MAX_SERIALIZED_BYTES),
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("preserves V1 watch and capability snapshot decoding", () => {
+    const watch = decodeChannelWatchDefinition({
+      id: "watch-1",
+      companyId: "company-1",
+      integrationId: "integration-1",
+      channelId: "C1",
+      channelName: "support",
+      cloudProjectId: null,
+      cycleId: null,
+      autoInvestigate: false,
+      autoAssign: false,
+      trigger: { reactionRoutes: [], everyMessage: true, botMention: false },
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const capabilities = decodeProviderCapabilitySnapshot({
+      companyId: "company-1",
+      environmentId: "environment-1",
+      revision: 1,
+      supportsSlackCoordination: true,
+      supportsAutomationJobs: true,
+      providers: [],
+      publishedAt: 1,
+    });
+
+    expect("configurationVersion" in watch).toBe(false);
+    expect(capabilities.slackProtocolVersion).toBeUndefined();
   });
 });

@@ -3423,11 +3423,22 @@ export async function readBootstrapRows(
         await pageOf(ctx, "roleAssignments", company._id, afterId, limit),
         (row) => encodeRoleAssignment(ctx, row),
       );
-    case "cloudProject":
-      return liftCompanyRows(
-        await pageOf(ctx, "cloudProjects", company._id, afterId, limit),
-        (row) => encodeCloudProject(row),
-      );
+    case "cloudProject": {
+      const rows = await pageOf(ctx, "cloudProjects", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const deleted = row.deletedAt !== null;
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted,
+          teamIds: deleted ? [] : row.teamIds,
+          ownerMembershipId: null,
+          payload: deleted ? null : encodeCloudProject(row),
+        });
+      }
+      return lifted;
+    }
     case "environmentRegistration": {
       const rows = await pageOf(ctx, "environmentRegistrations", company._id, afterId, limit);
       const lifted: BootstrapRow[] = [];

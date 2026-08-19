@@ -157,7 +157,7 @@ import { Button } from "../ui/button";
 import { MenuItem } from "../ui/menu";
 import { Select } from "../ui/select";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
-import { ProjectDetail } from "./ProjectSettingsPanel";
+import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
 
 const localEnvironmentId = EnvironmentId.make("local");
 const remoteEnvironmentId = EnvironmentId.make("remote");
@@ -385,6 +385,40 @@ describe("Project settings favicon selection", () => {
       [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
       [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
     ]);
+  });
+
+  it("lets a project with no checkout be removed manually", async () => {
+    const companyId = CompanyId.make("company-a");
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyId],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    expect(removeProject).not.toBeNull();
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    expect(cloudState.deleteCompanyProject).toHaveBeenCalledWith({
+      companyId,
+      cloudProjectId: "cloud-pathway",
+    });
   });
 
   it("opens the migration warning flow when the project company changes", () => {

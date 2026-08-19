@@ -239,12 +239,10 @@ then continues the original action. Enrichment is the one feature that simply re
 
 #### Watch
 
-One row of `slack_channel_watches`: a Slack channel the poller reads, its trigger combination
-(emoji, every message, bot mention — any combination, all off meaning paused), and the project
-and release cycle filed issues are tagged with. Distinct from the **cursor** (`slack_cursors`),
-which is where reading resumed from, and from the **outbound registry**
-(`slack_outbound_posts`), which is how the poller recognises the bot's own messages. See
-[issue-tracker.md][25].
+A Slack channel the poller reads together with its ordered intake rules and issue-placement
+configuration. New watches live in the central integration ledger. Legacy environment-local
+watches remain in `slack_channel_watches`. A watch is distinct from its cursor, processed-message
+records, and outbound deliveries. See [issue-tracker.md][25].
 
 ## Practical Shortcuts
 
@@ -254,17 +252,30 @@ which is where reading resumed from, and from the **outbound registry**
 - If you see `checkpoint`, think "workspace snapshot for diff/restore".
 - If you see `quiesced`, think "all relevant follow-up work has gone idle".
 
-### Company integrations
+### Workspace integrations
 
 #### Integration
 
-A company-owned connection to an external service, including its redacted configuration, health,
-and operational state. Environments execute an integration but do not own its configuration.
+A connection owned by a Personal or organisation workspace, including its redacted configuration,
+health, and operational state. Environments execute an integration but do not own its
+configuration.
 
 #### Slack integration
 
-One Slack workspace connected to one Pathway company. It owns the encrypted bot credential,
-watched channels, controller order, shared cursors, deduplication ledger, and outbound deliveries.
+One Slack workspace connected to one Pathway workspace. It owns the encrypted bot credential,
+watches, controller order, shared cursors, deduplication ledger, and outbound deliveries. A
+Pathway workspace may own several Slack integrations.
+
+#### Intake rule
+
+One ordered rule within a watch. Its condition decides whether a Slack message matches; its result
+chooses company- or team-owned workflow, project, cycle, initial placement, investigation, and
+assignment. The first matching rule wins and creates at most one issue.
+
+#### Rule condition tree
+
+A bounded, recursively nested AND/OR tree of text-prefix, Slack-reaction, bot-mention, and
+every-message leaves. A validated tree is compiled once per configuration revision.
 
 #### Controller pool
 
@@ -291,6 +302,11 @@ messages, canonical issue/comment links, delivery claims, resulting Slack timest
 A durable, uniquely triggered unit of issue automation created by Convex with an immutable
 configuration snapshot and a specific project or thread execution target.
 
+#### Automation intent snapshot
+
+The investigation and assignment choices copied from the matching intake rule when Convex accepts
+an issue. It is immutable so later watch edits cannot change queued or status-triggered work.
+
 #### Blocked job
 
 An automation job whose intent is retained but whose prerequisite is unavailable, such as an
@@ -301,6 +317,18 @@ when prerequisites change and by the recovery sweep.
 
 A bounded, non-secret environment advertisement containing provider instance IDs, driver kinds,
 enabled/available state, model IDs, and a revision. It is readiness data, not credentials.
+
+#### Legacy local integration
+
+A Personal Slack integration created before workspace-owned integrations. Its credential, watches,
+cursors, and poller remain on one environment and appear separately from cloud-owned integrations.
+Pathway does not import it automatically.
+
+#### Configuration move
+
+A reviewed transfer of a Slack integration to another Pathway workspace. The backend re-encrypts
+the token for the destination, copies Slack identities and rule conditions, clears workspace-owned
+references, and keeps the source active until an atomic cutover. It does not move existing issues.
 
 ### Identity and onboarding
 

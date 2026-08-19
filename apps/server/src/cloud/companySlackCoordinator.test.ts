@@ -19,10 +19,18 @@ describe("company Slack coordinator", () => {
   it.effect("keeps separate company routing when Slack cycles run together", () =>
     Effect.gen(function* () {
       const observed: string[] = [];
+      const protocolVersions: number[] = [];
       const backend = {
-        publishCapabilities: ({ companyId }: { companyId: string }) =>
+        publishCapabilities: ({
+          companyId,
+          slackProtocolVersion,
+        }: {
+          companyId: string;
+          slackProtocolVersion: number;
+        }) =>
           Effect.sync(() => {
             observed.push(`capabilities:${companyId}`);
+            protocolVersions.push(slackProtocolVersion);
           }),
         listIntegrations: (companyId: string) =>
           Effect.sync(() => {
@@ -51,6 +59,7 @@ describe("company Slack coordinator", () => {
         "integrations:company-a",
         "integrations:company-b",
       ]);
+      expect(protocolVersions).toEqual([2, 2]);
       expect(isCompanySlackWorkspaceOwned("workspace-company-a")).toBe(true);
       expect(isCompanySlackWorkspaceOwned("workspace-company-b")).toBe(true);
       removeCompanyOwnedSlackWorkspaces("company-a");
@@ -64,6 +73,7 @@ describe("company Slack coordinator", () => {
       Effect.gen(function* () {
         let createdIssueId: string | null = null;
         let createCalls = 0;
+        let createInput: Record<string, unknown> | null = null;
         let confirmations = 0;
         let completeAttempts = 0;
         let pendingConfirmation: {
@@ -136,12 +146,14 @@ describe("company Slack coordinator", () => {
                 },
               ],
             }),
+          listDueMessages: () => Effect.succeed([]),
           readCursor: () =>
             Effect.succeed({ messageCursor: "1.000000", reactionCursor: "1.000000" }),
           updateCursor: () => Effect.void,
-          createIssue: () =>
+          createIssue: (input: Record<string, unknown>) =>
             Effect.sync(() => {
               createCalls += 1;
+              createInput = input;
               if (createdIssueId !== null) {
                 return { created: false, issueId: createdIssueId, issueKey: "ACM-1" };
               }
@@ -236,10 +248,305 @@ describe("company Slack coordinator", () => {
         yield* runCompanySlackCycle(runtime("backup"));
 
         expect(createCalls).toBe(1);
+        expect(createInput).not.toHaveProperty("ruleId");
+        expect(createInput).not.toHaveProperty("watchRevision");
         expect(createdIssueId).toBe("issue-1");
         expect(confirmations).toBe(1);
         expect(completeAttempts).toBe(2);
         expect(pendingConfirmation).toBeNull();
       }),
+  );
+
+  it.effect("routes V2 watches with their rule identity and normalized title", () =>
+    Effect.gen(function* () {
+      const now = 1_700_000_120_000;
+      const createInputs: Array<Record<string, unknown>> = [];
+      const ignoredReasons: string[] = [];
+      const cursorUpdates: Array<Record<string, unknown>> = [];
+      const integration = {
+        id: "integration-v2",
+        workspaceId: "T123",
+        state: "active" as const,
+        preferredEnvironmentId: "primary",
+        backupEnvironmentIds: [],
+      };
+      const backend = {
+        publishCapabilities: () => Effect.void,
+        listIntegrations: () => Effect.succeed([integration]),
+        ownedWorkspaceIds: () => Effect.succeed([integration.workspaceId]),
+        heartbeat: () =>
+          Effect.succeed({
+            integrationId: integration.id,
+            holderEnvironmentId: "primary",
+            generation: 1,
+            expiresAt: now + 90_000,
+          }),
+        credential: () => Effect.succeed({ workspaceId: "T123", token: "memory-only-token" }),
+        configuration: () =>
+          Effect.succeed({
+            integration,
+            watches: [
+              {
+                id: "watch-v2",
+                companyId: "company-1",
+                integrationId: integration.id,
+                channelId: "C123",
+                channelName: "triage",
+                configurationVersion: 2,
+                rules: [
+                  {
+                    id: "rule-bug",
+                    name: "Bug reports",
+                    condition: { kind: "text-prefix", prefixes: ["bug:", "bug: urgent"] },
+                    teamId: null,
+                    cloudProjectId: null,
+                    cycleId: null,
+                    initialStatusId: null,
+                    investigation: {
+                      timing: "off",
+                      triggerStatusId: null,
+                      successStatusId: null,
+                    },
+                    assignmentTiming: "off",
+                  },
+                ],
+                revision: 7,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+          }),
+        listDueMessages: () => Effect.succeed([]),
+        clearDeferredMessage: () => Effect.void,
+        readCursor: () =>
+          Effect.succeed({ messageCursor: "1699999999.000000", reactionCursor: null }),
+        updateCursor: (input: Record<string, unknown>) =>
+          Effect.sync(() => {
+            cursorUpdates.push(input);
+          }),
+        createIssue: (input: Record<string, unknown>) =>
+          Effect.sync(() => {
+            createInputs.push(input);
+            return { created: false, issueId: "issue-1", issueKey: "ACM-1" };
+          }),
+        recordIgnored: ({ reason }: { reason: string }) =>
+          Effect.sync(() => {
+            ignoredReasons.push(reason);
+          }),
+        threadsForReplyScan: () => Effect.succeed([]),
+        pendingDeliveries: () => Effect.succeed([]),
+        updateHealth: () => Effect.void,
+      } as unknown as CompanySlackBackend;
+      const slack = {
+        authTest: () =>
+          Effect.succeed({
+            workspaceId: "T123",
+            workspaceName: "Acme",
+            workspaceDomain: "acme",
+            botUserId: "U-BOT",
+            botId: "B-BOT",
+          }),
+        history: () =>
+          Effect.succeed({
+            messages: [
+              { ts: "1700000000.000000", user: "U1", text: "  BUG: urgent Login fails" },
+              { ts: "1700000001.000000", user: "U1", text: "A normal message" },
+            ],
+            hasMore: false,
+            nextCursor: null,
+          }),
+        permalink: () => Effect.succeed("https://acme.slack.com/archives/C123/p1"),
+        displayName: () => Effect.succeed("Sam"),
+      } as unknown as SlackApiClientShape;
+      const runtime: CompanySlackRuntime = {
+        companyId: CompanyId.make("company-1"),
+        environmentId: EnvironmentId.make("primary"),
+        backend,
+        slack,
+        providers: [],
+        now: () => now,
+      };
+
+      yield* runCompanySlackCycle(runtime);
+
+      expect(createInputs).toHaveLength(1);
+      expect(createInputs[0]).toMatchObject({
+        ruleId: "rule-bug",
+        watchRevision: 7,
+        routeEmoji: null,
+        title: "Login fails",
+        description: "**Slack comment:**\n\n  BUG: urgent Login fails",
+      });
+      expect(ignoredReasons).toEqual(["no-rule"]);
+      expect(cursorUpdates[0]).toMatchObject({ messageCursor: "1700000001.000000" });
+    }),
+  );
+
+  it.effect("stores reaction grace durably and refetches the message when due", () =>
+    Effect.gen(function* () {
+      let now = 1_700_000_030_000;
+      let createCalls = 0;
+      let ignoredCalls = 0;
+      let deferredCalls = 0;
+      let clearedCalls = 0;
+      let savedMessageCursor: string | null = "1699999999.000000";
+      let pending: {
+        readonly channelId: string;
+        readonly messageTs: string;
+        readonly watchRevision: number;
+        readonly candidateRuleId: string;
+        readonly eligibleAt: number;
+      } | null = null;
+      const integration = {
+        id: "integration-v2",
+        workspaceId: "T123",
+        state: "active" as const,
+        preferredEnvironmentId: "primary",
+        backupEnvironmentIds: [],
+      };
+      const ruleDefaults = {
+        teamId: null,
+        cloudProjectId: null,
+        cycleId: null,
+        initialStatusId: null,
+        investigation: {
+          timing: "off" as const,
+          triggerStatusId: null,
+          successStatusId: null,
+        },
+        assignmentTiming: "off" as const,
+      };
+      const backend = {
+        publishCapabilities: () => Effect.void,
+        listIntegrations: () => Effect.succeed([integration]),
+        ownedWorkspaceIds: () => Effect.succeed([integration.workspaceId]),
+        heartbeat: () =>
+          Effect.succeed({
+            integrationId: integration.id,
+            holderEnvironmentId: "primary",
+            generation: 1,
+            expiresAt: now + 90_000,
+          }),
+        credential: () => Effect.succeed({ workspaceId: "T123", token: "memory-only-token" }),
+        configuration: () =>
+          Effect.succeed({
+            integration,
+            watches: [
+              {
+                id: "watch-v2",
+                companyId: "company-1",
+                integrationId: integration.id,
+                channelId: "C123",
+                channelName: "triage",
+                configurationVersion: 2,
+                rules: [
+                  {
+                    id: "rule-eyes",
+                    name: "Needs eyes",
+                    condition: { kind: "reaction", emoji: "eyes" },
+                    ...ruleDefaults,
+                  },
+                  {
+                    id: "rule-fallback",
+                    name: "Fallback",
+                    condition: { kind: "every-message" },
+                    ...ruleDefaults,
+                  },
+                ],
+                revision: 8,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+          }),
+        listDueMessages: () =>
+          Effect.succeed(pending !== null && pending.eligibleAt <= now ? [pending] : []),
+        deferMessage: () =>
+          Effect.sync(() => {
+            deferredCalls += 1;
+            pending = {
+              channelId: "C123",
+              messageTs: "1700000000.000000",
+              watchRevision: 8,
+              candidateRuleId: "rule-fallback",
+              eligibleAt: now + 30_000,
+            };
+            return pending;
+          }),
+        clearDeferredMessage: () =>
+          Effect.sync(() => {
+            clearedCalls += 1;
+            pending = null;
+          }),
+        readCursor: () =>
+          Effect.sync(() => ({ messageCursor: savedMessageCursor, reactionCursor: null })),
+        updateCursor: ({ messageCursor }: { messageCursor: string | null }) =>
+          Effect.sync(() => {
+            savedMessageCursor = messageCursor;
+          }),
+        createIssue: () =>
+          Effect.sync(() => {
+            createCalls += 1;
+            return { created: false, issueId: "issue-1", issueKey: "ACM-1" };
+          }),
+        recordIgnored: () =>
+          Effect.sync(() => {
+            ignoredCalls += 1;
+          }),
+        threadsForReplyScan: () => Effect.succeed([]),
+        pendingDeliveries: () => Effect.succeed([]),
+        updateHealth: () => Effect.void,
+      } as unknown as CompanySlackBackend;
+      const slack = {
+        authTest: () =>
+          Effect.succeed({
+            workspaceId: "T123",
+            workspaceName: "Acme",
+            workspaceDomain: "acme",
+            botUserId: "U-BOT",
+            botId: "B-BOT",
+          }),
+        history: () =>
+          Effect.succeed({
+            messages:
+              now < 1_700_000_060_000
+                ? [{ ts: "1700000000.000000", username: "Sam", text: "Fallback later" }]
+                : [],
+            hasMore: false,
+            nextCursor: null,
+          }),
+        replies: () =>
+          Effect.succeed([{ ts: "1700000000.000000", username: "Sam", text: "Fallback later" }]),
+        permalink: () => Effect.succeed("https://acme.slack.com/archives/C123/p1"),
+      } as unknown as SlackApiClientShape;
+
+      yield* runCompanySlackCycle({
+        companyId: CompanyId.make("company-1"),
+        environmentId: EnvironmentId.make("primary"),
+        backend,
+        slack,
+        providers: [],
+        now: () => now,
+      });
+
+      expect(createCalls).toBe(0);
+      expect(ignoredCalls).toBe(0);
+      expect(deferredCalls).toBe(1);
+      expect(savedMessageCursor).toBe("1700000000.000000");
+
+      now = 1_700_000_090_000;
+      yield* runCompanySlackCycle({
+        companyId: CompanyId.make("company-1"),
+        environmentId: EnvironmentId.make("primary"),
+        backend,
+        slack,
+        providers: [],
+        now: () => now,
+      });
+
+      expect(createCalls).toBe(1);
+      expect(clearedCalls).toBe(1);
+      expect(pending).toBeNull();
+    }),
   );
 });

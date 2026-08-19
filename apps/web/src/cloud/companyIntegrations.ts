@@ -1,5 +1,6 @@
 /** Online Convex client for company-owned integrations and durable automation. */
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { CompanySlackRoutingRule } from "@spiritdevs/contracts";
 import type { IssueAutomationSettings } from "@spiritdevs/contracts/settings";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
@@ -49,6 +50,8 @@ export interface CompanySlackIntegrationSummary {
   readonly workspaceId: string;
   readonly workspaceName: string;
   readonly workspaceDomain: string | null;
+  readonly botUserId: string | null;
+  readonly botId: string | null;
   readonly state: "draft" | "active" | "disconnected";
   readonly activatedAt: number | null;
   readonly credentialPresent: boolean;
@@ -92,6 +95,51 @@ export interface CompanySlackWatchSummary {
   readonly revision: number;
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+export interface CompanySlackWatchV2Summary {
+  readonly id: string;
+  readonly integrationId: string;
+  readonly channelId: string;
+  readonly channelName: string;
+  readonly configurationVersion: 2;
+  readonly rules: ReadonlyArray<CompanySlackRoutingRule>;
+  readonly revision: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type CompanySlackWatchDefinitionSummary =
+  | CompanySlackWatchSummary
+  | CompanySlackWatchV2Summary;
+
+export interface CompanySlackDiscoveredChannel {
+  readonly id: string;
+  readonly name: string;
+  readonly isPrivate: boolean;
+}
+
+export interface SaveCompanySlackWatchV2Args extends Args {
+  readonly companyId: CompanyId;
+  readonly integrationId: string;
+  readonly id: string;
+  readonly channelId: string;
+  readonly channelName: string;
+  readonly rules: ReadonlyArray<CompanySlackRoutingRule>;
+  readonly expectedRevision: number | null;
+}
+
+export interface ActivateCompanySlackIntegrationArgs extends Args {
+  readonly companyId: CompanyId;
+  readonly integrationId: string;
+  readonly legacyWatchersAcknowledged: boolean;
+  readonly enableAutomation?: boolean;
+}
+
+export interface DeleteCompanySlackDraftArgs extends Args {
+  readonly companyId: CompanyId;
+  readonly integrationId: string;
+  readonly expectedRevision: number;
 }
 
 export interface CompanyAutomationSettingsSummary {
@@ -141,10 +189,9 @@ const refs = {
     },
     CompanySlackIntegrationSummary
   >("slackIntegrations:setControllerPool"),
-  activate: mutationRef<
-    { companyId: CompanyId; integrationId: string; legacyWatchersAcknowledged: boolean },
-    CompanySlackIntegrationSummary
-  >("slackIntegrations:activate"),
+  activate: mutationRef<ActivateCompanySlackIntegrationArgs, CompanySlackIntegrationSummary>(
+    "slackIntegrations:activate",
+  ),
   disconnect: mutationRef<
     { companyId: CompanyId; integrationId: string },
     CompanySlackIntegrationSummary
@@ -153,12 +200,24 @@ const refs = {
     { companyId: CompanyId; integrationId: string; confirmWorkspaceName: string },
     null
   >("slackIntegrations:remove"),
+  deleteDraft: mutationRef<DeleteCompanySlackDraftArgs, null>("slackIntegrations:deleteDraft"),
   listWatches: queryRef<
     { companyId: CompanyId; integrationId: string },
     ReadonlyArray<CompanySlackWatchSummary>
   >("slackOperations:listWatches"),
+  listWatchDefinitions: queryRef<
+    { companyId: CompanyId; integrationId: string },
+    ReadonlyArray<CompanySlackWatchDefinitionSummary>
+  >("slackOperations:listWatches"),
+  discoverChannels: actionRef<
+    { companyId: CompanyId; integrationId: string },
+    ReadonlyArray<CompanySlackDiscoveredChannel>
+  >("slackIntegrations:listJoinedChannels"),
   createWatch: mutationRef<Args, CompanySlackWatchSummary>("slackOperations:createWatch"),
   updateWatch: mutationRef<Args, CompanySlackWatchSummary>("slackOperations:updateWatch"),
+  saveV2Watch: mutationRef<SaveCompanySlackWatchV2Args, CompanySlackWatchV2Summary>(
+    "slackOperations:saveWatchV2",
+  ),
   deleteWatch: mutationRef<Args, null>("slackOperations:deleteWatch"),
   getAutomation: queryRef<{ companyId: CompanyId }, CompanyAutomationSettingsSummary | null>(
     "issueAutomation:getSettings",
@@ -182,21 +241,37 @@ const refs = {
 
 export interface CompanyIntegrationsClient {
   readonly list: (companyId: CompanyId) => Promise<ReadonlyArray<CompanySlackIntegrationSummary>>;
+  readonly getIntegration: (
+    companyId: CompanyId,
+    integrationId: string,
+  ) => Promise<CompanySlackIntegrationSummary | null>;
   readonly connect: (
     companyId: CompanyId,
     token: string,
     expectedIntegrationId?: string,
   ) => Promise<CompanySlackIntegrationSummary>;
   readonly setControllerPool: (args: Args) => Promise<CompanySlackIntegrationSummary>;
-  readonly activate: (args: Args) => Promise<CompanySlackIntegrationSummary>;
+  readonly activate: (
+    args: ActivateCompanySlackIntegrationArgs,
+  ) => Promise<CompanySlackIntegrationSummary>;
   readonly disconnect: (args: Args) => Promise<CompanySlackIntegrationSummary>;
   readonly remove: (args: Args) => Promise<void>;
+  readonly deleteDraft: (args: DeleteCompanySlackDraftArgs) => Promise<void>;
   readonly listWatches: (
     companyId: CompanyId,
     integrationId: string,
   ) => Promise<ReadonlyArray<CompanySlackWatchSummary>>;
+  readonly listWatchDefinitions: (
+    companyId: CompanyId,
+    integrationId: string,
+  ) => Promise<ReadonlyArray<CompanySlackWatchDefinitionSummary>>;
+  readonly discoverChannels: (
+    companyId: CompanyId,
+    integrationId: string,
+  ) => Promise<ReadonlyArray<CompanySlackDiscoveredChannel>>;
   readonly createWatch: (args: Args) => Promise<CompanySlackWatchSummary>;
   readonly updateWatch: (args: Args) => Promise<CompanySlackWatchSummary>;
+  readonly saveV2Watch: (args: SaveCompanySlackWatchV2Args) => Promise<CompanySlackWatchV2Summary>;
   readonly deleteWatch: (args: Args) => Promise<void>;
   readonly getAutomation: (
     companyId: CompanyId,
@@ -323,6 +398,14 @@ export function makeCompanyIntegrationsClient(options: {
     client.action(reference, args) as Promise<R>;
   return {
     list: (companyId) => query(refs.list, { companyId }, "Loading integrations"),
+    getIntegration: async (companyId, integrationId) => {
+      const integrations = await query<ReadonlyArray<CompanySlackIntegrationSummary>>(
+        refs.list,
+        { companyId },
+        "Loading integration",
+      );
+      return integrations.find((integration) => integration.id === integrationId) ?? null;
+    },
     connect: (companyId, token, expectedIntegrationId) =>
       action(refs.connect, {
         companyId,
@@ -333,10 +416,16 @@ export function makeCompanyIntegrationsClient(options: {
     activate: (args) => mutation(refs.activate, args),
     disconnect: (args) => mutation(refs.disconnect, args),
     remove: (args) => mutation<null>(refs.remove, args).then(() => undefined),
+    deleteDraft: (args) => mutation<null>(refs.deleteDraft, args).then(() => undefined),
     listWatches: (companyId, integrationId) =>
       query(refs.listWatches, { companyId, integrationId }, "Loading watched channels"),
+    listWatchDefinitions: (companyId, integrationId) =>
+      query(refs.listWatchDefinitions, { companyId, integrationId }, "Loading watched channels"),
+    discoverChannels: (companyId, integrationId) =>
+      action(refs.discoverChannels, { companyId, integrationId }),
     createWatch: (args) => mutation(refs.createWatch, args),
     updateWatch: (args) => mutation(refs.updateWatch, args),
+    saveV2Watch: (args) => mutation(refs.saveV2Watch, args),
     deleteWatch: (args) => mutation<null>(refs.deleteWatch, args).then(() => undefined),
     getAutomation: (companyId) =>
       query(refs.getAutomation, { companyId }, "Loading issue automation"),

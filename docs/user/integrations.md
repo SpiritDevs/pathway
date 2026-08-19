@@ -1,81 +1,115 @@
 # Integrations
 
-Open **Settings → Integrations** to manage Slack intake and issue automation. The former **Triage &
-Intake** address redirects here, including links to its Slack and automation sections.
+Open **Settings → Integrations** to connect Slack intake and manage issue automation. The former
+**Triage & Intake** address redirects here, including links to its Slack and automation sections.
 
-## Personal workspaces
+## Add a Slack workspace
 
-A personal workspace connects one Slack workspace to the environment you are using. Its token,
-watched channels, cursors, and automation settings remain local to that environment. This is the
-same behavior Pathway used before the Integrations page moved.
+Choose **Add integration** to open a three-step setup. You can leave before activation and resume
+the draft later, or delete it if you no longer need it.
 
-## Organisation workspaces
+### 1. Connect Slack
 
-An organisation may connect several Slack workspaces. Configuration belongs to the company, so
-every administrator sees the same workspaces, watched channels, routing, controller priority,
-health, and automation jobs.
+Choose the Pathway workspace that owns the integration: your Personal workspace or an organisation
+you can manage. This choice controls where new issues and integration settings are stored; it does
+not limit Slack to one Pathway environment. Personal and organisation workspaces can each connect
+several Slack workspaces.
 
-Select a Slack row to open its floating settings sheet. The sheet contains:
+Enter the Slack bot token. Pathway validates it with Slack, shows the discovered Slack workspace
+name and ID, encrypts it, and never displays it again. Choose at least one channel for the bot to
+watch. The channel picker only shows channels the bot can see, so invite the bot to a missing
+channel in Slack and refresh the list.
 
-- **Overview** for connection state, activation, and credential replacement.
-- **Watched channels** for triggers, reaction routes, project/cycle routing, investigation, and
-  assignment.
-- **Controller priority** for one preferred environment and ordered backups.
-- **Health** for the current controller, lease generation, last poll, and first actionable error.
-- **Danger zone** for disconnecting or permanently removing the integration.
+### 2. Route issues
 
-Members with `integrations.read` can see redacted configuration and health. Changing anything
-requires `integrations.manage`; Slack tokens are never displayed after submission.
+Each watched channel has an ordered list of rules. The first matching rule creates one issue; if no
+rule matches, Pathway ignores the message.
 
-### Controllers and failover
+A rule can match:
 
-Only one environment polls a Slack workspace. If it disappears, its lease expires after about 90
-seconds and the first healthy configured backup takes over from the shared cursor. A returning
-preferred environment must report healthy twice, then regains control at a lease boundary. Pathway
-does not round-robin and never selects an environment outside the configured list.
+- one of several text prefixes at the start of a message;
+- a Slack reaction added to the message;
+- an @-mention of the connected bot;
+- every human message; or
+- a nested combination using **all** and **any** groups.
 
-The first channel watch starts from the time it is added. Failover resumes its central cursor rather
-than replaying the channel. Message origins are deduplicated centrally, including replies. An
-ambiguous Slack send is reconciled from opaque Slack message metadata before Pathway retries it.
+Prefix matching ignores case and leading whitespace. If several configured prefixes match, Pathway
+uses and removes the longest one from the generated issue title. Reaction rules use Slack's actual
+reaction on the message, not an emoji typed into its text.
 
-### Connecting and migration
+Rules that depend on a reaction get a short grace period before a lower catch-all rule can win.
+This lets somebody react after posting without creating the fallback issue first. Pathway also
+checks a bounded recent window for reactions added later.
 
-Organisation settings are not imported from individual environments. Configure the company Slack
-workspace again, choose its controller order, and review its channels. Activation remains blocked
-until the selected environments are upgraded and capability-compatible, the preferred environment
-is healthy, and an administrator confirms older watchers have been upgraded/disconnected or their
-old token was rotated.
+For each result, choose whether the issue uses company-wide workflow or belongs to one team. You
+can also choose its project, release cycle, and initial placement. Select a real status to put the
+issue straight into the workflow, or choose **Triage** to leave it for review.
 
-Once active, organisation-local watches for that Slack workspace remain stored but are inert.
-Disconnecting the company integration does not silently resume them; that avoids duplicate intake.
+### 3. Automate and activate
 
-Tokens are validated with Slack and encrypted before Convex stores them. A controller receives a
-decrypted token only while it holds the current lease, keeps it in memory, and never writes it to
-disk. Disconnecting deletes the encrypted credential but retains watches, cursors, controller order,
-and health history. Reconnecting must authenticate the same Slack workspace.
+Investigation can be:
 
-Removing an integration requires typing its workspace name. It permanently deletes the credential,
-watches, controller pool, cursors, deduplication records, and delivery records. Existing issues stay
-readable.
+- **Off**;
+- **Immediately after intake**; or
+- **When the issue reaches a status** you choose.
+
+After a successful investigation, Pathway can optionally move the issue to another status. A
+failed investigation never applies that success status.
+
+Automatic assignment can run immediately or wait for investigation to finish. When it waits,
+blocked and retrying investigations continue to hold assignment. A successful investigation or a
+terminally failed investigation releases it. Investigation and assignment need a project with a
+healthy environment connection and a ready provider/model. If one becomes unavailable, the work
+remains visible as blocked rather than silently choosing a different target.
+
+Pathway enables issue automation for the owning workspace when the setup needs it and you have
+permission. It selects the current healthy compatible environment as the initial Slack controller.
+Activation completes after that controller's first healthy poll. If the first poll takes longer
+than expected, the integration stays active and shows a warning you can retry from its health view.
+
+## Controllers and failover
+
+Only one compatible environment polls a Slack workspace at a time. If it disappears, its lease
+expires after about 90 seconds and the first healthy configured backup takes over from the shared
+cursor. A returning preferred environment reports healthy twice, then regains control at a lease
+boundary. Pathway never round-robins or selects an environment outside the configured controller
+list.
+
+The first channel watch starts from the time it is activated. Failover resumes its central cursor
+rather than replaying the channel. Message origins are deduplicated centrally, including replies.
+If a Slack send times out ambiguously, Pathway looks for its delivery marker before retrying.
+
+## Manage an integration
+
+Select a Slack workspace row to review its owner, channels, routing, automation, controller health,
+and recent jobs. Members with integration read access can see redacted configuration and health.
+Changing anything requires integration management access.
+
+Disconnecting removes the encrypted credential but retains routing, cursors, controller order, and
+health so the same Slack workspace can be reconnected. Permanently removing an integration deletes
+its credential and operational records. Existing issues stay readable.
 
 ## Issue automation
 
-The separate **Issue automation** row opens the company routing, audit, transition, reviewer, and
-remediation settings. Organisation automation is activated independently from Slack.
-After its first activation, pausing company automation keeps legacy environment-local automation
-inert; it does not silently fall back to a second authority.
+The separate **Issue automation** row opens workspace routing, audit, transition, reviewer, and
+remediation settings. Slack rules can enable this authority during activation. Pausing it later does
+not silently fall back to environment-local automation.
 
 Every automatic action is a durable job. Recent jobs show their state, target environment, attempts,
 and reason. A job may be pending, blocked, claimed, running, succeeded, failed, or canceled. Missing
-project bindings, offline thread environments, missing or disabled provider instances, and
-unavailable models block visibly; Pathway never silently chooses another model. Administrators may
-retry blocked or failed jobs and cancel unfinished jobs.
+project bindings, offline environments, disabled providers, and unavailable models block visibly.
+Administrators can retry blocked or failed jobs and cancel unfinished jobs.
 
 Transient failures retry at increasing intervals before becoming failed. A final failure adds one
 comment to the issue; retries and readiness changes do not spam its conversation.
 
-## Legacy Slack issues
+## Legacy integrations and issues
 
-Slack issues created before company integrations do not contain a Slack integration/workspace ID.
+Slack integrations created in a Personal workspace before cloud-owned integrations remain on the
+environment where they were configured. They appear under **On this environment — legacy** and are
+not imported automatically. This keeps their token and cursor ownership unambiguous. You may keep
+managing them locally or create a new cloud-owned integration when you are ready.
+
+Slack issues created before cloud integrations do not contain a Slack integration/workspace ID.
 They remain readable and show **Legacy Slack link—two-way replies unavailable**. Pathway does not
-guess which workspace owns them, so they do not resume Slack synchronisation.
+guess which workspace owns them, so they do not resume Slack synchronization.

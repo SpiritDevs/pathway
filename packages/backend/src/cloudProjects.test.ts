@@ -11,6 +11,7 @@ const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/cloudProjects.ts": () => import("../convex/cloudProjects.ts"),
+  "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
 
 const CLERK_ISSUER = "https://clerk.example.test";
@@ -195,5 +196,45 @@ describe("company project deletion", () => {
     const project = await t.run(async (ctx) => await ctx.db.get(ids.projectId));
     expect(project).toMatchObject({ name: "Pathway", preferredBindingId: null });
     expect(project?.deletedAt).toEqual(expect.any(Number));
+  });
+
+  it("does not resurrect a deleted project during a reconnect bootstrap", async () => {
+    const t = harness();
+    await seed(t);
+    const owner = asOwner(t);
+
+    const before = await owner.query(api.sync.bootstrap, {
+      companyId: COMPANY_ID,
+      cursor: null,
+    });
+    expect(before.entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ entityKind: "cloudProject", entityId: PROJECT_ID }),
+      ]),
+    );
+
+    await owner.mutation(api.cloudProjects.deleteCompanyProject, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+    });
+
+    const after = await owner.query(api.sync.bootstrap, {
+      companyId: COMPANY_ID,
+      cursor: null,
+    });
+    expect(after.entities).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ entityKind: "cloudProject", entityId: PROJECT_ID }),
+      ]),
+    );
+    expect(after.entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityKind: "environmentBinding",
+          entityId: BINDING_ID,
+          payload: expect.objectContaining({ status: "revoked" }),
+        }),
+      ]),
+    );
   });
 });

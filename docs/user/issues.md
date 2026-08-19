@@ -373,37 +373,43 @@ Pathway can watch Slack channels, turn messages into issues, and post back into 
 Add the scopes under **OAuth & Permissions**, then reinstall the Slack app to the workspace so the
 new permissions reach the bot token. Invite the bot to each channel (for example, with Slack's
 `/invite @bot-name` command), then open **Settings → Integrations** to connect it. Saving verifies
-the token; opening the channel
-picker and the first poll verify the channel scopes. Personal workspaces keep the token on the
-environment. Organisation workspaces encrypt it in company storage and release it only to the
-current controller; in either case the field stays empty afterwards. See [Integrations](./integrations.md)
-for controller priority, failover, migration, and credential details.
+the token and discovers the Slack workspace. The channel picker and first poll verify the channel
+scopes. New Personal and organisation integrations are encrypted in workspace storage and released
+only to the current controller; the field stays empty afterwards. See
+[Integrations](./integrations.md) for setup, controller failover, legacy integrations, and credential
+details.
 
 ### Watched channels and triggers
 
-Add the channels you want watched, then set its **default project**, optional **release cycle**, and
-whether matching messages should be investigated automatically. Every issue filed from the
-channel takes that release cycle. Automatic investigation starts while the issue is still in
-Triage; it does not accept the issue or move it onto a board.
+Add the channels you want watched, then give each channel an ordered list of intake rules. The first
+matching rule creates one issue. A message that matches no rule is ignored.
 
-Choose what files an issue from each channel. Any combination of these triggers works:
+A rule can match a text prefix, a Slack reaction, a bot mention, every human message, or a nested
+combination using **all** and **any** groups. Prefix matching ignores leading whitespace and case.
+If several prefixes match, Pathway removes the longest one from the generated issue title. Reaction
+rules respond to Slack's reaction metadata, not an emoji typed into message text.
 
-- **Reaction rules** — someone adds an emoji you nominate, such as `ticket`, to a message. A
-  channel can have several rules. Each rule can inherit or override the channel's project and
-  automatic-investigation setting.
-- **Any new message** — every new human message posted in the channel.
-- **Bot is mentioned** — messages that @-mention the bot.
+An earlier reaction-dependent rule gets a short grace period before a lower catch-all rule can win,
+so somebody can post and then react without creating the fallback issue first. The recent-reaction
+scan also finds reactions added later.
 
-Reaction rules are checked in their visible order. The first matching reaction wins, ahead of the
-two general triggers. That makes one shared intake channel able to route `:quotecloud:` to the
-QuoteCloud project and `:ve:` to the VE project while keeping a channel-wide fallback.
-
-Turning every trigger off pauses a channel without removing it.
+For each result, choose company-wide workflow or one team, then optionally choose a project and
+release cycle. Initial placement can be **Triage** or a real workflow status. One shared channel can
+therefore send `support:` messages to one project and `:quotecloud:` reactions to another team,
+while leaving unmatched conversation alone.
 
 ### Automatic assignment and review
 
-Turn on **Auto-assign worker** for the channels that should use automatic routing. In the
-**Issue automation** sheet under **Settings → Integrations**, configure:
+Each intake result can investigate the issue immediately, wait until the issue reaches a selected
+status, or leave investigation off. A successful investigation can optionally move the issue to
+another status. A failed investigation never applies that success status.
+
+Automatic assignment can run immediately or after investigation reaches a terminal result. Blocked
+and retrying investigations continue to hold assignment; success and terminal failure both release
+it. Investigation and assignment require a project. If its environment, provider, or model is not
+ready, Pathway preserves a visible blocked job instead of silently selecting another target.
+
+In the **Issue automation** sheet under **Settings → Integrations**, configure:
 
 - the routing model, ordered worker rules, and an optional fallback worker;
 - audit rules, each with one or more independent auditor models;
@@ -428,7 +434,8 @@ work, which starts a new deduplicated audit cycle. Passing moves it to the expli
 status or, by default, the next status in workflow order — commonly Pending Human Review or Done.
 
 An automatic investigation needs the resolved project to have a directory attached. If it cannot
-start, the issue is still filed and remains available to investigate by hand.
+start, the issue is still filed and remains available to investigate by hand. Its automation intent
+is saved when the message is accepted, so later rule edits do not change work already queued.
 
 Channels are polled about every thirty seconds, each from its own position. A machine that was
 asleep catches up on what it missed rather than losing it. Watching a channel starts from now: the
@@ -440,9 +447,9 @@ bot removed from one channel does not stop the others being read.
 
 ### The triage queue
 
-A message becomes a **triage item**: an issue with no status, on no board, in no count, waiting for
-a decision. The Triage entry in the Issues sidebar carries the pending count, and each row shows
-which channel it came from and how long it has been waiting.
+When a matching rule chooses **Triage**, the message becomes a triage item: an issue with no status,
+on no board, in no count, waiting for a decision. The Triage entry in the Issues sidebar carries the
+pending count, and each row shows which channel it came from and how long it has been waiting.
 
 **Accept** assigns a status, a project, and a priority in one step, and offers to start an
 investigation at the same time when one has not already been started by Slack routing (unavailable

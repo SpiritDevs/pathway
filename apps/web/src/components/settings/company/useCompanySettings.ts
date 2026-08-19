@@ -99,6 +99,8 @@ export function useCompanySettings() {
     contentCompanyId,
     contentReplica,
     personalCompany: personalCompany(companies),
+    registryMembershipIds: membershipIds,
+    registryReplicas: replicas,
     settingsCompanyScope,
     setSettingsCompanyScope,
     workspaceKind: activeCompany === null ? ("profile" as const) : activeCompany.workspaceKind,
