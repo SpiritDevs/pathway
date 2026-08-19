@@ -362,17 +362,17 @@ describe("companies.provisionCurrentUser", () => {
       isOwner: true,
     });
 
+    // Asking for an organization adds one; it no longer converts the personal workspace, which is
+    // the member's own space and outlives every company they join (ADR 0011).
     const organization = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
       workspaceKind: "organization",
       workspaceName: "Analytical Engines",
     });
     expect(organization).toMatchObject({
-      id: personal.id,
-      membershipId: personal.membershipId,
       name: "Analytical Engines",
       workspaceKind: "organization",
     });
-    expect(organization.syncVersion).toBe(personal.syncVersion + 1);
+    expect(organization.id).not.toBe(personal.id);
 
     const retry = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
       workspaceKind: "organization",
@@ -380,7 +380,7 @@ describe("companies.provisionCurrentUser", () => {
     });
     expect(retry).toEqual(organization);
     await t.run(async (ctx) => {
-      expect(await ctx.db.query("companies").collect()).toHaveLength(1);
+      expect(await ctx.db.query("companies").collect()).toHaveLength(2);
     });
   });
 
@@ -513,61 +513,57 @@ describe("companies.create", () => {
   });
 });
 
-describe("companies.upgradeToOrganization", () => {
-  it("upgrades a personal workspace once, keeps its identity, and applies the organization name", async () => {
+describe("companies.createOrganizationWorkspace", () => {
+  it("creates a second company and leaves the personal workspace intact", async () => {
     const t = harness();
     const personal = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
       workspaceKind: "personal",
     });
-    const before = await feedRows(t);
 
-    const upgraded = await asUser(t, "user_new").mutation(api.companies.upgradeToOrganization, {
-      companyId: personal.id,
-      name: "  New Organization  ",
-    });
-    expect(upgraded).toMatchObject({
-      id: personal.id,
-      membershipId: personal.membershipId,
+    const organization = await asUser(t, "user_new").mutation(
+      api.companies.createOrganizationWorkspace,
+      { name: "  New Organization  " },
+    );
+    expect(organization).toMatchObject({
       workspaceKind: "organization",
       name: "New Organization",
+      isOwner: true,
     });
-    expect(upgraded.syncVersion).toBe(personal.syncVersion + 1);
-    expect((await feedRows(t)).slice(before.length)).toHaveLength(1);
+    expect(organization.id).not.toBe(personal.id);
 
-    const retry = await asUser(t, "user_new").mutation(api.companies.upgradeToOrganization, {
-      companyId: personal.id,
-      name: "Ignored retry name",
+    // The point of ADR 0011: the member still has somewhere of their own.
+    const mine = await asUser(t, "user_new").query(api.companies.listMine, {});
+    expect(mine.map((company) => company.id).sort()).toEqual([personal.id, organization.id].sort());
+    expect(mine.find((company) => company.id === personal.id)).toMatchObject({
+      workspaceKind: "personal",
     });
-    expect(retry).toEqual(upgraded);
-    expect((await feedRows(t)).slice(before.length)).toHaveLength(1);
   });
 
-  it("requires company management permission and a non-blank name", async () => {
+  it("requires a non-blank name", async () => {
     const t = harness();
-    await seed(t);
-    await t.run(async (ctx) => {
-      const company = await ctx.db
-        .query("companies")
-        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
-        .unique();
-      if (company !== null) await ctx.db.patch(company._id, { workspaceKind: "personal" });
+    await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "personal",
     });
-
     await expect(
-      asUser(t, "user_reader").mutation(api.companies.upgradeToOrganization, {
-        companyId: COMPANY_ID,
-        name: "Readers Cannot Upgrade",
-      }),
-    ).rejects.toThrow("Missing permission company.manage.");
-    await expect(
-      asUser(t, "user_admin").mutation(api.companies.upgradeToOrganization, {
-        companyId: COMPANY_ID,
-        name: "   ",
-      }),
+      asUser(t, "user_new").mutation(api.companies.createOrganizationWorkspace, { name: "   " }),
     ).rejects.toThrow("A workspace needs a name.");
   });
 
-  it("is the one-way door for ownership and membership administration", async () => {
+  it("gives a member provisioned straight into an organization a personal workspace too", async () => {
+    const t = harness();
+    const organization = await asUser(t, "user_new").mutation(api.companies.provisionCurrentUser, {
+      workspaceKind: "organization",
+      workspaceName: "Straight To Org",
+    });
+    const mine = await asUser(t, "user_new").query(api.companies.listMine, {});
+    expect(mine).toHaveLength(2);
+    expect(mine.find((company) => company.id === organization.id)).toMatchObject({
+      workspaceKind: "organization",
+    });
+    expect(mine.find((company) => company.workspaceKind === "personal")).toBeDefined();
+  });
+
+  it("keeps a personal workspace out of ownership and membership administration for good", async () => {
     const t = harness();
     await seed(t);
     await t.run(async (ctx) => {
@@ -578,33 +574,21 @@ describe("companies.upgradeToOrganization", () => {
       if (company !== null) await ctx.db.patch(company._id, { workspaceKind: "personal" });
     });
 
+    // There is no upgrade door any more, so these stay refused rather than being unlocked by a
+    // conversion. Collaboration means creating an organization alongside.
     await expect(
       asUser(t, "user_owner").mutation(api.companies.addOwner, {
         companyId: COMPANY_ID,
         membershipId: ADMIN_MEMBERSHIP_ID,
       }),
-    ).rejects.toThrow("Upgrade this personal workspace to an organization");
+    ).rejects.toThrow("personal workspace");
     await expect(
       asUser(t, "user_admin").mutation(api.memberships.setState, {
         companyId: COMPANY_ID,
         membershipId: READER_MEMBERSHIP_ID,
         state: "locked",
       }),
-    ).rejects.toThrow("Upgrade this personal workspace to an organization");
-
-    await asUser(t, "user_owner").mutation(api.companies.upgradeToOrganization, {
-      companyId: COMPANY_ID,
-      name: "Upgraded Co",
-    });
-    await asUser(t, "user_owner").mutation(api.companies.addOwner, {
-      companyId: COMPANY_ID,
-      membershipId: ADMIN_MEMBERSHIP_ID,
-    });
-    await asUser(t, "user_admin").mutation(api.memberships.setState, {
-      companyId: COMPANY_ID,
-      membershipId: READER_MEMBERSHIP_ID,
-      state: "locked",
-    });
+    ).rejects.toThrow("personal workspace");
   });
 });
 

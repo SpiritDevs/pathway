@@ -27,6 +27,7 @@ import {
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -334,6 +335,8 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ConfirmDialogHost />
         {/* A rootless project prompts for a directory just in time, from anywhere in the app. */}
         <AttachProjectDirectoryHost />
+        {/* Every project needs an owning company before it can carry issues. */}
+        {primaryEnvironmentAuthenticated ? <AssignProjectCompanyDialog /> : null}
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}

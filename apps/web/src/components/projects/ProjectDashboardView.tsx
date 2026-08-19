@@ -2,7 +2,7 @@ import { FolderKanbanIcon } from "lucide-react";
 
 import { useAllEnvironmentShellsBootstrapped } from "~/state/entities";
 import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
-import { useProjectGroups } from "./useProjectGroups";
+import { useWorkspaceProjects } from "./useWorkspaceProjects";
 
 function ProjectDashboardState({
   description,
@@ -44,9 +44,9 @@ export function ProjectsIndexView() {
 }
 
 export function ProjectDashboardView({ projectKey }: { projectKey: string }) {
-  const groups = useProjectGroups();
+  const projects = useWorkspaceProjects();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
-  const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
+  const selected = projects.find((project) => project.projectKey === projectKey) ?? null;
 
   if (!bootstrapped) {
     return (

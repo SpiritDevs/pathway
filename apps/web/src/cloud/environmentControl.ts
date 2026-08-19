@@ -114,6 +114,14 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("environments:register"),
+  createCompanyProject: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly name: string;
+      readonly description?: string;
+    },
+    string
+  >("cloudProjects:createCompanyProject"),
   ensureEnvironmentProject: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -213,6 +221,12 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     readonly info: EnvironmentCloudRegistrationInfo;
     readonly serviceRoleIds: ReadonlyArray<string>;
+  }) => Promise<void>;
+  /** Creates a project the company owns before any machine has a checkout of it. */
+  readonly createCompanyProject: (args: {
+    readonly companyId: CompanyId;
+    readonly name: string;
+    readonly description?: string;
   }) => Promise<void>;
   readonly ensureEnvironmentProject: (args: {
     readonly companyId: CompanyId;
@@ -314,6 +328,8 @@ export function makeEnvironmentControlClient(options: {
         serviceRoleIds,
         teamIds: [],
       }),
+    createCompanyProject: (args) =>
+      mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
     ensureEnvironmentProject: ({ companyId, project }) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject, {
         companyId,

@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { FolderKanbanIcon } from "lucide-react";
+import { CloudOffIcon, FolderKanbanIcon } from "lucide-react";
 
 import { ProjectFavicon } from "../ProjectFavicon";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
@@ -12,14 +12,15 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { projectKeyFromProjectsPathname } from "./projectsSidebar.logic";
-import { useProjectGroups } from "./useProjectGroups";
+import { useWorkspaceProjects } from "./useWorkspaceProjects";
 
 export function ProjectsSidebar() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { isMobile, setOpenMobile } = useSidebar();
-  const groups = useProjectGroups();
+  const projects = useWorkspaceProjects();
   const activeProjectKey = projectKeyFromProjectsPathname(pathname);
 
   const openProject = (projectKey: string) => {
@@ -39,29 +40,64 @@ export function ProjectsSidebar() {
             <FolderKanbanIcon />
             All projects
           </SidebarGroupLabel>
-          {groups.length === 0 ? (
+          {projects.length === 0 ? (
             <p className="px-2 py-3 text-xs leading-relaxed text-sidebar-muted-foreground/70">
               Projects you add to Pathway will appear here.
             </p>
           ) : (
             <SidebarMenu>
-              {groups.map((group) => (
-                <SidebarMenuItem key={group.projectKey}>
+              {projects.map((project) => (
+                <SidebarMenuItem key={project.projectKey}>
                   <SidebarMenuButton
-                    isActive={activeProjectKey === group.projectKey}
+                    isActive={activeProjectKey === project.projectKey}
                     className="gap-2"
-                    onClick={() => openProject(group.projectKey)}
+                    onClick={() => openProject(project.projectKey)}
                   >
-                    <ProjectFavicon
-                      environmentId={group.environmentId}
-                      cwd={group.workspaceRoot}
-                      faviconPath={group.faviconPath}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{group.displayName}</span>
-                    {group.groupedProjectCount > 1 ? (
-                      <span className="shrink-0 text-[11px] tabular-nums text-sidebar-muted-foreground/70">
-                        {group.groupedProjectCount}
-                      </span>
+                    {project.group === null ? (
+                      <FolderKanbanIcon className="size-4 text-sidebar-muted-foreground/70" />
+                    ) : (
+                      <ProjectFavicon
+                        environmentId={project.group.environmentId}
+                        cwd={project.group.workspaceRoot}
+                        faviconPath={project.group.faviconPath}
+                      />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{project.displayName}</span>
+                    {project.checkoutCount === 0 ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <CloudOffIcon
+                              aria-label="No checkout on any machine"
+                              className="size-3.5 shrink-0 text-sidebar-muted-foreground/70"
+                            />
+                          }
+                        />
+                        <TooltipPopup side="right">
+                          No checkout yet. You can plan and file issues here; attach a directory to
+                          run agents.
+                        </TooltipPopup>
+                      </Tooltip>
+                    ) : project.checkoutCount > 1 ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="shrink-0 text-[11px] tabular-nums text-sidebar-muted-foreground/70">
+                              {project.checkoutCount}
+                            </span>
+                          }
+                        />
+                        <TooltipPopup side="right">
+                          {project.group?.memberProjects.length === 0
+                            ? `${project.checkoutCount} checkouts`
+                            : project.group?.memberProjects
+                                .map(
+                                  (member) =>
+                                    `${member.environmentLabel ?? "This machine"} · ${member.workspaceRoot ?? "No directory"}`,
+                                )
+                                .join("\n")}
+                        </TooltipPopup>
+                      </Tooltip>
                     ) : null}
                   </SidebarMenuButton>
                 </SidebarMenuItem>

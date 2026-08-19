@@ -4,8 +4,12 @@ Pathway has a built-in issue tracker at **Issues** in the sidebar. It holds the 
 planning, the work an agent is doing, and the requests arriving from Slack, in one place next to
 your threads.
 
-Issues belong to the environment you are connected to. Connect to a different machine and you see
-that machine's tracker.
+Issues belong to a company, not to a machine. The same issues follow you to every device you sign
+in on, and the workspace switcher decides which company's issues you are looking at.
+
+Each issue can be attached to a project. A project belongs to a company too, so you can file issues
+against one before any machine has a checkout of it — you just cannot start agent work there until
+you attach a directory.
 
 ## The Issues workspace
 

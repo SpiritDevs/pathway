@@ -42,27 +42,18 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
   const [error, setError] = useState<string | null>(null);
   const trimmedName = name.trim();
 
-  const upgrade = async () => {
-    if (
-      settings.admin === null ||
-      settings.companyId === null ||
-      trimmedName.length === 0 ||
-      pending ||
-      completed
-    ) {
+  const createOrganization = async () => {
+    if (settings.admin === null || trimmedName.length === 0 || pending || completed) {
       return;
     }
 
     setPending(true);
     setError(null);
     try {
-      await settings.admin.upgradeToOrganization({
-        companyId: settings.companyId,
-        name: trimmedName,
-      });
+      await settings.admin.createOrganizationWorkspace({ name: trimmedName });
       setCompleted(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not upgrade this workspace.");
+      setError(cause instanceof Error ? cause.message : "Could not create this company.");
     } finally {
       setPending(false);
     }
@@ -81,18 +72,18 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
               <Badge variant="secondary">Personal workspace</Badge>
               <div className="space-y-2">
                 <h3 className="max-w-md text-2xl font-semibold tracking-[-0.035em]">
-                  Build together, without moving your work
+                  Build together, and keep a space of your own
                 </h3>
                 <p className="max-w-md text-sm leading-6 text-muted-foreground">
-                  Upgrade this workspace to a company when you are ready to collaborate. Your
-                  projects, threads, environments, and settings stay exactly where they are.
+                  Create a company when you are ready to collaborate. This personal workspace stays
+                  exactly as it is, with its own projects, threads, and issues.
                 </p>
               </div>
             </div>
 
             <div className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
               <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-success" />
-              Personal features remain available after upgrading.
+              Your personal workspace is never replaced. Switch between the two at any time.
             </div>
           </div>
 
@@ -113,7 +104,7 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
               className="mt-5 border-t pt-5"
               onSubmit={(event) => {
                 event.preventDefault();
-                void upgrade();
+                void createOrganization();
               }}
             >
               <label htmlFor="company-workspace-name" className="text-xs font-medium">
@@ -140,7 +131,7 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
                     settings.admin === null || trimmedName.length === 0 || pending || completed
                   }
                 >
-                  {completed ? "Upgraded" : pending ? "Upgrading…" : "Upgrade to company"}
+                  {completed ? "Created" : pending ? "Creating…" : "Create company"}
                 </Button>
               </div>
               {error !== null ? (
@@ -153,11 +144,11 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
                 </p>
               ) : completed ? (
                 <p role="status" className="mt-2 text-xs text-muted-foreground">
-                  Your company controls will appear as soon as this workspace finishes syncing.
+                  Your new company will appear in the workspace switcher once it finishes syncing.
                 </p>
               ) : (
                 <p className="mt-2 text-xs text-muted-foreground">
-                  This changes how the workspace collaborates; it does not create a new workspace.
+                  This creates a separate company. Nothing moves out of your personal workspace.
                 </p>
               )}
             </form>

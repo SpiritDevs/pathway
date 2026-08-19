@@ -170,9 +170,13 @@ async function ensureDefaultIssueStatuses(
 }
 
 /**
- * Persists a legacy workspace kind or performs the only supported transition. Callers select an
- * organization for a missing legacy kind because those rows predate personal workspaces and were
- * already fully collaboration-capable.
+ * Stamps a workspace kind onto a legacy row that predates the field. Callers select an
+ * organization for a missing kind because those rows predate personal workspaces and were already
+ * fully collaboration-capable.
+ *
+ * A workspace never changes kind after that. A personal workspace is permanent (ADR 0011): asking
+ * for an organization creates a second company rather than consuming the one place a member keeps
+ * their own side projects.
  */
 async function ensureWorkspaceKindTransition(
   ctx: MutationCtx,
@@ -181,14 +185,7 @@ async function ensureWorkspaceKindTransition(
   workspaceKind: WorkspaceKind,
   workspaceName?: string,
 ): Promise<Doc<"companies">> {
-  const currentKind = company.workspaceKind ?? "organization";
-  if (currentKind === "organization" && workspaceKind === "personal") {
-    return company;
-  }
-
-  const isLegacyRepair = company.workspaceKind === undefined;
-  const isUpgrade = currentKind === "personal" && workspaceKind === "organization";
-  if (!isLegacyRepair && !isUpgrade) return company;
+  if (company.workspaceKind !== undefined) return company;
 
   const name = workspaceName ?? company.name;
   await ctx.db.patch(company._id, {
@@ -556,23 +553,9 @@ export const provisionCurrentUser = mutation({
         );
       }
 
-      if (args.workspaceKind === "organization") {
-        const personal = owned.find(({ company }) => company.workspaceKind === "personal");
-        if (personal !== undefined) {
-          const upgraded = await ensureWorkspaceKindTransition(
-            ctx,
-            personal.company,
-            personal.membership,
-            "organization",
-            workspaceName,
-          );
-          return await summarize(
-            ctx,
-            await ensureDefaultIssueStatuses(ctx, upgraded, personal.membership),
-            personal.membership,
-          );
-        }
-      }
+      // Asking for an organization when only a personal workspace exists used to convert that
+      // workspace in place. It now falls through to creation: personal is where a member keeps
+      // their own work, and joining a company must not cost them that.
     }
 
     // Preserve the pre-workspace behavior for older callers. New onboarding callers always send a
@@ -598,9 +581,39 @@ export const provisionCurrentUser = mutation({
       workspaceKind,
       issueKeyPrefix: defaultIssueKeyPrefix(name),
     });
+    if (workspaceKind === "organization") {
+      // Every member has a personal workspace, always. Provisioning straight into an organization
+      // would otherwise leave them with nowhere of their own to file a side project.
+      await ensurePersonalWorkspace(ctx, user, displayName, owned);
+    }
     return await summarize(ctx, created.company, created.membership);
   },
 });
+
+/**
+ * Returns the caller's personal workspace, creating it when they have none.
+ *
+ * Accounts provisioned before ADR 0011 may have had their personal workspace converted into an
+ * organization, which leaves them with none. Recreating it here is the repair for those accounts;
+ * it is a no-op for everyone else.
+ */
+async function ensurePersonalWorkspace(
+  ctx: MutationCtx,
+  user: Doc<"users">,
+  displayName: string,
+  owned: ReadonlyArray<{ company: Doc<"companies">; membership: Doc<"memberships"> }>,
+): Promise<{ company: Doc<"companies">; membership: Doc<"memberships"> }> {
+  const existing = owned.find(({ company }) => company.workspaceKind === "personal");
+  if (existing !== undefined) return existing;
+  const name = normalizeCompanyName(`${displayName}'s Workspace`);
+  return await createCompanyOwnedBy(ctx, {
+    user,
+    companyDomainId: mintDomainId(Date.now()),
+    name,
+    workspaceKind: "personal",
+    issueKeyPrefix: defaultIssueKeyPrefix(name),
+  });
+}
 
 /**
  * Repairs bootstrap rows for an existing workspace without ever creating one. The background sync
@@ -649,32 +662,32 @@ export const repairCurrentUserWorkspace = mutation({
 });
 
 /**
- * Converts a personal workspace into an organization without replacing its identity or moving any
- * data. The transition is deliberately one-way; retrying after a successful response was lost is
- * harmless and returns the already-upgraded workspace.
+ * Creates a company alongside the caller's personal workspace.
+ *
+ * This replaces the old in-place upgrade. A personal workspace is permanent (ADR 0011), so
+ * collaborating adds a second company and leaves a member's own projects where they were. The
+ * caller keeps ownership of both.
  */
-export const upgradeToOrganization = mutation({
-  args: { companyId: domainIdArg, name: v.string() },
+export const createOrganizationWorkspace = mutation({
+  args: { name: v.string() },
   returns: companySummary,
   handler: async (ctx, args) => {
-    const actor = await requireCompanyActor(ctx, args.companyId);
-    if (actor.kind !== "member") {
-      throw backendError("invalid-arguments", "An environment cannot upgrade a workspace.");
+    const user = await currentUser(ctx);
+    if (user === null) {
+      throw backendError("user-not-provisioned", "Provision the user before creating a company.");
     }
-    requirePermission(actor, "company.manage");
     const name = optionalWorkspaceName(args.name);
     if (name === undefined) {
       throw backendError("invalid-arguments", "An organization needs a name.");
     }
-
-    const upgraded = await ensureWorkspaceKindTransition(
-      ctx,
-      actor.company,
-      actor.membership,
-      "organization",
+    const created = await createCompanyOwnedBy(ctx, {
+      user,
+      companyDomainId: mintDomainId(Date.now()),
       name,
-    );
-    return await summarize(ctx, upgraded, actor.membership);
+      workspaceKind: "organization",
+      issueKeyPrefix: defaultIssueKeyPrefix(name),
+    });
+    return await summarize(ctx, created.company, created.membership);
   },
 });
 
