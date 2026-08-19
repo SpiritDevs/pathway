@@ -25,11 +25,9 @@ import {
   type ManagedRelaySession,
 } from "@spiritdevs/client-runtime/relay";
 import {
-  EnvironmentRegistrationEntity,
   makeIssueSyncAdapter,
   makeSyncEngine,
   makeWebLeaderElection,
-  RoleEntity,
   SyncStore,
   SyncTransport,
   SYNC_INDEXED_DB_PREFIX,
@@ -40,7 +38,7 @@ import { makeIndexedDbSyncStore } from "@spiritdevs/client-runtime/sync/indexedd
 import { runAtomCommand } from "@spiritdevs/client-runtime/state/runtime";
 import { SyncClientId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
-import { type EnvironmentCloudRegistrationInfo, EnvironmentId } from "@spiritdevs/contracts";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import * as Cause from "effect/Cause";
@@ -60,8 +58,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
-import { runPrimaryHttp } from "../lib/runtime";
 import { randomUUID } from "../lib/utils";
 import { environmentCatalog, localEnvironmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -76,6 +72,11 @@ import {
   publishCompanySyncEngineHandle,
   type CompanySyncEngineMutationHandle,
 } from "./companySyncEngines";
+import {
+  isEnvironmentRegistration,
+  readPrimaryEnvironmentRegistrationInfo,
+  registerEnvironmentAutomatically,
+} from "./environmentRegistration";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
@@ -88,7 +89,6 @@ import {
   type ConvexClientLike,
 } from "./syncTransport";
 import { makeClerkConvexTokenFetcher, managedRelayClerkTokenFetcher } from "./syncTransportAuth";
-import type { EnvironmentControlClient } from "./environmentControl";
 import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
 import { useEnvironmentControl } from "./useEnvironmentControl";
 import { automaticCloudRetryDelayMs, useAlwaysOnCloudLink } from "./useCloudLinkController";
@@ -960,119 +960,6 @@ function useRelayEnvironmentConnections(): void {
   }, [localCatalog.entries, primaryEnvironmentId, relayDiscovery.environments]);
 }
 
-const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
-const isRole = Schema.is(RoleEntity);
-
-const ENVIRONMENT_SERVICE_ROLE_PERMISSIONS = [
-  "company.read",
-  "projects.read",
-  "issues.read",
-  "workflow.manage",
-  "environments.read",
-] as const;
-
-/**
- * Picks the least-privileged role that can back a new environment registration, or `null` when
- * this environment is already active or the company replica has not delivered a suitable role.
- */
-export function automaticEnvironmentRegistrationServiceRoleId(
-  values: Iterable<unknown>,
-  environmentId: EnvironmentId,
-): string | null {
-  const roles: Array<RoleEntity> = [];
-  for (const value of values) {
-    if (
-      isEnvironmentRegistration(value) &&
-      value.environmentId === environmentId &&
-      value.state === "active"
-    ) {
-      return null;
-    }
-    if (
-      isRole(value) &&
-      ENVIRONMENT_SERVICE_ROLE_PERMISSIONS.every((permission) =>
-        value.permissions.includes(permission),
-      )
-    ) {
-      roles.push(value);
-    }
-  }
-  return (
-    roles.toSorted((left, right) => left.permissions.length - right.permissions.length)[0]?.id ??
-    null
-  );
-}
-
-function capabilitiesMatch(
-  left: EnvironmentCloudRegistrationInfo["descriptor"]["capabilities"],
-  right: EnvironmentCloudRegistrationInfo["descriptor"]["capabilities"],
-): boolean {
-  const entries = (value: typeof left) =>
-    Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify(entries(left)) === JSON.stringify(entries(right));
-}
-
-export function environmentRegistrationMatchesInfo(
-  registration: EnvironmentRegistrationEntity,
-  info: EnvironmentCloudRegistrationInfo,
-): boolean {
-  const current = registration.descriptor;
-  const incoming = info.descriptor;
-  return (
-    registration.state === "active" &&
-    registration.publicKeyThumbprint === info.publicKeyThumbprint &&
-    registration.relayLinkState === info.relayLinkState &&
-    registration.managedEndpointAvailable === info.managedEndpointAvailable &&
-    current.environmentId === incoming.environmentId &&
-    current.label === incoming.label &&
-    current.platform.os === incoming.platform.os &&
-    current.platform.arch === incoming.platform.arch &&
-    current.serverVersion === incoming.serverVersion &&
-    capabilitiesMatch(current.capabilities, incoming.capabilities)
-  );
-}
-
-/**
- * Publishes this environment's registration to one company, or reports that nothing was needed.
- *
- * Returns `false` — without a write — when the company already carries a matching active
- * registration, and when it carries neither a registration nor a role low-privileged enough to back
- * a new one.
- */
-export async function registerEnvironmentAutomatically(input: {
-  readonly companyId: CompanyId;
-  readonly environmentId: EnvironmentId;
-  readonly replica: CompanyRegistryReplicaState;
-  readonly control: Pick<EnvironmentControlClient, "registerEnvironment">;
-  readonly readRegistrationInfo: () => Promise<EnvironmentCloudRegistrationInfo>;
-}): Promise<boolean> {
-  const activeRegistration = Array.from(input.replica.view.values()).find(
-    (value): value is EnvironmentRegistrationEntity =>
-      isEnvironmentRegistration(value) &&
-      value.environmentId === input.environmentId &&
-      value.state === "active",
-  );
-  const serviceRoleId = automaticEnvironmentRegistrationServiceRoleId(
-    input.replica.view.values(),
-    input.environmentId,
-  );
-  if (activeRegistration === undefined && serviceRoleId === null) return false;
-  const info = await input.readRegistrationInfo();
-  if (
-    activeRegistration !== undefined &&
-    environmentRegistrationMatchesInfo(activeRegistration, info)
-  ) {
-    return false;
-  }
-  await input.control.registerEnvironment({
-    companyId: input.companyId,
-    info,
-    serviceRoleIds:
-      activeRegistration?.serviceRoleIds ?? (serviceRoleId === null ? [] : [serviceRoleId]),
-  });
-  return true;
-}
-
 /**
  * Publishes this environment's registration to every company the account is a member of.
  *
@@ -1107,12 +994,7 @@ function useAutomaticEnvironmentRegistration(): void {
           environmentId,
           replica,
           control,
-          readRegistrationInfo: () =>
-            runPrimaryHttp(
-              PrimaryEnvironmentHttpClient.pipe(
-                Effect.flatMap((client) => client.connect.registrationInfo({ headers: {} })),
-              ),
-            ),
+          readRegistrationInfo: readPrimaryEnvironmentRegistrationInfo,
         });
         inFlight.current.set(registrationKey, registration);
         const clearInFlight = () => {

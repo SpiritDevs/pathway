@@ -15,7 +15,13 @@ import { FolderKanbanIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { companyListAtom } from "~/cloud/activeCompany";
+import { companyRegistryReplicasAtom } from "~/cloud/companyRegistryReplica";
+import {
+  readPrimaryEnvironmentRegistrationInfo,
+  registerEnvironmentAutomatically,
+} from "~/cloud/environmentRegistration";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { toastManager } from "~/components/ui/toast";
 import { Button } from "../ui/button";
 import {
@@ -84,6 +90,8 @@ function ProjectRow({
 export function AssignProjectCompanyDialog() {
   const projects = useWorkspaceProjects();
   const companies = useAtomValue(companyListAtom);
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const control = useEnvironmentControl();
   const [assignments, setAssignments] = useState<Assignments>(new Map());
   const [saving, setSaving] = useState(false);
@@ -108,12 +116,31 @@ export function AssignProjectCompanyDialog() {
     if (control === null || !complete || saving) return;
     setSaving(true);
     const assigned: string[] = [];
+    // This dialog opens on launch, in the same seconds the sync runtime is publishing this
+    // environment's registrations. A company assigned before its registration lands rejects the
+    // binding outright, so each one waits for its own registration first. It is idempotent and
+    // returns without a write once the registration is there.
+    const registered = new Set<CompanyId>();
+    const ensureRegistered = async (companyId: CompanyId) => {
+      if (registered.has(companyId) || environmentId === null) return;
+      const replica = replicas.get(companyId);
+      if (replica === undefined) return;
+      await registerEnvironmentAutomatically({
+        companyId,
+        environmentId,
+        replica,
+        control,
+        readRegistrationInfo: readPrimaryEnvironmentRegistrationInfo,
+      });
+      registered.add(companyId);
+    };
     try {
       for (const project of unassigned) {
         const companyId = assignments.get(project.projectKey);
         if (companyId === undefined) continue;
         const checkouts = project.group?.memberProjects ?? [];
         if (checkouts.length === 0) continue;
+        await ensureRegistered(companyId);
         // Register every checkout, not just the first: the same project on a second machine is the
         // same project, and binding only one would leave the others unassigned on next launch.
         for (const checkout of checkouts) {

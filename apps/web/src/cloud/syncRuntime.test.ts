@@ -40,13 +40,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
+  automaticEnvironmentRegistrationServiceRoleId,
+  environmentRegistrationMatchesInfo,
+  registerEnvironmentAutomatically,
+} from "./environmentRegistration";
+import {
   cloudSyncClientIdStorageKey,
   cloudSyncScope,
   decodeCloudSyncCompanies,
   discoverCompanyEnvironmentConnections,
-  automaticEnvironmentRegistrationServiceRoleId,
-  environmentRegistrationMatchesInfo,
-  registerEnvironmentAutomatically,
   repairCloudSyncCurrentUserWorkspace,
   readCloudSyncClientId,
   reconcileCloudSyncEngines,
