@@ -529,6 +529,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(mac.protocols, [
         { name: "Pathway", schemes: ["pathway", "pathway-dev"] },
       ]);
+      assert.deepStrictEqual(mac.extendInfo, {
+        NSLocalNetworkUsageDescription:
+          "Pathway connects to development servers running on your local network.",
+      });
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 

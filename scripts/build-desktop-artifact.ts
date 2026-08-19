@@ -1570,6 +1570,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      // macOS 15+ gates LAN traffic per app, so without this string Chromium
+      // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
+      // of prompting. The webview and the agent browser both need the grant.
+      extendInfo: {
+        NSLocalNetworkUsageDescription:
+          "Pathway connects to development servers running on your local network.",
+      },
       protocols: [
         {
           name: "Pathway",
