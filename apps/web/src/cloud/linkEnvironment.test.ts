@@ -280,7 +280,27 @@ describe("web cloud link environment client", () => {
         }),
       ).pipe(Effect.flip);
 
-      expect(error.message).toBe("Could not remove the environment from Pathway Connect.");
+      expect(error.message).toBe(
+        "Could not remove the environment from Pathway Connect; the account still lists it.",
+      );
+      expect(error.traceId).toBe("trace-unlink-persistence");
+      expect(error.diagnostic).toMatchObject({
+        unlink: {
+          tag: "ManagedRelayRequestFailedError",
+          traceId: "trace-unlink-persistence",
+          relayError: {
+            tag: "RelayInternalError",
+            code: "internal_error",
+            reason: "persistence_failed",
+            traceId: "trace-unlink-persistence",
+          },
+        },
+        listing: {
+          result: "success",
+          environmentStillPresent: true,
+          environmentCount: 1,
+        },
+      });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     }),
   );

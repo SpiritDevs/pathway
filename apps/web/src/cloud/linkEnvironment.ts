@@ -23,6 +23,7 @@ import {
   type RelayManagedEndpointProviderKind,
 } from "@spiritdevs/contracts/relay";
 import { EnvironmentRegistry } from "@spiritdevs/client-runtime/connection";
+import { findErrorTraceId } from "@spiritdevs/client-runtime/errors";
 import { request, runStream } from "@spiritdevs/client-runtime/rpc";
 import { makeEnvironmentHttpApiClient } from "@spiritdevs/client-runtime/rpc";
 import { ManagedRelay } from "@spiritdevs/client-runtime/relay";
@@ -50,7 +51,36 @@ export class CloudEnvironmentLinkError extends Data.TaggedError("CloudEnvironmen
   readonly message: string;
   readonly cause?: unknown;
   readonly traceId?: string;
+  readonly diagnostic?: Readonly<Record<string, unknown>>;
 }> {}
+
+function relayFailureDiagnostic(error: unknown): Readonly<Record<string, unknown>> {
+  if (typeof error !== "object" || error === null) return { value: String(error) };
+  const record = error as {
+    readonly _tag?: unknown;
+    readonly message?: unknown;
+    readonly traceId?: unknown;
+    readonly relayError?: unknown;
+  };
+  const relayError =
+    typeof record.relayError === "object" && record.relayError !== null
+      ? (record.relayError as Record<string, unknown>)
+      : null;
+  return {
+    tag: typeof record._tag === "string" ? record._tag : null,
+    message: typeof record.message === "string" ? record.message : null,
+    traceId: findErrorTraceId(error),
+    relayError:
+      relayError === null
+        ? null
+        : {
+            tag: relayError["_tag"] ?? null,
+            code: relayError["code"] ?? null,
+            reason: relayError["reason"] ?? null,
+            traceId: relayError["traceId"] ?? null,
+          },
+  };
+}
 
 const relayClientRpcError = (message: string) => (cause: unknown) =>
   new CloudEnvironmentLinkError({
@@ -314,9 +344,27 @@ export function unlinkRelayEnvironmentFromAccount(input: {
       return;
     }
 
+    const traceId = findErrorTraceId(unlinkResult.failure);
     return yield* new CloudEnvironmentLinkError({
-      message: "Could not remove the environment from Pathway Connect.",
+      message:
+        listingResult._tag === "Failure"
+          ? "Could not remove the environment from Pathway Connect, and account verification failed."
+          : "Could not remove the environment from Pathway Connect; the account still lists it.",
       cause: unlinkResult.failure,
+      ...(traceId === null ? {} : { traceId }),
+      diagnostic: {
+        unlink: relayFailureDiagnostic(unlinkResult.failure),
+        listing:
+          listingResult._tag === "Failure"
+            ? { result: "failure", error: relayFailureDiagnostic(listingResult.failure) }
+            : {
+                result: "success",
+                environmentStillPresent: listingResult.success.some(
+                  (environment) => environment.environmentId === input.environmentId,
+                ),
+                environmentCount: listingResult.success.length,
+              },
+      },
     });
   });
 }

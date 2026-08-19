@@ -40,6 +40,7 @@ import * as Option from "effect/Option";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
+import { resolveRelayClerkTokenOptions } from "../../cloud/publicConfig";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 import {
   applyWslEnableSelection,
@@ -146,12 +147,17 @@ const ENVIRONMENT_DEBUG_STORAGE_KEY = "pathway:debug:environment-operations";
 
 function environmentDebugError(error: unknown) {
   if (!(error instanceof Error)) return { value: String(error) };
-  const tagged = error as Error & { readonly _tag?: string; readonly traceId?: string };
+  const tagged = error as Error & {
+    readonly _tag?: string;
+    readonly traceId?: string;
+    readonly diagnostic?: Readonly<Record<string, unknown>>;
+  };
   return {
     name: error.name,
     message: error.message,
     tag: tagged._tag ?? null,
     traceId: tagged.traceId ?? null,
+    diagnostic: tagged.diagnostic ?? null,
   };
 }
 
@@ -2110,7 +2116,7 @@ export function EnvironmentConnectionSettings({
       recordEnvironmentDebug("relay-unlink-started", { environmentId });
       let clerkToken: string | null;
       try {
-        clerkToken = await getToken();
+        clerkToken = await getToken(resolveRelayClerkTokenOptions());
       } catch (error) {
         recordEnvironmentDebug("relay-token-failed", {
           environmentId,
