@@ -192,7 +192,6 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
         workspaceProjects.find((project) => project.projectKey === selected.projectKey) ?? null
       }
       companyContext={{
-        companyId: companySettings.companyId,
         replica: companySettings.replica,
         environmentControl,
       }}
@@ -201,9 +200,12 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 }
 
 interface ProjectCompanyContext {
-  readonly companyId: CompanyId | null;
   readonly replica: CompanySettings["replica"];
   readonly environmentControl: EnvironmentControlClient | null;
+}
+
+function owningCompanyIds(workspaceProject: WorkspaceProject): ReadonlyArray<CompanyId> {
+  return [...new Set(workspaceProject.companyIds)].map((companyId) => companyId as CompanyId);
 }
 
 export function ProjectDetail({
@@ -655,40 +657,36 @@ export function ProjectDetail({
       };
 
       if (workspaceProject?.cloudProjectId != null) {
-        const companyId =
-          companyContext?.companyId != null &&
-          workspaceProject.companyIds.includes(String(companyContext.companyId))
-            ? companyContext.companyId
-            : workspaceProject.companyIds.length === 1
-              ? (workspaceProject.companyIds[0] as CompanyId)
-              : null;
+        const companyIds = owningCompanyIds(workspaceProject);
         const environmentControl = companyContext?.environmentControl ?? null;
-        if (environmentControl === null || companyId === null) {
+        if (environmentControl === null || companyIds.length === 0) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title: `Failed to remove "${targetLabel}"`,
               description:
-                companyId === null
-                  ? "Choose the company that owns this project before removing it."
+                companyIds.length === 0
+                  ? "The project's company ownership is still syncing. Try again shortly."
                   : "Company project controls are not available.",
             }),
           );
           return;
         }
         try {
-          if (isWholeGroup) {
-            await environmentControl.deleteCompanyProject({
-              companyId,
-              cloudProjectId: workspaceProject.cloudProjectId,
-            });
-          } else {
-            for (const member of members) {
-              await environmentControl.releaseEnvironmentProject({
+          for (const companyId of companyIds) {
+            if (isWholeGroup) {
+              await environmentControl.deleteCompanyProject({
                 companyId,
-                environmentId: member.environmentId,
-                localProjectId: member.id,
+                cloudProjectId: workspaceProject.cloudProjectId,
               });
+            } else {
+              for (const member of members) {
+                await environmentControl.releaseEnvironmentProject({
+                  companyId,
+                  environmentId: member.environmentId,
+                  localProjectId: member.id,
+                });
+              }
             }
           }
         } catch (error) {
@@ -780,33 +778,29 @@ export function ProjectDetail({
       if (confirmed._tag === "Failure" || !confirmed.value) return;
 
       if (workspaceProject?.cloudProjectId != null) {
-        const companyId =
-          companyContext?.companyId != null &&
-          workspaceProject.companyIds.includes(String(companyContext.companyId))
-            ? companyContext.companyId
-            : workspaceProject.companyIds.length === 1
-              ? (workspaceProject.companyIds[0] as CompanyId)
-              : null;
+        const companyIds = owningCompanyIds(workspaceProject);
         const environmentControl = companyContext?.environmentControl ?? null;
-        if (environmentControl === null || companyId === null) {
+        if (environmentControl === null || companyIds.length === 0) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title: `Failed to remove "${connection.environmentLabel}"`,
               description:
-                companyId === null
-                  ? "Choose the company that owns this project before removing the connection."
+                companyIds.length === 0
+                  ? "The project's company ownership is still syncing. Try again shortly."
                   : "Company project controls are not available.",
             }),
           );
           return;
         }
         try {
-          await environmentControl.releaseEnvironmentProject({
-            companyId,
-            environmentId: connection.environmentId,
-            localProjectId: connection.localProjectId,
-          });
+          for (const companyId of companyIds) {
+            await environmentControl.releaseEnvironmentProject({
+              companyId,
+              environmentId: connection.environmentId,
+              localProjectId: connection.localProjectId,
+            });
+          }
         } catch (error) {
           toastManager.add(
             stackedThreadToast({

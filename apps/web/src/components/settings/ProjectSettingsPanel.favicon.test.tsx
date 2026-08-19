@@ -5,6 +5,7 @@ import {
   ProjectId,
   type ProjectEntry,
 } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Cause from "effect/Cause";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -40,6 +41,8 @@ const toastState = vi.hoisted(() => ({ add: vi.fn() }));
 const threadState = vi.hoisted(() => ({
   threads: [] as Array<{ environmentId: EnvironmentId; projectId: ProjectId }>,
 }));
+const dialogState = vi.hoisted(() => ({ confirm: vi.fn() }));
+const cloudState = vi.hoisted(() => ({ deleteCompanyProject: vi.fn() }));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -82,6 +85,9 @@ vi.mock("../../hooks/useCopyToClipboard", () => ({
 }));
 vi.mock("../../hooks/usePathwayProjectFileScripts", () => ({
   usePathwayProjectFileState: () => ({ file: null, scripts: [] }),
+}));
+vi.mock("../../localApi", () => ({
+  readLocalApi: () => ({ dialogs: { confirm: dialogState.confirm } }),
 }));
 vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../../state/entities", () => ({
@@ -131,6 +137,7 @@ vi.mock("../ui/toast", () => ({
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { Button } from "../ui/button";
 import { MenuItem } from "../ui/menu";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { ProjectDetail } from "./ProjectSettingsPanel";
@@ -221,6 +228,8 @@ describe("Project settings favicon selection", () => {
       { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
       { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
     ];
+    dialogState.confirm.mockReset().mockResolvedValue(true);
+    cloudState.deleteCompanyProject.mockReset().mockResolvedValue(undefined);
   });
 
   it("fans the selected relative path out to every member and renders projected state", async () => {
@@ -318,6 +327,46 @@ describe("Project settings favicon selection", () => {
         element.props.children.includes("Remove connection"),
     );
     expect(protectedRemoval?.props.disabled).toBe(true);
+  });
+
+  it("deletes a shared project from every owning company without using the settings filter", async () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    const group = makeGroup(null);
+    hooks.beginRender();
+    const detail = ProjectDetail({
+      group,
+      workspaceProject: {
+        projectKey: group.projectKey,
+        displayName: group.displayName,
+        companyIds: [companyA, companyB],
+        group,
+        checkoutCount: group.memberProjects.length,
+        cloudProjectId: "cloud-pathway",
+      },
+      companyContext: {
+        replica: null,
+        environmentControl: {
+          deleteCompanyProject: cloudState.deleteCompanyProject,
+        } as never,
+      },
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      detail,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove all entries"),
+    );
+    expect(removeProject).not.toBeNull();
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    expect(cloudState.deleteCompanyProject.mock.calls).toEqual([
+      [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
+      [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
+    ]);
   });
 
   it("uses one retained picker action for pointer and Enter activation", async () => {

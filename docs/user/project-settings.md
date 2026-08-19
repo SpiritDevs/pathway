@@ -40,6 +40,10 @@ Open **Settings → Projects** to see every project and how many machine connect
 the connection count to see each environment name, directory, platform, Pathway version, and
 binding status.
 
+The profile or company selector at the top of Settings only filters what Settings shows. Deleting
+a project uses its recorded company ownership, so you do not need to select an owning company
+first.
+
 Select a project and open **Connections** for the full list. Each connection identifies the
 machine or environment, its attached directory, thread count, availability, environment ID, and
 last-seen time. Select a connection to configure its grouping and actions. Its action menu can copy
