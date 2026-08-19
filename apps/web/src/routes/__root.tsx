@@ -1,4 +1,4 @@
-import { type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
+import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
   isOnboardingComplete,
@@ -14,6 +14,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -25,6 +26,7 @@ import {
   resolveConvexClerkTokenOptions,
 } from "../cloud/publicConfig";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
+import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
@@ -306,11 +308,21 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
     );
   }
 
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
+  // Every route below this point is server-backed, so an unpaired client has
+  // nothing to render: the routes above own the pairing and sign-in surfaces,
+  // and the rest would paint their own content with no app shell around it.
+  // Pair in place instead of redirecting to `/pair`, so the requested route is
+  // still the one that renders once the session exists.
+  if (authGateState.status === "requires-auth") {
     return (
       <>
         <DocumentTitleSync />
-        <Outlet />
+        <ServerPairingGate
+          auth={authGateState.auth}
+          {...(authGateState.errorMessage
+            ? { initialErrorMessage: authGateState.errorMessage }
+            : {})}
+        />
       </>
     );
   }
@@ -349,6 +361,32 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ThemeEditorHost />
       </AnchoredToastProvider>
     </ToastProvider>
+  );
+}
+
+/**
+ * The pairing prompt for a client the local environment does not know yet,
+ * rendered in place of the route it blocks. Pairing re-runs the root
+ * `beforeLoad`, which is what resolves the gate again, so the route this
+ * replaced renders with its shell as soon as the session exists.
+ */
+function ServerPairingGate({
+  auth,
+  initialErrorMessage,
+}: {
+  readonly auth: AuthSessionState["auth"];
+  readonly initialErrorMessage?: string;
+}) {
+  const router = useRouter();
+
+  return (
+    <PairingRouteSurface
+      auth={auth}
+      onAuthenticated={() => {
+        void router.invalidate();
+      }}
+      {...(initialErrorMessage ? { initialErrorMessage } : {})}
+    />
   );
 }
 
