@@ -80,6 +80,7 @@ describe("environment control function references", () => {
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
+      deleteCompanyProject: "cloudProjects:deleteCompanyProject",
     });
   });
 
@@ -320,6 +321,37 @@ describe("environment control function references", () => {
         localProjectId: "project-a",
       },
     });
+  });
+
+  it("deletes a company project with one authenticated HTTP request", async () => {
+    const fake = fakeClient();
+    const calls: Array<{ readonly name: string; readonly args: unknown }> = [];
+    const httpClient: EnvironmentControlHttpClient = {
+      setAuth: vi.fn(),
+      mutation: async (reference, args) => {
+        calls.push({ name: getFunctionName(reference), args });
+        return null;
+      },
+    };
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+      httpClient,
+    });
+
+    await control.deleteCompanyProject({
+      companyId: COMPANY_ID,
+      cloudProjectId: "project-company",
+    });
+
+    expect(calls).toEqual([
+      {
+        name: "cloudProjects:deleteCompanyProject",
+        args: { companyId: COMPANY_ID, cloudProjectId: "project-company" },
+      },
+    ]);
+    expect(fake.calls).toEqual([]);
   });
 
   it("sets the preferred environment binding for future project work", async () => {

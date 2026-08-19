@@ -41,9 +41,16 @@ the connection count to see each environment name, directory, platform, Pathway 
 binding status.
 
 Select a project and open **Connections** for the full list. Each connection identifies the
-machine or environment, its attached directory, availability, environment ID, and last-seen time.
+machine or environment, its attached directory, thread count, availability, environment ID, and
+last-seen time. Select a connection to configure its grouping and actions. Its action menu can copy
+the directory path or remove that connection; Pathway disables removal when it is the project's
+only connection.
 When a project has several active connections, **New-thread default** marks the environment Pathway
 will use automatically.
+
+Removing a project does not require any of its machines to be online. Pathway removes the shared
+company project immediately; each offline checkout removes its local project and conversation
+history when that environment reconnects. Project files and directories on disk are never deleted.
 
 ## Customize a project icon
 

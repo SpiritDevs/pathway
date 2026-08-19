@@ -37,6 +37,9 @@ const pickerState = vi.hoisted(() => ({
 }));
 
 const toastState = vi.hoisted(() => ({ add: vi.fn() }));
+const threadState = vi.hoisted(() => ({
+  threads: [] as Array<{ environmentId: EnvironmentId; projectId: ProjectId }>,
+}));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -60,6 +63,7 @@ vi.mock("@effect/atom-react", () => ({
 }));
 
 vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children?: unknown }) => children,
   useCanGoBack: () => false,
   useNavigate: () => vi.fn(),
 }));
@@ -82,10 +86,10 @@ vi.mock("../../hooks/usePathwayProjectFileScripts", () => ({
 vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
-  useThreadShells: () => [],
+  useThreadShells: () => threadState.threads,
 }));
 vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({ environments: [] }),
+  useEnvironments: () => ({ environments: [], presentationById: new Map() }),
   usePrimaryEnvironmentId: () => EnvironmentId.make("local"),
 }));
 vi.mock("../../state/projects", () => ({
@@ -127,6 +131,7 @@ vi.mock("../ui/toast", () => ({
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { MenuItem } from "../ui/menu";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { ProjectDetail } from "./ProjectSettingsPanel";
 
@@ -165,11 +170,13 @@ function makeProject(
   };
 }
 
-function makeGroup(faviconPath: string | null) {
+function makeGroup(faviconPath: string | null, includeRemote = true) {
   return buildSidebarProjectSnapshots({
     projects: [
       makeProject(localEnvironmentId, "project-local", "/workspace/pathway", faviconPath),
-      makeProject(remoteEnvironmentId, "project-remote", "/remote/pathway", faviconPath),
+      ...(includeRemote
+        ? [makeProject(remoteEnvironmentId, "project-remote", "/remote/pathway", faviconPath)]
+        : []),
     ],
     settings: {
       sidebarProjectGroupingMode: "repository",
@@ -181,9 +188,14 @@ function makeGroup(faviconPath: string | null) {
   })[0]!;
 }
 
-function renderDetail(faviconPath: string | null): ReactElement<Record<string, unknown>> {
+function renderDetail(
+  faviconPath: string | null,
+  includeRemote = true,
+): ReactElement<Record<string, unknown>> {
   hooks.beginRender();
-  return ProjectDetail({ group: makeGroup(faviconPath) }) as ReactElement<Record<string, unknown>>;
+  return ProjectDetail({
+    group: makeGroup(faviconPath, includeRemote),
+  }) as ReactElement<Record<string, unknown>>;
 }
 
 async function flushPromises(): Promise<void> {
@@ -205,6 +217,10 @@ describe("Project settings favicon selection", () => {
       _tag: "Success",
       value: undefined,
     });
+    threadState.threads = [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
+    ];
   });
 
   it("fans the selected relative path out to every member and renders projected state", async () => {
@@ -276,6 +292,32 @@ describe("Project settings favicon selection", () => {
         (element) => element.type === ProjectFavicon && element.props.faviconPath === priorPath,
       ),
     ).not.toBeNull();
+  });
+
+  it("shows thread counts on connections and protects the final connection", () => {
+    const grouped = renderDetail(null);
+    expect(
+      visitElements(grouped, (element) => element.props.children === "2 threads"),
+    ).not.toBeNull();
+    const removable = visitElements(
+      grouped,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove connection"),
+    );
+    expect(removable?.props.disabled).toBe(false);
+
+    hooks.reset();
+    const onlyConnection = renderDetail(null, false);
+    const protectedRemoval = visitElements(
+      onlyConnection,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove connection"),
+    );
+    expect(protectedRemoval?.props.disabled).toBe(true);
   });
 
   it("uses one retained picker action for pointer and Enter activation", async () => {

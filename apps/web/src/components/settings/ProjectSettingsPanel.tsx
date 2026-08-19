@@ -20,6 +20,7 @@ import type {
   PathwayProjectFileScript,
   ThreadEnvMode,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
 import { createModelSelection } from "@spiritdevs/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@spiritdevs/shared/keybindings";
@@ -29,6 +30,7 @@ import {
   ArrowLeftIcon,
   ChevronDownIcon,
   CopyIcon,
+  EllipsisIcon,
   MonitorIcon,
   PlusIcon,
   SettingsIcon,
@@ -48,6 +50,7 @@ import { usePathwayProjectFileState } from "../../hooks/usePathwayProjectFileScr
 import { shortcutLabelForCommand } from "../../keybindings";
 import { keybindingValueForCommand } from "../../lib/projectScriptKeybindings";
 import { readLocalApi } from "../../localApi";
+import type { EnvironmentControlClient } from "../../cloud/environmentControl";
 import {
   buildProjectScript,
   commandForProjectScript,
@@ -79,10 +82,12 @@ import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectory
 import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
+  type ProjectConnectionMetadata,
   projectConnectionPlatformLabel,
 } from "../projects/projectConnectionMetadata";
 import { useProjectGroups } from "../projects/useProjectGroups";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
+import type { WorkspaceProject } from "../projects/workspaceProjects.logic";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -111,10 +116,8 @@ import {
   SettingsSection,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
-import { useCompanySettings } from "./company/useCompanySettings";
+import { useCompanySettings, type CompanySettings } from "./company/useCompanySettings";
 import { useEnvironmentControl } from "./company/useEnvironmentControl";
-import { environmentRegistrationsFromReplicaValues } from "./company/environmentSettings.logic";
-import { shouldReleaseDisconnectedCloudProject } from "./projectRemoval.logic";
 
 export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
@@ -130,6 +133,8 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
   const groups = useProjectGroups();
   const workspaceProjects = useWorkspaceProjects();
   const navigate = useNavigate();
+  const companySettings = useCompanySettings();
+  const environmentControl = useEnvironmentControl();
 
   const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
 
@@ -179,15 +184,40 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
       </div>
     );
   }
-  return <ProjectDetail key={selected.projectKey} group={selected} />;
+  return (
+    <ProjectDetail
+      key={selected.projectKey}
+      group={selected}
+      workspaceProject={
+        workspaceProjects.find((project) => project.projectKey === selected.projectKey) ?? null
+      }
+      companyContext={{
+        companyId: companySettings.companyId,
+        replica: companySettings.replica,
+        environmentControl,
+      }}
+    />
+  );
 }
 
-export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
+interface ProjectCompanyContext {
+  readonly companyId: CompanyId | null;
+  readonly replica: CompanySettings["replica"];
+  readonly environmentControl: EnvironmentControlClient | null;
+}
+
+export function ProjectDetail({
+  group,
+  workspaceProject = null,
+  companyContext = null,
+}: {
+  group: SidebarProjectSnapshot;
+  workspaceProject?: WorkspaceProject | null;
+  companyContext?: ProjectCompanyContext | null;
+}) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
-  const companySettings = useCompanySettings();
   const { presentationById } = useEnvironments();
-  const environmentControl = useEnvironmentControl();
   // Captured mail belongs to the machine the listener runs on, so the capture section follows this
   // group's checkout on the primary environment and hides for a group that has none.
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -227,8 +257,8 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     null;
   const faviconPath = representative.faviconPath ?? null;
   const connectionCatalog = useMemo(
-    () => buildProjectConnectionCatalog(companySettings.replica?.view.values() ?? []),
-    [companySettings.replica],
+    () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
+    [companyContext?.replica],
   );
   const projectConnections = deriveProjectConnectionMetadata({
     members: group.memberProjects,
@@ -364,12 +394,11 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     [updateAllMembers],
   );
 
-  // ----- checkout selection and scripts -----
+  // ----- connection selection and scripts -----
   const [selectedCheckoutKey, setSelectedCheckoutKey] = useState(representative.physicalProjectKey);
   const selectedCheckout =
     group.memberProjects.find((member) => member.physicalProjectKey === selectedCheckoutKey) ??
     representative;
-  const selectedCheckoutWorkspaceRoot = selectedCheckout.workspaceRoot;
   const [attachDirectoryOpen, setAttachDirectoryOpen] = useState(false);
   const selectedServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(selectedCheckout.environmentId),
@@ -557,7 +586,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     [submitScript],
   );
 
-  // ----- checkouts -----
+  // ----- connections -----
   const updateGroupingPreference = useCallback(
     (member: SidebarProjectGroupMember, selection: SidebarProjectGroupingMode | "inherit") => {
       const overrideKey = deriveProjectGroupingOverrideKey(member);
@@ -601,9 +630,11 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             ...(projectThreads.length > 0
               ? ["This permanently clears conversation history for those threads."]
               : []),
-            isWholeGroup
-              ? "This removes only the project entries, not the files on disk."
-              : "Other entries in this grouped project are unaffected.",
+            isWholeGroup && workspaceProject?.cloudProjectId != null
+              ? "This removes the company project and every checkout. Offline checkouts are removed when they reconnect; files on disk are not touched."
+              : isWholeGroup
+                ? "This removes only the project entries, not the files on disk."
+                : "Other entries in this grouped project are unaffected.",
             "This action cannot be undone.",
           ].join("\n"),
           { variant: "destructive" },
@@ -612,6 +643,72 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
       if (confirmed._tag === "Failure" || !confirmed.value) return;
 
       const draftStore = useComposerDraftStore.getState();
+      const clearMemberDrafts = () => {
+        for (const member of members) {
+          const projectRef = scopeProjectRef(member.environmentId, member.id);
+          const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
+          if (projectDraftThread) {
+            draftStore.clearDraftThread(projectDraftThread.draftId);
+          }
+          draftStore.clearProjectDraftThreadId(projectRef);
+        }
+      };
+
+      if (workspaceProject?.cloudProjectId != null) {
+        const companyId =
+          companyContext?.companyId != null &&
+          workspaceProject.companyIds.includes(String(companyContext.companyId))
+            ? companyContext.companyId
+            : workspaceProject.companyIds.length === 1
+              ? (workspaceProject.companyIds[0] as CompanyId)
+              : null;
+        const environmentControl = companyContext?.environmentControl ?? null;
+        if (environmentControl === null || companyId === null) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to remove "${targetLabel}"`,
+              description:
+                companyId === null
+                  ? "Choose the company that owns this project before removing it."
+                  : "Company project controls are not available.",
+            }),
+          );
+          return;
+        }
+        try {
+          if (isWholeGroup) {
+            await environmentControl.deleteCompanyProject({
+              companyId,
+              cloudProjectId: workspaceProject.cloudProjectId,
+            });
+          } else {
+            for (const member of members) {
+              await environmentControl.releaseEnvironmentProject({
+                companyId,
+                environmentId: member.environmentId,
+                localProjectId: member.id,
+              });
+            }
+          }
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to remove "${targetLabel}"`,
+              description:
+                error instanceof Error ? error.message : "The cloud project could not be removed.",
+            }),
+          );
+          return;
+        }
+        clearMemberDrafts();
+        if (isWholeGroup) {
+          void navigate({ to: "/settings/projects", replace: true });
+        }
+        return;
+      }
+
       for (const member of members) {
         const memberThreads = projectThreads.filter(
           (thread) =>
@@ -628,50 +725,11 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           () => undefined,
         );
         if (result._tag === "Failure") {
-          const localError = squashAtomCommandFailure(result);
-          const registrations = environmentRegistrationsFromReplicaValues(
-            companySettings.replica?.view.values() ?? [],
-          );
-          const canReleaseCloudBinding = shouldReleaseDisconnectedCloudProject({
-            errorMessage: localError instanceof Error ? localError.message : String(localError),
-            environmentId: member.environmentId,
-            registrations,
-          });
-          if (
-            !canReleaseCloudBinding ||
-            environmentControl === null ||
-            companySettings.companyId === null
-          ) {
-            reportFailure(`Failed to remove "${member.title}"`, result);
-            return;
-          }
-          try {
-            await environmentControl.releaseEnvironmentProject({
-              companyId: companySettings.companyId,
-              environmentId: member.environmentId,
-              localProjectId: member.id,
-            });
-          } catch (error) {
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: `Failed to remove "${member.title}"`,
-                description:
-                  error instanceof Error
-                    ? error.message
-                    : "The cloud project could not be removed.",
-              }),
-            );
-            return;
-          }
+          reportFailure(`Failed to remove "${member.title}"`, result);
+          return;
         }
-        const projectRef = scopeProjectRef(member.environmentId, member.id);
-        const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
-        if (projectDraftThread) {
-          draftStore.clearDraftThread(projectDraftThread.draftId);
-        }
-        draftStore.clearProjectDraftThreadId(projectRef);
       }
+      clearMemberDrafts();
 
       // The selected settings page just deleted itself; return to the project directory.
       if (isWholeGroup) {
@@ -680,18 +738,141 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     },
     [
       deleteProject,
-      companySettings.companyId,
-      companySettings.replica,
-      environmentControl,
+      companyContext,
       group.displayName,
       group.memberProjects.length,
       navigate,
       reportFailure,
       threads,
+      workspaceProject,
     ],
   );
 
-  const selectedCheckoutThreadCount = threadCountByMember.get(memberKey(selectedCheckout)) ?? 0;
+  const removeConnection = useCallback(
+    async (connection: ProjectConnectionMetadata, member: SidebarProjectGroupMember | null) => {
+      // A project must always retain at least one connection. The disabled menu item also makes
+      // this visible before the user tries, while this guard keeps the invariant independent of UI.
+      if (projectConnections.length <= 1) return;
+
+      const api = readLocalApi();
+      if (!api) return;
+      const connectionThreads = threads.filter(
+        (thread) =>
+          thread.environmentId === connection.environmentId &&
+          thread.projectId === connection.localProjectId,
+      );
+      const confirmed = await settlePromise(() =>
+        api.dialogs.confirm(
+          [
+            `Remove the connection to "${connection.environmentLabel}"?`,
+            ...(connection.directory ? [`Path: ${connection.directory}`] : []),
+            ...(connectionThreads.length > 0
+              ? [
+                  `This also deletes its ${connectionThreads.length} thread${connectionThreads.length === 1 ? "" : "s"} from Pathway.`,
+                ]
+              : []),
+            "Other connections to this project are unaffected. Files on disk are not touched.",
+            "This action cannot be undone.",
+          ].join("\n"),
+          { variant: "destructive" },
+        ),
+      );
+      if (confirmed._tag === "Failure" || !confirmed.value) return;
+
+      if (workspaceProject?.cloudProjectId != null) {
+        const companyId =
+          companyContext?.companyId != null &&
+          workspaceProject.companyIds.includes(String(companyContext.companyId))
+            ? companyContext.companyId
+            : workspaceProject.companyIds.length === 1
+              ? (workspaceProject.companyIds[0] as CompanyId)
+              : null;
+        const environmentControl = companyContext?.environmentControl ?? null;
+        if (environmentControl === null || companyId === null) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to remove "${connection.environmentLabel}"`,
+              description:
+                companyId === null
+                  ? "Choose the company that owns this project before removing the connection."
+                  : "Company project controls are not available.",
+            }),
+          );
+          return;
+        }
+        try {
+          await environmentControl.releaseEnvironmentProject({
+            companyId,
+            environmentId: connection.environmentId,
+            localProjectId: connection.localProjectId,
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: `Failed to remove "${connection.environmentLabel}"`,
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "The project connection could not be removed.",
+            }),
+          );
+          return;
+        }
+      } else if (member !== null) {
+        const result = mapAtomCommandResult(
+          await deleteProject({
+            environmentId: member.environmentId,
+            input: {
+              projectId: member.id,
+              ...(connectionThreads.length > 0 ? { force: true } : {}),
+            },
+          }),
+          () => undefined,
+        );
+        if (result._tag === "Failure") {
+          reportFailure(`Failed to remove "${connection.environmentLabel}"`, result);
+          return;
+        }
+      } else {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Failed to remove "${connection.environmentLabel}"`,
+            description: "This connection is not available in the current project data.",
+          }),
+        );
+        return;
+      }
+
+      if (member !== null) {
+        const draftStore = useComposerDraftStore.getState();
+        const projectRef = scopeProjectRef(member.environmentId, member.id);
+        const draftThread = draftStore.getDraftThreadByProjectRef(projectRef);
+        if (draftThread) draftStore.clearDraftThread(draftThread.draftId);
+        draftStore.clearProjectDraftThreadId(projectRef);
+
+        if (member.physicalProjectKey === selectedCheckout.physicalProjectKey) {
+          const replacement = group.memberProjects.find(
+            (candidate) => candidate.physicalProjectKey !== member.physicalProjectKey,
+          );
+          if (replacement) setSelectedCheckoutKey(replacement.physicalProjectKey);
+        }
+      }
+    },
+    [
+      companyContext,
+      deleteProject,
+      group.memberProjects,
+      projectConnections.length,
+      reportFailure,
+      selectedCheckout.physicalProjectKey,
+      threads,
+      workspaceProject,
+    ],
+  );
+
   const selectedCheckoutGrouping =
     projectGroupingSettings.sidebarProjectGroupingOverrides?.[
       deriveProjectGroupingOverrideKey(selectedCheckout)
@@ -779,8 +960,17 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         >
           <div className="space-y-2 px-3 py-3 sm:px-4">
             {projectConnections.map((connection) => {
+              const connectionKey = `${connection.environmentId}:${connection.localProjectId}`;
+              const member =
+                group.memberProjects.find((candidate) => memberKey(candidate) === connectionKey) ??
+                null;
               const environment = presentationById.get(connection.environmentId);
               const platformLabel = projectConnectionPlatformLabel(connection.platform);
+              const threadCount = threadCountByMember.get(connectionKey) ?? 0;
+              const isSelected = member?.physicalProjectKey === selectedCheckout.physicalProjectKey;
+              const canRemoveConnection =
+                projectConnections.length > 1 &&
+                (workspaceProject?.cloudProjectId != null || member !== null);
               const statusLabel = environment
                 ? connectionStatusTitle(environment.connection)
                 : connection.bindingStatus === null
@@ -788,10 +978,23 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   : connection.bindingStatus[0]!.toUpperCase() + connection.bindingStatus.slice(1);
               return (
                 <div
-                  key={`${connection.environmentId}:${connection.localProjectId}`}
-                  className="rounded-xl border border-border/70 bg-muted/15 px-3 py-3"
+                  key={connectionKey}
+                  className={
+                    isSelected
+                      ? "flex items-start rounded-xl border border-primary/45 bg-primary/[0.04]"
+                      : "flex items-start rounded-xl border border-border/70 bg-muted/15"
+                  }
                 >
-                  <div className="flex min-w-0 items-start gap-3">
+                  <button
+                    aria-label={`Configure ${connection.environmentLabel}`}
+                    aria-pressed={isSelected}
+                    className="flex min-w-0 flex-1 items-start gap-3 rounded-xl px-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+                    disabled={member === null}
+                    type="button"
+                    onClick={() => {
+                      if (member) setSelectedCheckoutKey(member.physicalProjectKey);
+                    }}
+                  >
                     <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                       <MonitorIcon className="size-3.5" />
                     </span>
@@ -806,6 +1009,9 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                             New-thread default
                           </span>
                         ) : null}
+                        <span className="ms-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {threadCount === 1 ? "1 thread" : `${threadCount} threads`}
+                        </span>
                       </div>
                       <code className="mt-1 block truncate font-mono text-xs text-muted-foreground">
                         {connection.directory ?? "No directory attached"}
@@ -821,7 +1027,57 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                         ) : null}
                       </div>
                     </div>
-                  </div>
+                  </button>
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <Button
+                          aria-label={`Actions for ${connection.environmentLabel}`}
+                          className="me-2 mt-2 shrink-0 text-muted-foreground"
+                          size="icon-sm"
+                          type="button"
+                          variant="ghost"
+                        />
+                      }
+                    >
+                      <EllipsisIcon className="size-4" />
+                    </MenuTrigger>
+                    <MenuPopup align="end" className="min-w-48">
+                      <MenuItem
+                        disabled={connection.directory === null}
+                        onClick={() => {
+                          if (connection.directory) {
+                            copyPathToClipboard(connection.directory, {
+                              path: connection.directory,
+                            });
+                          }
+                        }}
+                      >
+                        <CopyIcon className="size-3.5" />
+                        Copy path
+                      </MenuItem>
+                      {connection.directory === null && member !== null ? (
+                        <MenuItem
+                          onClick={() => {
+                            setSelectedCheckoutKey(member.physicalProjectKey);
+                            setAttachDirectoryOpen(true);
+                          }}
+                        >
+                          <PlusIcon className="size-3.5" />
+                          Attach directory
+                        </MenuItem>
+                      ) : null}
+                      <MenuSeparator />
+                      <MenuItem
+                        disabled={!canRemoveConnection}
+                        variant="destructive"
+                        onClick={() => void removeConnection(connection, member)}
+                      >
+                        <Trash2Icon className="size-3.5" />
+                        Remove connection
+                      </MenuItem>
+                    </MenuPopup>
+                  </Menu>
                 </div>
               );
             })}
@@ -837,7 +1093,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         <SettingsSection title="New threads">
           <SettingsRow
             title="Model"
-            description="New threads in this project start with this model. Applies to every checkout in this group."
+            description="New threads in this project start with this model. Applies to every connection in this group."
             resetAction={
               storedSelection !== null ? (
                 <SettingResetButton
@@ -889,7 +1145,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
           <SettingsRow
             title="Workspace"
-            description="Where new threads in this project start. Overrides pathway.json and the global default; applies to every checkout in this group."
+            description="Where new threads in this project start. Overrides pathway.json and the global default; applies to every connection in this group."
             resetAction={
               storedEnvMode !== null ? (
                 <SettingResetButton
@@ -913,7 +1169,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   <SelectValue>
                     {storedEnvMode === null
                       ? group.memberProjects.length > 1
-                        ? "Default (per checkout)"
+                        ? "Default (per connection)"
                         : `Default (${resolveEnvModeLabel(inheritedEnvMode).toLowerCase()})`
                       : resolveEnvModeLabel(storedEnvMode)}
                   </SelectValue>
@@ -921,7 +1177,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem value="inherit">
                     {group.memberProjects.length > 1
-                      ? "Default (each checkout's pathway.json or global setting)"
+                      ? "Default (each connection's pathway.json or global setting)"
                       : `Default (${inheritedEnvModeSource}: ${resolveEnvModeLabel(inheritedEnvMode).toLowerCase()})`}
                   </SelectItem>
                   <SelectItem value="worktree">{resolveEnvModeLabel("worktree")}</SelectItem>
@@ -932,76 +1188,10 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           />
         </SettingsSection>
 
-        <SettingsSection
-          title="Checkout"
-          headerAction={
-            <Select
-              value={selectedCheckout.physicalProjectKey}
-              onValueChange={(value) => setSelectedCheckoutKey(String(value))}
-            >
-              <SelectTrigger className="max-w-64" aria-label="Selected checkout">
-                <SelectValue>{selectedCheckoutLabel}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {group.memberProjects.map((member) => (
-                  <SelectItem
-                    key={member.physicalProjectKey}
-                    hideIndicator
-                    value={member.physicalProjectKey}
-                  >
-                    {member.environmentLabel ?? "This machine"} ·{" "}
-                    {member.workspaceRoot ?? "No directory"}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        >
-          <div className="px-3 py-2 sm:px-4">
-            <div className="flex min-w-0 items-center rounded-lg bg-muted/30 p-1 text-base text-muted-foreground sm:text-sm">
-              {/* A rootless project says so and offers the fix in place, rather than showing an
-                  empty path field — the same just-in-time promotion every other surface uses. */}
-              {selectedCheckoutWorkspaceRoot === null ? (
-                <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1">
-                  <span className="min-w-0 flex-1 truncate">No directory attached</span>
-                  <Button
-                    aria-label="Attach a directory to this project"
-                    onClick={() => setAttachDirectoryOpen(true)}
-                    size="xs"
-                    type="button"
-                    variant="outline"
-                  >
-                    Attach directory
-                  </Button>
-                </div>
-              ) : (
-                <button
-                  aria-label="Copy checkout path"
-                  className="group flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left outline-none hover:bg-accent/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                  title="Copy path"
-                  type="button"
-                  onClick={() =>
-                    copyPathToClipboard(selectedCheckoutWorkspaceRoot, {
-                      path: selectedCheckoutWorkspaceRoot,
-                    })
-                  }
-                >
-                  <code className="min-w-0 flex-1 truncate font-mono">
-                    {selectedCheckoutWorkspaceRoot}
-                  </code>
-                  <CopyIcon className="size-4 shrink-0 opacity-60 group-hover:opacity-100" />
-                </button>
-              )}
-              <div className="shrink-0 border-l border-border/60 px-2 tabular-nums">
-                {selectedCheckoutThreadCount === 1
-                  ? "1 thread"
-                  : `${selectedCheckoutThreadCount} threads`}
-              </div>
-            </div>
-          </div>
+        <SettingsSection title="Connection settings">
           <SettingsRow
             title="Project grouping"
-            description="How this checkout joins project groups in the sidebar. Changing it can move you to a different project group."
+            description={`How the connection on ${selectedCheckoutLabel} joins project groups in the sidebar. Changing it can move you to a different project group.`}
             control={
               <Select
                 value={selectedCheckoutGrouping}
@@ -1040,27 +1230,11 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               </Select>
             }
           />
-          {group.memberProjects.length > 1 ? (
-            <SettingsRow
-              title="Remove checkout"
-              description="Removes this checkout and its threads from the project group. Files on disk are not touched."
-              control={
-                <Button
-                  size="xs"
-                  variant="destructive-outline"
-                  onClick={() => void removeMembers([selectedCheckout])}
-                >
-                  <Trash2Icon className="size-3.5" />
-                  Remove checkout
-                </Button>
-              }
-            />
-          ) : null}
           <div className="flex min-h-8 flex-col items-start gap-3 px-3 pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4">
             <div className="min-w-0">
               <h3 className="text-base font-semibold text-foreground">Actions</h3>
               <p className="text-pretty text-sm text-muted-foreground">
-                Saved and run only in {selectedCheckoutLabel}.
+                Saved and run only through {selectedCheckoutLabel}.
               </p>
             </div>
             <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
@@ -1078,7 +1252,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                     <MenuGroup>
                       <MenuGroupLabel>Import from pathway.json</MenuGroupLabel>
                       <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
-                        Add actions declared by this checkout without editing them first.
+                        Add actions declared by this connection without editing them first.
                       </p>
                     </MenuGroup>
                     <MenuSeparator />
@@ -1114,7 +1288,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           </div>
           {scripts.length === 0 ? (
             <p className="px-3 py-2 text-base text-muted-foreground sm:px-4 sm:text-sm">
-              No actions configured for this checkout.
+              No actions configured for this connection.
             </p>
           ) : (
             scripts.map((script) => {
@@ -1174,7 +1348,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           {pathwayFile.status === "invalid" ? (
             <SettingsRow
               title="pathway.json is invalid"
-              description="A pathway.json exists in this checkout but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
+              description="A pathway.json exists for this connection but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
               className="text-warning"
             />
           ) : null}
@@ -1194,7 +1368,7 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             }
             description={
               group.memberProjects.length > 1
-                ? `Deletes all ${group.memberProjects.length} checkout entries and their threads on every machine. Files on disk are not touched.`
+                ? `Deletes all ${group.memberProjects.length} connections and their threads on every machine. Files on disk are not touched.`
                 : "Deletes the project entry and its threads. Files on disk are not touched."
             }
             control={

@@ -60,12 +60,15 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
 import {
@@ -91,6 +94,11 @@ import {
 } from "./environmentKeys.ts";
 import { convexUrlConfig } from "./publicConfig.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
+import {
+  reconcileRevokedEnvironmentProjects,
+  revokedEnvironmentProjectIntentKey,
+  revokedEnvironmentProjects,
+} from "./cloudProjectReconciler.ts";
 
 // --------------------------------------------------------------------------
 // Gates
@@ -659,6 +667,8 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
   readonly restartDelay: Duration.Input;
   readonly unauthorizedRestarts: number;
 }) {
+  const projects = yield* Effect.serviceOption(ProjectService.ProjectService);
+  const orchestration = yield* Effect.serviceOption(OrchestrationEngineService);
   const transport = yield* input.transport({
     settings: input.settings,
     companyId: input.companyId,
@@ -680,6 +690,44 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
     Effect.provideService(SyncStore, input.store),
     Effect.provideService(SyncTransport, transport),
   );
+  const reconciledProjectDeletions = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const reconcileProjectDeletions =
+    Option.isSome(projects) && Option.isSome(orchestration)
+      ? SubscriptionRef.changes(engine.state).pipe(
+          Stream.runForEach((state) =>
+            Effect.gen(function* () {
+              const settled = yield* Ref.get(reconciledProjectDeletions);
+              const pending = revokedEnvironmentProjects(
+                state.confirmed.values(),
+                input.environmentId,
+              ).filter((binding) => !settled.has(revokedEnvironmentProjectIntentKey(binding)));
+              if (pending.length === 0) return;
+
+              const reconciled = yield* reconcileRevokedEnvironmentProjects({
+                companyId: input.companyId,
+                environmentId: input.environmentId,
+                revoked: pending,
+                projects: projects.value,
+                orchestration: orchestration.value,
+              });
+              if (reconciled.length > 0) {
+                yield* Ref.update(
+                  reconciledProjectDeletions,
+                  (current) => new Set([...current, ...reconciled]),
+                );
+              }
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Cloud project deletion reconciliation failed; it will retry", {
+                  companyId: input.companyId,
+                  environmentId: input.environmentId,
+                  cause,
+                }),
+              ),
+            ),
+          ),
+        )
+      : Effect.never;
   const supervise = Effect.gen(function* () {
     yield* Effect.logInfo("Cloud sync company engine started", {
       companyId: input.companyId,
@@ -747,7 +795,7 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
   });
   yield* input.engineRegistry.withIssueEngine(
     { environmentId: input.environmentId, engine },
-    supervise,
+    Effect.raceFirst(supervise, reconcileProjectDeletions),
   );
 });
 

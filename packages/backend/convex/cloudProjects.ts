@@ -11,7 +11,12 @@ import {
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
-import { actorRecord, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  actorRecord,
+  requireCompanyActor,
+  requirePermission,
+  requireRecordPermission,
+} from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
 function trimmed(value: string, label: string): string {
@@ -117,12 +122,25 @@ export const ensureEnvironmentProject = mutation({
     // takes the project and leaves the binding for later.
     const environmentRegistered = registration !== null && registration.state === "active";
 
-    let project = await ctx.db
-      .query("cloudProjects")
-      .withIndex("by_company_and_domain_id", (q) =>
-        q.eq("companyId", actor.company._id).eq("id", localProjectId),
-      )
-      .unique();
+    let binding: Doc<"environmentBindings"> | null = !environmentRegistered
+      ? null
+      : ((
+          await ctx.db
+            .query("environmentBindings")
+            .withIndex("by_company_and_environment", (q) =>
+              q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+            )
+            .collect()
+        ).find((row) => row.localProjectId === localProjectId) ?? null);
+    let project =
+      binding === null
+        ? await ctx.db
+            .query("cloudProjects")
+            .withIndex("by_company_and_domain_id", (q) =>
+              q.eq("companyId", actor.company._id).eq("id", localProjectId),
+            )
+            .unique()
+        : await ctx.db.get(binding.cloudProjectId);
     const now = Date.now();
     let projectChanged = false;
     if (project === null) {
@@ -142,11 +160,16 @@ export const ensureEnvironmentProject = mutation({
       project = await ctx.db.get(projectDocId);
       if (project === null) throw backendError("entity-not-found", "The project insert vanished.");
       projectChanged = true;
-    } else if (project.name !== name || project.archivedAt !== null || project.deletedAt !== null) {
+    } else if (project.deletedAt !== null) {
+      // A local checkout can be offline when its company project is deleted. Its publisher will
+      // offer the still-live local row again when that environment reconnects, before the inbound
+      // replica necessarily gets a turn to remove it. The Convex tombstone is authoritative: an
+      // outbound observation may never resurrect a project the company already deleted.
+      return project.id;
+    } else if (project.name !== name || project.archivedAt !== null) {
       await ctx.db.patch(project._id, {
         name,
         archivedAt: null,
-        deletedAt: null,
         updatedAt: now,
       });
       project = await ctx.db.get(project._id);
@@ -154,16 +177,6 @@ export const ensureEnvironmentProject = mutation({
       projectChanged = true;
     }
 
-    let binding: Doc<"environmentBindings"> | null = !environmentRegistered
-      ? null
-      : ((
-          await ctx.db
-            .query("environmentBindings")
-            .withIndex("by_company_and_environment", (q) =>
-              q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
-            )
-            .collect()
-        ).find((row) => row.localProjectId === localProjectId) ?? null);
     let bindingChanged = false;
 
     if (binding !== null && binding.cloudProjectId !== project._id) {
@@ -374,6 +387,123 @@ export const releaseEnvironmentProject = mutation({
               },
             ]),
       ],
+    });
+    return null;
+  },
+});
+
+/**
+ * Deletes the company-owned project without requiring any of its checkout environments online.
+ *
+ * Bindings remain as revoked feed rows until their environments consume them. That durable intent
+ * is what lets an offline server remove its local project and threads when it reconnects, while
+ * the project tombstone removes the shared identity from every company client immediately.
+ */
+export const deleteCompanyProject = mutation({
+  args: {
+    companyId: domainIdArg,
+    cloudProjectId: domainIdArg,
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const project = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.cloudProjectId),
+      )
+      .unique();
+    if (project === null || project.deletedAt !== null) return null;
+    requireRecordPermission(actor, "projects.manage", project.teamIds);
+
+    const [bindings, agentThreads, milestones] = await Promise.all([
+      ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
+      ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
+      ctx.db
+        .query("issueMilestones")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", project.id),
+        )
+        .collect(),
+    ]);
+
+    const now = Date.now();
+    const changes = [];
+    for (const binding of bindings) {
+      if (binding.status === "revoked") continue;
+      await ctx.db.patch(binding._id, {
+        status: "revoked",
+        lastSeenAt: now,
+        updatedAt: now,
+      });
+      const revoked = await ctx.db.get(binding._id);
+      if (revoked === null) throw backendError("entity-not-found", "A project binding vanished.");
+      changes.push({
+        entityKind: "environmentBinding" as const,
+        entityId: revoked.id,
+        changeKind: "upsert" as const,
+        versionDocId: revoked._id,
+        payload: await encodeEnvironmentBinding(ctx, revoked),
+      });
+    }
+
+    // Thread shells are shared discovery metadata only. Their owning environment will delete the
+    // full local threads when it consumes the revoked binding.
+    for (const thread of agentThreads) {
+      await ctx.db.delete(thread._id);
+      changes.push({
+        entityKind: "agentThread" as const,
+        entityId: thread.id,
+        changeKind: "tombstone" as const,
+        teamIds: project.teamIds,
+        versionDocId: null,
+        payload: null,
+      });
+    }
+
+    // Milestones cannot exist without their project. Existing issues already tolerate an unknown
+    // milestone or project as "none", matching the ordinary issue-milestone delete semantics.
+    for (const milestone of milestones) {
+      if (milestone.deletedAt !== null) continue;
+      await ctx.db.patch(milestone._id, { deletedAt: now, updatedAt: now });
+      changes.push({
+        entityKind: "issueMilestone" as const,
+        entityId: milestone.id,
+        changeKind: "tombstone" as const,
+        teamIds: project.teamIds,
+        versionDocId: milestone._id,
+        payload: null,
+      });
+    }
+
+    await ctx.db.patch(project._id, {
+      preferredBindingId: null,
+      deletedAt: now,
+      updatedAt: now,
+    });
+    changes.push({
+      entityKind: "cloudProject" as const,
+      entityId: project.id,
+      changeKind: "tombstone" as const,
+      teamIds: project.teamIds,
+      versionDocId: project._id,
+      payload: null,
+    });
+
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
     });
     return null;
   },

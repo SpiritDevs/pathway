@@ -182,6 +182,13 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("cloudProjects:releaseEnvironmentProject"),
+  deleteCompanyProject: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly cloudProjectId: string;
+    },
+    null
+  >("cloudProjects:deleteCompanyProject"),
 } as const;
 
 const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -311,6 +318,10 @@ export interface EnvironmentControlClient {
     readonly environmentId: EnvironmentId;
     readonly localProjectId: string;
   }) => Promise<void>;
+  readonly deleteCompanyProject: (args: {
+    readonly companyId: CompanyId;
+    readonly cloudProjectId: string;
+  }) => Promise<void>;
   readonly close: () => Promise<void>;
 }
 
@@ -359,6 +370,8 @@ export function makeEnvironmentControlClient(options: {
         authenticatedHttpMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args)
     : (args: ConvexArgs) =>
         mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args);
+  const cloudProjectMutation = (reference: FunctionReference<"mutation">, args: ConvexArgs) =>
+    useHttpMutation ? authenticatedHttpMutation(reference, args) : mutation(reference, args);
   const action = <A>(reference: FunctionReference<"action">, args: ConvexArgs) =>
     call<A>(() => client.action(reference, args));
 
@@ -424,7 +437,9 @@ export function makeEnvironmentControlClient(options: {
     setPreferredEnvironmentBinding: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.setPreferredEnvironmentBinding, args),
     releaseEnvironmentProject: (args) =>
-      mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
+      cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
+    deleteCompanyProject: (args) =>
+      cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deleteCompanyProject, args),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

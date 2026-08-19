@@ -42,6 +42,11 @@ identity.
   Anything that cannot run agents says so rather than disappearing.
 - A project with no company is surfaced and resolved, not hidden. Launch asks which company owns
   each unassigned checkout and blocks until every one has an answer.
+- Deletion follows the same ownership boundary. `cloudProjects.deleteCompanyProject` tombstones the
+  company project and revokes all checkout bindings without contacting their environments. An
+  offline environment consumes that durable revocation when it reconnects, then deletes its local
+  project and threads while leaving the directory on disk untouched. Its outbound publisher may
+  never resurrect the tombstoned project.
 
 **A personal workspace is permanent.** Every member has one, it is never converted into an
 organization, and creating a company adds a second workspace alongside it. This amends the tenancy
@@ -79,6 +84,9 @@ only one side keeps serving work that has left.
 - A project with no environment binding cannot start work. That is a designed, non-error state:
   automation already blocks visibly with `project-binding-missing` rather than failing, per
   [0010](0010-company-integrations-and-durable-automation.md).
+- Removing a company project is available while every checkout is offline. Connected checkouts
+  reconcile immediately; disconnected checkouts reconcile the next time their company replica
+  syncs.
 - A personal workspace can never add owners or administer memberships, and there is no longer an
   upgrade door that unlocks those. Collaborating means creating an organization alongside.
 - Accounts provisioned before this decision may have had their personal workspace converted away.
