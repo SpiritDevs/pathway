@@ -6,6 +6,7 @@ import {
   automaticCloudRetryDelayMs,
   isAlwaysOnCloudLinkState,
   isCloudAccountLinkConflict,
+  resolveCloudAccountMembership,
   shouldRelinkCloudEnvironment,
   shouldScheduleAutomaticCloudRetry,
 } from "./useCloudLinkController";
@@ -107,5 +108,70 @@ describe("always-on Pathway Connect state", () => {
         "Relay is temporarily unavailable.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("Pathway Connect account membership", () => {
+  const listing = {
+    listed: true,
+    hasError: false,
+    offline: false,
+    environmentIds: ["environment-1", "environment-2"],
+    environmentId: "environment-1",
+  };
+
+  it("reads membership from an established account listing", () => {
+    expect(resolveCloudAccountMembership(listing)).toBe("present");
+    expect(resolveCloudAccountMembership({ ...listing, environmentId: "environment-3" })).toBe(
+      "absent",
+    );
+    expect(
+      resolveCloudAccountMembership({
+        ...listing,
+        environmentIds: [],
+        environmentId: "environment-1",
+      }),
+    ).toBe("absent");
+  });
+
+  it("never infers absence from an unestablished listing", () => {
+    for (const state of [
+      { ...listing, listed: false },
+      { ...listing, hasError: true },
+      { ...listing, offline: true },
+      { ...listing, environmentId: null },
+    ]) {
+      expect(resolveCloudAccountMembership(state)).toBe("unknown");
+    }
+  });
+
+  it("treats an environment the account dropped as unsatisfied and relinks it", () => {
+    const linkState = {
+      linked: true,
+      managedTunnelActive: true,
+      publishAgentActivity: true,
+      linkedRelayUrl: "https://relay.example.test",
+      configuredRelayUrl: "https://relay.example.test",
+    };
+    expect(isAlwaysOnCloudLinkState({ ...linkState, accountMembership: "present" })).toBe(true);
+    expect(isAlwaysOnCloudLinkState({ ...linkState, accountMembership: "unknown" })).toBe(true);
+    expect(isAlwaysOnCloudLinkState({ ...linkState, accountMembership: "absent" })).toBe(false);
+
+    const relinkState = {
+      linked: true,
+      managedTunnelActive: true,
+      desiredManagedTunnel: true,
+      linkedRelayUrl: "https://relay.example.test",
+      configuredRelayUrl: "https://relay.example.test",
+    };
+    expect(shouldRelinkCloudEnvironment({ ...relinkState, accountMembership: "present" })).toBe(
+      false,
+    );
+    expect(shouldRelinkCloudEnvironment({ ...relinkState, accountMembership: "unknown" })).toBe(
+      false,
+    );
+    expect(shouldRelinkCloudEnvironment({ ...relinkState, accountMembership: "absent" })).toBe(
+      true,
+    );
   });
 });

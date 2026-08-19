@@ -38,6 +38,13 @@ export interface RelayEnvironmentDiscoveryState {
   readonly refreshing: boolean;
   readonly offline: boolean;
   readonly error: Option.Option<ConnectionAttemptError>;
+  /**
+   * True once the relay answered with the account's environment list. An empty
+   * map only means "this account owns no environments" once this is set —
+   * before that it is indistinguishable from "not asked yet", and callers that
+   * act on absence (rather than presence) must not treat it as authoritative.
+   */
+  readonly listed: boolean;
 }
 
 export class RelayEnvironmentDiscovery extends Context.Service<
@@ -56,6 +63,7 @@ export const EMPTY_RELAY_ENVIRONMENT_DISCOVERY_STATE: RelayEnvironmentDiscoveryS
   refreshing: false,
   offline: false,
   error: Option.none(),
+  listed: false,
 };
 
 export function effectiveRelayEnvironmentAvailability(
@@ -309,6 +317,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
         yield* SubscriptionRef.update(state, (current) => ({
           ...current,
           environments: new Map(),
+          listed: false,
         }));
       }
       yield* Ref.set(activeAccountId, accountId);
@@ -322,6 +331,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       yield* SubscriptionRef.update(state, (current) => ({
         ...current,
         environments: refreshingEnvironmentMap(environments, current.environments),
+        listed: true,
       }));
 
       yield* Effect.forEach(
@@ -351,6 +361,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
             environments: new Map(),
             refreshing: false,
             error: Option.some(error),
+            listed: false,
           }));
         }),
       ),

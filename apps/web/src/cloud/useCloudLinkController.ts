@@ -6,11 +6,13 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
+import * as Option from "effect/Option";
 import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore } from "react";
 
 import { toastManager } from "../components/ui/toast";
 import { relayEnvironmentDiscovery } from "../state/relay";
 import { useAtomCommand } from "../state/use-atom-command";
+import { useAtomValue } from "@effect/atom-react";
 import {
   linkPrimaryEnvironment as linkPrimaryEnvironmentAtom,
   unlinkPrimaryEnvironment as unlinkPrimaryEnvironmentAtom,
@@ -120,17 +122,45 @@ export function useAlwaysOnCloudLinkStatus(): AlwaysOnCloudLinkStatus {
   );
 }
 
+/**
+ * Whether the relay account still owns this environment. Local link secrets
+ * only record what the environment was told; the account can revoke the link
+ * out of band (another device removes the environment), and nothing informs
+ * the environment. `"unknown"` means the account listing has not been
+ * established yet and absence must not be inferred from it.
+ */
+export type CloudAccountMembership = "unknown" | "present" | "absent";
+
+export function resolveCloudAccountMembership(input: {
+  readonly listed: boolean;
+  readonly hasError: boolean;
+  readonly offline: boolean;
+  readonly environmentIds: ReadonlyArray<string>;
+  readonly environmentId: string | null;
+}): CloudAccountMembership {
+  if (!input.listed || input.hasError || input.offline || input.environmentId === null) {
+    return "unknown";
+  }
+  return input.environmentIds.includes(input.environmentId) ? "present" : "absent";
+}
+
 export function isAlwaysOnCloudLinkState(input: {
   readonly linked: boolean;
   readonly managedTunnelActive: boolean;
   readonly publishAgentActivity: boolean;
   readonly linkedRelayUrl: string | null;
   readonly configuredRelayUrl: string | null;
+  readonly accountMembership?: CloudAccountMembership;
 }): boolean {
   return (
     input.linked &&
     input.managedTunnelActive &&
     input.publishAgentActivity &&
+    // An environment the account no longer lists is unreachable through the
+    // relay no matter how healthy its local link and tunnel look, and only a
+    // fresh link puts it back. Treat that as unsatisfied so the invariant
+    // repairs itself instead of stranding the environment.
+    (input.accountMembership ?? "unknown") !== "absent" &&
     input.configuredRelayUrl !== null &&
     normalizeSecureRelayUrl(input.linkedRelayUrl ?? "") === input.configuredRelayUrl
   );
@@ -142,10 +172,12 @@ export function shouldRelinkCloudEnvironment(input: {
   readonly desiredManagedTunnel: boolean;
   readonly linkedRelayUrl: string | null;
   readonly configuredRelayUrl: string | null;
+  readonly accountMembership?: CloudAccountMembership;
 }): boolean {
   return (
     !input.linked ||
     input.managedTunnelActive !== input.desiredManagedTunnel ||
+    (input.accountMembership ?? "unknown") === "absent" ||
     input.configuredRelayUrl === null ||
     normalizeSecureRelayUrl(input.linkedRelayUrl ?? "") !== input.configuredRelayUrl
   );
@@ -176,6 +208,7 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
     { reportFailure: false },
   );
   const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const relayDiscovery = useAtomValue(relayEnvironmentDiscovery.stateValueAtom);
   const [operationError, setOperationError] = useState<string | null>(null);
   const reportFailures = options.reportFailures ?? true;
 
@@ -216,6 +249,13 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
   const linked = primaryCloudLinkState.data?.linked ?? false;
   const linkedRelayUrl = primaryCloudLinkState.data?.relayUrl ?? null;
   const configuredRelayUrl = resolveCloudPublicConfig().relayUrl;
+  const accountMembership = resolveCloudAccountMembership({
+    listed: relayDiscovery.listed,
+    hasError: Option.isSome(relayDiscovery.error),
+    offline: relayDiscovery.offline,
+    environmentIds: [...relayDiscovery.environments.keys()],
+    environmentId: primaryCloudLinkState.target?.environmentId ?? null,
+  });
 
   const updateCloudState = async (
     desired: CloudLinkDesiredState,
@@ -282,6 +322,7 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
           desiredManagedTunnel: desired.managedTunnel,
           linkedRelayUrl,
           configuredRelayUrl,
+          accountMembership,
         })
       ) {
         const linkResult = await linkPrimaryEnvironment({
@@ -331,6 +372,7 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
     managedTunnelActive,
     publishAgentActivity,
     operationError,
+    accountMembership,
     reconcileCloudState,
     relinkCloudState,
   };
@@ -375,6 +417,7 @@ export function useAlwaysOnCloudLink(): void {
     publishAgentActivity: controller.publishAgentActivity,
     linkedRelayUrl: controller.linkState.data?.relayUrl ?? null,
     configuredRelayUrl: resolveCloudPublicConfig().relayUrl,
+    accountMembership: controller.accountMembership,
   });
 
   const eligible =
