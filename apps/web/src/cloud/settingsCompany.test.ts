@@ -6,6 +6,8 @@ import {
   hasMultipleCompanies,
   isExplicitSettingsCompanyScope,
   organizationCompanies,
+  personalCompany,
+  resolveSettingsContentCompanyId,
   resolveSettingsCompanyId,
   SETTINGS_AUTO_SCOPE,
   SETTINGS_PROFILE_SCOPE,
@@ -35,6 +37,11 @@ describe("settings company scope", () => {
     expect(organizationCompanies([PERSONAL, ACME, BETA])).toEqual([ACME, BETA]);
     expect(hasMultipleCompanies([PERSONAL, ACME])).toBe(false);
     expect(hasMultipleCompanies([PERSONAL, ACME, BETA])).toBe(true);
+  });
+
+  it("finds the personal workspace independently of organization selection", () => {
+    expect(personalCompany([ACME, PERSONAL, BETA])).toBe(PERSONAL);
+    expect(personalCompany([ACME, BETA])).toBeNull();
   });
 
   it("keeps explicit Profile company-free even with one organization", () => {
@@ -86,6 +93,30 @@ describe("settings company scope", () => {
         scope: BETA.id,
       }),
     ).toBe(BETA.id);
+  });
+
+  it("uses the personal workspace for issue settings in Profile and Auto", () => {
+    expect(
+      resolveSettingsContentCompanyId({
+        companies: [PERSONAL, ACME, BETA],
+        scope: SETTINGS_PROFILE_SCOPE,
+      }),
+    ).toBe(PERSONAL.id);
+    expect(
+      resolveSettingsContentCompanyId({
+        companies: [PERSONAL, ACME, BETA],
+        scope: SETTINGS_AUTO_SCOPE,
+      }),
+    ).toBe(PERSONAL.id);
+  });
+
+  it("requires another selection when an explicit company is no longer available", () => {
+    expect(
+      resolveSettingsContentCompanyId({
+        companies: [PERSONAL, ACME],
+        scope: BETA.id,
+      }),
+    ).toBeNull();
   });
 
   it("distinguishes explicit company bootstrap from Auto and Profile", () => {

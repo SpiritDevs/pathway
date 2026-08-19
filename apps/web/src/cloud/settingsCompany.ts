@@ -17,6 +17,12 @@ export function organizationCompanies(
   return companies.filter((company) => company.workspaceKind === "organization");
 }
 
+export function personalCompany(
+  companies: ReadonlyArray<ActiveCompanyRow>,
+): ActiveCompanyRow | null {
+  return companies.find((company) => company.workspaceKind === "personal") ?? null;
+}
+
 export function hasMultipleCompanies(companies: ReadonlyArray<ActiveCompanyRow>): boolean {
   return organizationCompanies(companies).length > 1;
 }
@@ -38,6 +44,18 @@ export function resolveSettingsCompanyId(input: {
     return companyChoices.length === 1 ? companyChoices[0]!.id : null;
   }
   return companyChoices.find((company) => company.id === input.scope)?.id ?? null;
+}
+
+/** Content settings use the personal workspace while Profile is selected. */
+export function resolveSettingsContentCompanyId(input: {
+  readonly companies: ReadonlyArray<ActiveCompanyRow>;
+  readonly scope: SettingsCompanyScope;
+}): CompanyId | null {
+  const selectedCompanyId = resolveSettingsCompanyId(input);
+  if (selectedCompanyId !== null || isExplicitSettingsCompanyScope(input.scope)) {
+    return selectedCompanyId;
+  }
+  return personalCompany(input.companies)?.id ?? null;
 }
 
 export const settingsCompanyScopeAtom = Atom.make<SettingsCompanyScope>(SETTINGS_AUTO_SCOPE).pipe(

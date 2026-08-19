@@ -233,13 +233,14 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(settingsPathIsVisibleForWorkspace("/settings/company-roles", "organization")).toBe(true);
   });
 
-  it("hides company-owned settings in the profile scope", () => {
+  it("keeps app and personal settings visible in the profile scope", () => {
     expect(settingsPathIsVisibleForWorkspace("/settings/general", "profile")).toBe(true);
     expect(settingsPathIsVisibleForWorkspace("/settings/providers", "profile")).toBe(true);
     expect(settingsPathIsVisibleForWorkspace("/settings/company-members", "profile")).toBe(false);
-    expect(settingsPathIsVisibleForWorkspace("/settings/environments", "profile")).toBe(false);
-    expect(settingsPathIsVisibleForWorkspace("/settings/issues-statuses", "profile")).toBe(false);
-    expect(settingsPathIsVisibleForWorkspace("/settings/email", "profile")).toBe(false);
+    expect(settingsPathIsVisibleForWorkspace("/settings/environments", "profile")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/integrations", "profile")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/issues-statuses", "profile")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/email", "profile")).toBe(true);
   });
 
   it("resolves direct and nested Settings locations to their owning section", () => {
@@ -257,7 +258,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(settingsLocationIsVisibleForWorkspace("/settings/company-members", "profile")).toBe(
       false,
     );
-    expect(settingsLocationIsVisibleForWorkspace("/settings/integrations", "profile")).toBe(false);
+    expect(settingsLocationIsVisibleForWorkspace("/settings/integrations", "profile")).toBe(true);
     expect(settingsLocationIsVisibleForWorkspace("/settings/projects/pathway", "profile")).toBe(
       true,
     );

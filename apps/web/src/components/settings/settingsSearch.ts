@@ -71,14 +71,6 @@ const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
   "/settings/company-members",
   "/settings/company-teams",
   "/settings/company-roles",
-  "/settings/environments",
-  "/settings/integrations",
-  "/settings/issues-statuses",
-  "/settings/issues-labels",
-  "/settings/issues-milestones",
-  "/settings/issues-import",
-  "/settings/issues-enrichment",
-  "/settings/email",
 ]);
 
 /**

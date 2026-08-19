@@ -1,7 +1,42 @@
-import { Building2Icon } from "lucide-react";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import { Building2Icon, ChevronDownIcon } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
+import type { ActiveCompanyRow } from "../../../cloud/activeCompany";
+import { Button } from "../../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
+
+export function SettingsCompanyPicker({
+  companies,
+  onSelect,
+}: {
+  readonly companies: ReadonlyArray<ActiveCompanyRow>;
+  readonly onSelect: (companyId: CompanyId) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
+        <Building2Icon className="size-3.5" />
+        Select a company
+        <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        {companies.map((company) => (
+          <DropdownMenuItem key={company.id} onClick={() => onSelect(company.id)}>
+            <Building2Icon />
+            <span className="truncate">{company.name}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 export function CompanySettingsEmptyState({
   title,

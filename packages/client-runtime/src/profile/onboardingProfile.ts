@@ -40,6 +40,8 @@ export const CompanyProfile = Schema.Struct({
   name: Schema.String,
   size: Schema.optionalKey(CompanySize),
   role: Schema.optionalKey(CompanyRole),
+  referralSource: Schema.optionalKey(ReferralSource),
+  referralDetail: Schema.optionalKey(Schema.String),
 });
 export type CompanyProfile = typeof CompanyProfile.Type;
 

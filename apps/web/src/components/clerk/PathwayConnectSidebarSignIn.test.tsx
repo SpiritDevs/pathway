@@ -75,10 +75,6 @@ vi.mock("../usage/ProviderUsage", () => ({
   ConnectedProviderUsageMenu: () => <div>Connected provider limits</div>,
 }));
 
-vi.mock("../settings/company/CreateCompanyDialog", () => ({
-  CreateCompanyDialog: () => <div>Create company dialog</div>,
-}));
-
 import { PathwayConnectProfileButton } from "./PathwayConnectSidebarSignIn";
 
 describe("PathwayConnectProfileButton", () => {

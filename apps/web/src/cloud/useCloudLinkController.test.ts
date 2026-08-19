@@ -5,6 +5,7 @@ import {
   AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
   automaticCloudRetryDelayMs,
   isAlwaysOnCloudLinkState,
+  isCloudAccountLinkConflict,
   shouldRelinkCloudEnvironment,
   shouldScheduleAutomaticCloudRetry,
 } from "./useCloudLinkController";
@@ -88,5 +89,23 @@ describe("always-on Pathway Connect state", () => {
     expect(shouldScheduleAutomaticCloudRetry(4)).toBe(true);
     expect(shouldScheduleAutomaticCloudRetry(5)).toBe(false);
     expect(shouldScheduleAutomaticCloudRetry(6)).toBe(false);
+  });
+
+  it("stops immediately when the environment belongs to another cloud account", () => {
+    const conflict =
+      "Could not configure environment relay access: This environment is already linked to a different cloud account. Unlink it before switching accounts.";
+
+    expect(isCloudAccountLinkConflict(conflict)).toBe(true);
+    expect(shouldScheduleAutomaticCloudRetry(1, AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS, conflict)).toBe(
+      false,
+    );
+    expect(isCloudAccountLinkConflict("Relay is temporarily unavailable.")).toBe(false);
+    expect(
+      shouldScheduleAutomaticCloudRetry(
+        1,
+        AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
+        "Relay is temporarily unavailable.",
+      ),
+    ).toBe(true);
   });
 });

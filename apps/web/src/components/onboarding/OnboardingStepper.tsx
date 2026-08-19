@@ -79,6 +79,12 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
   const [companyRole, setCompanyRole] = useState<CompanyRole | null>(
     () => metadata?.company?.role ?? null,
   );
+  const [companyReferralSource, setCompanyReferralSource] = useState<ReferralSource | null>(
+    () => metadata?.company?.referralSource ?? null,
+  );
+  const [companyReferralDetail, setCompanyReferralDetail] = useState(
+    () => metadata?.company?.referralDetail ?? "",
+  );
 
   const [providers, setProviders] = useState<ReadonlyArray<ProviderUsage>>(
     () => metadata?.individual?.providers ?? [],
@@ -217,6 +223,8 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
       name: companyName,
       role: companyRole,
       size: companySize,
+      referralDetail: companyReferralDetail,
+      referralSource: companyReferralSource,
     });
     completeOnboarding("company", company === null ? {} : { company }, companyName);
   }
@@ -309,10 +317,16 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
           onBack={handleBack}
           onFinish={handleCompanyFinish}
           onNameChange={setCompanyName}
+          onReferralDetailChange={setCompanyReferralDetail}
+          onReferralSourceToggle={(value) =>
+            setCompanyReferralSource((current) => toggleSingleChoice(current, value))
+          }
           onRoleToggle={(value) => setCompanyRole((current) => toggleSingleChoice(current, value))}
           onSizeToggle={(value) => setCompanySize((current) => toggleSingleChoice(current, value))}
           onSkip={handleSkipBranch}
           pending={pending}
+          referralDetail={companyReferralDetail}
+          referralSource={companyReferralSource}
           role={companyRole}
           size={companySize}
         />

@@ -12,6 +12,7 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
+  Building2Icon,
   ChartNoAxesColumnIcon,
   ChevronDownIcon,
   CircleDotIcon,
@@ -284,7 +285,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     <>
       <SidebarContent className="overflow-x-hidden">
         <SidebarGroup className="gap-2 p-[var(--sidebar-content-inset)]">
-          {companySettings.hasMultipleCompanies ? (
+          {companySettings.organizationCompanies.length > 0 ? (
             <DropdownMenu>
               <DropdownMenuTrigger
                 aria-label="Choose settings profile or company"
@@ -293,7 +294,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 {companySettings.activeCompany === null ? (
                   <UserRoundIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
                 ) : (
-                  <UsersRoundIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                  <Building2Icon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
                 )}
                 <span className="min-w-0 flex-1 truncate">
                   {companySettings.activeCompany?.name ?? "Your profile"}

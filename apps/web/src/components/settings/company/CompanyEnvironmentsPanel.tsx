@@ -39,6 +39,8 @@ import { useAtomCommand } from "../../../state/use-atom-command";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../../../timestampFormat";
 import { usePrimaryCloudLinkState } from "../../../cloud/primaryCloudLinkState";
 import {
+  isCloudAccountLinkConflict,
+  requestAlwaysOnCloudLinkRelink,
   requestAlwaysOnCloudLinkRetry,
   useAlwaysOnCloudLinkStatus,
 } from "../../../cloud/useCloudLinkController";
@@ -164,6 +166,7 @@ function EnvironmentList({
   deletingEnvironmentId,
   onInfo,
   onReconnect,
+  onRelink,
   onDelete,
   onDeleteAllDisconnected,
 }: {
@@ -181,12 +184,18 @@ function EnvironmentList({
   readonly deletingEnvironmentId: EnvironmentId | null;
   readonly onInfo: (environmentId: EnvironmentId) => void;
   readonly onReconnect: () => void;
+  readonly onRelink: () => void;
   readonly onDelete: (environment: CompanyEnvironmentRow) => void;
   readonly onDeleteAllDisconnected: () => void;
 }) {
   const [disconnectedOpen, setDisconnectedOpen] = useState(false);
   const [removeAllOpen, setRemoveAllOpen] = useState(false);
   const rows = [...connectedRows, ...disconnectedRows];
+
+  useEffect(() => {
+    if (isCloudAccountLinkConflict(ownCloudLinkError)) setDisconnectedOpen(true);
+  }, [ownCloudLinkError]);
+
   const renderRow = (row: CompanyEnvironmentRow) => (
     <EnvironmentListRow
       key={row.registration.id}
@@ -200,6 +209,7 @@ function EnvironmentList({
       deleting={deletingEnvironmentId === row.environmentId}
       onInfo={() => onInfo(row.environmentId)}
       onReconnect={onReconnect}
+      onRelink={onRelink}
       onDelete={() => onDelete(row)}
     />
   );
@@ -298,6 +308,7 @@ function EnvironmentListRow({
   deleting,
   onInfo,
   onReconnect,
+  onRelink,
   onDelete,
 }: {
   readonly row: CompanyEnvironmentRow;
@@ -310,6 +321,7 @@ function EnvironmentListRow({
   readonly deleting: boolean;
   readonly onInfo: () => void;
   readonly onReconnect: () => void;
+  readonly onRelink: () => void;
   readonly onDelete: () => void;
 }) {
   const [deleteArmedUntil, setDeleteArmedUntil] = useState<number | null>(null);
@@ -341,10 +353,9 @@ function EnvironmentListRow({
     ownCloudLinkError,
     remoteRelayAvailability,
   });
-  const canAttemptReconnect = canAttemptEnvironmentReconnect({
-    row,
-    ownCloudLinkPhase,
-  });
+  const canRelink = row.isOwnEnvironment && isCloudAccountLinkConflict(ownCloudLinkError);
+  const canAttemptReconnect =
+    !canRelink && canAttemptEnvironmentReconnect({ row, ownCloudLinkPhase });
 
   return (
     <div className="flex w-full gap-3 border-b px-4 py-4 last:border-b-0 sm:items-start">
@@ -382,6 +393,23 @@ function EnvironmentListRow({
                 {teamName}
               </Badge>
             ))}
+          </div>
+        ) : null}
+        {canRelink ? (
+          <div
+            role="alert"
+            className="flex flex-col items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="space-y-0.5">
+              <p className="text-xs font-medium text-foreground">Linked to another account</p>
+              <p className="text-[11px] text-muted-foreground">
+                Re-link this environment to the Pathway Connect account you are signed into now.
+              </p>
+            </div>
+            <Button size="xs" variant="destructive-outline" onClick={onRelink}>
+              <RefreshCwIcon className="size-3.5" />
+              Re-link
+            </Button>
           </div>
         ) : null}
       </div>
@@ -762,6 +790,7 @@ export function CompanyEnvironmentsPanel() {
   );
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
   const [environmentInfoOpen, setEnvironmentInfoOpen] = useState(false);
+  const [relinkConfirmOpen, setRelinkConfirmOpen] = useState(false);
   const [commands, setCommands] = useState<ReadonlyArray<EnvironmentCommandRecord>>([]);
   const [commandLoadError, setCommandLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -863,6 +892,13 @@ export function CompanyEnvironmentsPanel() {
     }
   };
 
+  if (settings.activeCompany === null || settings.companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <EnvironmentConnectionSettings />
+      </SettingsPageContainer>
+    );
+  }
   if (settings.isAuthLoaded && !settings.isSignedIn) {
     return (
       <SettingsPageContainer>
@@ -870,17 +906,6 @@ export function CompanyEnvironmentsPanel() {
         <CompanySettingsEmptyState
           title="Sign in to manage environments"
           description="Environment discovery and remote control are available after you sign in."
-        />
-      </SettingsPageContainer>
-    );
-  }
-  if (settings.activeCompany === null || settings.companyId === null) {
-    return (
-      <SettingsPageContainer>
-        <EnvironmentConnectionSettings />
-        <CompanySettingsEmptyState
-          title="Workspace setup is still finishing"
-          description="Pathway is preparing your workspace and will connect this environment automatically."
         />
       </SettingsPageContainer>
     );
@@ -978,6 +1003,7 @@ export function CompanyEnvironmentsPanel() {
                 setEnvironmentInfoOpen(true);
               }}
               onReconnect={requestAlwaysOnCloudLinkRetry}
+              onRelink={() => setRelinkConfirmOpen(true)}
               onDelete={(environment) => {
                 if (control === null) return;
                 setSelectedEnvironmentId(environment.environmentId);
@@ -1079,7 +1105,7 @@ export function CompanyEnvironmentsPanel() {
               {canAttemptEnvironmentReconnect({
                 row: selected,
                 ownCloudLinkPhase: cloudLinkStatus.phase,
-              }) ? (
+              }) && !isCloudAccountLinkConflict(cloudLinkStatus.error) ? (
                 <div
                   role="alert"
                   className="space-y-3 rounded-lg border border-warning/30 bg-warning/5 p-3"
@@ -1250,6 +1276,30 @@ export function CompanyEnvironmentsPanel() {
           </SheetPopup>
         </Sheet>
       ) : null}
+      <AlertDialog open={relinkConfirmOpen} onOpenChange={setRelinkConfirmOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-link this environment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This severs all active Pathway Connect connections to this environment and stops its
+              current managed tunnel. Pathway will then link the environment to the account you are
+              signed into now. This-machine and local-network access are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setRelinkConfirmOpen(false);
+                requestAlwaysOnCloudLinkRelink();
+              }}
+            >
+              Disconnect and re-link
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </SettingsPageContainer>
   );
 }

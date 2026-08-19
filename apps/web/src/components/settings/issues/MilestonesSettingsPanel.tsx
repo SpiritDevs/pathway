@@ -51,6 +51,7 @@ import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
 import { useCompanySettings } from "../company/useCompanySettings";
+import { SettingsCompanyPicker } from "../company/CompanySettingsShared";
 import {
   duplicateNameError,
   issueMilestoneCreateInput,
@@ -390,7 +391,8 @@ function ProjectMilestoneGroup({
 }
 
 export function MilestonesSettingsPanel() {
-  const { companyId } = useCompanySettings();
+  const company = useCompanySettings();
+  const companyId = company.contentCompanyId;
   const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
   const domain = useSyncedIssueDomainForCompany(companyId);
   const projects = (domain?.cloudProjects ?? []).map((project) => ({
@@ -457,15 +459,23 @@ export function MilestonesSettingsPanel() {
             title="Milestones"
             description="Checkpoints inside a project. Drag to reorder within a project; the dates are what the timeline draws a bar between, and either one may be left empty."
           />
-          {storeStatus === "loading" && projects.length === 0 ? (
+          {companyId === null ? (
+            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4">
+              <p className="text-[13px] text-muted-foreground/80">
+                Select a company to configure its milestones.
+              </p>
+              {company.organizationCompanies.length > 0 ? (
+                <SettingsCompanyPicker
+                  companies={company.organizationCompanies}
+                  onSelect={company.setSettingsCompanyScope}
+                />
+              ) : null}
+            </div>
+          ) : storeStatus === "loading" && projects.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground sm:px-4">
               <Spinner className="size-3.5" />
               Loading milestones…
             </div>
-          ) : companyId === null ? (
-            <p className="px-3 py-3 text-[13px] text-muted-foreground/80 sm:px-4">
-              Select a company to configure its milestones.
-            </p>
           ) : projects.length === 0 ? (
             <p className="px-3 py-3 text-[13px] text-muted-foreground/80 sm:px-4">
               A milestone belongs to a project, and this environment has none yet.

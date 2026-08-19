@@ -330,7 +330,7 @@ export function IssueAutomationSettingsSection({
   readonly automation?: IssueAutomationSettings | undefined;
   readonly onSave?: ((settings: IssueAutomationSettings) => void) | undefined;
 } = {}) {
-  const { companyId } = useCompanySettings();
+  const { contentCompanyId: companyId } = useCompanySettings();
   const { store } = useCompanyIssuesStore(companyId);
   const statuses = store.statuses;
   const settings = usePrimarySettings();

@@ -14,6 +14,8 @@ import { makeClerkConvexTokenFetcher } from "../../../cloud/syncTransportAuth";
 import {
   hasMultipleCompanies,
   organizationCompanies,
+  personalCompany,
+  resolveSettingsContentCompanyId,
   resolveSettingsCompanyId,
   settingsCompanyScopeAtom,
 } from "../../../cloud/settingsCompany";
@@ -30,10 +32,16 @@ export function useCompanySettings() {
     companies,
     scope: settingsCompanyScope,
   });
+  const contentCompanyId = resolveSettingsContentCompanyId({
+    companies,
+    scope: settingsCompanyScope,
+  });
   const activeCompany = companies.find((company) => company.id === companyId) ?? null;
   const replicas = useAtomValue(companyRegistryReplicasAtom);
   const membershipIds = useAtomValue(companyRegistryMembershipIdsAtom);
   const replica = companyId === null ? null : (replicas.get(companyId) ?? null);
+  const contentReplica =
+    contentCompanyId === null ? null : (replicas.get(contentCompanyId) ?? null);
   const directory = useMemo(
     () => companyDirectoryFromReplicaValues(replica?.view.values() ?? []),
     [replica],
@@ -88,6 +96,9 @@ export function useCompanySettings() {
     replica,
     organizationCompanies: organizationCompanies(companies),
     hasMultipleCompanies: hasMultipleCompanies(companies),
+    contentCompanyId,
+    contentReplica,
+    personalCompany: personalCompany(companies),
     settingsCompanyScope,
     setSettingsCompanyScope,
     workspaceKind: activeCompany === null ? ("profile" as const) : activeCompany.workspaceKind,

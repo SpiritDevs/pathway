@@ -141,13 +141,25 @@ export function buildCompanyPatch(input: {
   readonly name: string;
   readonly size: CompanySize | null;
   readonly role: CompanyRole | null;
+  readonly referralSource: ReferralSource | null;
+  readonly referralDetail: string;
 }): CompanyProfile | null {
   const name = input.name.trim();
-  if (name.length === 0 && input.size === null && input.role === null) return null;
+  const detail = input.referralSource === "other" ? input.referralDetail.trim() : "";
+  if (
+    name.length === 0 &&
+    input.size === null &&
+    input.role === null &&
+    input.referralSource === null
+  ) {
+    return null;
+  }
   return {
     name,
     ...(input.size === null ? {} : { size: input.size }),
     ...(input.role === null ? {} : { role: input.role }),
+    ...(input.referralSource === null ? {} : { referralSource: input.referralSource }),
+    ...(detail.length === 0 ? {} : { referralDetail: detail }),
   };
 }
 

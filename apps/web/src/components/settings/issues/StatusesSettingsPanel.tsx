@@ -42,6 +42,7 @@ import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
 import { useCompanySettings } from "../company/useCompanySettings";
+import { SettingsCompanyPicker } from "../company/CompanySettingsShared";
 import {
   countIssuesByStatus,
   DEFAULT_ISSUE_COLOR,
@@ -229,7 +230,8 @@ function StatusRow({
 }
 
 export function StatusesSettingsPanel() {
-  const { companyId } = useCompanySettings();
+  const company = useCompanySettings();
+  const companyId = company.contentCompanyId;
   const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
   const statuses = store.statuses;
   const config = store.config;
@@ -336,6 +338,29 @@ export function StatusesSettingsPanel() {
   const reassignOptions =
     pendingDelete === null ? [] : issueStatusReassignmentOptions(statuses, pendingDelete.id);
   const movingCount = pendingDelete === null ? 0 : (issueCounts.get(pendingDelete.id) ?? 0);
+
+  if (companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <SettingsSection
+          {...searchableSetting("issue-statuses")}
+          headerAction={
+            company.organizationCompanies.length > 0 ? (
+              <SettingsCompanyPicker
+                companies={company.organizationCompanies}
+                onSelect={company.setSettingsCompanyScope}
+              />
+            ) : null
+          }
+        >
+          <SettingsRow
+            title="Select a company"
+            description="Choose the company whose issue statuses you want to configure."
+          />
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   if (storeStatus === "disconnected") {
     return (

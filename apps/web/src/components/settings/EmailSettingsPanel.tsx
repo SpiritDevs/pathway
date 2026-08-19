@@ -53,13 +53,15 @@ export function EmailSettingsPanel() {
   const updateSettings = useUpdateEmailSettings();
   const projects = useMemo(
     () =>
-      company.companyId === null || company.replica === null || primaryEnvironmentId === null
+      company.contentCompanyId === null ||
+      company.contentReplica === null ||
+      primaryEnvironmentId === null
         ? []
         : cloudEnvironmentProjectsFromReplicas(
-            new Map([[company.companyId, company.replica]]),
+            new Map([[company.contentCompanyId, company.contentReplica]]),
             primaryEnvironmentId,
           ),
-    [company.companyId, company.replica, primaryEnvironmentId],
+    [company.contentCompanyId, company.contentReplica, primaryEnvironmentId],
   );
   const [ruleProjectId, setRuleProjectId] = useState<ProjectId | null>(null);
 
@@ -271,10 +273,10 @@ export function EmailSettingsPanel() {
 function TrustedEmailSendersSettingsSection() {
   const company = useCompanySettings();
   const senders = useMemo(() => {
-    const companyId = company.companyId;
-    if (companyId === null || company.replica === null) return [];
+    const companyId = company.contentCompanyId;
+    if (companyId === null || company.contentReplica === null) return [];
     const isTrustedSender = Schema.is(TrustedEmailSenderEntity);
-    return [...company.replica.view.values()].flatMap((value) =>
+    return [...company.contentReplica.view.values()].flatMap((value) =>
       isTrustedSender(value)
         ? [
             {
@@ -285,7 +287,7 @@ function TrustedEmailSendersSettingsSection() {
           ]
         : [],
     );
-  }, [company.companyId, company.replica]);
+  }, [company.contentCompanyId, company.contentReplica]);
   const emailAdmin = useCapturedEmailAdmin();
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -309,11 +311,11 @@ function TrustedEmailSendersSettingsSection() {
       icon={<ShieldCheckIcon className="size-3.5" />}
     >
       <SettingsRow
-        description="Clicking Load remote content trusts that exact From address. Trusted senders load images and styles automatically and sync through Convex to every environment in this company."
+        description="Clicking Load remote content trusts that exact From address. Trusted senders load images and styles automatically and sync to every environment in this workspace."
         status={
           error ??
           (emailAdmin === null
-            ? "Connect and sign in to company sync to change trusted senders."
+            ? "Connect and sign in to workspace sync to change trusted senders."
             : null)
         }
         title="Trusted senders"

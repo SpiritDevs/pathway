@@ -34,11 +34,14 @@ If you belong to more than one company, the account menu lets you choose the com
 throughout Pathway. **All companies** combines company-owned projects, agent threads, issues,
 email, environments, and other data. Choosing one company filters those areas to that company. You
 can also use a company's cog to open its Settings or choose **Create company** to start another
-workspace.
+workspace. Creating a company opens the same guided setup used during onboarding: enter its name,
+then optionally share the expected team size, your role, and how you heard about Pathway.
 
 Settings has its own scope menu above search. Choose **Your profile** to see device and account
-preferences; company administration such as **Members**, **Teams**, **Roles**, and **Integrations**
-is hidden. Choose a company to see and manage the settings owned by that company.
+preferences, environments, personal integrations, email capture, and personal issue settings.
+Company administration such as **Members**, **Teams**, and **Roles** is hidden. Choose a company to
+manage its administration, integrations, and issue settings instead. If a company-owned issue
+setting needs a scope, **Select a company** changes this same Settings scope menu.
 
 Setup remembers where you were. If you close the app partway through — even if you continue on a
 different computer — it resumes at the step you left.

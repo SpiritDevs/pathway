@@ -10,7 +10,7 @@ import {
   SmartphoneIcon,
   UserRoundIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -34,7 +34,6 @@ import {
 } from "../ui/menu";
 import { ConnectedProviderUsageMenu } from "../usage/ProviderUsage";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { CreateCompanyDialog } from "../settings/company/CreateCompanyDialog";
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { usePathwayConnectAuthPrompt } from "./usePathwayConnectAuthPrompt";
 
@@ -89,7 +88,6 @@ function ConfiguredPathwayConnectProfileButton() {
   const companyChoices = organizationCompanies(companies);
   const [activeCompanyId, setActiveCompanyId] = useAtom(activeCompanyIdAtom);
   const [, setSettingsCompanyScope] = useAtom(settingsCompanyScopeAtom);
-  const [createCompanyOpen, setCreateCompanyOpen] = useState(false);
 
   if (!isLoaded || !isSignedIn || !user) return null;
 
@@ -145,8 +143,10 @@ function ConfiguredPathwayConnectProfileButton() {
                         setSettingsCompanyScope(SETTINGS_PROFILE_SCOPE);
                       }}
                     >
-                      <Building2Icon />
-                      <span>All companies</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Building2Icon />
+                        <span className="truncate">All companies</span>
+                      </span>
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
                   </>
@@ -181,7 +181,14 @@ function ConfiguredPathwayConnectProfileButton() {
                   </div>
                 ))}
                 {companyChoices.length > 0 ? <DropdownMenuSeparator /> : null}
-                <DropdownMenuItem onClick={() => setCreateCompanyOpen(true)}>
+                <DropdownMenuItem
+                  onClick={() =>
+                    void navigate({
+                      to: "/onboarding",
+                      search: { intent: "create-company" },
+                    })
+                  }
+                >
                   <PlusIcon />
                   <span>Create company</span>
                 </DropdownMenuItem>
@@ -213,16 +220,6 @@ function ConfiguredPathwayConnectProfileButton() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {createCompanyOpen ? (
-        <CreateCompanyDialog
-          open
-          onOpenChange={setCreateCompanyOpen}
-          onCreated={(company) => {
-            setSettingsCompanyScope(company.id);
-            void navigate({ to: "/settings/company-members" });
-          }}
-        />
-      ) : null}
     </>
   );
 }

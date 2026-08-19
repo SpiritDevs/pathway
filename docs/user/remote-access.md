@@ -56,6 +56,12 @@ the workspace registration. Neither action deletes the environment's server, pro
 After an app update changes the configured Pathway Connect service, the desktop app automatically
 relinks its local environment so the server and client use the same relay deployment.
 
+If the local environment is still linked to a different Pathway Connect account, Pathway stops
+automatic retries and offers **Re-link** beside that environment. Re-linking requires confirmation
+because it stops the current managed tunnel and disconnects active remote clients before linking the
+environment to the account you are signed into now. This-machine and local-network access are not
+affected.
+
 The default endpoint controls the QR code and primary copy action for pairing links. You can change it from the expanded endpoint list. The preference is stored by endpoint type, so choosing the local LAN endpoint survives normal IP address changes when you move between networks.
 
 When no user default is saved, the app uses the built-in LAN endpoint for pairing links when

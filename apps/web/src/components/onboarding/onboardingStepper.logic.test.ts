@@ -222,28 +222,69 @@ describe("shouldIgnoreStepperKeyEvent", () => {
 
 describe("buildCompanyPatch", () => {
   it("writes nothing when the whole branch was skipped", () => {
-    expect(buildCompanyPatch({ name: "   ", size: null, role: null })).toBe(null);
+    expect(
+      buildCompanyPatch({
+        name: "   ",
+        size: null,
+        role: null,
+        referralSource: null,
+        referralDetail: "",
+      }),
+    ).toBe(null);
   });
 
   it("trims the name and omits unanswered keys", () => {
-    expect(buildCompanyPatch({ name: "  Acme  ", size: null, role: null })).toEqual({
-      name: "Acme",
-    });
+    expect(
+      buildCompanyPatch({
+        name: "  Acme  ",
+        size: null,
+        role: null,
+        referralSource: null,
+        referralDetail: "",
+      }),
+    ).toEqual({ name: "Acme" });
   });
 
   it("keeps every answered field", () => {
-    expect(buildCompanyPatch({ name: "Acme", size: "11-50", role: "founder" })).toEqual({
+    expect(
+      buildCompanyPatch({
+        name: "Acme",
+        size: "11-50",
+        role: "founder",
+        referralSource: "other",
+        referralDetail: "  A conference  ",
+      }),
+    ).toEqual({
       name: "Acme",
       size: "11-50",
       role: "founder",
+      referralSource: "other",
+      referralDetail: "A conference",
     });
   });
 
   it("still records answers when only the name was skipped", () => {
-    expect(buildCompanyPatch({ name: "", size: "1000+", role: null })).toEqual({
-      name: "",
-      size: "1000+",
-    });
+    expect(
+      buildCompanyPatch({
+        name: "",
+        size: "1000+",
+        role: null,
+        referralSource: null,
+        referralDetail: "",
+      }),
+    ).toEqual({ name: "", size: "1000+" });
+  });
+
+  it("drops referral detail unless Other is selected", () => {
+    expect(
+      buildCompanyPatch({
+        name: "Acme",
+        size: null,
+        role: null,
+        referralSource: "search",
+        referralDetail: "stale answer",
+      }),
+    ).toEqual({ name: "Acme", referralSource: "search" });
   });
 });
 

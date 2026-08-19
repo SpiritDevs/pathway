@@ -20,10 +20,16 @@ describe("parseProfileMetadata", () => {
     const metadata = parseProfileMetadata({
       v: 1,
       accountKind: "company",
-      company: { name: "Acme", size: "11-50", role: "founder" },
+      company: {
+        name: "Acme",
+        size: "11-50",
+        role: "founder",
+        referralSource: "friend-or-colleague",
+      },
       onboardingCompletedAt: "2026-08-11T00:00:00.000Z",
     });
     expect(metadata?.company?.name).toBe("Acme");
+    expect(metadata?.company?.referralSource).toBe("friend-or-colleague");
     expect(isOnboardingComplete(metadata)).toBe(true);
   });
 

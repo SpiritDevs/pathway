@@ -4,10 +4,13 @@ import { Navigate, createFileRoute } from "@tanstack/react-router";
 
 import { hasClerkPublicConfig } from "../cloud/publicConfig";
 import { AuthShell } from "../components/auth/AuthShell";
+import { CreateCompanyOnboarding } from "../components/onboarding/CreateCompanyOnboarding";
 import { OnboardingStepper } from "../components/onboarding/OnboardingStepper";
+import { parseOnboardingSearch } from "../components/onboarding/onboardingRoute.logic";
 
 export const Route = createFileRoute("/onboarding")({
   component: OnboardingPage,
+  validateSearch: parseOnboardingSearch,
 });
 
 function OnboardingPage() {
@@ -18,6 +21,7 @@ function OnboardingPage() {
 
 function ConfiguredOnboardingPage() {
   const { isLoaded, isSignedIn, user } = useUser();
+  const search = Route.useSearch();
 
   if (isLoaded && !isSignedIn) return <Navigate replace to="/login" />;
 
@@ -32,9 +36,18 @@ function ConfiguredOnboardingPage() {
     );
   }
 
-  // A finished profile has no business here — the same bounce `/login` gives a
-  // signed-in visitor (docs/internals/decisions/0004).
-  if (isOnboardingComplete(parseProfileMetadata(user.unsafeMetadata))) {
+  const onboardingComplete = isOnboardingComplete(parseProfileMetadata(user.unsafeMetadata));
+  if (onboardingComplete && search.intent === "create-company") {
+    return (
+      <AuthShell width="wide">
+        <CreateCompanyOnboarding user={user} />
+      </AuthShell>
+    );
+  }
+
+  // A finished profile has no business in first-run onboarding — the same bounce
+  // `/login` gives a signed-in visitor (docs/internals/decisions/0004).
+  if (onboardingComplete) {
     return <Navigate replace to="/" />;
   }
 

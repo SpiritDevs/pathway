@@ -28,6 +28,7 @@ import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settingsLayout";
 import { searchableSetting } from "../settingsSearch";
 import { useCompanySettings } from "../company/useCompanySettings";
+import { SettingsCompanyPicker } from "../company/CompanySettingsShared";
 import {
   countIssuesByLabel,
   DEFAULT_ISSUE_COLOR,
@@ -79,7 +80,8 @@ function LabelColorPicker({
 }
 
 export function LabelsSettingsPanel() {
-  const { companyId } = useCompanySettings();
+  const company = useCompanySettings();
+  const companyId = company.contentCompanyId;
   const { store, status: storeStatus } = useCompanyIssuesStore(companyId);
   const labels = store.labels;
 
@@ -157,6 +159,29 @@ export function LabelsSettingsPanel() {
   );
 
   const pendingUsage = pendingDelete === null ? 0 : (usage.get(pendingDelete.id) ?? 0);
+
+  if (companyId === null) {
+    return (
+      <SettingsPageContainer>
+        <SettingsSection
+          {...searchableSetting("issue-labels")}
+          headerAction={
+            company.organizationCompanies.length > 0 ? (
+              <SettingsCompanyPicker
+                companies={company.organizationCompanies}
+                onSelect={company.setSettingsCompanyScope}
+              />
+            ) : null
+          }
+        >
+          <SettingsRow
+            title="Select a company"
+            description="Choose the company whose issue labels you want to configure."
+          />
+        </SettingsSection>
+      </SettingsPageContainer>
+    );
+  }
 
   if (storeStatus === "disconnected") {
     return (

@@ -42,6 +42,14 @@ export interface AlwaysOnCloudLinkStatus {
   readonly error: string | null;
   readonly nextRetryAt: number | null;
   readonly manualRetryRequestId: number;
+  readonly manualRelinkRequestId: number;
+}
+
+export const CLOUD_ACCOUNT_LINK_CONFLICT_MESSAGE =
+  "This environment is already linked to a different cloud account.";
+
+export function isCloudAccountLinkConflict(error: string | null): boolean {
+  return error?.includes(CLOUD_ACCOUNT_LINK_CONFLICT_MESSAGE) ?? false;
 }
 
 const alwaysOnCloudLinkListeners = new Set<() => void>();
@@ -52,15 +60,20 @@ let alwaysOnCloudLinkStatus: AlwaysOnCloudLinkStatus = {
   error: null,
   nextRetryAt: null,
   manualRetryRequestId: 0,
+  manualRelinkRequestId: 0,
 };
 
 function publishAlwaysOnCloudLinkStatus(
-  update: Omit<AlwaysOnCloudLinkStatus, "manualRetryRequestId" | "maxAttempts">,
+  update: Omit<
+    AlwaysOnCloudLinkStatus,
+    "manualRetryRequestId" | "manualRelinkRequestId" | "maxAttempts"
+  >,
 ): void {
   alwaysOnCloudLinkStatus = {
     ...update,
     maxAttempts: AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
     manualRetryRequestId: alwaysOnCloudLinkStatus.manualRetryRequestId,
+    manualRelinkRequestId: alwaysOnCloudLinkStatus.manualRelinkRequestId,
   };
   for (const listener of alwaysOnCloudLinkListeners) listener();
 }
@@ -83,6 +96,18 @@ export function requestAlwaysOnCloudLinkRetry(): void {
     error: null,
     nextRetryAt: null,
     manualRetryRequestId: alwaysOnCloudLinkStatus.manualRetryRequestId + 1,
+  };
+  for (const listener of alwaysOnCloudLinkListeners) listener();
+}
+
+export function requestAlwaysOnCloudLinkRelink(): void {
+  alwaysOnCloudLinkStatus = {
+    ...alwaysOnCloudLinkStatus,
+    phase: "connecting",
+    attempt: 1,
+    error: null,
+    nextRetryAt: null,
+    manualRelinkRequestId: alwaysOnCloudLinkStatus.manualRelinkRequestId + 1,
   };
   for (const listener of alwaysOnCloudLinkListeners) listener();
 }
@@ -192,8 +217,9 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
   const linkedRelayUrl = primaryCloudLinkState.data?.relayUrl ?? null;
   const configuredRelayUrl = resolveCloudPublicConfig().relayUrl;
 
-  const reconcileCloudState = async (
+  const updateCloudState = async (
     desired: CloudLinkDesiredState,
+    replaceExistingLink: boolean,
   ): Promise<{ readonly completed: boolean; readonly error: string | null }> => {
     setOperationError(null);
     const target = primaryCloudLinkState.target;
@@ -238,7 +264,18 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
           error: reportUpdateFailure(new Error("Sign in to Pathway Connect before enabling this.")),
         };
       }
+      if (replaceExistingLink && linked) {
+        const unlinkResult = await unlinkPrimaryEnvironment({ target, clerkToken });
+        if (unlinkResult._tag === "Failure") {
+          const error = isAtomCommandInterrupted(unlinkResult)
+            ? "Pathway Connect attempt was interrupted."
+            : reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
+          primaryCloudLinkState.refresh();
+          return { completed: false, error };
+        }
+      }
       if (
+        replaceExistingLink ||
         shouldRelinkCloudEnvironment({
           linked,
           managedTunnelActive,
@@ -284,6 +321,9 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
     return { completed: true, error: null };
   };
 
+  const reconcileCloudState = (desired: CloudLinkDesiredState) => updateCloudState(desired, false);
+  const relinkCloudState = (desired: CloudLinkDesiredState) => updateCloudState(desired, true);
+
   return {
     isSignedIn,
     linkState: primaryCloudLinkState,
@@ -292,6 +332,7 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
     publishAgentActivity,
     operationError,
     reconcileCloudState,
+    relinkCloudState,
   };
 }
 
@@ -308,8 +349,9 @@ export function automaticCloudRetryDelayMs(attempt: number): number {
 export function shouldScheduleAutomaticCloudRetry(
   attemptsCompleted: number,
   attemptsAllowed = AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS,
+  error: string | null = null,
 ): boolean {
-  return attemptsCompleted < attemptsAllowed;
+  return !isCloudAccountLinkConflict(error) && attemptsCompleted < attemptsAllowed;
 }
 
 /**
@@ -321,8 +363,10 @@ export function useAlwaysOnCloudLink(): void {
   const controller = useCloudLinkController({ reportFailures: false });
   const cloudConfigured = hasCloudPublicConfig();
   const reconcileCloudState = useEffectEvent(controller.reconcileCloudState);
+  const relinkCloudState = useEffectEvent(controller.relinkCloudState);
   const retryStatus = useAlwaysOnCloudLinkStatus();
   const lastHandledManualRetry = useRef(retryStatus.manualRetryRequestId);
+  const lastHandledManualRelink = useRef(retryStatus.manualRelinkRequestId);
 
   const target = controller.linkState.target;
   const isSatisfied = isAlwaysOnCloudLinkState({
@@ -358,18 +402,23 @@ export function useAlwaysOnCloudLink(): void {
         nextRetryAt: null,
       });
       lastHandledManualRetry.current = retryStatus.manualRetryRequestId;
+      lastHandledManualRelink.current = retryStatus.manualRelinkRequestId;
       return;
     }
 
     const isManualRetry = retryStatus.manualRetryRequestId !== lastHandledManualRetry.current;
+    const isManualRelink = retryStatus.manualRelinkRequestId !== lastHandledManualRelink.current;
     if (isManualRetry) {
       lastHandledManualRetry.current = retryStatus.manualRetryRequestId;
+    }
+    if (isManualRelink) {
+      lastHandledManualRelink.current = retryStatus.manualRelinkRequestId;
     }
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attemptsCompleted = 0;
-    const attemptsAllowed = isManualRetry ? 1 : AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS;
+    const attemptsAllowed = isManualRetry || isManualRelink ? 1 : AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS;
 
     const reconcile = async () => {
       const attempt = attemptsCompleted + 1;
@@ -379,7 +428,9 @@ export function useAlwaysOnCloudLink(): void {
         error: attemptsCompleted === 0 ? null : alwaysOnCloudLinkStatus.error,
         nextRetryAt: null,
       });
-      const result = await reconcileCloudState(ALWAYS_ON_CLOUD_LINK_STATE);
+      const result = await (isManualRelink ? relinkCloudState : reconcileCloudState)(
+        ALWAYS_ON_CLOUD_LINK_STATE,
+      );
       if (cancelled) return;
       attemptsCompleted = attempt;
       if (result.completed) {
@@ -391,7 +442,7 @@ export function useAlwaysOnCloudLink(): void {
         });
         return;
       }
-      if (!shouldScheduleAutomaticCloudRetry(attemptsCompleted, attemptsAllowed)) {
+      if (!shouldScheduleAutomaticCloudRetry(attemptsCompleted, attemptsAllowed, result.error)) {
         publishAlwaysOnCloudLinkStatus({
           phase: "exhausted",
           attempt: attemptsCompleted,
@@ -420,6 +471,7 @@ export function useAlwaysOnCloudLink(): void {
     controller.isSignedIn,
     eligible,
     isSatisfied,
+    retryStatus.manualRelinkRequestId,
     retryStatus.manualRetryRequestId,
     target?.environmentId,
   ]);
