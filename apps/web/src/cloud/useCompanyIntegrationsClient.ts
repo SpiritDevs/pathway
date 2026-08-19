@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import {
   makeCompanyIntegrationsClient,
+  retainCompanyIntegrationsClient,
   type CompanyIntegrationsClient,
 } from "./companyIntegrations";
 import { resolveCloudSyncConvexUrl } from "./publicConfig";
@@ -23,6 +24,9 @@ export function useCompanyIntegrationsClient(): CompanyIntegrationsClient | null
           }),
     [convexUrl, isSignedIn],
   );
-  useEffect(() => () => void client?.close(), [client]);
+  useEffect(
+    () => (client === null ? undefined : retainCompanyIntegrationsClient(client)),
+    [client],
+  );
   return client;
 }

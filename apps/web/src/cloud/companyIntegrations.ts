@@ -217,6 +217,32 @@ export interface CompanyIntegrationsClient {
   readonly close: () => Promise<void>;
 }
 
+interface CompanyIntegrationsClientLifetime {
+  mounts: number;
+  closed: boolean;
+}
+
+const companyIntegrationsClientLifetimes = new WeakMap<
+  CompanyIntegrationsClient,
+  CompanyIntegrationsClientLifetime
+>();
+
+/** Keeps Strict Mode's setup-cleanup-setup probe from closing a still-mounted client. */
+export function retainCompanyIntegrationsClient(client: CompanyIntegrationsClient): () => void {
+  const lifetime = companyIntegrationsClientLifetimes.get(client) ?? { mounts: 0, closed: false };
+  lifetime.mounts += 1;
+  companyIntegrationsClientLifetimes.set(client, lifetime);
+  return () => {
+    lifetime.mounts = Math.max(0, lifetime.mounts - 1);
+    queueMicrotask(() => {
+      if (lifetime.mounts !== 0 || lifetime.closed) return;
+      lifetime.closed = true;
+      companyIntegrationsClientLifetimes.delete(client);
+      void client.close();
+    });
+  };
+}
+
 export function makeCompanyIntegrationsClient(options: {
   readonly convexUrl: string;
   readonly fetchToken: ConvexAuthTokenFetcher;
