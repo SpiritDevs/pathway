@@ -1629,6 +1629,7 @@ export function IntegrationsSettingsPanel() {
   const refreshVersionRef = useRef(0);
   const companyIdRef = useRef(filteredCompanyId);
   companyIdRef.current = filteredCompanyId;
+  const sheetCompanyIdRef = useRef(filteredCompanyId);
   const ownerContexts = useMemo(() => {
     const contexts = new Map<
       string,
@@ -1803,6 +1804,11 @@ export function IntegrationsSettingsPanel() {
     () => new Map([...values].filter(isIssue).map((issue) => [issue.id, issue.key])),
     [values],
   );
+  // Registry replicas publish a fresh Map on every cloud-sync tick, so `ownerContexts` changes
+  // identity constantly. Reading it through a ref keeps `refresh` — and the effect that depends on
+  // it — from re-running and tearing down an open sheet mid-configuration.
+  const ownerContextsRef = useRef(ownerContexts);
+  ownerContextsRef.current = ownerContexts;
   const filteredPermissions =
     filteredCompanyId === null
       ? ({ status: "unknown" } as const)
@@ -1810,9 +1816,9 @@ export function IntegrationsSettingsPanel() {
   const readGate = permissionGate(filteredPermissions, "integrations.read");
   const manageGate = permissionGate(filteredPermissions, "integrations.manage");
   const refresh = useCallback(
-    async (requestedCompanyId = filteredCompanyId) => {
+    async (requestedCompanyId = companyIdRef.current) => {
       if (client === null || requestedCompanyId === null) return;
-      const requestedContext = ownerContexts.get(requestedCompanyId);
+      const requestedContext = ownerContextsRef.current.get(requestedCompanyId);
       if (
         !permissionGate(requestedContext?.permissions ?? { status: "unknown" }, "integrations.read")
           .enabled
@@ -1861,11 +1867,16 @@ export function IntegrationsSettingsPanel() {
         });
       await Promise.all([loadIntegrations, loadAutomation]);
     },
-    [client, filteredCompanyId, ownerContexts],
+    [client],
   );
   useEffect(() => {
     refreshVersionRef.current += 1;
-    setSheet(null);
+    // Only a genuine owner switch invalidates an open sheet. A permission or client refresh must
+    // never close the Slack wizard, or the workspace can never finish being configured.
+    if (sheetCompanyIdRef.current !== filteredCompanyId) {
+      sheetCompanyIdRef.current = filteredCompanyId;
+      setSheet(null);
+    }
     setLoading(true);
     setLoadError(null);
     setAutomationLoadError(null);
