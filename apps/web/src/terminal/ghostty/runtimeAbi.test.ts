@@ -14,6 +14,20 @@ function decodeWasmDataUrl(dataUrl: string): Uint8Array {
 }
 
 describe("vendored libghostty-vt WebAssembly", () => {
+  it("imports the Pathway PTY callback", () => {
+    const module = new WebAssembly.Module(
+      decodeWasmDataUrl(writePtyWasmDataUrl).buffer as ArrayBuffer,
+    );
+
+    expect(
+      WebAssembly.Module.imports(module).map(({ kind, module: namespace, name }) => ({
+        kind,
+        module: namespace,
+        name,
+      })),
+    ).toEqual([{ kind: "function", module: "env", name: "pathway_write_pty" }]);
+  });
+
   it("stays pinned to the canonical revision and size budget", async () => {
     const wasm = decodeWasmDataUrl(wasmDataUrl);
     expect(wasm.byteLength).toBeLessThan(750_000);
