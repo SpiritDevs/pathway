@@ -22,6 +22,7 @@ import {
   type ProjectWorkspaceTarget,
 } from "../components/projects/projectWorkspace.logic";
 import { requestProjectWorkspace } from "../components/projects/projectWorkspacePrompt";
+import { useAttachProjectDirectory } from "../components/projects/useProjectWorkspaceCommands";
 
 export interface EnsureProjectWorkspace {
   /** The project's root, or null when it has none (or there is no project). */
@@ -40,10 +41,29 @@ export function useEnsureProjectWorkspace(
 ): EnsureProjectWorkspace {
   const decision = useMemo(() => ensureProjectWorkspaceDecision(project), [project]);
 
+  const attachDirectory = useAttachProjectDirectory();
+
   const ensureWorkspaceRoot = useCallback(
     async (reason?: string): Promise<string | null> => {
       if (decision.kind === "unavailable") return null;
       if (decision.kind === "ready") return decision.workspaceRoot;
+      if (decision.kind === "provision") {
+        // Not every project is a checkout. Provision a folder below the home directory and carry
+        // on, rather than interrupting with a file picker whose answer nobody has yet formed.
+        const attached = await attachDirectory({
+          environmentId: decision.project.environmentId,
+          projectId: decision.project.id,
+          plan: {
+            kind: "attach",
+            workspaceRoot: decision.workspaceRoot,
+            createWorkspaceRootIfMissing: true,
+            initializeGit: false,
+          },
+        });
+        // Falling back to the picker keeps a permissions failure or a name collision recoverable
+        // instead of dead-ending the action that asked for a directory.
+        if (attached.ok) return decision.workspaceRoot;
+      }
       const promptResult = await requestProjectWorkspace({
         project: decision.project,
         reason: reason ?? null,
@@ -52,12 +72,12 @@ export function useEnsureProjectWorkspace(
       // would miss the attach that just happened, which is why the prompt answers with the path.
       return resolveEnsuredWorkspaceRoot({ workspaceRoot: null, promptResult });
     },
-    [decision],
+    [attachDirectory, decision],
   );
 
   return {
     workspaceRoot: decision.kind === "ready" ? decision.workspaceRoot : null,
-    isRootless: decision.kind === "prompt",
+    isRootless: decision.kind === "provision" || decision.kind === "prompt",
     ensureWorkspaceRoot,
   };
 }

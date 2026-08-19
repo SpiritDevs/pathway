@@ -40,10 +40,21 @@ export type EnsureProjectWorkspaceDecision =
   /** No project at all — the caller has nothing to prompt about, so it should bail silently. */
   | { readonly kind: "unavailable" }
   | { readonly kind: "ready"; readonly workspaceRoot: string }
+  /** No directory yet: provision one below the user's home rather than asking. */
+  | {
+      readonly kind: "provision";
+      readonly project: ProjectWorkspaceTarget;
+      readonly workspaceRoot: string;
+    }
   | { readonly kind: "prompt"; readonly project: ProjectWorkspaceTarget };
 
 /**
- * Whether an action that needs a directory can run, and if not, what to prompt for.
+ * Whether an action that needs a directory can run, and if not, how to get one.
+ *
+ * A project with no directory used to stop and ask. It now provisions a scratch folder instead:
+ * not every project is a git checkout, and someone starting a thread has already said what they
+ * want — a file picker in the way of that is a question with an obvious answer. `prompt` remains
+ * for the explicit "choose a different directory" path.
  *
  * A worktree path is deliberately *not* accepted as a substitute here: a worktree always hangs off
  * a rooted project, so a rootless project can never present one, and letting one stand in would
@@ -57,7 +68,7 @@ export function ensureProjectWorkspaceDecision(
   }
   const workspaceRoot = project.workspaceRoot?.trim() ?? "";
   if (workspaceRoot.length === 0) {
-    return { kind: "prompt", project };
+    return { kind: "provision", project, workspaceRoot: scratchWorkspaceRoot(project) };
   }
   return { kind: "ready", workspaceRoot };
 }
@@ -273,6 +284,50 @@ export function planQuickCreateProject(input: {
     createWorkspaceRootIfMissing: attach.createWorkspaceRootIfMissing,
     initializeGit: attach.initializeGit,
   };
+}
+
+// ── Scratch workspaces ────────────────────────────────────
+
+/**
+ * Where Pathway puts a directory it makes for you, below the user's home.
+ *
+ * `~` rather than an absolute path: the server expands it, so the same value is correct on a Mac,
+ * on Windows, and on a remote environment whose home the client has never seen.
+ */
+export const SCRATCH_WORKSPACE_PARENT = "~/Pathway Projects";
+
+const UNSAFE_FOLDER_CHARACTERS = /[<>:"/\\|?*\u0000-\u001F]/g;
+
+/**
+ * A directory name safe on every platform this runs on.
+ *
+ * Windows reserves several punctuation characters, and it silently strips a trailing dot or space,
+ * which would quietly fold two distinct project names into one directory.
+ */
+export function scratchWorkspaceFolderName(title: string, projectId: string): string {
+  const cleaned = title
+    .replaceAll(UNSAFE_FOLDER_CHARACTERS, " ")
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/, "");
+  // A title made entirely of punctuation leaves nothing to name a folder after, and a short id
+  // beats a folder called "-".
+  return cleaned.length === 0 ? `project-${projectId.slice(0, 8)}` : cleaned;
+}
+
+/**
+ * The workspace root to create for a project that has none.
+ *
+ * A project without a repository still needs somewhere to put scratch files, so rather than
+ * refusing the action or making someone choose a folder before they have decided anything,
+ * Pathway provisions one. Stable per project rather than per session: files left there have to
+ * still be there next time, which a `mkdtemp` directory would not be.
+ */
+export function scratchWorkspaceRoot(project: {
+  readonly id: string;
+  readonly title: string;
+}): string {
+  return `${SCRATCH_WORKSPACE_PARENT}/${scratchWorkspaceFolderName(project.title, project.id)}`;
 }
 
 // ── Dialog result plumbing ─────────────────────────────────────────────

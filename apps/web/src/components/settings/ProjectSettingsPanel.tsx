@@ -81,6 +81,7 @@ import {
   projectConnectionPlatformLabel,
 } from "../projects/projectConnectionMetadata";
 import { useProjectGroups } from "../projects/useProjectGroups";
+import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -126,6 +127,7 @@ function memberKey(member: { environmentId: string; id: string }): string {
 
 export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
   const groups = useProjectGroups();
+  const workspaceProjects = useWorkspaceProjects();
   const navigate = useNavigate();
 
   const selected = groups.find((group) => group.projectKey === projectKey) ?? null;
@@ -161,11 +163,18 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
   }, [groups, navigate, projectKey, selected]);
 
   if (!selected) {
+    // A company project with no checkout has no group to edit — everything on this page belongs to
+    // a directory on a machine. Say which state it is in rather than claiming the project is gone.
+    const isCheckoutless = workspaceProjects.some(
+      (project) => project.projectKey === projectKey && project.group === null,
+    );
     return (
-      <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
-        {groups.length === 0
-          ? "Add a project from the sidebar to configure it here."
-          : "This project is no longer available."}
+      <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">
+        {isCheckoutless
+          ? "No machine has a checkout of this project yet. Attach a directory to configure its icon, scripts, and new-thread defaults."
+          : groups.length === 0
+            ? "Add a project from the sidebar to configure it here."
+            : "This project is no longer available."}
       </div>
     );
   }

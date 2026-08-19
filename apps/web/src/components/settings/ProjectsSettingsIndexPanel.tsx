@@ -13,7 +13,7 @@ import { useMemo } from "react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { useProjectGroups } from "../projects/useProjectGroups";
+import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
 import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
@@ -26,7 +26,7 @@ import { searchableSetting } from "./settingsSearch";
 import { useCompanySettings } from "./company/useCompanySettings";
 
 export function ProjectsSettingsIndexPanel() {
-  const groups = useProjectGroups();
+  const projects = useWorkspaceProjects();
   const companySettings = useCompanySettings();
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companySettings.replica?.view.values() ?? []),
@@ -45,35 +45,40 @@ export function ProjectsSettingsIndexPanel() {
           </Button>
         }
       >
-        {groups.length === 0 ? (
+        {projects.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground sm:px-4">
             Add a project to configure it here.
           </p>
         ) : (
-          groups.map((group) => {
+          projects.map((project) => {
+            const group = project.group;
             const connections = deriveProjectConnectionMetadata({
-              members: group.memberProjects,
+              members: group?.memberProjects ?? [],
               catalog: connectionCatalog,
             });
             return (
               <Link
-                key={group.projectKey}
+                key={project.projectKey}
                 to="/settings/projects/$projectKey"
-                params={{ projectKey: group.projectKey }}
+                params={{ projectKey: project.projectKey }}
                 className="flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-accent/50 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:px-4"
               >
-                <ProjectFavicon
-                  environmentId={group.environmentId}
-                  cwd={group.workspaceRoot}
-                  faviconPath={group.faviconPath}
-                  className="size-4 shrink-0"
-                />
+                {group === null ? (
+                  <FolderIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ProjectFavicon
+                    environmentId={group.environmentId}
+                    cwd={group.workspaceRoot}
+                    faviconPath={group.faviconPath}
+                    className="size-4 shrink-0"
+                  />
+                )}
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium tracking-[-0.005em] text-foreground">
-                    {group.displayName}
+                    {project.displayName}
                   </span>
                   <span className="block truncate text-[13px] leading-[1.45] text-muted-foreground/80">
-                    {group.workspaceRoot ?? "No directory attached"}
+                    {group?.workspaceRoot ?? "No directory attached"}
                   </span>
                 </span>
                 <Tooltip>
