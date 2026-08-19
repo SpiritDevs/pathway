@@ -10,6 +10,7 @@ import {
   ISSUE_MAX_PARENT_DEPTH,
   ProjectId,
 } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import type {
   ChatAttachmentId,
   Issue,
@@ -29,6 +30,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   CalendarRangeIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   CircleDotIcon,
   EllipsisIcon,
@@ -43,6 +45,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -54,11 +57,16 @@ import {
 
 import { compressImageToByteLimit } from "~/lib/imageCompression";
 import { cn, randomUUID } from "~/lib/utils";
-import { activeCompanyIdAtom, scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
+import {
+  activeCompanyIdAtom,
+  companyListAtom,
+  scopedCompanyRegistryReplicasAtom,
+} from "~/cloud/activeCompany";
 import { useReplicaIssueAttachmentCloud } from "~/cloud/issueAttachmentClient";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { useSyncIssueOperations } from "~/cloud/issueDomainMutations";
 import {
+  useCompanyIssuesStore,
   useCreateIssue,
   useCreateIssueComment,
   useCreateIssueLabel,
@@ -110,7 +118,12 @@ import {
   newIssueAttachmentTooLargeMessage,
 } from "./newIssueAttachments";
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
-import { canResizeNewIssueDialog, resolveIssueProjectOptionId } from "./newIssueDialog.logic";
+import {
+  canResizeNewIssueDialog,
+  groupIssueProjectsByCompany,
+  issueProjectsForCompany,
+  resolveIssueProjectOptionId,
+} from "./newIssueDialog.logic";
 import type { IssueProjectOption } from "./useIssueProjectOptions";
 
 const PICKER_CLASS =
@@ -269,8 +282,8 @@ function ParentPicker({
 export function NewIssueDialog({
   open,
   onOpenChange,
-  statuses,
-  labels,
+  statuses: statusesProp,
+  labels: labelsProp,
   projects,
   defaultStatusId,
   defaultProjectId,
@@ -292,23 +305,51 @@ export function NewIssueDialog({
   defaultParentId?: IssueId | null;
 }) {
   const ASSIGNEE_OPTIONS = useIssueAssigneeOptions();
-  const createIssue = useCreateIssue();
-  const createComment = useCreateIssueComment();
-  const createLabel = useCreateIssueLabel();
   const uploadAttachment = useUploadIssueCommentAttachment();
   const syncIssueOperations = useSyncIssueOperations();
   const store = useIssuesStore();
-  const cycles = useIssueCycles();
+  const globalCycles = useIssueCycles();
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const companies = useAtomValue(companyListAtom);
   const replicaRouted = useAtomValue(scopedCompanyRegistryReplicasAtom).size > 0;
-  const companyRequired = replicaRouted && activeCompanyId === null;
-  const attachmentCloud = useReplicaIssueAttachmentCloud(activeCompanyId);
+
+  // The dialog owns its own destination. The app-wide scope only seeds it: All companies has no
+  // single target, and until now that simply refused the create. Choosing here files the issue
+  // somewhere without moving the workspace the user is looking at.
+  const [companyId, setCompanyId] = useState<CompanyId | null>(activeCompanyId);
+  const companyRequired = replicaRouted && companyId === null;
+  const selectedCompany = companies.find((company) => company.id === companyId) ?? null;
+
+  // Statuses, labels, cycles, and parents all belong to exactly one company, and the props carry
+  // whatever the app-wide scope holds. Once this dialog aims somewhere else, they have to come
+  // from that company's replica or the create enqueues a cross-company reference the mutation
+  // router rejects. When the two agree the props are already right, so nothing is substituted.
+  const retargeted = replicaRouted && companyId !== null && companyId !== activeCompanyId;
+  const retargetedStore = useCompanyIssuesStore(retargeted ? companyId : null).store;
+  const statuses = retargeted ? retargetedStore.statuses : statusesProp;
+  const labels = retargeted ? retargetedStore.labels : labelsProp;
+  const cycles = retargeted ? retargetedStore.cycles : globalCycles;
+  const issuesById = retargeted ? retargetedStore.issuesById : store.issuesById;
+  const keyPrefix = selectedCompany?.issueKeyPrefix ?? store.config?.keyPrefix ?? "ISS";
+
+  const createIssue = useCreateIssue(companyId);
+  const createComment = useCreateIssueComment(companyId);
+  const createLabel = useCreateIssueLabel(companyId);
+  const attachmentCloud = useReplicaIssueAttachmentCloud(companyId);
   const environmentControl = useEnvironmentControl();
-  const availableProjects = projects;
-  const availableDefaultProjectId = resolveIssueProjectOptionId(
-    defaultProjectId,
-    availableProjects,
+  const availableProjects = useMemo(
+    () => issueProjectsForCompany(projects, companyId),
+    [companyId, projects],
   );
+  const projectGroups = useMemo(
+    () => (companyId === null ? groupIssueProjectsByCompany(projects, companies) : []),
+    [companies, companyId, projects],
+  );
+  // Deliberately resolved against the unfiltered list: narrowing it by company would make this
+  // change whenever the destination does, and the reset effect below keys off it — a company
+  // switch would wipe the title the user had already typed. A default the chosen company does
+  // not own is dropped by the pruning effect instead.
+  const availableDefaultProjectId = resolveIssueProjectOptionId(defaultProjectId, projects);
   const titleRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -347,6 +388,7 @@ export function NewIssueDialog({
     }
     setTitle("");
     setDescription("");
+    setCompanyId(activeCompanyId);
     setStatusId(defaultStatusId);
     setPriority("none");
     setAssignee(null);
@@ -365,12 +407,43 @@ export function NewIssueDialog({
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [
+    activeCompanyId,
     defaultCycleId,
     defaultMilestoneId,
     defaultParentId,
     availableDefaultProjectId,
     defaultStatusId,
     open,
+  ]);
+
+  // Changing the destination invalidates every field that names a company-owned entity. Prune
+  // rather than clear on the switch itself: the retargeted replica arrives asynchronously, so the
+  // check has to re-run whenever the scoped data does.
+  useEffect(() => {
+    if (statusId !== null && !statuses.some((status) => status.id === statusId)) {
+      setStatusId(statuses[0]?.id ?? null);
+    }
+    setLabelIds((current) =>
+      current.every((id) => labels.some((label) => label.id === id))
+        ? current
+        : current.filter((id) => labels.some((label) => label.id === id)),
+    );
+    if (cycleId !== null && !cycles.some((cycle) => cycle.id === cycleId)) setCycleId(null);
+    if (parentId !== null && !issuesById.has(parentId)) setParentId(null);
+    if (projectId !== null && !availableProjects.some((project) => project.id === projectId)) {
+      setProjectId(null);
+      setMilestoneId(null);
+    }
+  }, [
+    availableProjects,
+    cycleId,
+    cycles,
+    issuesById,
+    labels,
+    parentId,
+    projectId,
+    statusId,
+    statuses,
   ]);
 
   useLayoutEffect(() => {
@@ -414,7 +487,7 @@ export function NewIssueDialog({
   const selectedLabels = labels.filter((label) => labelIds.includes(label.id));
   const selectedMilestone = milestones.find((milestone) => milestone.id === milestoneId) ?? null;
   const selectedCycle = cycles.find((cycle) => cycle.id === cycleId) ?? null;
-  const selectedParent = parentId === null ? null : (store.issuesById.get(parentId) ?? null);
+  const selectedParent = parentId === null ? null : (issuesById.get(parentId) ?? null);
   const selectedAssignee = ASSIGNEE_OPTIONS.find(
     (option) => option.value === issueAssigneeOptionValue(assignee),
   );
@@ -543,7 +616,7 @@ export function NewIssueDialog({
     }
     const submittedProjectId = resolveIssueProjectOptionId(projectId, availableProjects);
     if (
-      activeCompanyId !== null &&
+      companyId !== null &&
       submittedProjectId !== null &&
       selectedProject !== null &&
       !selectedProject.isCompanyProject
@@ -562,7 +635,7 @@ export function NewIssueDialog({
       }
       try {
         await environmentControl.ensureEnvironmentProject({
-          companyId: activeCompanyId,
+          companyId,
           project: localProject,
         });
       } catch (error) {
@@ -607,8 +680,8 @@ export function NewIssueDialog({
         : `Issue ${result.value.issue.key}`;
 
     if (preparedAttachments.length > 0) {
-      if (attachmentCloud !== null && activeCompanyId !== null) {
-        const syncResult = await syncIssueOperations(activeCompanyId);
+      if (attachmentCloud !== null && companyId !== null) {
+        const syncResult = await syncIssueOperations(companyId);
         if (!AsyncResult.isSuccess(syncResult)) {
           reportIssueWriteFailure(
             `${createdIssueLabel} was created, but could not be synced before attaching ${preparedAttachments[0]?.name ?? "the image"}`,
@@ -766,9 +839,52 @@ export function NewIssueDialog({
             </Button>
           ) : null}
           <DialogHeader className="flex-row items-center gap-1.5 px-4 py-2.5">
-            <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
-              {store.config?.keyPrefix ?? "ISS"}
-            </span>
+            {companies.length > 1 ? (
+              <PickerPopover
+                title="Company"
+                trigger={
+                  <button
+                    aria-label={
+                      selectedCompany === null
+                        ? "Choose a company for this issue"
+                        : `Company: ${selectedCompany.name}`
+                    }
+                    className={cn(
+                      "inline-flex min-h-7 items-center gap-1 rounded-full border border-border/70 bg-muted/70 ps-2.5 pe-1.5 font-medium text-xs outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring",
+                      // Unset is the one state that blocks the create, so it is the one state
+                      // that asks to be pressed.
+                      companyRequired ? "text-foreground" : "text-muted-foreground",
+                    )}
+                    type="button"
+                  >
+                    {companyRequired ? "Company" : keyPrefix}
+                    <ChevronDownIcon className="size-3 opacity-70" />
+                  </button>
+                }
+              >
+                {(close) =>
+                  companies.map((company) => (
+                    <PickerOption
+                      key={company.id}
+                      onSelect={() => {
+                        setCompanyId(company.id);
+                        close();
+                      }}
+                      selected={company.id === companyId}
+                    >
+                      <span className="inline-flex min-w-9 shrink-0 justify-center rounded-sm bg-muted px-1 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {company.issueKeyPrefix}
+                      </span>
+                      <span className="truncate">{company.name}</span>
+                    </PickerOption>
+                  ))
+                }
+              </PickerPopover>
+            ) : (
+              <span className="inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/70 px-2.5 font-medium text-xs text-muted-foreground">
+                {keyPrefix}
+              </span>
+            )}
             <ChevronRightIcon className="size-3.5 text-muted-foreground" />
             <DialogTitle className="font-sans text-base">New issue</DialogTitle>
             <DialogDescription className="sr-only">
@@ -959,20 +1075,50 @@ export function NewIssueDialog({
                     >
                       <span className="text-muted-foreground">No project</span>
                     </PickerOption>
-                    {availableProjects.map((project) => (
-                      <PickerOption
-                        key={project.id}
-                        onSelect={() => {
-                          setProjectId(project.id);
-                          setMilestoneId(null);
-                          close();
-                        }}
-                        selected={project.id === projectId}
-                      >
-                        <FolderIcon className="size-4 text-muted-foreground" />
-                        <span className="truncate">{project.title}</span>
-                      </PickerOption>
-                    ))}
+                    {companyId === null
+                      ? // No destination yet, so the flat list would mix workspaces. Grouping
+                        // names the owner of every project, and picking one commits the issue to
+                        // that company — the same choice the header chip makes, from the other end.
+                        projectGroups.map((group) => (
+                          <Fragment key={group.companyId ?? "no-company"}>
+                            {group.heading === null ? null : (
+                              <p className="px-2 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">
+                                {group.heading}
+                              </p>
+                            )}
+                            {group.projects.map((project) => (
+                              <PickerOption
+                                key={`${group.companyId ?? "no-company"}:${project.id}`}
+                                onSelect={() => {
+                                  if (group.companyId !== null) {
+                                    setCompanyId(CompanyId.make(group.companyId));
+                                  }
+                                  setProjectId(project.id);
+                                  setMilestoneId(null);
+                                  close();
+                                }}
+                                selected={project.id === projectId}
+                              >
+                                <FolderIcon className="size-4 text-muted-foreground" />
+                                <span className="truncate">{project.title}</span>
+                              </PickerOption>
+                            ))}
+                          </Fragment>
+                        ))
+                      : availableProjects.map((project) => (
+                          <PickerOption
+                            key={project.id}
+                            onSelect={() => {
+                              setProjectId(project.id);
+                              setMilestoneId(null);
+                              close();
+                            }}
+                            selected={project.id === projectId}
+                          >
+                            <FolderIcon className="size-4 text-muted-foreground" />
+                            <span className="truncate">{project.title}</span>
+                          </PickerOption>
+                        ))}
                     <button
                       className="mt-1 min-h-8 w-full border-t border-border/60 px-2 pt-2 text-start text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
                       onClick={() => {
@@ -1043,7 +1189,7 @@ export function NewIssueDialog({
                   value={cycleId}
                 />
                 <ParentPicker
-                  issues={store.issuesById}
+                  issues={issuesById}
                   onSelect={setParentId}
                   statusById={statusById}
                   trigger={

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canResizeNewIssueDialog,
+  groupIssueProjectsByCompany,
+  issueProjectsForCompany,
   resolveAvailableIssueProjectId,
   resolveIssueProjectOptionId,
 } from "./newIssueDialog.logic";
@@ -40,5 +42,47 @@ describe("new issue project selection", () => {
         },
       ]),
     ).toBe("cloud-pathway");
+  });
+});
+
+describe("new issue dialog project destinations", () => {
+  const ACME = { id: "company-acme", name: "Acme" };
+  const BOLT = { id: "company-bolt", name: "Bolt" };
+  const acmeOnly = { id: "project-acme", title: "Acme app", companyIds: ["company-acme"] };
+  const boltOnly = { id: "project-bolt", title: "Bolt app", companyIds: ["company-bolt"] };
+  const shared = {
+    id: "project-shared",
+    title: "Shared tooling",
+    companyIds: ["company-acme", "company-bolt"],
+  };
+  const local = { id: "project-local", title: "Scratch checkout", companyIds: [] };
+  const projects = [acmeOnly, boltOnly, shared, local];
+
+  it("shows every project when no company has been chosen", () => {
+    expect(issueProjectsForCompany(projects, null)).toEqual(projects);
+  });
+
+  it("narrows to one company, including projects that company shares", () => {
+    expect(issueProjectsForCompany(projects, "company-acme")).toEqual([acmeOnly, shared]);
+  });
+
+  it("groups by company and lists a shared project under each owner", () => {
+    expect(groupIssueProjectsByCompany(projects, [ACME, BOLT])).toEqual([
+      { companyId: "company-acme", heading: "Acme", projects: [acmeOnly, shared] },
+      { companyId: "company-bolt", heading: "Bolt", projects: [boltOnly, shared] },
+      { companyId: null, heading: "No company", projects: [local] },
+    ]);
+  });
+
+  it("drops headings when there is only one company to group by", () => {
+    expect(groupIssueProjectsByCompany([acmeOnly], [ACME])).toEqual([
+      { companyId: "company-acme", heading: null, projects: [acmeOnly] },
+    ]);
+  });
+
+  it("omits a company that has no projects rather than showing an empty section", () => {
+    expect(groupIssueProjectsByCompany([acmeOnly], [ACME, BOLT])).toEqual([
+      { companyId: "company-acme", heading: "Acme", projects: [acmeOnly] },
+    ]);
   });
 });

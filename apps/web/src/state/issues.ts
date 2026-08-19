@@ -2736,7 +2736,8 @@ function usePrimaryIssueCommand<
   );
 }
 
-export const useCreateIssue = () => usePrimaryIssueCommand(issueCommands.create);
+export const useCreateIssue = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.create, companyId);
 export const useUpdateIssue = () => usePrimaryIssueCommand(issueCommands.update);
 export const useDeleteIssue = () => usePrimaryIssueCommand(issueCommands.delete);
 export const useRestoreIssue = () => usePrimaryIssueCommand(issueCommands.restore);
@@ -2778,7 +2779,8 @@ export const useDeleteIssueTodo = () => usePrimaryIssueCommand(issueCommands.tod
 export const useReorderIssueTodos = () => usePrimaryIssueCommand(issueCommands.todosReorder);
 export const useCreateIssueRelation = () => usePrimaryIssueCommand(issueCommands.relationCreate);
 export const useDeleteIssueRelation = () => usePrimaryIssueCommand(issueCommands.relationDelete);
-export const useCreateIssueComment = () => usePrimaryIssueCommand(issueCommands.commentCreate);
+export const useCreateIssueComment = (companyId: CompanyId | null = null) =>
+  usePrimaryIssueCommand(issueCommands.commentCreate, companyId);
 export const useUpdateIssueComment = () => usePrimaryIssueCommand(issueCommands.commentUpdate);
 export const useDeleteIssueComment = () => usePrimaryIssueCommand(issueCommands.commentDelete);
 /** Both name the origin comment: a comment carries at most one run, so there is no run id to send. */
