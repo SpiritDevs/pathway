@@ -23,7 +23,7 @@ import {
   SettingsIcon,
   TagsIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useProjects } from "../../state/entities";
@@ -195,7 +195,7 @@ function LocalSmtpInboxes() {
   const tags = useEmailTags();
 
   // The same atom the list pane reads, so the badges never disagree with the rows beside them.
-  const scope = emailScopeFromParam(search.inbox);
+  const scope = useMemo(() => emailScopeFromParam(search.inbox), [search.inbox]);
   const inboxes = useEmailInboxSummaries(
     scope,
     (search.environment ?? null) as EnvironmentId | null,

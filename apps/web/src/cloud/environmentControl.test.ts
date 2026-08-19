@@ -73,6 +73,7 @@ describe("environment control function references", () => {
       deactivateEnvironment: "environments:deactivate",
       registerEnvironment: "environments:register",
       moveProjectToCompany: "projectMigration:moveProjectToCompany",
+      provisionPersonalWorkspace: "companies:provisionCurrentUser",
       createCompanyProject: "cloudProjects:createCompanyProject",
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",

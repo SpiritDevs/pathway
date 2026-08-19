@@ -74,6 +74,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProjectEmailCaptureSection } from "../email/ProjectEmailCaptureSection";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { AddProjectConnectionDialog } from "../projects/AddProjectConnectionDialog";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import {
   buildProjectConnectionCatalog,
@@ -233,6 +234,11 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     members: group.memberProjects,
     catalog: connectionCatalog,
   });
+  const [addingConnection, setAddingConnection] = useState(false);
+  const connectedEnvironmentIds = useMemo(
+    () => group.memberProjects.map((member) => member.environmentId),
+    [group.memberProjects],
+  );
 
   const threadCountByMember = useMemo(() => {
     const counts = new Map<string, number>();
@@ -762,7 +768,15 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
           </SettingsSection>
         </div>
 
-        <SettingsSection title="Connections">
+        <SettingsSection
+          title="Connections"
+          headerAction={
+            <Button onClick={() => setAddingConnection(true)} size="sm" variant="outline">
+              <PlusIcon className="size-3.5" />
+              Add connection
+            </Button>
+          }
+        >
           <div className="space-y-2 px-3 py-3 sm:px-4">
             {projectConnections.map((connection) => {
               const environment = presentationById.get(connection.environmentId);
@@ -812,6 +826,12 @@ export function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               );
             })}
           </div>
+          <AddProjectConnectionDialog
+            connectedEnvironmentIds={connectedEnvironmentIds}
+            onOpenChange={setAddingConnection}
+            open={addingConnection}
+            projectTitle={group.displayName}
+          />
         </SettingsSection>
 
         <SettingsSection title="New threads">

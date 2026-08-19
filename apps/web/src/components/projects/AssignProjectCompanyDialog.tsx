@@ -10,19 +10,21 @@
  * @module components/projects/AssignProjectCompanyDialog
  */
 import { useAtomValue } from "@effect/atom-react";
+import {
+  mapAtomCommandResult,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@spiritdevs/client-runtime/state/runtime";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { FolderKanbanIcon } from "lucide-react";
+import { FolderKanbanIcon, Trash2Icon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { companyListAtom } from "~/cloud/activeCompany";
-import { companyRegistryReplicasAtom } from "~/cloud/companyRegistryReplica";
-import {
-  readPrimaryEnvironmentRegistrationInfo,
-  registerEnvironmentAutomatically,
-} from "~/cloud/environmentRegistration";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
-import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { toastManager } from "~/components/ui/toast";
+import { readLocalApi } from "~/localApi";
+import { projectEnvironment } from "~/state/projects";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -36,19 +38,38 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { useWorkspaceProjects } from "./useWorkspaceProjects";
 import { unassignedWorkspaceProjects, type WorkspaceProject } from "./workspaceProjects.logic";
 
+/**
+ * The answer for a row that belongs to nobody but the person answering.
+ *
+ * It is not a company id: an account provisioned straight into an organization has no personal
+ * workspace to name yet, and refusing to offer the choice until one exists is how side projects
+ * end up filed against an employer.
+ */
+const PERSONAL_WORKSPACE = "personal-workspace";
+
+/** A destination a row can be assigned to: a company, or the personal workspace. */
+interface AssignmentTarget {
+  readonly id: string;
+  readonly name: string;
+}
+
 /** One row's chosen destination, keyed by project key. */
-type Assignments = ReadonlyMap<string, CompanyId>;
+type Assignments = ReadonlyMap<string, string>;
 
 function ProjectRow({
   project,
-  companies,
+  targets,
   value,
   onChange,
+  onDelete,
+  deleting,
 }: {
   readonly project: WorkspaceProject;
-  readonly companies: ReadonlyArray<{ readonly id: CompanyId; readonly name: string }>;
-  readonly value: CompanyId | null;
-  readonly onChange: (companyId: CompanyId) => void;
+  readonly targets: ReadonlyArray<AssignmentTarget>;
+  readonly value: string | null;
+  readonly onChange: (targetId: string) => void;
+  readonly onDelete: () => void;
+  readonly deleting: boolean;
 }) {
   const checkouts = project.group?.memberProjects ?? [];
   return (
@@ -67,22 +88,35 @@ function ProjectRow({
       </div>
       <Select
         value={value}
-        onValueChange={(next) => onChange(next as CompanyId)}
-        aria-label={`Company for ${project.displayName}`}
+        onValueChange={(next) => {
+          if (next !== null) onChange(next);
+        }}
+        aria-label={`Owner for ${project.displayName}`}
       >
         <SelectTrigger className="w-full sm:w-56">
-          <SelectValue placeholder="Choose a company">
-            {companies.find((company) => company.id === value)?.name}
+          <SelectValue placeholder="Choose an owner">
+            {targets.find((target) => target.id === value)?.name}
           </SelectValue>
         </SelectTrigger>
         <SelectPopup>
-          {companies.map((company) => (
-            <SelectItem key={company.id} value={company.id}>
-              {company.name}
+          {targets.map((target) => (
+            <SelectItem key={target.id} value={target.id}>
+              {target.name}
             </SelectItem>
           ))}
         </SelectPopup>
       </Select>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={`Delete ${project.displayName}`}
+        title="Delete this project instead of assigning it"
+        disabled={deleting}
+        onClick={onDelete}
+        className="shrink-0 text-muted-foreground hover:text-destructive"
+      >
+        <Trash2Icon className="size-4" />
+      </Button>
     </div>
   );
 }
@@ -90,8 +124,6 @@ function ProjectRow({
 export function AssignProjectCompanyDialog() {
   const projects = useWorkspaceProjects();
   const companies = useAtomValue(companyListAtom);
-  const replicas = useAtomValue(companyRegistryReplicasAtom);
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const control = useEnvironmentControl();
   const [assignments, setAssignments] = useState<Assignments>(new Map());
   const [saving, setSaving] = useState(false);
@@ -106,9 +138,73 @@ export function AssignProjectCompanyDialog() {
   // has no company at all — that is onboarding's job, not this dialog's.
   const open = unassigned.length > 0 && companies.length > 0 && control !== null;
 
-  const setAssignment = useCallback((projectKey: string, companyId: CompanyId) => {
-    setAssignments((current) => new Map(current).set(projectKey, companyId));
+  // The personal workspace is offered whether or not the account has one yet; choosing it is what
+  // creates it. Everything else is a company this person is already a member of.
+  const targets = useMemo<ReadonlyArray<AssignmentTarget>>(
+    () =>
+      companies.some((company) => company.workspaceKind === "personal")
+        ? companies
+        : [...companies, { id: PERSONAL_WORKSPACE, name: "Personal workspace" }],
+    [companies],
+  );
+
+  const setAssignment = useCallback((projectKey: string, targetId: string) => {
+    setAssignments((current) => new Map(current).set(projectKey, targetId));
   }, []);
+
+  const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+
+  // The escape hatch: a project you refuse to give an owner can be deleted instead, so this gate
+  // can never hold the app hostage. Deletion is local-first — it removes the checkout's project
+  // records (and their threads) on every machine that has one; there is nothing cloud-side yet,
+  // because being unassigned is exactly what this dialog is about.
+  const removeProject = async (project: WorkspaceProject) => {
+    if (deletingKey !== null || saving) return;
+    const checkouts = project.group?.memberProjects ?? [];
+    if (checkouts.length === 0) {
+      setDismissedFor((current) => [...current, project.projectKey]);
+      return;
+    }
+    const api = readLocalApi();
+    if (api === undefined) return;
+    const confirmed = await settlePromise(() =>
+      api.dialogs.confirm(
+        [
+          `Delete project "${project.displayName}" instead of assigning it?`,
+          ...checkouts.map((checkout) => `Path: ${checkout.workspaceRoot ?? "No directory"}`),
+          "This deletes its project entries and their threads, not the files on disk.",
+          "This action cannot be undone.",
+        ].join("\n"),
+        { variant: "destructive" },
+      ),
+    );
+    if (confirmed._tag === "Failure" || !confirmed.value) return;
+    setDeletingKey(project.projectKey);
+    try {
+      for (const checkout of checkouts) {
+        const result = mapAtomCommandResult(
+          await deleteProject({
+            environmentId: checkout.environmentId,
+            input: { projectId: checkout.id, force: true },
+          }),
+          () => undefined,
+        );
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: `Could not delete "${project.displayName}"`,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          });
+          return;
+        }
+      }
+      setDismissedFor((current) => [...current, project.projectKey]);
+    } finally {
+      setDeletingKey(null);
+    }
+  };
 
   const complete = unassigned.every((project) => assignments.has(project.projectKey));
 
@@ -116,31 +212,21 @@ export function AssignProjectCompanyDialog() {
     if (control === null || !complete || saving) return;
     setSaving(true);
     const assigned: string[] = [];
-    // This dialog opens on launch, in the same seconds the sync runtime is publishing this
-    // environment's registrations. A company assigned before its registration lands rejects the
-    // binding outright, so each one waits for its own registration first. It is idempotent and
-    // returns without a write once the registration is there.
-    const registered = new Set<CompanyId>();
-    const ensureRegistered = async (companyId: CompanyId) => {
-      if (registered.has(companyId) || environmentId === null) return;
-      const replica = replicas.get(companyId);
-      if (replica === undefined) return;
-      await registerEnvironmentAutomatically({
-        companyId,
-        environmentId,
-        replica,
-        control,
-        readRegistrationInfo: readPrimaryEnvironmentRegistrationInfo,
-      });
-      registered.add(companyId);
+    // Resolved once per save: the first row that picks the personal workspace provisions it, and
+    // every later row lands in that same workspace rather than racing a second one into existence.
+    let personalWorkspaceId: CompanyId | null = null;
+    const resolveTarget = async (targetId: string): Promise<CompanyId> => {
+      if (targetId !== PERSONAL_WORKSPACE) return targetId as CompanyId;
+      personalWorkspaceId ??= await control.provisionPersonalWorkspace();
+      return personalWorkspaceId;
     };
     try {
       for (const project of unassigned) {
-        const companyId = assignments.get(project.projectKey);
-        if (companyId === undefined) continue;
+        const targetId = assignments.get(project.projectKey);
+        if (targetId === undefined) continue;
         const checkouts = project.group?.memberProjects ?? [];
         if (checkouts.length === 0) continue;
-        await ensureRegistered(companyId);
+        const companyId = await resolveTarget(targetId);
         // Register every checkout, not just the first: the same project on a second machine is the
         // same project, and binding only one would leave the others unassigned on next launch.
         for (const checkout of checkouts) {
@@ -179,9 +265,11 @@ export function AssignProjectCompanyDialog() {
               <ProjectRow
                 key={project.projectKey}
                 project={project}
-                companies={companies}
+                targets={targets}
                 value={assignments.get(project.projectKey) ?? null}
-                onChange={(companyId) => setAssignment(project.projectKey, companyId)}
+                onChange={(targetId) => setAssignment(project.projectKey, targetId)}
+                onDelete={() => void removeProject(project)}
+                deleting={deletingKey === project.projectKey}
               />
             ))}
           </div>

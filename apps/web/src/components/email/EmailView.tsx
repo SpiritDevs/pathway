@@ -87,6 +87,7 @@ import {
   emailSelectAllState,
   emailSelectModeForModifiers,
   filterEmailMessages,
+  pruneEmailActionTargets,
   pruneEmailSelection,
   selectEmailRow,
   selectedEmailMessages,
@@ -141,7 +142,7 @@ export function EmailView({
   search: EmailSearch;
   onSearch: (patch: EmailSearchPatch) => void;
 }) {
-  const scope = emailScopeFromParam(search.inbox);
+  const scope = useMemo(() => emailScopeFromParam(search.inbox), [search.inbox]);
   const environmentFilter = (search.environment ?? null) as EnvironmentId | null;
   const inbox = useEmailInbox(scope, environmentFilter);
   const projects = useProjects();
@@ -298,20 +299,8 @@ export function EmailView({
     return current === undefined ? [] : [current];
   });
   useEffect(() => {
-    setTagTargets((current) =>
-      current.filter((target) =>
-        inbox.messages.some(
-          (message) => emailMessageSelectionId(message) === emailMessageSelectionId(target),
-        ),
-      ),
-    );
-    setDeleteTargets((current) =>
-      current.filter((target) =>
-        inbox.messages.some(
-          (message) => emailMessageSelectionId(message) === emailMessageSelectionId(target),
-        ),
-      ),
-    );
+    setTagTargets((current) => pruneEmailActionTargets(current, inbox.messages));
+    setDeleteTargets((current) => pruneEmailActionTargets(current, inbox.messages));
   }, [inbox.messages]);
   const tagTargetCompanyId = resolvedTagTargets[0]?.companyId ?? null;
   const availableTags = useMemo(

@@ -202,6 +202,69 @@ interface BootstrapPage {
 }
 
 describe("environment registry", () => {
+  it("takes ownership of a project whose environment the company has not registered", async () => {
+    const t = harness();
+    await seed(t);
+
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    };
+    expect(
+      await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args),
+    ).toBe(PROJECT_ID);
+
+    // The project is the company's; only the claim about where it is checked out waits for the
+    // environment the company has yet to admit.
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toEqual([]);
+    });
+    expect((await feedRows(t)).map((row) => row.entityKind)).toEqual(["cloudProject"]);
+
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company === null) throw new Error("The seeded company vanished.");
+      await ctx.db.insert("environmentRegistrations", {
+        id: REGISTRATION_ID,
+        companyId: company._id,
+        environmentId: ENVIRONMENT_ID,
+        publicKeyThumbprint: THUMBPRINT,
+        descriptor: descriptor(),
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+        lastSeenAt: null,
+        serviceRoleIds: [],
+        teamIds: [],
+        state: "active",
+        registeredByMembershipId: null,
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      });
+    });
+
+    // Registering is what the deferred binding was waiting for: the next publish attaches it to
+    // the project that is already there, rather than minting a second one.
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, args);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toMatchObject([
+        {
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: PROJECT_ID,
+          localWorkspaceRoot: "/workspace/pathway",
+          status: "active",
+        },
+      ]);
+    });
+  });
+
   it("makes a local environment project available to cloud issues exactly once", async () => {
     const t = harness();
     await seedRegistration(t);

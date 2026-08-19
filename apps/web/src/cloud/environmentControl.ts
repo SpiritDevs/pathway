@@ -129,6 +129,10 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly droppedLabels: number;
     }
   >("projectMigration:moveProjectToCompany"),
+  provisionPersonalWorkspace: mutationReference<
+    { readonly workspaceKind: "personal" },
+    { readonly id: CompanyId }
+  >("companies:provisionCurrentUser"),
   createCompanyProject: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -254,6 +258,15 @@ export interface EnvironmentControlClient {
     readonly movedBindings: number;
     readonly droppedLabels: number;
   }>;
+  /**
+   * The signed-in person's personal workspace, created on the spot when they have none.
+   *
+   * A personal workspace is permanent (ADR 0011) and is where side projects and anything not work
+   * belongs, but an account provisioned straight into an organization — or one whose workspace was
+   * converted before that rule existed — has none to choose. The mutation is idempotent, so this
+   * doubles as the lookup.
+   */
+  readonly provisionPersonalWorkspace: () => Promise<CompanyId>;
   /** Creates a project the company owns before any machine has a checkout of it. */
   readonly createCompanyProject: (args: {
     readonly companyId: CompanyId;
@@ -369,6 +382,11 @@ export function makeEnvironmentControlClient(options: {
       }),
     moveProjectToCompany: (args) =>
       mutationResult(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.moveProjectToCompany, args),
+    provisionPersonalWorkspace: () =>
+      mutationResult<{ readonly id: CompanyId }>(
+        ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.provisionPersonalWorkspace,
+        { workspaceKind: "personal" },
+      ).then((summary) => summary.id),
     createCompanyProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
     ensureEnvironmentProject: ({ companyId, project }) =>

@@ -75,10 +75,16 @@ export const createCompanyProject = mutation({
 });
 
 /**
- * Makes one environment project available to the company issue tracker.
+ * Gives a company a project a machine already has a checkout of, and binds that checkout to it.
  *
  * The local project id is deliberately reused as the cloud id. That keeps issue associations
  * stable on the originating environment, while the binding records the machine-specific root.
+ *
+ * Ownership does not wait for the checkout. A project belongs to a company (ADR 0011) and a
+ * checkout is something attached to it, so an environment this company has not registered costs
+ * you the binding, not the project: the project lands, and the binding follows when that
+ * environment registers and republishes. Gating the whole call on the registration made a project
+ * unassignable from every machine except the one holding it.
  */
 export const ensureEnvironmentProject = mutation({
   args: {
@@ -106,12 +112,10 @@ export const ensureEnvironmentProject = mutation({
         q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
       )
       .unique();
-    if (registration === null || registration.state !== "active") {
-      throw backendError(
-        "environment-not-registered",
-        "Register this environment before assigning its projects.",
-      );
-    }
+    // A binding asserts "this company's project is checked out on that machine, at that path".
+    // Only an environment the company has admitted may make that claim, so an unregistered one
+    // takes the project and leaves the binding for later.
+    const environmentRegistered = registration !== null && registration.state === "active";
 
     let project = await ctx.db
       .query("cloudProjects")
@@ -150,15 +154,16 @@ export const ensureEnvironmentProject = mutation({
       projectChanged = true;
     }
 
-    let binding: Doc<"environmentBindings"> | null =
-      (
-        await ctx.db
-          .query("environmentBindings")
-          .withIndex("by_company_and_environment", (q) =>
-            q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
-          )
-          .collect()
-      ).find((row) => row.localProjectId === localProjectId) ?? null;
+    let binding: Doc<"environmentBindings"> | null = !environmentRegistered
+      ? null
+      : ((
+          await ctx.db
+            .query("environmentBindings")
+            .withIndex("by_company_and_environment", (q) =>
+              q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
+            )
+            .collect()
+        ).find((row) => row.localProjectId === localProjectId) ?? null);
     let bindingChanged = false;
 
     if (binding !== null && binding.cloudProjectId !== project._id) {
@@ -168,7 +173,7 @@ export const ensureEnvironmentProject = mutation({
       );
     }
 
-    if (binding === null && localWorkspaceRoot !== null) {
+    if (environmentRegistered && binding === null && localWorkspaceRoot !== null) {
       const bindingDocId = await ctx.db.insert("environmentBindings", {
         id: mintDomainId(now),
         companyId: actor.company._id,

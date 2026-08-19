@@ -329,6 +329,22 @@ export function selectedEmailMessages<
 }
 
 /**
+ * Drops action-dialog targets that disappeared from the inbox. Returns the original array when
+ * every target is still present so a pruning effect can pass this straight to `setState` without
+ * turning an unchanged inbox into another render.
+ */
+export function pruneEmailActionTargets<
+  Message extends CapturedEmailSummary & {
+    readonly companyId?: string | null;
+    readonly environmentId?: string;
+  },
+>(targets: ReadonlyArray<Message>, messages: ReadonlyArray<Message>): ReadonlyArray<Message> {
+  const messageIds = new Set(messages.map(emailMessageSelectionId));
+  const next = targets.filter((target) => messageIds.has(emailMessageSelectionId(target)));
+  return next.length === targets.length ? targets : next;
+}
+
+/**
  * Which rows a menu opened on `message` acts on: the whole selection when the row is part of one,
  * and that row alone otherwise. Right-clicking an unchecked row deliberately does not check it —
  * opening a message and checking it stay separate gestures.

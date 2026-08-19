@@ -19,6 +19,7 @@ import {
   emailSelectModeForModifiers,
   filterEmailMessages,
   isEmailListFilterActive,
+  pruneEmailActionTargets,
   pruneEmailSelection,
   selectEmailRow,
   selectedEmailMessages,
@@ -228,6 +229,20 @@ describe("pruneEmailSelection", () => {
   it("returns the same selection when nothing moved, so setState is a no-op", () => {
     const selection: EmailSelection = { ids: new Set([id("m1")]), anchorId: id("m1") };
     expect(pruneEmailSelection(selection, ALL_IDS)).toBe(selection);
+  });
+});
+
+describe("pruneEmailActionTargets", () => {
+  it("returns the same targets when nothing disappeared, so setState is a no-op", () => {
+    const targets = [unreadWithCode, plainRead];
+    expect(pruneEmailActionTargets(targets, ALL)).toBe(targets);
+  });
+
+  it("drops targets that are no longer in the inbox", () => {
+    const targets = [unreadWithCode, plainRead];
+    expect(pruneEmailActionTargets(targets, [unreadWithCode, readWithAttachment])).toEqual([
+      unreadWithCode,
+    ]);
   });
 });
 
