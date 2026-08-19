@@ -211,6 +211,80 @@ describe("web cloud link environment client", () => {
     }),
   );
 
+  it.effect("accepts a teardown error when the account link was already revoked", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json(
+            {
+              _tag: "RelayInternalError",
+              code: "internal_error",
+              reason: "upstream_unavailable",
+              traceId: "trace-unlink-teardown",
+            },
+            { status: 500 },
+          ),
+        )
+        .mockResolvedValueOnce(Response.json({ environments: [] }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      yield* withServices(
+        unlinkRelayEnvironmentFromAccount({
+          clerkToken: "clerk-token",
+          environmentId: EnvironmentId.make(TARGET.environmentId),
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }),
+  );
+
+  it.effect("keeps an unlink error when the account still owns the environment", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          Response.json(
+            {
+              _tag: "RelayInternalError",
+              code: "internal_error",
+              reason: "persistence_failed",
+              traceId: "trace-unlink-persistence",
+            },
+            { status: 500 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            environments: [
+              {
+                environmentId: TARGET.environmentId,
+                label: TARGET.label,
+                endpoint: {
+                  httpBaseUrl: "https://desktop.example.test",
+                  wsBaseUrl: "wss://desktop.example.test",
+                  providerKind: "cloudflare_tunnel",
+                },
+                linkedAt: "2026-06-06T00:00:00.000Z",
+              },
+            ],
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = yield* withServices(
+        unlinkRelayEnvironmentFromAccount({
+          clerkToken: "clerk-token",
+          environmentId: EnvironmentId.make(TARGET.environmentId),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toBe("Could not remove the environment from Pathway Connect.");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }),
+  );
+
   it.effect("reads primary cloud link state from the explicit target", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn().mockResolvedValue(

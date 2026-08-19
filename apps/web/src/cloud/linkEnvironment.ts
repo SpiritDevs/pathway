@@ -289,22 +289,36 @@ export function unlinkRelayEnvironmentFromAccount(input: {
   readonly clerkToken: string;
   readonly environmentId: EnvironmentId;
 }): Effect.Effect<void, CloudEnvironmentLinkError, ManagedRelay.ManagedRelayClient> {
-  return ManagedRelay.ManagedRelayClient.pipe(
-    Effect.flatMap((client) =>
+  return Effect.gen(function* () {
+    const client = yield* ManagedRelay.ManagedRelayClient;
+    const unlinkResult = yield* Effect.result(
       client.unlinkEnvironment({
         clerkToken: input.clerkToken,
         environmentId: input.environmentId,
       }),
-    ),
-    Effect.asVoid,
-    Effect.mapError(
-      (cause) =>
-        new CloudEnvironmentLinkError({
-          message: "Could not remove the environment from Pathway Connect.",
-          cause,
-        }),
-    ),
-  );
+    );
+    if (unlinkResult._tag === "Success") return;
+
+    // Relay revokes the database link before external tunnel teardown. A teardown failure is
+    // therefore reported as an error even though the account no longer owns the environment.
+    // Confirm the authoritative account listing before deciding whether removal actually failed.
+    const listingResult = yield* Effect.result(
+      client.listEnvironments({ clerkToken: input.clerkToken }),
+    );
+    if (
+      listingResult._tag === "Success" &&
+      !listingResult.success.some(
+        (environment) => environment.environmentId === input.environmentId,
+      )
+    ) {
+      return;
+    }
+
+    return yield* new CloudEnvironmentLinkError({
+      message: "Could not remove the environment from Pathway Connect.",
+      cause: unlinkResult.failure,
+    });
+  });
 }
 
 export function listCloudDevices(input: {

@@ -3001,10 +3001,18 @@ export function EnvironmentConnectionSettings({
                 }
               />
             ) : null}
-            {isCloudAccountLinkConflict(cloudLinkStatus.error) ? (
+            {cloudLinkStatus.phase !== "idle" || cloudLinkStatus.error !== null ? (
               <SettingsRow
-                title="Linked to another account"
-                description="Re-link this environment to the Pathway Connect account you are signed into now."
+                title={
+                  isCloudAccountLinkConflict(cloudLinkStatus.error)
+                    ? "Linked to another account"
+                    : "Pathway Connect"
+                }
+                description={
+                  isCloudAccountLinkConflict(cloudLinkStatus.error)
+                    ? "Re-link this environment to the Pathway Connect account you are signed into now."
+                    : "Sever the current managed tunnel and create a fresh Pathway Connect link for this environment."
+                }
                 control={
                   <Button
                     size="xs"
