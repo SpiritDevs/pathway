@@ -9,6 +9,23 @@ import type { ConvexAuthTokenFetcher } from "./syncTransport";
 type Args = Record<string, unknown>;
 export const COMPANY_INTEGRATIONS_QUERY_TIMEOUT_MS = 10_000;
 
+// #region DEBUG
+let nextCompanyIntegrationsDebugClientId = 1;
+
+function debugCompanyIntegrations(
+  hypothesis: string,
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  if (typeof window === "undefined") return;
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
+
 export function withCompanyIntegrationsQueryTimeout<R>(
   request: Promise<R>,
   operation: string,
@@ -204,10 +221,76 @@ export function makeCompanyIntegrationsClient(options: {
   readonly convexUrl: string;
   readonly fetchToken: ConvexAuthTokenFetcher;
 }): CompanyIntegrationsClient {
+  // #region DEBUG
+  const debugClientId = nextCompanyIntegrationsDebugClientId++;
+  debugCompanyIntegrations("H3", "integrations-client-created", { debugClientId });
+  // #endregion DEBUG
   const client = new ConvexClient(options.convexUrl);
-  client.setAuth(options.fetchToken);
-  const query = <R>(reference: FunctionReference<"query">, args: Args, operation: string) =>
-    withCompanyIntegrationsQueryTimeout(client.query(reference, args) as Promise<R>, operation);
+  client.setAuth(async (args) => {
+    // #region DEBUG
+    const startedAt = performance.now();
+    debugCompanyIntegrations("H1", "integrations-token-fetch-started", {
+      debugClientId,
+      forceRefresh: args.forceRefreshToken,
+    });
+    // #endregion DEBUG
+    const token = await options.fetchToken(args);
+    // #region DEBUG
+    debugCompanyIntegrations("H1", "integrations-token-fetch-finished", {
+      debugClientId,
+      forceRefresh: args.forceRefreshToken,
+      hasToken: token !== null && token !== undefined,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+    // #endregion DEBUG
+    return token;
+  });
+  const query = <R>(reference: FunctionReference<"query">, args: Args, operation: string) => {
+    // #region DEBUG
+    const startedAt = performance.now();
+    const stateBefore = client.connectionState();
+    debugCompanyIntegrations("H2", "integrations-query-started", {
+      debugClientId,
+      operation,
+      connected: stateBefore.isWebSocketConnected,
+      hasEverConnected: stateBefore.hasEverConnected,
+      connectionCount: stateBefore.connectionCount,
+      connectionRetries: stateBefore.connectionRetries,
+    });
+    // #endregion DEBUG
+    return withCompanyIntegrationsQueryTimeout(
+      client.query(reference, args) as Promise<R>,
+      operation,
+    ).then(
+      (result) => {
+        // #region DEBUG
+        debugCompanyIntegrations("H2", "integrations-query-succeeded", {
+          debugClientId,
+          operation,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        // #endregion DEBUG
+        return result;
+      },
+      (error: unknown) => {
+        // #region DEBUG
+        const stateAfter = client.connectionState();
+        debugCompanyIntegrations("H2", "integrations-query-failed", {
+          debugClientId,
+          operation,
+          durationMs: Math.round(performance.now() - startedAt),
+          errorName: error instanceof Error ? error.name : "unknown",
+          connected: stateAfter.isWebSocketConnected,
+          hasEverConnected: stateAfter.hasEverConnected,
+          connectionCount: stateAfter.connectionCount,
+          connectionRetries: stateAfter.connectionRetries,
+          hasInflightRequests: stateAfter.hasInflightRequests,
+        });
+        // #endregion DEBUG
+        throw error;
+      },
+    );
+  };
   const mutation = <R>(reference: FunctionReference<"mutation">, args: Args) =>
     client.mutation(reference, args) as Promise<R>;
   const action = <R>(reference: FunctionReference<"action">, args: Args) =>
@@ -242,6 +325,11 @@ export function makeCompanyIntegrationsClient(options: {
       mutation<null>(refs.retryJob, { companyId, jobId }).then(() => undefined),
     cancelJob: (companyId, jobId) =>
       mutation<null>(refs.cancelJob, { companyId, jobId }).then(() => undefined),
-    close: () => client.close(),
+    close: () => {
+      // #region DEBUG
+      debugCompanyIntegrations("H3", "integrations-client-closed", { debugClientId });
+      // #endregion DEBUG
+      return client.close();
+    },
   };
 }
