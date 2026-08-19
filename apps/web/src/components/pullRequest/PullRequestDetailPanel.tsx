@@ -111,8 +111,10 @@ import {
   canPerformPullRequestAction,
   isPullRequestConflicting,
   pullRequestFindingKey,
+  resolvePullRequestChromeCollapse,
   resolvePullRequestPrimaryAction,
   resolveSelectedMergeMethod,
+  type PullRequestChromeMetrics,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { buildPullRequestAgentReviewPrompt } from "./pullRequestAgentReview.logic";
@@ -141,6 +143,31 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "code", label: "Code" },
   { value: "reviewing", label: "Reviewing" },
 ];
+
+/** Room for rounding: a scroller within a pixel of its content is not one the reader scrolls. */
+const SCROLLABLE_EPSILON = 1;
+
+/**
+ * The one scroller whose position the folding chrome answers to: the outermost vertically
+ * scrolling element of the tab on screen. Everything else a captured scroll event can come
+ * from — a diff row travelling sideways, an inner list with its own overflow, a tab still
+ * mounted behind this one being restored by its virtualizer — is reporting a position in a
+ * different space, and folding the chrome on it is how the chrome ends up flapping.
+ */
+function isActiveTabScroller(target: HTMLElement, tab: DetailTab): boolean {
+  if (target.scrollHeight - target.clientHeight <= SCROLLABLE_EPSILON) return false;
+  const pane = target.closest<HTMLElement>("[data-pr-tab]");
+  if (pane === null || pane.dataset.prTab !== tab) return false;
+  for (let node = target.parentElement; node !== null && node !== pane; node = node.parentElement) {
+    // Overflowing is not the same as scrolling: a clipped `overflow-hidden` box can measure
+    // taller than it paints and is nobody's scroller. The style is only consulted for the few
+    // ancestors that overflow at all, so the usual walk never leaves the layout numbers.
+    if (node.scrollHeight - node.clientHeight <= SCROLLABLE_EPSILON) continue;
+    const overflowY = getComputedStyle(node).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") return false;
+  }
+  return true;
+}
 
 // The diff viewer pulls in its worker pool, so it stays out of the bundle until Code is opened.
 // Named rather than inlined so the panel can also call it itself, to start the download before
@@ -223,22 +250,20 @@ export function PullRequestDetailPanel({
       previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
     );
   }, [tab]);
-  const [chromeCondensed, setChromeCondensed] = useState(false);
-  // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
-  // events, so the capture handler always writes the active tab's entry — and a tab switch
-  // reads the destination's memory instead of inheriting the tab being left. A tab too short
-  // to scroll remembers "expanded", which is what keeps it from being stranded under a chrome
-  // it has no scrollbar to reopen.
-  const chromeStateByTab = useRef<Partial<Record<DetailTab, boolean>>>({});
+  // Whether the chrome is folded is a property of the tab being read, not of the panel: each
+  // tab scrolls its own container, so a tab left at the top must show a full chrome even when
+  // the tab beside it is deep in a diff. Keyed state rather than a state plus a remembered
+  // copy — a tab switch then has nothing to re-sync, and no frame paints the wrong chrome.
+  const [condensedByTab, setCondensedByTab] = useState<Partial<Record<DetailTab, boolean>>>({});
+  const condensed = chromeVariant === "collapse" && (condensedByTab[tab] ?? false);
+  // A different pull request is a different set of scrollers, all of them at the top.
   useEffect(() => {
-    setChromeCondensed(chromeStateByTab.current[tab] ?? false);
-  }, [tab]);
-  const condensed = chromeVariant === "collapse" && chromeCondensed;
-  // Collapsing removes the fold's height from the chrome, which would otherwise hand that
-  // height to the scrollport and leap the content up by it mid-scroll. The cure is exact
-  // compensation: collapse only once the reader has scrolled at least the fold's height,
-  // then give that height back to `scrollTop` before the next paint — the content under
-  // their eyes does not move, and the collapse itself is the only thing that changes.
+    setCondensedByTab({});
+  }, [pullRequestKey]);
+  // Collapsing removes the fold's height from the chrome, which hands that height to the
+  // scrollport and would leap the content up by it mid-scroll. The cure is exact compensation:
+  // give the height back to `scrollTop` before the next paint, so the content under the
+  // reader's eyes does not move and the collapse itself is the only thing that changes.
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
   // The condensed chrome's second row opens as the fold closes, so the height the scrollport
@@ -247,12 +272,38 @@ export function PullRequestDetailPanel({
   const condensedRowRef = useRef<HTMLDivElement | null>(null);
   const compensationRef = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (compensationRef.current === null) return;
-    const scroller = scrollerRef.current;
     const delta = compensationRef.current;
     compensationRef.current = null;
+    if (delta === null || delta === 0) return;
+    const scroller = scrollerRef.current;
     if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
   }, [condensed]);
+  // Both heights, read on render rather than on every scroll event: `scrollHeight` forces a
+  // synchronous layout, and a scroll handler over a virtualized diff is the last place to ask
+  // for one. Rendering covers the changes the panel knows about — the conflict row arriving,
+  // a tab appearing — and the observer covers the ones it does not, such as a resize wrapping
+  // the title onto a second line.
+  const chromeMetricsRef = useRef<PullRequestChromeMetrics>({
+    foldHeight: 0,
+    condensedRowHeight: 0,
+  });
+  const chromeRef = useRef<HTMLDivElement | null>(null);
+  const measureChrome = useCallback(() => {
+    // `scrollHeight` through a zero-height track reads natural height in either state, so the
+    // measurement does not depend on which way the chrome happens to be folded right now.
+    chromeMetricsRef.current = {
+      foldHeight: foldRef.current?.scrollHeight ?? 0,
+      condensedRowHeight: condensedRowRef.current?.scrollHeight ?? 0,
+    };
+  }, []);
+  useLayoutEffect(measureChrome);
+  useLayoutEffect(() => {
+    const chrome = chromeRef.current;
+    if (chrome === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measureChrome);
+    observer.observe(chrome);
+    return () => observer.disconnect();
+  }, [measureChrome]);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
   const { copyToClipboard: copyBranchToClipboard, isCopied: isBranchCopied } = useCopyToClipboard({
@@ -665,7 +716,10 @@ export function PullRequestDetailPanel({
       {/* The top row's geometry never changes: both of its states occupy the same stacked
           cell and crossfade, so the actions on the right have one home whatever the chrome
           is doing below. The fold and this fade share one 200ms clock. */}
-      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
+      <div
+        ref={chromeRef}
+        className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60"
+      >
         {/* The fixed height lives on the two top-row cells — not the grid, whose later rows
             are the fold — so the actions have one immovable home in both states. */}
         <div className="ml-4 grid h-11 min-w-0 items-center">
@@ -1222,35 +1276,27 @@ export function PullRequestDetailPanel({
       <div
         className="relative min-h-0 flex-1 overflow-hidden"
         // Scroll does not bubble, but it captures: one listener hears every tab's own scroll
-        // container. Collapse past two line-heights, expand only back at the very top, so the
-        // boundary row cannot flap the chrome open and shut.
+        // container. It also hears every scroller nested inside them — a diff line scrolling
+        // sideways, a comment box with its own overflow, a hidden tab the diff viewer restores
+        // while it is off screen — none of which say anything about how far the reader has
+        // come. Only the active tab's own outermost vertical scroller does.
         onScrollCapture={(event) => {
           if (chromeVariant !== "collapse") return;
-          const scroller = event.target as HTMLElement;
+          const scroller = event.target;
+          if (!(scroller instanceof HTMLElement)) return;
+          if (!isActiveTabScroller(scroller, tab)) return;
           scrollerRef.current = scroller;
-          const top = scroller.scrollTop;
-          setChromeCondensed((previous) => {
-            let next = previous;
-            // `scrollHeight` reads the fold's natural height whichever state the track is in.
-            const foldHeight = foldRef.current?.scrollHeight ?? 0;
-            // The chrome trades the fold for the condensed second row, so the height the
-            // scrollport actually gains is the difference between the two.
-            const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
-            if (previous) {
-              // The hard top reopens the chrome. The refund puts the reader a fold's height
-              // from the top, pinned to the same pixels — the metadata is scrolled up to,
-              // not thrown at them.
-              if (top < 4 && foldHeight > 0) {
-                compensationRef.current = chromeDelta;
-                next = false;
-              }
-            } else if (foldHeight > 0 && top > foldHeight + 32) {
-              compensationRef.current = -chromeDelta;
-              next = true;
-            }
-            chromeStateByTab.current[tab] = next;
-            return next;
+          const next = resolvePullRequestChromeCollapse({
+            condensed,
+            scrollTop: scroller.scrollTop,
+            metrics: chromeMetricsRef.current,
           });
+          if (next.condensed === condensed) return;
+          // The compensation is handed to the layout effect rather than applied here: the
+          // fold has not closed yet, so the height being given back does not exist until
+          // React has painted the state this event is about to set.
+          compensationRef.current = next.scrollCompensation;
+          setCondensedByTab((previous) => ({ ...previous, [tab]: next.condensed }));
         }}
       >
         {detailQuery.isPending && !detail ? (
@@ -1268,7 +1314,10 @@ export function PullRequestDetailPanel({
         ) : detail ? (
           <>
             {mountedTabs.has("summary") ? (
-              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+              <div
+                data-pr-tab="summary"
+                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
+              >
                 <PullRequestSummaryTab
                   environmentId={environmentId}
                   reference={reference}
@@ -1282,7 +1331,10 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+              <div
+                data-pr-tab="timeline"
+                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
+              >
                 {activityPending ? (
                   <PullRequestTimelineGhost />
                 ) : activityError ? (
@@ -1300,7 +1352,10 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
-              <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
+              <div
+                data-pr-tab="code"
+                className={cn("absolute inset-0", tab !== "code" && "invisible")}
+              >
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
                     onAskAboutSelection={askAboutSelection}
@@ -1318,7 +1373,10 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("reviewing") && activeReview !== null ? (
-              <div className={cn("absolute inset-0", tab !== "reviewing" && "invisible")}>
+              <div
+                data-pr-tab="reviewing"
+                className={cn("absolute inset-0", tab !== "reviewing" && "invisible")}
+              >
                 <PullRequestReviewingTab
                   activityState={
                     activity !== null ? "ready" : activityError === null ? "pending" : "unavailable"

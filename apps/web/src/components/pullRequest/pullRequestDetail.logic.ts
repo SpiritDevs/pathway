@@ -713,3 +713,68 @@ export function readableFailure(failure: unknown, hint: string): string {
   // that contradicts it is worse than no guess at all.
   return bounded;
 }
+
+/** What the folding chrome measures at, whichever state it is currently painted in. */
+export interface PullRequestChromeMetrics {
+  /** Natural height of the rows that fold away. */
+  readonly foldHeight: number;
+  /** Natural height of the condensed row that opens as the fold closes. */
+  readonly condensedRowHeight: number;
+}
+
+export interface PullRequestChromeCollapse {
+  readonly condensed: boolean;
+  /**
+   * Pixels to add to the scroller's `scrollTop` before the next paint, so that the content
+   * under the reader's eyes does not move when the chrome flips. Zero when nothing flipped.
+   */
+  readonly scrollCompensation: number;
+}
+
+/** Below the fold's height, the chrome has nothing left to trade for reading room. */
+const CHROME_COLLAPSE_MARGIN = 32;
+/** How far back up the reader has to come before the chrome reopens. */
+const CHROME_EXPAND_MARGIN = 8;
+/** The narrowest gap between the two thresholds that no single wheel tick can cross. */
+const CHROME_MIN_HYSTERESIS = 48;
+
+/**
+ * Folding the chrome hands its height to the scrollport, so `scrollTop` means a different
+ * position either side of the flip. Deciding in that shifting coordinate is what makes a
+ * threshold flap: collapsing moves the reader back below the line that just collapsed it.
+ *
+ * So decide in one that does not shift. `virtualTop` is the reader's offset measured as if the
+ * chrome were always open — folding and unfolding only rename the same position — and the
+ * compensation is exactly the rename, applied to `scrollTop` before the next paint. A threshold
+ * crossed in that space stays crossed, which is what stops the flapping; the content staying
+ * put is the same fact seen from the reader's side.
+ */
+export function resolvePullRequestChromeCollapse(input: {
+  readonly condensed: boolean;
+  readonly scrollTop: number;
+  readonly metrics: PullRequestChromeMetrics;
+}): PullRequestChromeCollapse {
+  const { condensed, scrollTop, metrics } = input;
+  const chromeDelta = metrics.foldHeight - metrics.condensedRowHeight;
+  // Nothing measured yet, or a fold that would buy no room: leave the chrome where it is
+  // rather than flip it on numbers that cannot be compensated for.
+  if (metrics.foldHeight <= 0 || chromeDelta <= 0) {
+    return { condensed, scrollCompensation: 0 };
+  }
+  const virtualTop = Math.max(0, scrollTop) + (condensed ? chromeDelta : 0);
+  // The floor of `virtualTop` while condensed is `chromeDelta` — the reader at the very top of
+  // a folded scroller — so the reopening threshold has to sit above it or the chrome could
+  // never reopen at all.
+  const expandBelow = chromeDelta + CHROME_EXPAND_MARGIN;
+  const collapseAbove = Math.max(
+    metrics.foldHeight + CHROME_COLLAPSE_MARGIN,
+    expandBelow + CHROME_MIN_HYSTERESIS,
+  );
+  if (!condensed && virtualTop >= collapseAbove) {
+    return { condensed: true, scrollCompensation: -chromeDelta };
+  }
+  if (condensed && virtualTop <= expandBelow) {
+    return { condensed: false, scrollCompensation: chromeDelta };
+  }
+  return { condensed, scrollCompensation: 0 };
+}

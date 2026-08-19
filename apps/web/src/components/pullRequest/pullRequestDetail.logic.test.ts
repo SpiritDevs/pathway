@@ -18,6 +18,7 @@ import {
   orderPullRequestComments,
   pullRequestFindingKey,
   readableFailure,
+  resolvePullRequestChromeCollapse,
   buildPullRequestTimeline,
   describePullRequestState,
 } from "./pullRequestDetail.logic";
@@ -785,5 +786,86 @@ describe("a second ask into the same composer", () => {
       "file-comment:3",
       "pull-request-context:42",
     ]);
+  });
+});
+
+describe("resolvePullRequestChromeCollapse", () => {
+  // A fold worth 180px that leaves a 30px condensed row behind: the scrollport gains 150px.
+  const metrics = { foldHeight: 180, condensedRowHeight: 30 } as const;
+
+  it("leaves the chrome alone until the reader has scrolled past the fold", () => {
+    expect(resolvePullRequestChromeCollapse({ condensed: false, scrollTop: 180, metrics })).toEqual(
+      { condensed: false, scrollCompensation: 0 },
+    );
+  });
+
+  it("folds past the fold and hands the height it took back to the scroller", () => {
+    expect(resolvePullRequestChromeCollapse({ condensed: false, scrollTop: 212, metrics })).toEqual(
+      { condensed: true, scrollCompensation: -150 },
+    );
+  });
+
+  it("reopens at the top of a folded scroller, pinned to the same content", () => {
+    expect(resolvePullRequestChromeCollapse({ condensed: true, scrollTop: 0, metrics })).toEqual({
+      condensed: false,
+      scrollCompensation: 150,
+    });
+  });
+
+  it("holds the chrome folded while the reader is still reading", () => {
+    expect(resolvePullRequestChromeCollapse({ condensed: true, scrollTop: 400, metrics })).toEqual({
+      condensed: true,
+      scrollCompensation: 0,
+    });
+  });
+
+  // The flap the whole virtual coordinate exists to prevent: the position each flip leaves the
+  // reader at must never be a position that flips the chrome straight back.
+  it("does not flip back from where the previous flip left the reader", () => {
+    const collapsed = resolvePullRequestChromeCollapse({
+      condensed: false,
+      scrollTop: 212,
+      metrics,
+    });
+    expect(
+      resolvePullRequestChromeCollapse({
+        condensed: collapsed.condensed,
+        scrollTop: 212 + collapsed.scrollCompensation,
+        metrics,
+      }).condensed,
+    ).toBe(true);
+
+    const expanded = resolvePullRequestChromeCollapse({ condensed: true, scrollTop: 0, metrics });
+    expect(
+      resolvePullRequestChromeCollapse({
+        condensed: expanded.condensed,
+        scrollTop: 0 + expanded.scrollCompensation,
+        metrics,
+      }).condensed,
+    ).toBe(false);
+  });
+
+  it("keeps a tall condensed row from stranding the chrome shut", () => {
+    // The row that replaces the fold is nearly as tall as it, so the reopening threshold is
+    // what has to move: reaching the top of the folded scroller still reopens the chrome.
+    const shallow = { foldHeight: 120, condensedRowHeight: 110 } as const;
+    expect(
+      resolvePullRequestChromeCollapse({ condensed: true, scrollTop: 0, metrics: shallow })
+        .condensed,
+    ).toBe(false);
+    expect(
+      resolvePullRequestChromeCollapse({ condensed: false, scrollTop: 151, metrics: shallow })
+        .condensed,
+    ).toBe(false);
+  });
+
+  it("stays where it is when the chrome has not been measured yet", () => {
+    expect(
+      resolvePullRequestChromeCollapse({
+        condensed: false,
+        scrollTop: 9000,
+        metrics: { foldHeight: 0, condensedRowHeight: 0 },
+      }),
+    ).toEqual({ condensed: false, scrollCompensation: 0 });
   });
 });
