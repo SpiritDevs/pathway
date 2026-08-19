@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@spiritdevs/contracts";
-import { CloudIcon, MonitorIcon } from "lucide-react";
+import { CloudIcon, MonitorIcon, PlusIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
@@ -16,15 +16,23 @@ import {
   SelectGroupLabel,
   SelectItem,
   SelectPopup,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
+
+// Sentinel item value for the trailing action row. The Select is controlled by
+// `environmentId`, so picking it never lands in `value`: `onValueChange` routes
+// it to the link flow and leaves the selection where it was.
+const LINK_ENVIRONMENT_VALUE = "__link-environment__";
 
 interface BranchToolbarEnvironmentSelectorProps {
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  /** Opens the flow that attaches this project to another environment. */
+  onLinkEnvironmentRequest?: () => void;
   displayMode?: "toolbar" | "panel";
 }
 
@@ -33,6 +41,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   environmentId,
   availableEnvironments,
   onEnvironmentChange,
+  onLinkEnvironmentRequest,
   displayMode = "toolbar",
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
@@ -53,7 +62,9 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   // the glass seam joining it to the composer assumes a fixed strip height, so
   // a shorter label would drag the seam out of line whenever this label is the
   // only thing in the strip.
-  if (envLocked || onEnvironmentChange === undefined) {
+  // A single environment still opens: the popup carries "Link environment",
+  // which is the only in-composer way to get a second one.
+  if (envLocked || (onEnvironmentChange === undefined && onLinkEnvironmentRequest === undefined)) {
     return (
       <span
         className={cn(
@@ -98,7 +109,13 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     <Select
       modal={false}
       value={environmentId}
-      onValueChange={(value) => onEnvironmentChange(value as EnvironmentId)}
+      onValueChange={(value) => {
+        if (value === LINK_ENVIRONMENT_VALUE) {
+          onLinkEnvironmentRequest?.();
+          return;
+        }
+        onEnvironmentChange?.(value as EnvironmentId);
+      }}
       items={environmentItems}
     >
       <SelectTrigger
@@ -163,6 +180,17 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             </SelectItem>
           ))}
         </SelectGroup>
+        {onLinkEnvironmentRequest ? (
+          <>
+            <SelectSeparator />
+            <SelectItem value={LINK_ENVIRONMENT_VALUE}>
+              <span className="inline-flex items-center gap-1.5">
+                <PlusIcon className="size-3" />
+                Link environment
+              </span>
+            </SelectItem>
+          </>
+        ) : null}
       </SelectPopup>
     </Select>
   );

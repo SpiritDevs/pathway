@@ -8,6 +8,7 @@ import {
   FolderIcon,
   HistoryIcon,
   MonitorIcon,
+  PlusIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -16,8 +17,10 @@ import { useProject, useThreadShell, useThreadShellsForProjectRefs } from "../st
 import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
+  canOpenEnvironmentPicker,
   type EnvMode,
   type EnvironmentOption,
+  hasEnvironmentChoice,
   resolveCurrentWorkspaceLabel,
   resolveEnvModeLabel,
   resolveEffectiveEnvMode,
@@ -34,6 +37,7 @@ import {
   Menu,
   MenuGroup,
   MenuGroupLabel,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -60,6 +64,7 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  onLinkEnvironmentRequest?: () => void;
 }
 
 interface MobileRunContextSelectorProps {
@@ -70,6 +75,7 @@ interface MobileRunContextSelectorProps {
   showEnvironmentPicker: boolean;
   showEnvironmentIndicator: boolean;
   onEnvironmentChange: ((environmentId: EnvironmentId) => void) | undefined;
+  onLinkEnvironmentRequest: (() => void) | undefined;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
   onEnvModeChange: (mode: EnvMode) => void;
@@ -85,6 +91,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   showEnvironmentPicker,
   showEnvironmentIndicator,
   onEnvironmentChange,
+  onLinkEnvironmentRequest,
   effectiveEnvMode,
   activeWorktreePath,
   onEnvModeChange,
@@ -145,13 +152,13 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
       </MenuTrigger>
       <MenuPopup align="start" side="top" className="w-64">
-        {showEnvironmentPicker && availableEnvironments && onEnvironmentChange ? (
+        {showEnvironmentIndicator && showEnvironmentPicker && availableEnvironments ? (
           <>
             <MenuGroup>
               <MenuGroupLabel>Run on</MenuGroupLabel>
               <MenuRadioGroup
                 value={environmentId}
-                onValueChange={(value) => onEnvironmentChange(value as EnvironmentId)}
+                onValueChange={(value) => onEnvironmentChange?.(value as EnvironmentId)}
               >
                 {availableEnvironments.map((env) => {
                   const Icon = env.isPrimary ? MonitorIcon : CloudIcon;
@@ -169,6 +176,17 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                   );
                 })}
               </MenuRadioGroup>
+              {onLinkEnvironmentRequest ? (
+                <>
+                  <MenuSeparator />
+                  <MenuItem onClick={onLinkEnvironmentRequest}>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <PlusIcon className="size-3" />
+                      <span className="min-w-0 truncate">Link environment</span>
+                    </span>
+                  </MenuItem>
+                </>
+              ) : null}
             </MenuGroup>
             <MenuSeparator />
           </>
@@ -394,6 +412,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  onLinkEnvironmentRequest,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -475,14 +494,17 @@ export const BranchToolbar = memo(function BranchToolbar({
     });
   }, [activeProjectRef, draftId, previousWorktreeSeed, setDraftThreadContext, threadRef]);
 
-  const showEnvironmentPicker = Boolean(
-    availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
-  );
+  const environmentPickerInput = {
+    environmentCount: availableEnvironments?.length ?? 0,
+    canChangeEnvironment: onEnvironmentChange !== undefined,
+    canLinkEnvironment: onLinkEnvironmentRequest !== undefined,
+  };
+  const showEnvironmentPicker = canOpenEnvironmentPicker(environmentPickerInput);
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: showEnvironmentPicker,
+    canPickEnvironment: hasEnvironmentChoice(environmentPickerInput),
   });
   const isMobile = useIsMobile();
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
@@ -541,6 +563,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           showEnvironmentPicker={showEnvironmentPicker}
           showEnvironmentIndicator={showEnvironmentIndicator}
           onEnvironmentChange={onEnvironmentChange}
+          onLinkEnvironmentRequest={onLinkEnvironmentRequest}
           effectiveEnvMode={effectiveEnvMode}
           activeWorktreePath={activeWorktreePath}
           onEnvModeChange={handleEnvModeChange}
@@ -556,6 +579,9 @@ export const BranchToolbar = memo(function BranchToolbar({
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
+                {...(showEnvironmentPicker && onLinkEnvironmentRequest
+                  ? { onLinkEnvironmentRequest }
+                  : {})}
               />
               {showGitControls ? (
                 <Separator

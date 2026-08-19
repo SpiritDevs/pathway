@@ -54,6 +54,27 @@ export function shouldShowEnvironmentIndicator(input: {
   return input.activeEnvironment !== null && !input.activeEnvironment.isPrimary;
 }
 
+// Whether there is a second environment to switch between. This gates whether
+// the control shows up at all on a local-only project; the trailing "Link
+// environment" row is not on its own reason to put a picker in every composer.
+export function hasEnvironmentChoice(input: {
+  environmentCount: number;
+  canChangeEnvironment: boolean;
+}): boolean {
+  return input.environmentCount > 1 && input.canChangeEnvironment;
+}
+
+// Whether the control, once shown, opens. A single environment still opens: the
+// popup carries "Link environment", which is the way out of having only one.
+export function canOpenEnvironmentPicker(input: {
+  environmentCount: number;
+  canChangeEnvironment: boolean;
+  canLinkEnvironment: boolean;
+}): boolean {
+  if (input.environmentCount === 0) return false;
+  return input.canChangeEnvironment || input.canLinkEnvironment;
+}
+
 export function shouldShowComposerContextStrip(input: {
   hasActiveProject: boolean;
   isGitRepo: boolean;
