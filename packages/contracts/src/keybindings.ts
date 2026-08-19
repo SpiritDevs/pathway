@@ -56,6 +56,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "terminal.close",
   "rightPanel.toggle",
   "threadPanel.toggle",
+  "threadBrowser.toggle",
   "diff.toggle",
   "preview.toggle",
   "preview.refresh",

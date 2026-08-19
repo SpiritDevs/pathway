@@ -3693,6 +3693,37 @@ function ChatViewContent(props: ChatViewProps) {
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
+  /**
+   * Hides the panel when it is showing, and every time it comes back it lands on
+   * a browser: the thread's existing browser tab when there is one, a freshly
+   * opened tab when there is not. Unlike `togglePreviewPanel` this hides the
+   * panel from any tab, so the shortcut always reads as "show/hide my browser".
+   */
+  const toggleBrowserPanel = useCallback(() => {
+    if (isPanelPresentation || !activeThreadRef || !isPreviewSupportedInRuntime()) return;
+    if (rightPanelOpen) {
+      closePreviewPanel();
+      return;
+    }
+    const existingBrowserTabId =
+      rightPanelState.surfaces.find(
+        (surface): surface is Extract<RightPanelSurface, { kind: "preview" }> =>
+          surface.kind === "preview" && surface.resourceId !== null,
+      )?.resourceId ?? activePreviewState.activeTabId;
+    if (existingBrowserTabId) {
+      useRightPanelStore.getState().openBrowser(activeThreadRef, existingBrowserTabId);
+      return;
+    }
+    createBrowserSurface();
+  }, [
+    activePreviewState.activeTabId,
+    activeThreadRef,
+    closePreviewPanel,
+    createBrowserSurface,
+    isPanelPresentation,
+    rightPanelOpen,
+    rightPanelState.surfaces,
+  ]);
   const addTerminalSurface = useCallback(() => {
     if (!activeThreadRef || !activeThreadId || !activeProject) return;
     void (async () => {
@@ -3990,8 +4021,9 @@ function ChatViewContent(props: ChatViewProps) {
     () =>
       subscribePreviewAction((action) => {
         if (action === "toggle-panel") togglePreviewPanel();
+        if (action === "toggle-browser-panel") toggleBrowserPanel();
       }),
-    [togglePreviewPanel],
+    [toggleBrowserPanel, togglePreviewPanel],
   );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
