@@ -114,6 +114,21 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     null
   >("environments:register"),
+  moveProjectToCompany: mutationReference<
+    {
+      readonly fromCompanyId: CompanyId;
+      readonly toCompanyId: CompanyId;
+      readonly projectId: string;
+      readonly statusMapping: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+      readonly labelMapping: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+    },
+    {
+      readonly movedIssues: number;
+      readonly movedMilestones: number;
+      readonly movedBindings: number;
+      readonly droppedLabels: number;
+    }
+  >("projectMigration:moveProjectToCompany"),
   createCompanyProject: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -222,6 +237,23 @@ export interface EnvironmentControlClient {
     readonly info: EnvironmentCloudRegistrationInfo;
     readonly serviceRoleIds: ReadonlyArray<string>;
   }) => Promise<void>;
+  /**
+   * Moves a project and everything filed against it to another company.
+   *
+   * Destructive: issues are re-keyed under the destination prefix and the old keys are gone.
+   */
+  readonly moveProjectToCompany: (args: {
+    readonly fromCompanyId: CompanyId;
+    readonly toCompanyId: CompanyId;
+    readonly projectId: string;
+    readonly statusMapping: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+    readonly labelMapping: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+  }) => Promise<{
+    readonly movedIssues: number;
+    readonly movedMilestones: number;
+    readonly movedBindings: number;
+    readonly droppedLabels: number;
+  }>;
   /** Creates a project the company owns before any machine has a checkout of it. */
   readonly createCompanyProject: (args: {
     readonly companyId: CompanyId;
@@ -266,6 +298,8 @@ export function makeEnvironmentControlClient(options: {
     call<A>(() => client.query(reference, args));
   const mutation = (reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     call<null>(() => client.mutation(reference, args)).then(() => undefined);
+  const mutationResult = <A>(reference: FunctionReference<"mutation">, args: ConvexArgs) =>
+    call<A>(() => client.mutation(reference, args));
   const registrationMutation =
     options.client === undefined
       ? async (args: ConvexArgs) => {
@@ -328,6 +362,8 @@ export function makeEnvironmentControlClient(options: {
         serviceRoleIds,
         teamIds: [],
       }),
+    moveProjectToCompany: (args) =>
+      mutationResult(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.moveProjectToCompany, args),
     createCompanyProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
     ensureEnvironmentProject: ({ companyId, project }) =>

@@ -10,7 +10,23 @@ A project belongs to a company, not to a machine, so it appears here whether or 
 checked out. A project with no checkout is marked **No checkout**: you can plan and file issues
 against it, and attach a directory later to run agents in it.
 
-**Configure** opens the same editor as Settings → Projects, in a side panel.
+**Configure** opens the same editor as Settings → Projects, in a side panel. It is also where you
+move a project to another company.
+
+## Moving a project to another company
+
+A project can move, and its issues and milestones move with it. Because statuses, labels, and issue
+keys all belong to the company, the move is a migration rather than a setting, so it runs as a
+stepper: choose the destination, map each status and label onto one in the new company, then review.
+
+Pathway fills in the mappings whose names match and leaves the rest blank — a wrong guess that looks
+confident is worse than an empty field. What does not survive is stated on the review step:
+
+- **Issue keys are re-issued** under the new company's prefix. Any key you have linked or quoted
+  stops resolving, and this cannot be undone.
+- **Cycles are left behind**, because a cycle spans a whole company rather than one project.
+- **Team visibility resets** — issues arrive company-wide.
+- **Unmapped labels are removed** from their issues.
 
 AI usage is attributed by working directory, which is how the provider CLIs organise their
 transcripts. Session time is wall clock from a session's first message to its last — a session left

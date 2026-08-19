@@ -65,6 +65,14 @@ stepper so the lossy parts are chosen rather than guessed:
   is required.
 - **Issue keys are re-issued** under the destination company's prefix. This is destructive to any
   key a user has quoted or linked, so the review step states it plainly before anything is written.
+- **Cycles do not travel.** A cycle spans a whole company rather than one project, so a moved issue
+  leaves its cycle behind rather than pointing at one the destination does not have. Team visibility
+  resets for the same reason: issues arrive company-wide instead of inventing a team nobody chose.
+
+The move runs as one Convex transaction (`projectMigration.moveProjectToCompany`) and refuses
+before writing anything if a status it was not told how to translate is in use. Both companies'
+feeds are appended: tombstones in the source, upserts in the destination, because a replica told
+only one side keeps serving work that has left.
 
 ## Consequences
 

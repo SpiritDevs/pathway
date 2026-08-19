@@ -73,6 +73,8 @@ describe("environment control function references", () => {
       issueConnectGrant: "connectGrants:issue",
       deactivateEnvironment: "environments:deactivate",
       registerEnvironment: "environments:register",
+      moveProjectToCompany: "projectMigration:moveProjectToCompany",
+      createCompanyProject: "cloudProjects:createCompanyProject",
       ensureEnvironmentProject: "cloudProjects:ensureEnvironmentProject",
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
