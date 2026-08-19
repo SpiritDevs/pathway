@@ -166,6 +166,7 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { useWorkspaceProjects } from "./projects/useWorkspaceProjects";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
@@ -1884,6 +1885,7 @@ export default function Sidebar() {
       sortLogicalProjectsForSidebar(unsortedProjectGroups, agentThreads, sidebarProjectSortOrder),
     [agentThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
+  const workspaceProjects = useWorkspaceProjects();
   const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -1993,22 +1995,41 @@ export default function Sidebar() {
         : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
     [projectGroups, projectScopeKey],
   );
+  // A company project nothing has checked out is a real scope with no threads in it. Without this
+  // it would look like an unknown key and the effect below would snap the menu back to All.
+  const scopedCheckoutlessProject = useMemo(
+    () =>
+      projectScopeKey === null || scopedProjectGroup !== null
+        ? null
+        : (workspaceProjects.find(
+            (project) => project.projectKey === projectScopeKey && project.group === null,
+          ) ?? null),
+    [projectScopeKey, scopedProjectGroup, workspaceProjects],
+  );
   const scopedProjectKeys = useMemo(
     () =>
-      scopedProjectGroup === null
-        ? null
-        : new Set(
+      scopedProjectGroup !== null
+        ? new Set(
             scopedProjectGroup.memberProjectRefs.map(
               (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
             ),
-          ),
-    [scopedProjectGroup],
+          )
+        : // Empty rather than null: null means "no scope, show everything", which is the opposite
+          // of what scoping to a project with no threads should show.
+          scopedCheckoutlessProject !== null
+          ? new Set<string>()
+          : null,
+    [scopedCheckoutlessProject, scopedProjectGroup],
   );
   useEffect(() => {
-    if (projectScopeKey !== null && scopedProjectGroup === null) {
+    if (
+      projectScopeKey !== null &&
+      scopedProjectGroup === null &&
+      scopedCheckoutlessProject === null
+    ) {
       setProjectScopeKey(null);
     }
-  }, [projectScopeKey, scopedProjectGroup]);
+  }, [projectScopeKey, scopedCheckoutlessProject, scopedProjectGroup]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -3512,7 +3533,7 @@ export default function Sidebar() {
                 </Tooltip>
               </div>
             </div>
-            {projectGroups.length > 0 ? (
+            {workspaceProjects.length > 0 ? (
               <div className="flex items-center gap-1">
                 {singleProjectGroup ? (
                   <SidebarMenuButton
@@ -3573,8 +3594,9 @@ export default function Sidebar() {
                           <FolderIcon className="size-4 shrink-0" />
                           <span className="min-w-0 truncate text-sm">All projects</span>
                         </MenuRadioItem>
-                        {projectGroups.map((project) => {
-                          const scopeKey = project.projectKey;
+                        {workspaceProjects.map((workspaceProject) => {
+                          const scopeKey = workspaceProject.projectKey;
+                          const project = workspaceProject.group;
                           return (
                             <MenuRadioItem
                               key={scopeKey}
@@ -3582,27 +3604,33 @@ export default function Sidebar() {
                               closeOnClick
                               className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
                             >
-                              <ProjectFavicon
-                                environmentId={project.environmentId}
-                                cwd={project.workspaceRoot}
-                                faviconPath={project.faviconPath}
-                                className="size-4 shrink-0"
-                              />
+                              {project === null ? (
+                                <FolderIcon className="size-4 shrink-0 text-icon-muted" />
+                              ) : (
+                                <ProjectFavicon
+                                  environmentId={project.environmentId}
+                                  cwd={project.workspaceRoot}
+                                  faviconPath={project.faviconPath}
+                                  className="size-4 shrink-0"
+                                />
+                              )}
                               <span className="min-w-0 truncate text-sm">
-                                {project.displayName}
+                                {workspaceProject.displayName}
                               </span>
-                              <button
-                                type="button"
-                                aria-label={`Project settings for ${project.displayName}`}
-                                title={`Project settings for ${project.displayName}`}
-                                className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  void handleProjectSettings(event, project);
-                                }}
-                              >
-                                <SettingsIcon className="size-3.5" />
-                              </button>
+                              {project === null ? null : (
+                                <button
+                                  type="button"
+                                  aria-label={`Project settings for ${workspaceProject.displayName}`}
+                                  title={`Project settings for ${workspaceProject.displayName}`}
+                                  className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    void handleProjectSettings(event, project);
+                                  }}
+                                >
+                                  <SettingsIcon className="size-3.5" />
+                                </button>
+                              )}
                             </MenuRadioItem>
                           );
                         })}

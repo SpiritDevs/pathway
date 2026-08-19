@@ -262,7 +262,12 @@ export interface EnvironmentControlClient {
   }) => Promise<void>;
   readonly ensureEnvironmentProject: (args: {
     readonly companyId: CompanyId;
-    readonly project: EnvironmentProject;
+    /**
+     * Only the four fields the mutation sends. Narrower than `EnvironmentProject` on purpose: a
+     * caller that has just created a project holds those four and nothing else, and widening the
+     * parameter to the full shell would force it to invent a repository identity and a script list.
+     */
+    readonly project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "title">;
   }) => Promise<void>;
   readonly setPreferredEnvironmentBinding: (args: {
     readonly companyId: CompanyId;

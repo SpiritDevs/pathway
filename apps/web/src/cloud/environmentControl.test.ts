@@ -1,5 +1,4 @@
 import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
-import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
@@ -218,17 +217,14 @@ describe("environment control function references", () => {
 
     await control.ensureEnvironmentProject({
       companyId: COMPANY_ID,
+      // A full project shell still satisfies the narrowed parameter; the mutation reads four
+      // fields and the rest are along for the ride.
       project: {
         id: ProjectId.make("project-a"),
         environmentId: ENVIRONMENT_ID,
         title: "Pathway",
         workspaceRoot: "/workspace/pathway",
-        repositoryIdentity: null,
-        defaultModelSelection: null,
-        scripts: [],
-        createdAt: "2026-08-17T00:00:00.000Z",
-        updatedAt: "2026-08-17T00:00:00.000Z",
-      } satisfies EnvironmentProject,
+      },
     });
 
     expect(fake.calls).toContainEqual({
