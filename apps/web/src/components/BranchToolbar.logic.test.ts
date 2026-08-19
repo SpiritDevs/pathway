@@ -20,6 +20,8 @@ import {
   shouldIncludeBranchPickerItem,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
+  canOpenEnvironmentPicker,
+  hasEnvironmentChoice,
 } from "./BranchToolbar.logic";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
@@ -382,6 +384,48 @@ describe("resolveEnvironmentOptionLabel", () => {
         savedLabel: "Build box",
       }),
     ).toBe("Build box");
+  });
+});
+
+describe("canOpenEnvironmentPicker", () => {
+  it("opens with a single environment so the link row is reachable", () => {
+    expect(
+      canOpenEnvironmentPicker({
+        environmentCount: 1,
+        canChangeEnvironment: false,
+        canLinkEnvironment: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays inert when there is nothing to pick and nothing to link", () => {
+    expect(
+      canOpenEnvironmentPicker({
+        environmentCount: 1,
+        canChangeEnvironment: false,
+        canLinkEnvironment: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays inert before any environment is known", () => {
+    expect(
+      canOpenEnvironmentPicker({
+        environmentCount: 0,
+        canChangeEnvironment: true,
+        canLinkEnvironment: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasEnvironmentChoice", () => {
+  it("does not count a lone environment as a choice", () => {
+    expect(hasEnvironmentChoice({ environmentCount: 1, canChangeEnvironment: true })).toBe(false);
+  });
+
+  it("counts a second environment the user can switch to", () => {
+    expect(hasEnvironmentChoice({ environmentCount: 2, canChangeEnvironment: true })).toBe(true);
   });
 });
 

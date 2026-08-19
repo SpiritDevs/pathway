@@ -71,6 +71,7 @@ export interface ThreadDetailsPanelProps {
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  onLinkEnvironmentRequest?: () => void;
   onEnvModeChange: (mode: EnvMode) => void;
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
@@ -258,6 +259,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   environmentId={props.environmentId}
                   availableEnvironments={props.availableEnvironments}
                   onEnvironmentChange={props.onEnvironmentChange}
+                  {...(props.onLinkEnvironmentRequest
+                    ? { onLinkEnvironmentRequest: props.onLinkEnvironmentRequest }
+                    : {})}
                 />
               ) : null}
               <BranchToolbar layout="panel" panelSection="workspace" {...branchToolbarProps} />

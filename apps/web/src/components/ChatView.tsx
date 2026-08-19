@@ -58,6 +58,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@spiritdevs/shared/model";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@spiritdevs/shared/chatList";
+import { AddProjectConnectionDialog } from "./projects/AddProjectConnectionDialog";
 import { projectWorkspaceCwd, projectWorkspaceRuntimeEnv } from "./projects/projectWorkspace.logic";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
 import { truncate } from "@spiritdevs/shared/String";
@@ -2133,6 +2134,17 @@ function ChatViewContent(props: ChatViewProps) {
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
   const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
+  // The environment picker stays usable with a single environment: its last row
+  // opens the same "add a connection" flow as project settings, so linking a
+  // second machine does not require leaving the composer.
+  const [linkEnvironmentOpen, setLinkEnvironmentOpen] = useState(false);
+  const connectedEnvironmentIds = useMemo(
+    () => logicalProjectEnvironments.map((env) => env.environmentId),
+    [logicalProjectEnvironments],
+  );
+  const onLinkEnvironmentRequest = useCallback(() => {
+    setLinkEnvironmentOpen(true);
+  }, []);
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
       if (!canCheckoutPullRequestIntoThread) {
@@ -7460,6 +7472,7 @@ function ChatViewContent(props: ChatViewProps) {
     envLocked,
     availableEnvironments: logicalProjectEnvironments,
     onEnvironmentChange,
+    onLinkEnvironmentRequest,
     onEnvModeChange,
     ...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {}),
     ...(canOverrideServerThreadEnvMode
@@ -7915,6 +7928,7 @@ function ChatViewContent(props: ChatViewProps) {
                                     ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                     : {})}
                                   {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                                  onLinkEnvironmentRequest={onLinkEnvironmentRequest}
                                   availableEnvironments={logicalProjectEnvironments}
                                 />
                               </div>
@@ -7985,6 +7999,15 @@ function ChatViewContent(props: ChatViewProps) {
                   }
                 }}
                 onPrepared={handlePreparedPullRequestThread}
+              />
+            ) : null}
+
+            {activeProject ? (
+              <AddProjectConnectionDialog
+                connectedEnvironmentIds={connectedEnvironmentIds}
+                onOpenChange={setLinkEnvironmentOpen}
+                open={linkEnvironmentOpen}
+                projectTitle={activeProject.title}
               />
             ) : null}
           </div>
