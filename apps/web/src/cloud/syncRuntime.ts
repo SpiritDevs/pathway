@@ -58,14 +58,17 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
+import { runPrimaryHttp } from "../lib/runtime";
 import { randomUUID } from "../lib/utils";
 import { environmentCatalog, localEnvironmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { relayEnvironmentDiscovery } from "../state/relay";
 import {
+  companyRegistryReplicasAtom,
   publishCompanyRegistryMembershipId,
   publishCompanyRegistryReplica,
 } from "./companyRegistryReplica";
@@ -86,7 +89,9 @@ import {
 } from "./syncTransport";
 import { makeClerkConvexTokenFetcher, managedRelayClerkTokenFetcher } from "./syncTransportAuth";
 import type { EnvironmentControlClient } from "./environmentControl";
-import { useAlwaysOnCloudLink } from "./useCloudLinkController";
+import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
+import { useEnvironmentControl } from "./useEnvironmentControl";
+import { automaticCloudRetryDelayMs, useAlwaysOnCloudLink } from "./useCloudLinkController";
 import type { SyncTransportError } from "@spiritdevs/client-runtime/sync";
 
 /** How long a stopped engine waits before it is started again (a lost socket, a lost lock). */
@@ -1027,6 +1032,13 @@ export function environmentRegistrationMatchesInfo(
   );
 }
 
+/**
+ * Publishes this environment's registration to one company, or reports that nothing was needed.
+ *
+ * Returns `false` — without a write — when the company already carries a matching active
+ * registration, and when it carries neither a registration nor a role low-privileged enough to back
+ * a new one.
+ */
 export async function registerEnvironmentAutomatically(input: {
   readonly companyId: CompanyId;
   readonly environmentId: EnvironmentId;
@@ -1059,6 +1071,76 @@ export async function registerEnvironmentAutomatically(input: {
       activeRegistration?.serviceRoleIds ?? (serviceRoleId === null ? [] : [serviceRoleId]),
   });
   return true;
+}
+
+/**
+ * Publishes this environment's registration to every company the account is a member of.
+ *
+ * A registration is keyed by (company, environment), and company-scoped writes refuse an
+ * environment the company never registered — `cloudProjects.ensureEnvironmentProject` is the one
+ * people meet first, when a local checkout cannot be adopted. Company selection is a view
+ * preference and says nothing about which company a checkout belongs to, so registering only the
+ * selected one leaves every other company permanently unable to see this machine.
+ */
+function useAutomaticEnvironmentRegistration(): void {
+  const control = useEnvironmentControl();
+  const replicas = useAppAtomValue(companyRegistryReplicasAtom);
+  const environmentId = useAppAtomValue(primaryEnvironmentIdAtom);
+  const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const relayLinked = primaryCloudLinkState.data?.linked ?? null;
+  const managedTunnelActive = primaryCloudLinkState.data?.managedTunnelActive ?? null;
+  const inFlight = useRef(new Map<string, Promise<boolean>>());
+  const retryAttempts = useRef(new Map<string, number>());
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  useEffect(() => {
+    if (control === null || environmentId === null) return;
+    let cancelled = false;
+    const retryTimers: Array<ReturnType<typeof setTimeout>> = [];
+
+    for (const [companyId, replica] of replicas) {
+      const registrationKey = `${companyId} ${environmentId}`;
+      let registration = inFlight.current.get(registrationKey);
+      if (registration === undefined) {
+        registration = registerEnvironmentAutomatically({
+          companyId,
+          environmentId,
+          replica,
+          control,
+          readRegistrationInfo: () =>
+            runPrimaryHttp(
+              PrimaryEnvironmentHttpClient.pipe(
+                Effect.flatMap((client) => client.connect.registrationInfo({ headers: {} })),
+              ),
+            ),
+        });
+        inFlight.current.set(registrationKey, registration);
+        const clearInFlight = () => {
+          if (inFlight.current.get(registrationKey) === registration) {
+            inFlight.current.delete(registrationKey);
+          }
+        };
+        void registration.then(clearInFlight, clearInFlight);
+      }
+      void registration
+        .catch((error: unknown) => {
+          console.warn("Could not automatically register this Pathway environment.", error);
+          if (cancelled) return;
+          const attempt = retryAttempts.current.get(registrationKey) ?? 0;
+          retryAttempts.current.set(registrationKey, attempt + 1);
+          const delay = automaticCloudRetryDelayMs(attempt);
+          retryTimers.push(setTimeout(() => setRetryNonce((nonce) => nonce + 1), delay));
+        })
+        .then((didRegister) => {
+          if (didRegister) retryAttempts.current.delete(registrationKey);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+      for (const timer of retryTimers) clearTimeout(timer);
+    };
+  }, [control, environmentId, managedTunnelActive, relayLinked, replicas, retryNonce]);
 }
 
 export function discoverCompanyEnvironmentConnections(
@@ -1110,6 +1192,7 @@ export function CloudSyncRuntime(): null {
   // early is safe and lets provisioning flow straight into the first replica bootstrap.
   useCloudSyncRuntime(shouldRunCloudSyncRuntime(isSignedIn));
   useAlwaysOnCloudLink();
+  useAutomaticEnvironmentRegistration();
   useRelayEnvironmentConnections();
 
   return null;
