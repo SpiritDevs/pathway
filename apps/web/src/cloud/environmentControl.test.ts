@@ -330,7 +330,7 @@ describe("environment control function references", () => {
       setAuth: vi.fn(),
       mutation: async (reference, args) => {
         calls.push({ name: getFunctionName(reference), args });
-        return null;
+        return { deleted: true };
       },
     };
     const control = makeEnvironmentControlClient({
@@ -340,10 +340,14 @@ describe("environment control function references", () => {
       httpClient,
     });
 
-    await control.deleteCompanyProject({
-      companyId: COMPANY_ID,
-      cloudProjectId: "project-company",
-    });
+    // The caller decides between "removed" and "this workspace owned nothing by that id" from
+    // this value, so the authenticated HTTP path has to hand it back rather than discard it.
+    expect(
+      await control.deleteCompanyProject({
+        companyId: COMPANY_ID,
+        cloudProjectId: "project-company",
+      }),
+    ).toEqual({ deleted: true });
 
     expect(calls).toEqual([
       {

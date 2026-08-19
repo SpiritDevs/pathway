@@ -398,13 +398,18 @@ export const releaseEnvironmentProject = mutation({
  * Bindings remain as revoked feed rows until their environments consume them. That durable intent
  * is what lets an offline server remove its local project and threads when it reconnects, while
  * the project tombstone removes the shared identity from every company client immediately.
+ *
+ * `deleted` reports whether this call removed anything. A caller that owns the same project id in
+ * several companies asks each of them in turn, and most of those asks legitimately match nothing;
+ * without this flag a run where *every* ask matched nothing is indistinguishable from a successful
+ * delete, so the UI navigates away from a project it never removed.
  */
 export const deleteCompanyProject = mutation({
   args: {
     companyId: domainIdArg,
     cloudProjectId: domainIdArg,
   },
-  returns: v.null(),
+  returns: v.object({ deleted: v.boolean() }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     const project = await ctx.db
@@ -413,7 +418,7 @@ export const deleteCompanyProject = mutation({
         q.eq("companyId", actor.company._id).eq("id", args.cloudProjectId),
       )
       .unique();
-    if (project === null || project.deletedAt !== null) return null;
+    if (project === null || project.deletedAt !== null) return { deleted: false };
     requireRecordPermission(actor, "projects.manage", project.teamIds);
 
     const [bindings, agentThreads, milestones] = await Promise.all([
@@ -505,6 +510,6 @@ export const deleteCompanyProject = mutation({
       actor: actorRecord(actor),
       changes,
     });
-    return null;
+    return { deleted: true };
   },
 });

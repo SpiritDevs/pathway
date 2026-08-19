@@ -206,6 +206,7 @@ describe("Slack controller coordination", () => {
     };
     await environment.mutation(api.slackIntegrations.publishCapabilities, {
       ...capabilityArgs,
+      revision: 99,
       slackProtocolVersion: 2,
     });
     expect(

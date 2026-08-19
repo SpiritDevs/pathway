@@ -176,6 +176,34 @@ describe("company project deletion", () => {
     ]);
   });
 
+  it("reports whether the call actually removed a project", async () => {
+    const t = harness();
+    await seed(t);
+    const owner = asOwner(t);
+
+    expect(
+      await owner.mutation(api.cloudProjects.deleteCompanyProject, {
+        companyId: COMPANY_ID,
+        cloudProjectId: PROJECT_ID,
+      }),
+    ).toEqual({ deleted: true });
+
+    // A caller holding the same project id in several workspaces asks each of them in turn, so
+    // "this company owns nothing by that id" has to read differently from "removed".
+    expect(
+      await owner.mutation(api.cloudProjects.deleteCompanyProject, {
+        companyId: COMPANY_ID,
+        cloudProjectId: PROJECT_ID,
+      }),
+    ).toEqual({ deleted: false });
+    expect(
+      await owner.mutation(api.cloudProjects.deleteCompanyProject, {
+        companyId: COMPANY_ID,
+        cloudProjectId: "00000000-0000-4000-8000-000000000000",
+      }),
+    ).toEqual({ deleted: false });
+  });
+
   it("does not let a reconnecting checkout resurrect a deleted project", async () => {
     const t = harness();
     const ids = await seed(t);

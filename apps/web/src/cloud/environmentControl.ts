@@ -192,7 +192,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly companyId: CompanyId;
       readonly cloudProjectId: string;
     },
-    null
+    { readonly deleted: boolean }
   >("cloudProjects:deleteCompanyProject"),
 } as const;
 
@@ -328,10 +328,11 @@ export interface EnvironmentControlClient {
     readonly environmentId: EnvironmentId;
     readonly localProjectId: string;
   }) => Promise<void>;
+  /** Resolves `deleted: false` when this company had no live project with that id to remove. */
   readonly deleteCompanyProject: (args: {
     readonly companyId: CompanyId;
     readonly cloudProjectId: string;
-  }) => Promise<void>;
+  }) => Promise<{ readonly deleted: boolean }>;
   readonly close: () => Promise<void>;
 }
 
@@ -359,10 +360,10 @@ export function makeEnvironmentControlClient(options: {
     call<null>(() => client.mutation(reference, args)).then(() => undefined);
   const mutationResult = <A>(reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     call<A>(() => client.mutation(reference, args));
-  const authenticatedHttpMutation = async (
+  const authenticatedHttpMutationResult = async <A>(
     reference: FunctionReference<"mutation">,
     args: ConvexArgs,
-  ) => {
+  ): Promise<A> => {
     const token = await options.fetchToken({ forceRefreshToken: false });
     if (!token) {
       throw new EnvironmentControlError({
@@ -372,7 +373,13 @@ export function makeEnvironmentControlClient(options: {
     }
     const http = options.httpClient ?? new ConvexHttpClient(options.convexUrl);
     http.setAuth(token);
-    await call<null>(() => http.mutation(reference, args));
+    return call<A>(() => http.mutation(reference, args));
+  };
+  const authenticatedHttpMutation = async (
+    reference: FunctionReference<"mutation">,
+    args: ConvexArgs,
+  ) => {
+    await authenticatedHttpMutationResult<null>(reference, args);
   };
   const useHttpMutation = options.client === undefined || options.httpClient !== undefined;
   const registrationMutation = useHttpMutation
@@ -382,6 +389,13 @@ export function makeEnvironmentControlClient(options: {
         mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.registerEnvironment, args);
   const cloudProjectMutation = (reference: FunctionReference<"mutation">, args: ConvexArgs) =>
     useHttpMutation ? authenticatedHttpMutation(reference, args) : mutation(reference, args);
+  const cloudProjectMutationResult = <A>(
+    reference: FunctionReference<"mutation">,
+    args: ConvexArgs,
+  ): Promise<A> =>
+    useHttpMutation
+      ? authenticatedHttpMutationResult<A>(reference, args)
+      : mutationResult<A>(reference, args);
   const action = <A>(reference: FunctionReference<"action">, args: ConvexArgs) =>
     call<A>(() => client.action(reference, args));
 
@@ -449,7 +463,10 @@ export function makeEnvironmentControlClient(options: {
     releaseEnvironmentProject: (args) =>
       cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.releaseEnvironmentProject, args),
     deleteCompanyProject: (args) =>
-      cloudProjectMutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deleteCompanyProject, args),
+      cloudProjectMutationResult<{ readonly deleted: boolean }>(
+        ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deleteCompanyProject,
+        args,
+      ),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

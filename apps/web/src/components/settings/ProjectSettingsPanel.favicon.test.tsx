@@ -246,7 +246,7 @@ describe("Project settings favicon selection", () => {
       { environmentId: localEnvironmentId, projectId: ProjectId.make("project-local") },
     ];
     dialogState.confirm.mockReset().mockResolvedValue(true);
-    cloudState.deleteCompanyProject.mockReset().mockResolvedValue(undefined);
+    cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
     companyState.companies = [];
   });
 
@@ -418,6 +418,84 @@ describe("Project settings favicon selection", () => {
     expect(cloudState.deleteCompanyProject).toHaveBeenCalledWith({
       companyId,
       cloudProjectId: "cloud-pathway",
+    });
+  });
+
+  it("asks every owning workspace even after one of them fails", async () => {
+    const companyA = CompanyId.make("company-a");
+    const companyB = CompanyId.make("company-b");
+    cloudState.deleteCompanyProject
+      .mockReset()
+      .mockRejectedValueOnce(new Error("You cannot manage projects here."))
+      .mockResolvedValue({ deleted: true });
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyA, companyB],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    // The second owner is the one still holding the project. Aborting on the first error is what
+    // left it on screen after the user removed it.
+    expect(cloudState.deleteCompanyProject.mock.calls).toEqual([
+      [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
+      [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
+    ]);
+    expect(toastState.add).toHaveBeenCalledOnce();
+    expect(toastState.add.mock.calls[0]?.[0]).toMatchObject({
+      description: "You cannot manage projects here.",
+    });
+  });
+
+  it("reports a removal that deleted nothing instead of reporting success", async () => {
+    const companyId = CompanyId.make("company-a");
+    cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: false });
+    hooks.beginRender();
+    const settings = CheckoutlessProjectSettings({
+      project: {
+        projectKey: "cloud:cloud-pathway",
+        displayName: "Orphan Pathway",
+        companyIds: [companyId],
+        group: null,
+        checkoutCount: 0,
+        cloudProjectId: "cloud-pathway",
+      },
+      environmentControl: {
+        deleteCompanyProject: cloudState.deleteCompanyProject,
+      } as never,
+    }) as ReactElement<Record<string, unknown>>;
+    const removeProject = visitElements(
+      settings,
+      (element) =>
+        element.type === Button &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Remove project"),
+    );
+    (removeProject?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    await flushPromises();
+
+    expect(toastState.add).toHaveBeenCalledOnce();
+    expect(toastState.add.mock.calls[0]?.[0]).toMatchObject({
+      title: 'Failed to remove "Orphan Pathway"',
     });
   });
 

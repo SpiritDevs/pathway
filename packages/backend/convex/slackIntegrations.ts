@@ -1539,7 +1539,7 @@ export const publishCapabilities = mutation({
         environmentId,
         ...values,
       });
-    } else if (args.revision >= existing.revision) {
+    } else {
       await ctx.db.patch(existing._id, values);
     }
     return null;
