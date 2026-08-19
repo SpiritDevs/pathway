@@ -459,9 +459,15 @@
         animation: boot-lift 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
 
+      /* The icon is the app icon: a squircle painted onto an opaque square, so
+         the corners outside it are black and would read as a plate behind the
+         logo on any background. Rounding the image clips them away. 28% sits
+         just outside the artwork's own corner arc, so nothing dark survives the
+         mask while the silhouette still matches the icon everywhere else. */
       .boot-logo {
         width: 64px;
         height: 64px;
+        border-radius: 28%;
         object-fit: contain;
       }
 
