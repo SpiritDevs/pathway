@@ -284,6 +284,29 @@ export function listManagedCloudEnvironments(input: {
   });
 }
 
+/** Removes an environment from the signed-in Pathway Connect account. */
+export function unlinkRelayEnvironmentFromAccount(input: {
+  readonly clerkToken: string;
+  readonly environmentId: EnvironmentId;
+}): Effect.Effect<void, CloudEnvironmentLinkError, ManagedRelay.ManagedRelayClient> {
+  return ManagedRelay.ManagedRelayClient.pipe(
+    Effect.flatMap((client) =>
+      client.unlinkEnvironment({
+        clerkToken: input.clerkToken,
+        environmentId: input.environmentId,
+      }),
+    ),
+    Effect.asVoid,
+    Effect.mapError(
+      (cause) =>
+        new CloudEnvironmentLinkError({
+          message: "Could not remove the environment from Pathway Connect.",
+          cause,
+        }),
+    ),
+  );
+}
+
 export function listCloudDevices(input: {
   readonly clerkToken: string;
 }): Effect.Effect<

@@ -32,7 +32,8 @@ internally for an individual workspace; they do not require separate setup.
 
 If you belong to more than one company, the account menu lets you choose the company scope used
 throughout Pathway. **All companies** combines company-owned projects, agent threads, issues,
-email, environments, and other data. Choosing one company filters those areas to that company. You
+email, and other company data. Choosing one company filters those areas to that company. Environments
+remain account-level and do not change with this selection. You
 can also use a company's cog to open its Settings or choose **Create company** to start another
 workspace. Creating a company opens the same guided setup used during onboarding: enter its name,
 then optionally share the expected team size, your role, and how you heard about Pathway.

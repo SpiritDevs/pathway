@@ -9,6 +9,7 @@ import {
   type CloudLinkMode,
   type CloudLinkTarget,
   unlinkPrimaryEnvironmentFromCloud,
+  unlinkRelayEnvironmentFromAccount,
   updatePrimaryCloudPreferences,
 } from "./linkEnvironment";
 
@@ -43,4 +44,14 @@ export const updatePrimaryEnvironmentPreferences = createRuntimeCommand(connecti
   concurrency: cloudLinkConcurrency,
   execute: (input: { readonly target: CloudLinkTarget; readonly publishAgentActivity: boolean }) =>
     updatePrimaryCloudPreferences(input),
+});
+
+export const unlinkRelayEnvironment = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:cloud:unlink-relay-environment",
+  scheduler: cloudLinkScheduler,
+  concurrency: {
+    mode: "serial" as const,
+    key: (input: { readonly environmentId: string }) => input.environmentId,
+  },
+  execute: unlinkRelayEnvironmentFromAccount,
 });

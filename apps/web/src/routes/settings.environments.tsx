@@ -1,7 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { CompanyEnvironmentsPanel } from "../components/settings/company/CompanyEnvironmentsPanel";
+import { EnvironmentConnectionSettings } from "../components/settings/ConnectionsSettings";
+import { SettingsPageContainer } from "../components/settings/settingsLayout";
+
+function AppEnvironmentsPanel() {
+  return (
+    <SettingsPageContainer>
+      <EnvironmentConnectionSettings />
+    </SettingsPageContainer>
+  );
+}
 
 export const Route = createFileRoute("/settings/environments")({
-  component: CompanyEnvironmentsPanel,
+  component: AppEnvironmentsPanel,
 });

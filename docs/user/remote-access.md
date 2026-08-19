@@ -49,10 +49,11 @@ they can reconnect.
 Connected environments stay visible in the **Environments** list. Saved environments that are not
 currently reachable through Pathway Connect are grouped under the collapsed **Disconnected** section.
 Pathway refreshes relay health for the lifetime of the signed-in client, so closing or reopening a
-host is reflected throughout the app without changing its workspace registration. You can reconnect
-one environment, remove it, or remove all disconnected environments at once. For locally saved
-environments, removal only changes this client's catalog. In a company workspace, removal deactivates
-the workspace registration. Neither action deletes the environment's server, projects, or other data.
+host is reflected throughout the app. Environments belong to your Pathway Connect account, not to a
+company, so this list does not change when you switch Settings between your profile and a company.
+You can reconnect one environment, remove it, or remove all disconnected environments at once.
+Removing an account environment severs its Pathway Connect link and clears it from this client's
+catalog. It does not delete the environment's server, projects, or other data.
 After an app update changes the configured Pathway Connect service, the desktop app automatically
 relinks its local environment so the server and client use the same relay deployment.
 

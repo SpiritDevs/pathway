@@ -34,6 +34,7 @@ import {
   readPrimaryCloudLinkState,
   type CloudLinkTarget,
   unlinkPrimaryEnvironmentFromCloud,
+  unlinkRelayEnvironmentFromAccount,
   updatePrimaryCloudPreferences,
 } from "./linkEnvironment";
 
@@ -188,6 +189,25 @@ describe("web cloud link environment client", () => {
 
       expect(environments).toHaveLength(1);
       expect(fetchMock.mock.calls[0]?.[1]?.headers.authorization).toBe("Bearer clerk-token");
+    }),
+  );
+
+  it.effect("unlinks an account environment without contacting the local server", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      yield* withServices(
+        unlinkRelayEnvironmentFromAccount({
+          clerkToken: "clerk-token",
+          environmentId: EnvironmentId.make(TARGET.environmentId),
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+        `/v1/client/environment-links/${TARGET.environmentId}`,
+      );
     }),
   );
 

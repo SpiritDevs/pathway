@@ -7,6 +7,7 @@ import {
   TerminalIcon,
 } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
+import { useAuth } from "@clerk/react";
 import { type ReactNode, memo, useCallback, useId, useMemo, useState } from "react";
 import {
   AuthAccessReadScope,
@@ -123,12 +124,20 @@ import {
   type EnvironmentPresentation,
   useEnvironments,
   usePrimaryEnvironment,
+  useRelayEnvironmentDiscovery,
 } from "~/state/environments";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "~/state/server";
 import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import {
+  isCloudAccountLinkConflict,
+  requestAlwaysOnCloudLinkRelink,
+  useAlwaysOnCloudLinkStatus,
+} from "~/cloud/useCloudLinkController";
+import { unlinkRelayEnvironment } from "~/cloud/linkEnvironmentAtoms";
+import { relayEnvironmentDiscovery } from "~/state/relay";
 
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
@@ -1518,7 +1527,7 @@ function SavedBackendListRow({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={disableActions || isConnecting || removingEnvironmentId === environmentId}
+                disabled={disableActions || removingEnvironmentId === environmentId}
                 onClick={() =>
                   void (isConnected ? onRemove(environmentId) : onConnect(environmentId))
                 }
@@ -1528,7 +1537,7 @@ function SavedBackendListRow({
                     ? "Disconnecting…"
                     : "Disconnect"
                   : isConnecting
-                    ? "Connecting…"
+                    ? "Retry now"
                     : "Connect"}
               </Button>
             </>
@@ -1608,7 +1617,9 @@ export function EnvironmentConnectionSettings({
   readonly renderEnvironmentSection?: (slot: EnvironmentSectionSlot) => ReactNode;
 }) {
   const desktopBridge = window.desktopBridge;
+  const { getToken } = useAuth();
   const { environments } = useEnvironments();
+  const relayDiscovery = useRelayEnvironmentDiscovery();
   const primaryEnvironment = usePrimaryEnvironment();
   const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
   const connectSshEnvironment = useAtomCommand(connectSshEnvironmentAtom, {
@@ -1616,6 +1627,14 @@ export function EnvironmentConnectionSettings({
   });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const unlinkAccountEnvironment = useAtomCommand(unlinkRelayEnvironment, {
+    reportFailure: false,
+  });
+  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    reportFailure: false,
+  });
+  const cloudLinkStatus = useAlwaysOnCloudLinkStatus();
+  const [relinkConfirmOpen, setRelinkConfirmOpen] = useState(false);
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
   const currentSessionScopes = desktopBridge
@@ -2045,10 +2064,40 @@ export function EnvironmentConnectionSettings({
     [retryEnvironment],
   );
 
+  const unlinkAccountOwnedEnvironment = useCallback(
+    async (environmentId: EnvironmentId) => {
+      if (!relayDiscovery.environments.has(environmentId)) return;
+      const clerkToken = await getToken();
+      if (!clerkToken) {
+        throw new Error("Sign in to remove this environment from Pathway Connect.");
+      }
+      const result = await unlinkAccountEnvironment({ clerkToken, environmentId });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        throw squashAtomCommandFailure(result);
+      }
+    },
+    [getToken, relayDiscovery.environments, unlinkAccountEnvironment],
+  );
+
   const handleRemoveSavedBackend = useCallback(
     async (environmentId: EnvironmentId) => {
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
+      try {
+        await unlinkAccountOwnedEnvironment(environmentId);
+      } catch (error) {
+        setRemovingSavedEnvironmentId(null);
+        const message = error instanceof Error ? error.message : "Failed to remove backend.";
+        setSavedBackendError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not remove backend",
+            description: message,
+          }),
+        );
+        return;
+      }
       const result = await removeEnvironment(environmentId);
       setRemovingSavedEnvironmentId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -2062,9 +2111,11 @@ export function EnvironmentConnectionSettings({
             description: message,
           }),
         );
+        return;
       }
+      void refreshRelayEnvironments();
     },
-    [removeEnvironment],
+    [refreshRelayEnvironments, removeEnvironment, unlinkAccountOwnedEnvironment],
   );
 
   const handleRemoveAllDisconnectedEnvironments = useCallback(async () => {
@@ -2076,6 +2127,12 @@ export function EnvironmentConnectionSettings({
 
     for (const environment of removableDisconnectedEnvironments) {
       setRemovingSavedEnvironmentId(environment.environmentId);
+      try {
+        await unlinkAccountOwnedEnvironment(environment.environmentId);
+      } catch {
+        failedLabels.push(environment.label);
+        continue;
+      }
       const result = await removeEnvironment(environment.environmentId);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         failedLabels.push(environment.label);
@@ -2085,6 +2142,7 @@ export function EnvironmentConnectionSettings({
     setRemovingSavedEnvironmentId(null);
     setIsRemovingDisconnectedEnvironments(false);
     setRemoveAllDisconnectedDialogOpen(false);
+    void refreshRelayEnvironments();
 
     if (failedLabels.length > 0) {
       const message = `Could not remove ${failedLabels.join(", ")}.`;
@@ -2106,7 +2164,12 @@ export function EnvironmentConnectionSettings({
         removableDisconnectedEnvironments.length === 1 ? "environment" : "environments"
       } removed from this client.`,
     });
-  }, [removableDisconnectedEnvironments, removeEnvironment]);
+  }, [
+    refreshRelayEnvironments,
+    removableDisconnectedEnvironments,
+    removeEnvironment,
+    unlinkAccountOwnedEnvironment,
+  ]);
 
   const handleConnectSshHost = useCallback(
     async (target: DesktopSshEnvironmentTarget, label?: string) => {
@@ -2938,6 +3001,22 @@ export function EnvironmentConnectionSettings({
                 }
               />
             ) : null}
+            {isCloudAccountLinkConflict(cloudLinkStatus.error) ? (
+              <SettingsRow
+                title="Linked to another account"
+                description="Re-link this environment to the Pathway Connect account you are signed into now."
+                control={
+                  <Button
+                    size="xs"
+                    variant="destructive-outline"
+                    onClick={() => setRelinkConfirmOpen(true)}
+                  >
+                    <RefreshCwIcon className="size-3.5" />
+                    Re-link
+                  </Button>
+                }
+              />
+            ) : null}
             {desktopBridge ? (
               <>
                 {renderEndpointRows("endpoint-rail")}
@@ -3079,6 +3158,31 @@ export function EnvironmentConnectionSettings({
           />
         </SettingsSection>
       )}
+
+      <AlertDialog open={relinkConfirmOpen} onOpenChange={setRelinkConfirmOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-link this environment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This severs all active Pathway Connect connections to this environment and stops its
+              current managed tunnel. Pathway will then link the environment to the account you are
+              signed into now. This-machine and local-network access are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setRelinkConfirmOpen(false);
+                requestAlwaysOnCloudLinkRelink();
+              }}
+            >
+              Disconnect and re-link
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
 
       {environmentSection}
     </>

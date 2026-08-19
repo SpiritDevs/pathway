@@ -550,7 +550,18 @@ export const make = Effect.gen(function* () {
             environmentId,
           });
         }
-        const target = (yield* getEntry(environmentId)).target;
+        const runtimeEntry = (yield* SubscriptionRef.get(entries)).get(environmentId);
+        const target =
+          runtimeEntry?.target ??
+          (yield* Ref.get(persistedTargetsByEnvironment)).get(environmentId);
+
+        // Removal is deliberately idempotent. Catalog projections and user actions are
+        // asynchronous, so a row can outlive the runtime entry it was rendered from. In that
+        // case the durable target is still enough to finish cleanup; if neither remains, the
+        // requested end state has already been reached.
+        if (target === undefined) {
+          return;
+        }
         const profile =
           target._tag === "BearerConnectionTarget" || target._tag === "SshConnectionTarget"
             ? yield* profiles.get(target.connectionId)
@@ -608,17 +619,10 @@ export const make = Effect.gen(function* () {
         .filter((entry) => entry.target._tag === "RelayConnectionTarget")
         .map((entry) => entry.target.environmentId);
 
-      yield* Effect.forEach(
-        relayEnvironmentIds,
-        (environmentId) =>
-          remove(environmentId).pipe(
-            Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
-          ),
-        {
-          concurrency: "unbounded",
-          discard: true,
-        },
-      );
+      yield* Effect.forEach(relayEnvironmentIds, (environmentId) => remove(environmentId), {
+        concurrency: "unbounded",
+        discard: true,
+      });
     },
   );
 

@@ -58,17 +58,14 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { randomUUID } from "../lib/utils";
 import { environmentCatalog, localEnvironmentCatalog } from "../connection/catalog";
-import { PrimaryEnvironmentHttpClient } from "../environments/primary/httpClient";
-import { runPrimaryHttp } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
-import { activeCompanyIdAtom } from "./activeCompany";
+import { relayEnvironmentDiscovery } from "../state/relay";
 import {
-  companyRegistryReplicasAtom,
   publishCompanyRegistryMembershipId,
   publishCompanyRegistryReplica,
 } from "./companyRegistryReplica";
@@ -77,7 +74,6 @@ import {
   type CompanySyncEngineMutationHandle,
 } from "./companySyncEngines";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
-import { usePrimaryCloudLinkState } from "./primaryCloudLinkState";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
 import {
@@ -90,8 +86,7 @@ import {
 } from "./syncTransport";
 import { makeClerkConvexTokenFetcher, managedRelayClerkTokenFetcher } from "./syncTransportAuth";
 import type { EnvironmentControlClient } from "./environmentControl";
-import { useEnvironmentControl } from "./useEnvironmentControl";
-import { automaticCloudRetryDelayMs, useAlwaysOnCloudLink } from "./useCloudLinkController";
+import { useAlwaysOnCloudLink } from "./useCloudLinkController";
 import type { SyncTransportError } from "@spiritdevs/client-runtime/sync";
 
 /** How long a stopped engine waits before it is started again (a lost socket, a lost lock). */
@@ -900,18 +895,40 @@ export function shouldRunCloudSyncRuntime(isSignedIn: boolean | undefined): bool
 }
 
 /**
- * Installs company-discovered environments into the ordinary connection registry. From that point
- * the existing relay resolver owns live shell and transcript streaming, just as it does for a
- * manually added Pathway Connect environment.
+ * Installs the signed-in account's Pathway Connect environments into the ordinary connection
+ * registry. Company selection must never change this catalog: environments belong to the app and
+ * the Pathway Connect account, not to a company workspace.
  */
-function useCompanyEnvironmentConnections(): void {
-  const replicas = useAppAtomValue(companyRegistryReplicasAtom);
+function useRelayEnvironmentConnections(): void {
+  const relayDiscovery = useAppAtomValue(relayEnvironmentDiscovery.stateValueAtom);
   const localCatalog = useAppAtomValue(localEnvironmentCatalog.catalogValueAtom);
   const primaryEnvironmentId = useAppAtomValue(primaryEnvironmentIdAtom);
   const installedEnvironmentIds = useRef(new Set<EnvironmentId>());
 
   useEffect(() => {
-    const discovered = discoverCompanyEnvironmentConnections(replicas, primaryEnvironmentId);
+    void runAtomCommand(appAtomRegistry, relayEnvironmentDiscovery.refresh, undefined, {
+      label: "Pathway Connect environment discovery",
+      reportFailure: true,
+      reportDefect: true,
+    });
+  }, []);
+
+  useEffect(() => {
+    const discovered = new Map(
+      [...relayDiscovery.environments.values()]
+        .map(({ environment }) => [environment.environmentId, environment.label] as const)
+        .filter(([environmentId]) => environmentId !== primaryEnvironmentId),
+    );
+
+    for (const environmentId of installedEnvironmentIds.current) {
+      if (discovered.has(environmentId)) continue;
+      installedEnvironmentIds.current.delete(environmentId);
+      void runAtomCommand(appAtomRegistry, environmentCatalog.remove, environmentId, {
+        label: "company environment disconnect",
+        reportFailure: true,
+        reportDefect: true,
+      });
+    }
 
     for (const [environmentId, label] of discovered) {
       if (
@@ -927,7 +944,7 @@ function useCompanyEnvironmentConnections(): void {
           target: new RelayConnectionTarget({ environmentId, label }),
         }),
         {
-          label: "company environment connect",
+          label: "Pathway Connect environment connect",
           reportFailure: true,
           reportDefect: true,
         },
@@ -935,7 +952,7 @@ function useCompanyEnvironmentConnections(): void {
         if (result._tag === "Failure") installedEnvironmentIds.current.delete(environmentId);
       });
     }
-  }, [localCatalog.entries, primaryEnvironmentId, replicas]);
+  }, [localCatalog.entries, primaryEnvironmentId, relayDiscovery.environments]);
 }
 
 const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
@@ -1044,67 +1061,6 @@ export async function registerEnvironmentAutomatically(input: {
   return true;
 }
 
-/** Registers a newly paired primary environment as soon as login has bootstrapped its company. */
-function useAutomaticEnvironmentRegistration(): void {
-  const control = useEnvironmentControl();
-  const companyId = useAppAtomValue(activeCompanyIdAtom);
-  const replicas = useAppAtomValue(companyRegistryReplicasAtom);
-  const environmentId = useAppAtomValue(primaryEnvironmentIdAtom);
-  const primaryCloudLinkState = usePrimaryCloudLinkState();
-  const relayLinked = primaryCloudLinkState.data?.linked ?? null;
-  const managedTunnelActive = primaryCloudLinkState.data?.managedTunnelActive ?? null;
-  const inFlight = useRef(new Map<string, Promise<boolean>>());
-  const retryAttempts = useRef(new Map<string, number>());
-  const [retryNonce, setRetryNonce] = useState(0);
-  const replica = companyId === null ? undefined : replicas.get(companyId);
-
-  useEffect(() => {
-    if (control === null || companyId === null || environmentId === null) return;
-    if (replica === undefined) return;
-    const registrationKey = `${companyId}\u0000${environmentId}`;
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let registration = inFlight.current.get(registrationKey);
-    if (registration === undefined) {
-      registration = registerEnvironmentAutomatically({
-        companyId,
-        environmentId,
-        replica,
-        control,
-        readRegistrationInfo: () =>
-          runPrimaryHttp(
-            PrimaryEnvironmentHttpClient.pipe(
-              Effect.flatMap((client) => client.connect.registrationInfo({ headers: {} })),
-            ),
-          ),
-      });
-      inFlight.current.set(registrationKey, registration);
-      const clearInFlight = () => {
-        if (inFlight.current.get(registrationKey) === registration) {
-          inFlight.current.delete(registrationKey);
-        }
-      };
-      void registration.then(clearInFlight, clearInFlight);
-    }
-    void registration
-      .catch((error: unknown) => {
-        console.warn("Could not automatically register this Pathway environment.", error);
-        if (cancelled) return;
-        const attempt = retryAttempts.current.get(registrationKey) ?? 0;
-        retryAttempts.current.set(registrationKey, attempt + 1);
-        const delay = automaticCloudRetryDelayMs(attempt);
-        retryTimer = setTimeout(() => setRetryNonce((nonce) => nonce + 1), delay);
-      })
-      .then((didRegister) => {
-        if (didRegister) retryAttempts.current.delete(registrationKey);
-      });
-    return () => {
-      cancelled = true;
-      if (retryTimer !== null) clearTimeout(retryTimer);
-    };
-  }, [companyId, control, environmentId, managedTunnelActive, relayLinked, replica, retryNonce]);
-}
-
 export function discoverCompanyEnvironmentConnections(
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
   primaryEnvironmentId: EnvironmentId | null = null,
@@ -1153,9 +1109,8 @@ export function CloudSyncRuntime(): null {
   // an indefinite "preparing" state. The repair mutation cannot create a workspace, so starting
   // early is safe and lets provisioning flow straight into the first replica bootstrap.
   useCloudSyncRuntime(shouldRunCloudSyncRuntime(isSignedIn));
-  useAutomaticEnvironmentRegistration();
   useAlwaysOnCloudLink();
-  useCompanyEnvironmentConnections();
+  useRelayEnvironmentConnections();
 
   return null;
 }

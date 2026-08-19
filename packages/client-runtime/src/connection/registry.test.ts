@@ -663,6 +663,25 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect("treats removal of an already removed environment as successful", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([RELAY_TARGET]);
+
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.remove(RELAY_TARGET.environmentId);
+        yield* registry.remove(RELAY_TARGET.environmentId);
+
+        expect((yield* Ref.get(harness.storedTargets)).has(RELAY_TARGET.environmentId)).toBe(false);
+        expect((yield* SubscriptionRef.get(registry.entries)).has(RELAY_TARGET.environmentId)).toBe(
+          false,
+        );
+        expect(yield* Ref.get(harness.cacheClears)).toEqual([RELAY_TARGET.environmentId]);
+        expect(yield* Ref.get(harness.ownedDataClears)).toEqual([RELAY_TARGET.environmentId]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("removes all relay-owned data without touching non-cloud connections", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness(
