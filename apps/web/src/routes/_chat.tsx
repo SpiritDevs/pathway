@@ -99,6 +99,24 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "threadBrowser.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!routeThreadRef) return;
+        if (!isPreviewSupportedInRuntime()) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "The browser is desktop-only",
+              description: "Open Pathway in the desktop app to use the in-app browser.",
+            }),
+          );
+          return;
+        }
+        dispatchPreviewAction("toggle-browser-panel");
+        return;
+      }
+
       // The remaining preview commands only fire when the panel is the
       // currently-focused tenant. The `when: previewFocus` rule already
       // gates this, but defend against the keybinding being misconfigured.

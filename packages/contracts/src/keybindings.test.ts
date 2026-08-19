@@ -48,6 +48,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedThreadPanelToggle.command, "threadPanel.toggle");
 
+    const parsedThreadBrowserToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+b",
+      command: "threadBrowser.toggle",
+    });
+    assert.strictEqual(parsedThreadBrowserToggle.command, "threadBrowser.toggle");
+
     const parsedClose = yield* decode(KeybindingRule, {
       key: "mod+w",
       command: "terminal.close",

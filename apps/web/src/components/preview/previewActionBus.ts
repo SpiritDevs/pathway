@@ -7,6 +7,7 @@
  */
 export type PreviewAction =
   | "toggle-panel"
+  | "toggle-browser-panel"
   | "refresh"
   | "focus-url"
   | "zoom-in"
