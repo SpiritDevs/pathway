@@ -17,6 +17,32 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+/**
+ * Where settings content is being rendered. A page owns the scroll container,
+ * the page gutters and the reading measure; a sheet already provides all three,
+ * so the same panels must render flat inside one instead of nesting a second
+ * scroller and a second set of gutters into a column half the width.
+ */
+export type SettingsSurface = "page" | "sheet";
+
+const SettingsSurfaceContext = createContext<SettingsSurface>("page");
+
+export function SettingsSurfaceProvider({
+  children,
+  surface,
+}: {
+  readonly children: ReactNode;
+  readonly surface: SettingsSurface;
+}) {
+  return (
+    <SettingsSurfaceContext.Provider value={surface}>{children}</SettingsSurfaceContext.Provider>
+  );
+}
+
+export function useSettingsSurface(): SettingsSurface {
+  return useContext(SettingsSurfaceContext);
+}
+
 interface SettingsSearchTargetContextValue {
   readonly targetId: string | null;
   readonly onTargetHandled: () => void;
@@ -157,7 +183,7 @@ export function SettingsSection({
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
       className={cn("space-y-3", className)}
     >
-      <div className="flex min-h-8 items-center justify-between gap-4 px-3 sm:px-4">
+      <div className="@xl/settings:px-4 flex min-h-8 items-center justify-between gap-4 px-3">
         <h2 className="flex items-center gap-2 text-lg font-semibold tracking-[-0.025em] text-foreground">
           {icon}
           {title}
@@ -193,9 +219,20 @@ export function SettingsRow({
       {...rowProps}
       ref={targetRef}
       tabIndex={rowProps.id ? -1 : rowProps.tabIndex}
-      className={cn("rounded-xl px-3 sm:px-4", children ? "pt-3 pb-1" : "py-3", className)}
+      className={cn(
+        "@xl/settings:px-4 rounded-xl px-3",
+        children ? "pt-3 pb-1" : "py-3",
+        className,
+      )}
     >
-      <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] sm:items-center sm:gap-8">
+      {/*
+        Two columns only once the *container* is wide enough for both. Keyed to
+        the viewport this collapsed the label to a few characters per line
+        whenever the same row was reused in a narrow surface such as a settings
+        sheet, because the control column takes its intrinsic width and the
+        label column is the one that gives.
+      */}
+      <div className="@xl/settings:grid @xl/settings:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @xl/settings:items-center @xl/settings:gap-8 flex flex-col gap-3">
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">{title}</h3>
@@ -211,7 +248,7 @@ export function SettingsRow({
           {status ? <div className="pt-0.5 text-xs text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (
-          <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
+          <div className="@xl/settings:w-auto @xl/settings:justify-end flex w-full min-w-0 shrink-0 items-center gap-2">
             {control}
           </div>
         ) : null}
@@ -262,6 +299,7 @@ export function SettingsPageContainer({
   className?: string;
 }) {
   const navigate = useNavigate();
+  const surface = useSettingsSurface();
   const { hash, pathname } = useLocation({
     select: (location) => ({ hash: location.hash, pathname: location.pathname }),
   });
@@ -287,13 +325,32 @@ export function SettingsPageContainer({
     };
   }, [pathname, targetId]);
 
+  // A sheet already scrolls its own body and applies its own padding, so the
+  // page chrome is dropped there: nesting a second scroller inside it strands
+  // content behind the footer, and stacking both sets of gutters is what left
+  // the column too narrow to lay out.
+  if (surface === "sheet") {
+    return (
+      <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>
+        <div className={cn("@container/settings flex w-full flex-col gap-10", className)}>
+          {children}
+        </div>
+      </SettingsSearchTargetProvider>
+    );
+  }
+
   return (
     <SettingsSearchTargetProvider targetId={targetId} onTargetHandled={clearTargetHash}>
       <div
         ref={scrollContainerRef}
         className="settings-page-scroll-fade scrollbar-gutter-both flex-1 overflow-y-auto px-4 pt-10 pb-7 sm:px-8 sm:pt-12 sm:pb-10"
       >
-        <div className={cn("mx-auto flex w-full max-w-4xl flex-col gap-12", className)}>
+        <div
+          className={cn(
+            "@container/settings mx-auto flex w-full max-w-4xl flex-col gap-12",
+            className,
+          )}
+        >
           {children}
         </div>
       </div>

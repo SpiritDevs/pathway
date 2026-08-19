@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { RightPanelSheet } from "../../RightPanelSheet";
 import { Button } from "../../ui/button";
 import { SheetDescription, SheetFooter, SheetHeader, SheetPanel, SheetTitle } from "../../ui/sheet";
+import { SettingsSurfaceProvider } from "../settingsLayout";
 
 export function CompanySettingsSheet({
   children,
@@ -41,7 +42,14 @@ export function CompanySettingsSheet({
           <XIcon />
         </Button>
       </SheetHeader>
-      <SheetPanel className="space-y-5 p-5">{children}</SheetPanel>
+      {/*
+        Settings rows size themselves against the named `settings` container, so
+        the sheet body has to declare it — the rows are otherwise laid out for a
+        full-width page inside a column less than half that wide.
+      */}
+      <SheetPanel className="@container/settings space-y-5 p-5">
+        <SettingsSurfaceProvider surface="sheet">{children}</SettingsSurfaceProvider>
+      </SheetPanel>
       <SheetFooter className="px-5">{footer}</SheetFooter>
     </RightPanelSheet>
   );

@@ -180,7 +180,7 @@ function RoutingRuleCard({
 }) {
   return (
     <div className="space-y-2 rounded-md border border-border/60 bg-background/30 p-2.5">
-      <div className="grid gap-2 sm:grid-cols-[minmax(9rem,0.55fr)_minmax(14rem,1fr)_auto]">
+      <div className="@xl/settings:grid-cols-[minmax(9rem,0.55fr)_minmax(14rem,1fr)_auto] grid gap-2">
         <RuleTextInput
           label="Auto-assignment rule name"
           onCommit={(name) => onChange({ ...rule, name })}
@@ -193,7 +193,13 @@ function RoutingRuleCard({
           placeholder="UI, frontend, styling, or accessibility work"
           value={rule.condition}
         />
-        <div className="flex items-center gap-0.5">
+        {/*
+          Grid items stretch, so once the container is too narrow for the
+          three-column rule layout these controls land on a row of their own and
+          would otherwise span its full width. Keep them at their own size,
+          trailing the fields they act on.
+        */}
+        <div className="flex items-center gap-0.5 justify-self-end">
           <Button
             aria-label={`Move ${rule.name} up`}
             disabled={onMoveUp === null}
@@ -244,7 +250,7 @@ function AuditRuleCard({
 }) {
   return (
     <div className="space-y-2.5 rounded-md border border-border/60 bg-background/30 p-2.5">
-      <div className="grid gap-2 sm:grid-cols-[minmax(9rem,0.55fr)_minmax(14rem,1fr)_auto]">
+      <div className="@xl/settings:grid-cols-[minmax(9rem,0.55fr)_minmax(14rem,1fr)_auto] grid gap-2">
         <RuleTextInput
           label="Audit rule name"
           onCommit={(name) => onChange({ ...rule, name })}
@@ -259,6 +265,7 @@ function AuditRuleCard({
         />
         <Button
           aria-label={`Delete ${rule.name}`}
+          className="justify-self-end"
           onClick={onDelete}
           size="icon-xs"
           variant="ghost"
@@ -363,7 +370,7 @@ export function IssueAutomationSettingsSection({
         }
       />
 
-      <div className="space-y-2 px-3 sm:px-4">
+      <div className="@xl/settings:px-4 space-y-2 px-3">
         <div>
           <p className="text-xs font-medium text-foreground">Worker rules</p>
           <p className="text-[11px] text-muted-foreground">First matching rule wins.</p>
@@ -448,7 +455,7 @@ export function IssueAutomationSettingsSection({
         }
       />
 
-      <div className="space-y-2 px-3 pt-2 sm:px-4">
+      <div className="@xl/settings:px-4 space-y-2 px-3 pt-2">
         <div>
           <p className="text-xs font-medium text-foreground">Audit rules</p>
           <p className="text-[11px] text-muted-foreground">
@@ -504,7 +511,7 @@ export function IssueAutomationSettingsSection({
         </Button>
       </div>
 
-      <div className="space-y-2 px-3 pt-2 sm:px-4">
+      <div className="@xl/settings:px-4 space-y-2 px-3 pt-2">
         <div>
           <p className="text-xs font-medium text-foreground">Review workers</p>
           <p className="text-[11px] text-muted-foreground">
@@ -567,7 +574,7 @@ export function IssueAutomationSettingsSection({
         </Button>
       </div>
 
-      <div className="grid gap-2 px-3 pt-2 sm:grid-cols-2 sm:px-4">
+      <div className="@xl/settings:grid-cols-2 @xl/settings:px-4 grid gap-2 px-3 pt-2">
         <StatusTransitionSelect
           statuses={statuses}
           automaticLabel="First Started status"

@@ -142,7 +142,7 @@ function ReactionRouteControls({
       : (projectTitles.get(route.projectId) ?? "Unknown project");
 
   return (
-    <div className="grid gap-2 rounded-md border border-border/60 bg-background/30 p-2 sm:grid-cols-[minmax(8rem,0.8fr)_minmax(10rem,1fr)_minmax(9rem,0.7fr)_auto] sm:items-end">
+    <div className="@xl/settings:grid-cols-[minmax(8rem,0.8fr)_minmax(10rem,1fr)_minmax(9rem,0.7fr)_auto] @xl/settings:items-end grid gap-2 rounded-md border border-border/60 bg-background/30 p-2">
       <label className="min-w-0 space-y-1">
         <span className="block text-[11px] font-medium text-muted-foreground">Slack reaction</span>
         <span className="flex items-center gap-1 text-muted-foreground">
@@ -672,7 +672,7 @@ export function IntakeSettingsPanel({
               </span>
             }
             control={
-              <div className="flex w-full items-center gap-1.5 sm:w-72">
+              <div className="@xl/settings:w-72 flex w-full min-w-0 items-center gap-1.5">
                 <Input
                   aria-label="Slack bot token"
                   autoComplete="off"
@@ -726,17 +726,17 @@ export function IntakeSettingsPanel({
           />
 
           {limitError === null ? null : (
-            <p className="px-3 text-[11px] text-muted-foreground sm:px-4">{limitError}</p>
+            <p className="@xl/settings:px-4 px-3 text-[11px] text-muted-foreground">{limitError}</p>
           )}
 
           {watches.length === 0 ? (
-            <p className="px-3 py-3 text-[13px] text-muted-foreground/80 sm:px-4">
+            <p className="@xl/settings:px-4 px-3 py-3 text-[13px] text-muted-foreground/80">
               No channels watched yet. Invite the bot to a channel, then add it here.
             </p>
           ) : (
             watches.map((watch) => (
               <div
-                className="flex flex-col gap-3 rounded-lg border border-border/60 bg-card/30 px-3 py-3 sm:px-4"
+                className="@xl/settings:px-4 flex flex-col gap-3 rounded-lg border border-border/60 bg-card/30 px-3 py-3"
                 key={watch.id}
               >
                 <div className="flex items-center gap-2">
@@ -759,7 +759,7 @@ export function IntakeSettingsPanel({
                   </Button>
                 </div>
 
-                <div className="grid gap-3 rounded-md bg-muted/25 p-2.5 sm:grid-cols-2">
+                <div className="@xl/settings:grid-cols-2 grid gap-3 rounded-md bg-muted/25 p-2.5">
                   <div className="min-w-0 space-y-1">
                     <span className="block text-[11px] font-medium text-muted-foreground">
                       Default project

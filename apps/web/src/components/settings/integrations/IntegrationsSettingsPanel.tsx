@@ -921,14 +921,15 @@ function AutomationSheet({
         </Button>
       }
     >
-      <label className="flex items-center justify-between rounded-lg border p-4">
-        <span>
+      <label className="flex items-center justify-between gap-3 rounded-lg border p-4">
+        <span className="min-w-0">
           <span className="block text-sm font-medium">Company automation</span>
           <span className="block text-xs text-muted-foreground">
             {summary?.enabled ? "Enabled" : "Paused"}
           </span>
         </span>
         <Switch
+          className="shrink-0"
           disabled={!canManage || summary === null}
           checked={summary?.enabled ?? false}
           onCheckedChange={(enabled) =>
