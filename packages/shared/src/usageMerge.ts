@@ -9,6 +9,7 @@
 import type {
   EnvironmentId,
   UsageBucket,
+  UsageProjectTotals,
   UsageProviderKind,
   UsageSourceFingerprint,
   UsageSummary,
@@ -53,6 +54,16 @@ export interface HourlyTotals {
   readonly byProvider: ReadonlyMap<UsageProviderKind, { costUsd: number; totalTokens: number }>;
 }
 
+/** Usage attributed to one working directory, summed across providers and environments. */
+export interface WorkspaceUsage {
+  readonly workspaceSlug: string;
+  readonly costUsd: number;
+  readonly totalTokens: number;
+  readonly records: number;
+  readonly sessions: number;
+  readonly activeMs: number;
+}
+
 export interface CostQuality {
   readonly providerReportedShare: number;
   readonly modelPricedShare: number;
@@ -75,6 +86,8 @@ export interface MergedUsage {
   readonly daily: readonly DailyTotals[];
   readonly hourly: readonly HourlyTotals[];
   readonly costQuality: CostQuality;
+  /** Per-working-directory totals, for the providers that record one. */
+  readonly workspaces: readonly WorkspaceUsage[];
   /** Environments whose data was dropped as a duplicate of another's. */
   readonly duplicateSources: readonly string[];
   readonly contributingEnvironments: readonly EnvironmentId[];
@@ -135,7 +148,11 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
 function ownedContribution(
   environment: EnvironmentUsage,
   ownerByFingerprint: ReadonlyMap<string, EnvironmentId>,
-): { readonly buckets: readonly UsageBucket[]; readonly sessions: number } {
+): {
+  readonly buckets: readonly UsageBucket[];
+  readonly sessions: number;
+  readonly projects: readonly UsageProjectTotals[];
+} {
   const ownedProviders = new Set<UsageProviderKind>();
   let sessions = 0;
   for (const source of environment.summary.sources) {
@@ -151,7 +168,22 @@ function ownedContribution(
   return {
     buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
     sessions,
+    // Same claim rule as the buckets: a directory two worktree servers both scan must contribute
+    // its tokens once, not once per server.
+    projects: environment.summary.projects.filter((project) =>
+      ownedProviders.has(project.provider),
+    ),
   };
+}
+
+function projectTokens(project: UsageProjectTotals): number {
+  // reasoningTokens is a subset of outputTokens and must not be added again.
+  return (
+    project.totals.uncachedInputTokens +
+    project.totals.cachedInputTokens +
+    project.totals.cacheCreationTokens +
+    project.totals.outputTokens
+  );
 }
 
 function bucketTokens(bucket: UsageBucket): number {
@@ -184,6 +216,7 @@ const EMPTY_MERGED: MergedUsage = {
     unpricedShare: 0,
     cacheSavingsUsd: 0,
   },
+  workspaces: [],
   duplicateSources: [],
   contributingEnvironments: [],
   staleEnvironments: [],
@@ -252,15 +285,36 @@ export function mergeUsage(
       byProvider: Map<UsageProviderKind, { costUsd: number; totalTokens: number }>;
     }
   >();
+  const workspaceAccumulator = new Map<
+    string,
+    { costUsd: number; totalTokens: number; records: number; sessions: number; activeMs: number }
+  >();
   const contributingEnvironments: EnvironmentId[] = [];
 
   for (const environment of current) {
-    const { buckets, sessions: environmentSessions } = ownedContribution(
-      environment,
-      ownerByFingerprint,
-    );
+    const {
+      buckets,
+      sessions: environmentSessions,
+      projects,
+    } = ownedContribution(environment, ownerByFingerprint);
     if (buckets.length > 0) contributingEnvironments.push(environment.environmentId);
     sessions += environmentSessions;
+
+    for (const project of projects) {
+      const current = workspaceAccumulator.get(project.workspaceSlug) ?? {
+        costUsd: 0,
+        totalTokens: 0,
+        records: 0,
+        sessions: 0,
+        activeMs: 0,
+      };
+      current.costUsd += project.costUsd;
+      current.totalTokens += projectTokens(project);
+      current.records += project.records;
+      current.sessions += project.sessions;
+      current.activeMs += project.activeMs;
+      workspaceAccumulator.set(project.workspaceSlug, current);
+    }
 
     for (const bucket of buckets) {
       const tokens = bucketTokens(bucket);
@@ -391,6 +445,9 @@ export function mergeUsage(
         records === 0 ? 0 : (records - providerReportedRecords - unpricedRecords) / records,
       cacheSavingsUsd,
     },
+    workspaces: [...workspaceAccumulator.entries()]
+      .map(([workspaceSlug, totals]) => ({ workspaceSlug, ...totals }))
+      .sort((a, b) => b.costUsd - a.costUsd || a.workspaceSlug.localeCompare(b.workspaceSlug)),
     duplicateSources: duplicates,
     contributingEnvironments,
     staleEnvironments,
