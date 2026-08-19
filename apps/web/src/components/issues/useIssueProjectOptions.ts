@@ -250,6 +250,10 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
   const groups = useProjectGroups();
   const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
   return useMemo(() => {
+    // No replica in scope: either cloud sync is off, or the persisted company selection has no
+    // live replica yet — a state that persists, not a startup flicker. Options built here carry an
+    // empty `companyIds`, which consumers read as "provenance unknown, still offerable" rather
+    // than as "owned by nobody, hide it".
     if (replicas.size === 0) {
       return buildIssueProjectOptions({ groups, cloudProjects: [], environmentBindings: [] });
     }

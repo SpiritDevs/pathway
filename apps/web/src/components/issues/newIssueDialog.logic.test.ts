@@ -63,7 +63,13 @@ describe("new issue dialog project destinations", () => {
   });
 
   it("narrows to one company, including projects that company shares", () => {
-    expect(issueProjectsForCompany(projects, "company-acme")).toEqual([acmeOnly, shared]);
+    expect(issueProjectsForCompany(projects, "company-acme")).toEqual([acmeOnly, shared, local]);
+  });
+
+  it("keeps a project with no known owner rather than emptying the menu", () => {
+    // A local checkout seen before any company replica loads has no provenance. Filtering it out
+    // hid every project in the picker whenever the persisted company had no live replica.
+    expect(issueProjectsForCompany([local], "company-acme")).toEqual([local]);
   });
 
   it("groups by company and lists a shared project under each owner", () => {

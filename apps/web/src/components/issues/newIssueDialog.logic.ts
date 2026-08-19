@@ -49,13 +49,19 @@ export interface IssueProjectCompanyGroup<P> {
  * A project id can be shared by several companies, so narrowing matches on the full owner list
  * rather than the canonical `companyId`, which is deliberately null once an option spans more
  * than one company.
+ *
+ * An empty owner list means the project carries no company provenance at all — a local checkout
+ * seen before any company replica has loaded. Those stay eligible: hiding a project because we do
+ * not yet know who owns it empties the whole menu, which is exactly the bug this guard fixes.
  */
 export function issueProjectsForCompany<P extends { readonly companyIds: ReadonlyArray<string> }>(
   projects: ReadonlyArray<P>,
   companyId: string | null,
 ): ReadonlyArray<P> {
   if (companyId === null) return projects;
-  return projects.filter((project) => project.companyIds.includes(companyId));
+  return projects.filter(
+    (project) => project.companyIds.length === 0 || project.companyIds.includes(companyId),
+  );
 }
 
 /**
