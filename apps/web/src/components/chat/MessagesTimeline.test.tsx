@@ -840,6 +840,61 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Structured details");
   });
 
+  it("keeps input request runtime details behind a compact disclosure", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "input-request",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "input-request",
+              item: {
+                id: "input-request",
+                threadId: "thread-1",
+                runId: "run-1",
+                nodeId: "node-1",
+                providerThreadId: "provider-thread-1",
+                providerTurnId: "provider-turn-1",
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: null,
+                startedAt: null,
+                completedAt: null,
+                updatedAt: {},
+                type: "user_input_request",
+                requestId: "request-1",
+                questions: [
+                  {
+                    id: "service-lifecycle",
+                    header: "Lifecycle",
+                    question: "What should happen automatically?",
+                    options: [],
+                    multiSelect: false,
+                  },
+                ],
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-v2-item-type="user_input_request"');
+    expect(markup).toContain('aria-label="Show details"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("What should happen automatically?");
+    expect(markup).not.toContain('data-v2-item-inspector="user_input_request"');
+    expect(markup).not.toContain("Structured details");
+  });
+
   it("renders context handoffs as from → to model endpoints instead of the summary", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const providerStatuses = [

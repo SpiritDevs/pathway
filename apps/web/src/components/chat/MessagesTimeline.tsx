@@ -21,6 +21,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -1739,6 +1740,8 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  const inspectorId = useId();
+  const [inspectorVisible, setInspectorVisible] = useState(false);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
     return (
@@ -1926,18 +1929,32 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               From {sourceThreadId}
             </p>
           ) : null}
-          <div className="mt-2">
-            <V2ItemInspector
-              projectedItem={row.projectedItem}
-              environmentId={ctx.activeThreadEnvironmentId}
-              cwd={ctx.markdownCwd}
-              workspaceRoot={ctx.workspaceRoot}
-              onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
-              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
-            />
-          </div>
         </div>
+        <Button
+          variant="outline"
+          size="icon-xs"
+          className="rounded-md"
+          aria-label={inspectorVisible ? "Hide details" : "Show details"}
+          aria-controls={inspectorId}
+          aria-expanded={inspectorVisible}
+          data-pressed={inspectorVisible || undefined}
+          onClick={() => setInspectorVisible((visible) => !visible)}
+        >
+          <EyeIcon aria-hidden />
+        </Button>
+      </div>
+      <div id={inspectorId} className="mt-2 ms-6" hidden={!inspectorVisible}>
+        {inspectorVisible ? (
+          <V2ItemInspector
+            projectedItem={row.projectedItem}
+            environmentId={ctx.activeThreadEnvironmentId}
+            cwd={ctx.markdownCwd}
+            workspaceRoot={ctx.workspaceRoot}
+            onOpenThread={ctx.onOpenThread}
+            onOpenTurnDiff={ctx.onOpenTurnDiff}
+            onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+          />
+        ) : null}
       </div>
     </section>
   );
