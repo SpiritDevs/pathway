@@ -50,6 +50,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
@@ -62,6 +63,62 @@ import {
 } from "./emailView.logic";
 
 type EmailSource = "local-smtp" | "gmail";
+
+const ALL_ENVIRONMENTS_VALUE = "all-environments";
+
+interface EmailEnvironmentOption {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}
+
+export function EmailEnvironmentSelect({
+  environments,
+  environmentId,
+  onEnvironmentChange,
+}: {
+  environments: ReadonlyArray<EmailEnvironmentOption>;
+  environmentId: EnvironmentId | null;
+  onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+}) {
+  const selectedEnvironment =
+    environments.find((environment) => environment.environmentId === environmentId) ?? null;
+
+  return (
+    <Select
+      value={selectedEnvironment?.environmentId ?? ALL_ENVIRONMENTS_VALUE}
+      onValueChange={(value) =>
+        onEnvironmentChange(value === ALL_ENVIRONMENTS_VALUE ? null : (value as EnvironmentId))
+      }
+    >
+      <SelectTrigger
+        aria-label="Filter email by environment"
+        className="w-full border-sidebar-foreground/10 bg-sidebar-foreground/[0.06] px-2 text-sidebar-foreground shadow-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        size="sm"
+      >
+        <MonitorIcon className="size-4 text-sidebar-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {selectedEnvironment?.label ?? "All environments"}
+        </span>
+      </SelectTrigger>
+      <SelectPopup alignItemWithTrigger={false}>
+        <SelectItem value={ALL_ENVIRONMENTS_VALUE}>
+          <span className="flex items-center gap-2">
+            <MonitorIcon />
+            All environments
+          </span>
+        </SelectItem>
+        {environments.map((environment) => (
+          <SelectItem key={environment.environmentId} value={environment.environmentId}>
+            <span className="flex items-center gap-2">
+              <MonitorIcon />
+              <span className="truncate">{environment.label}</span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectPopup>
+    </Select>
+  );
+}
 
 export function EmailSourceToggle({
   source,
@@ -244,46 +301,18 @@ function LocalSmtpInboxes() {
     <>
       <SidebarGroup>
         <SidebarGroupLabel>Environments</SidebarGroupLabel>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              isActive={onEmail && search.environment === undefined && search.analytics !== true}
-              onClick={() =>
-                navigateWith({
-                  environment: undefined,
-                  message: undefined,
-                  analytics: undefined,
-                  tab: undefined,
-                })
-              }
-            >
-              <MonitorIcon />
-              <span>All environments</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          {environments.map((environment) => (
-            <SidebarMenuItem key={environment.environmentId}>
-              <SidebarMenuButton
-                isActive={
-                  onEmail &&
-                  search.environment === environment.environmentId &&
-                  search.analytics !== true
-                }
-                onClick={() =>
-                  navigateWith({
-                    environment: environment.environmentId,
-                    message: undefined,
-                    analytics: undefined,
-                    tab: undefined,
-                  })
-                }
-              >
-                <MonitorIcon />
-                <span className="truncate">{environment.label}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-        </SidebarMenu>
+        <EmailEnvironmentSelect
+          environmentId={(search.environment ?? null) as EnvironmentId | null}
+          environments={environments}
+          onEnvironmentChange={(environmentId) =>
+            navigateWith({
+              environment: environmentId ?? undefined,
+              message: undefined,
+              analytics: undefined,
+              tab: undefined,
+            })
+          }
+        />
       </SidebarGroup>
 
       <SidebarGroup>

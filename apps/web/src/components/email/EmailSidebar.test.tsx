@@ -1,7 +1,44 @@
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { EmailSourceToggle } from "./EmailSidebar";
+import { EmailEnvironmentSelect, EmailSourceToggle } from "./EmailSidebar";
+
+describe("EmailEnvironmentSelect", () => {
+  const primaryEnvironmentId = EnvironmentId.make("env-primary");
+  const browserEnvironmentId = EnvironmentId.make("env-browser");
+  const environments = [
+    { environmentId: primaryEnvironmentId, label: "Corey's Mac Studio" },
+    { environmentId: browserEnvironmentId, label: "M1 Dev Browser" },
+  ];
+
+  it("shows all environments as the default compact selection", () => {
+    const markup = renderToStaticMarkup(
+      <EmailEnvironmentSelect
+        environmentId={null}
+        environments={environments}
+        onEnvironmentChange={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Filter email by environment"');
+    expect(markup).toContain("All environments");
+    expect(markup).toContain("w-full");
+  });
+
+  it("shows the selected environment", () => {
+    const markup = renderToStaticMarkup(
+      <EmailEnvironmentSelect
+        environmentId={browserEnvironmentId}
+        environments={environments}
+        onEnvironmentChange={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("M1 Dev Browser");
+    expect(markup).not.toContain(">All environments</span></button>");
+  });
+});
 
 describe("EmailSourceToggle", () => {
   it("offers Local SMTP and Gmail with the selected source pressed", () => {
