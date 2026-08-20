@@ -1,4 +1,3 @@
-import type { ProjectId } from "@spiritdevs/contracts";
 import { CircleIcon } from "lucide-react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -56,11 +55,6 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     host: undefined,
     hostOptions: [],
     onHost: () => undefined,
-    environmentId: null,
-    projects: [],
-    projectId: undefined,
-    unavailable: new Map(),
-    onProject: () => undefined,
     ...overrides,
   });
 }
@@ -77,23 +71,5 @@ describe("pull request filters menu", () => {
     group?.props.onValueChange("closed");
     expect(onState).toHaveBeenCalledOnce();
     expect(onState).toHaveBeenCalledWith("closed");
-  });
-
-  it("does not emit a change when the selected project is chosen again", () => {
-    const projectId = "project-1" as ProjectId;
-    const onProject = vi.fn();
-    const view = menu({
-      projects: [{ id: projectId, title: "Pathway", workspaceRoot: "/work/pathway" }],
-      projectId,
-      onProject,
-    });
-    const radioGroup = findValueChange(view);
-    expect(radioGroup).toBeDefined();
-
-    radioGroup?.props.onValueChange(projectId);
-    expect(onProject).not.toHaveBeenCalled();
-
-    radioGroup?.props.onValueChange("all");
-    expect(onProject).toHaveBeenCalledWith(undefined);
   });
 });

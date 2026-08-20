@@ -184,20 +184,6 @@ function PullRequestsRouteView() {
     () => allProjects.filter((project) => project.environmentId === environmentId),
     [allProjects, environmentId],
   );
-  const scopedProjects = useMemo(
-    () =>
-      projects
-        // A rootless project has no remote and no host, so `PullRequestService` already drops it
-        // before building a `PullRequestDetail`; listing it in the filter would offer a scope
-        // that can never match a row.
-        .flatMap((project) =>
-          project.workspaceRoot === null
-            ? []
-            : [{ id: project.id, title: project.title, workspaceRoot: project.workspaceRoot }],
-        )
-        .toSorted((left, right) => left.title.localeCompare(right.title)),
-    [projects],
-  );
   // The scope the URL asks for, once the environment has had its say about whether it exists.
   const scopedProjectId = useMemo(
     () => resolveProjectScope(search.projectId, projects, projectsKnown),
@@ -632,8 +618,6 @@ function PullRequestsRouteView() {
   );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
-  const listErrors = baselineQuery.data?.errors ?? listData?.errors ?? [];
-
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
     () =>
@@ -899,12 +883,6 @@ function PullRequestsRouteView() {
     return [...byHost.values()];
   }, [projects]);
 
-  /** Reported per project rather than as a count, so the reader can see which one it was. */
-  const unavailableProjects = useMemo(
-    () => new Map(listErrors.map((error) => [error.projectId, error.message] as const)),
-    [listErrors],
-  );
-
   // Stable so the memoized rows can skip re-rendering when the list around them changes.
   const selectEntry = useCallback(
     (entry: PullRequestListEntry) => {
@@ -1085,11 +1063,6 @@ function PullRequestsRouteView() {
       host={search.host}
       hostOptions={hostMenuOptions}
       onHost={(host) => updateListScope({ host })}
-      environmentId={environmentId}
-      projects={scopedProjects}
-      projectId={scopedProjectId}
-      unavailable={unavailableProjects}
-      onProject={(projectId) => updateListScope({ projectId })}
     />
   );
   const columnProps = {

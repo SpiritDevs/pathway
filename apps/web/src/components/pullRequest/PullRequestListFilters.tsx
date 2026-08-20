@@ -1,17 +1,13 @@
 import type {
-  EnvironmentId,
-  ProjectId,
   PullRequestInvolvement,
   PullRequestListState,
   SourceControlProviderKind,
 } from "@spiritdevs/contracts";
-import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
 import type { ElementType } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { ProjectFavicon } from "../ProjectFavicon";
-
 import {
   Menu,
   MenuGroupLabel,
@@ -98,7 +94,6 @@ export function PullRequestSearchInput({
  * default, so a narrowed list is never a mystery. Same menu chrome as the detail panel's
  * actions, which also owns its own spacing.
  */
-const ALL_PROJECTS_VALUE = "all";
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 const ALL_HOSTS_VALUE = "";
 
@@ -150,11 +145,6 @@ export function PullRequestFiltersMenu({
   host,
   hostOptions,
   onHost,
-  environmentId,
-  projects,
-  projectId,
-  unavailable,
-  onProject,
 }: {
   state: PullRequestListState;
   stateOptions: ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
@@ -169,24 +159,8 @@ export function PullRequestFiltersMenu({
    */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
-  /** Where the projects' own favicons are read from; null before the environment is known. */
-  environmentId: EnvironmentId | null;
-  projects: ReadonlyArray<{
-    readonly id: ProjectId;
-    readonly title: string;
-    readonly workspaceRoot: string;
-  }>;
-  projectId: ProjectId | undefined;
-  /**
-   * Projects whose repository could not be read this time round. They are named here, where
-   * the reader is already choosing between projects, rather than as a count above the list
-   * that says something is missing without saying which.
-   */
-  unavailable: ReadonlyMap<ProjectId, string>;
-  onProject: (projectId: ProjectId | undefined) => void;
 }) {
-  const filtered =
-    state !== "open" || involvement !== "all" || host !== undefined || projectId !== undefined;
+  const filtered = state !== "open" || involvement !== "all" || host !== undefined;
   return (
     <Menu>
       <MenuTrigger
@@ -230,58 +204,6 @@ export function PullRequestFiltersMenu({
             />
           </>
         ) : null}
-        <MenuSeparator />
-        <MenuRadioGroup
-          value={projectId ?? ALL_PROJECTS_VALUE}
-          onValueChange={(next) => {
-            const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-            if (nextProjectId !== projectId) onProject(nextProjectId);
-          }}
-        >
-          <MenuGroupLabel>Project</MenuGroupLabel>
-          <MenuRadioItem value={ALL_PROJECTS_VALUE}>
-            <span className="flex min-w-0 items-center gap-2">
-              <LayersIcon aria-hidden className="size-3.5" />
-              All projects
-            </span>
-          </MenuRadioItem>
-          {/* The ones that can be chosen first: a list that opens with three disabled rows reads
-              as a broken menu rather than as a workspace with three unreadable repositories. */}
-          {projects
-            .toSorted(
-              (left, right) => Number(unavailable.has(left.id)) - Number(unavailable.has(right.id)),
-            )
-            .map((project) => {
-              const reason = unavailable.get(project.id);
-              return (
-                <MenuRadioItem
-                  key={project.id}
-                  value={project.id}
-                  disabled={reason !== undefined}
-                  title={reason}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    {environmentId === null ? (
-                      <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
-                    ) : (
-                      <ProjectFavicon
-                        environmentId={environmentId}
-                        cwd={project.workspaceRoot}
-                        fallbackIcon={FolderGit2Icon}
-                        className="size-3.5 shrink-0"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                    {reason === undefined ? null : (
-                      <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                        Unavailable
-                      </span>
-                    )}
-                  </span>
-                </MenuRadioItem>
-              );
-            })}
-        </MenuRadioGroup>
       </MenuPopup>
     </Menu>
   );
