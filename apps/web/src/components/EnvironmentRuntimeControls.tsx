@@ -4,7 +4,13 @@ import {
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
 import type { DiscoveredLocalServer, ScopedThreadRef } from "@spiritdevs/contracts";
-import { ChevronDownIcon, RadioTower, TerminalSquare } from "lucide-react";
+import {
+  ChevronDownIcon,
+  LoaderCircleIcon,
+  RadioTower,
+  TerminalSquare,
+  Trash2Icon,
+} from "lucide-react";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { getTerminalLabel, resolveTerminalSessionLabel } from "@spiritdevs/shared/terminalLabels";
@@ -12,6 +18,7 @@ import { cn } from "~/lib/utils";
 import { useDiscoveredPorts } from "~/portDiscoveryState";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { previewEnvironment } from "~/state/preview";
+import { terminalEnvironment } from "~/state/terminal";
 import { useKnownTerminalSessions } from "~/state/terminalSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useTerminalUiStateStore } from "~/terminalUiStateStore";
@@ -21,6 +28,7 @@ import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
+import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { openDiscoveredPort } from "./preview/openDiscoveredPort";
 import { DevelopmentServerRow } from "./DevelopmentServerRow";
@@ -77,29 +85,55 @@ function RuntimeDisclosure({
   );
 }
 
-function TerminalRow({
+export function TerminalRow({
   session,
   onOpen,
+  onKill,
+  killing,
 }: {
   session: KnownTerminalSession;
   onOpen: (terminalId: string) => void;
+  onKill: (terminalId: string) => void;
+  killing: boolean;
 }) {
   const terminalId = session.target.terminalId;
   const label = resolveTerminalSessionLabel(terminalId, session.state.summary);
   const fallbackLabel = getTerminalLabel(terminalId);
 
   return (
-    <button
-      type="button"
-      className="flex w-full cursor-pointer items-center gap-2 rounded-md py-1.5 pr-2 pl-8 text-left text-sm text-foreground transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-      onClick={() => onOpen(terminalId)}
-    >
-      <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {label !== fallbackLabel ? (
-        <span className="shrink-0 text-xs text-muted-foreground">{fallbackLabel}</span>
-      ) : null}
-    </button>
+    <div className="flex w-full items-center rounded-md hover:bg-accent focus-within:bg-accent">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1.5 pr-1 pl-8 text-left text-sm text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => onOpen(terminalId)}
+      >
+        <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {label !== fallbackLabel ? (
+          <span className="shrink-0 text-xs text-muted-foreground">{fallbackLabel}</span>
+        ) : null}
+      </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        className="mr-1 hover:text-destructive"
+        data-keep-action-card-open
+        aria-label={`Kill ${label}`}
+        title="Kill terminal"
+        disabled={killing}
+        onClick={() => onKill(terminalId)}
+      >
+        {killing ? (
+          <LoaderCircleIcon
+            className="animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <Trash2Icon aria-hidden="true" />
+        )}
+      </Button>
+    </div>
   );
 }
 
@@ -240,6 +274,8 @@ export const TerminalRuntimeControls = memo(function TerminalRuntimeControls({
   displayMode?: "card" | "panel";
 }) {
   const [terminalsOpen, setTerminalsOpen] = useState(false);
+  const [killingTerminalId, setKillingTerminalId] = useState<string | null>(null);
+  const killTerminal = useAtomCommand(terminalEnvironment.close, { reportFailure: false });
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: threadRef.environmentId,
     threadId: threadRef.threadId,
@@ -267,6 +303,35 @@ export const TerminalRuntimeControls = memo(function TerminalRuntimeControls({
         .ensureTerminal(threadRef, terminalId, { open: true, active: true });
     },
     [rightPanelState.surfaces, threadRef],
+  );
+  const handleKillTerminal = useCallback(
+    (terminalId: string) => {
+      setKillingTerminalId(terminalId);
+      void killTerminal({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, terminalId, deleteHistory: true },
+      }).then((result) => {
+        setKillingTerminalId((current) => (current === terminalId ? null : current));
+        if (result._tag === "Success") {
+          useTerminalUiStateStore.getState().closeTerminal(threadRef, terminalId);
+          const panelStore = useRightPanelStore.getState();
+          for (const surface of rightPanelState.surfaces) {
+            if (surface.kind === "terminal" && surface.terminalIds.includes(terminalId)) {
+              panelStore.closeTerminal(threadRef, surface.id, terminalId);
+            }
+          }
+          return;
+        }
+        if (isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add({
+          type: "error",
+          title: "Unable to kill terminal",
+          description: error instanceof Error ? error.message : "The terminal could not be killed.",
+        });
+      });
+    },
+    [killTerminal, rightPanelState.surfaces, threadRef],
   );
 
   if (activeTerminalSessions.length === 0) return null;
@@ -308,6 +373,8 @@ export const TerminalRuntimeControls = memo(function TerminalRuntimeControls({
               key={session.target.terminalId}
               session={session}
               onOpen={handleOpenTerminal}
+              onKill={handleKillTerminal}
+              killing={killingTerminalId === session.target.terminalId}
             />
           ))}
         </RuntimeDisclosure>

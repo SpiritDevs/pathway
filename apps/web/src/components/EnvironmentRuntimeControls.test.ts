@@ -1,7 +1,10 @@
 import type { KnownTerminalSession } from "@spiritdevs/client-runtime/state/terminal";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { TerminalRow } from "./EnvironmentRuntimeControls";
 import { selectActiveTerminalSessions } from "./EnvironmentRuntimeControls.logic";
 
 function terminalSession(
@@ -39,5 +42,36 @@ describe("selectActiveTerminalSessions", () => {
     expect(
       selectActiveTerminalSessions(sessions).map((session) => session.target.terminalId),
     ).toEqual(["term-1", "term-2"]);
+  });
+});
+
+describe("TerminalRow", () => {
+  it("shows a trash action that kills the terminal", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TerminalRow, {
+        session: terminalSession("term-1", "running"),
+        onOpen: () => {},
+        onKill: () => {},
+        killing: false,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Kill Terminal 1"');
+    expect(markup).toContain('title="Kill terminal"');
+    expect(markup).toContain("lucide-trash-2");
+  });
+
+  it("disables the action while the terminal is being killed", () => {
+    const markup = renderToStaticMarkup(
+      createElement(TerminalRow, {
+        session: terminalSession("term-1", "running"),
+        onOpen: () => {},
+        onKill: () => {},
+        killing: true,
+      }),
+    );
+
+    expect(markup).toContain("disabled");
+    expect(markup).toContain("lucide-loader-circle");
   });
 });

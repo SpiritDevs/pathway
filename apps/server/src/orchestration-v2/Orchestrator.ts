@@ -1446,6 +1446,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const now = yield* DateTime.now;
       const emitEvent = emit(events, command);
+      const latestRunId = projection.runs.at(-1)?.id ?? null;
       yield* emitEvent({
         type: "turn-item.updated",
         threadId: command.threadId,
@@ -1453,7 +1454,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: {
           id: idAllocator.derive.sourceControlTurnItem({ commandId: command.commandId }),
           threadId: command.threadId,
-          runId: null,
+          // Keep the marker in the latest run's position bucket. Run-less items
+          // occupy the thread prefix, which made commit/push markers jump above
+          // the conversation after position normalization.
+          runId: latestRunId,
           nodeId: null,
           providerThreadId: null,
           providerTurnId: null,

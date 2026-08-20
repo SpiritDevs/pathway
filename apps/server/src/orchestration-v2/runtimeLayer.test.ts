@@ -540,6 +540,23 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         branch: "feature/marker",
         worktreePath: process.cwd(),
       });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-source-control-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-source-control-message"),
+        text: "Make the requested change.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      const beforeMarker = yield* orchestrator.getThreadProjection(threadId);
+      const latestRun = beforeMarker.runs.at(-1);
+      const lastVisibleItem = beforeMarker.visibleTurnItems.at(-1)?.item;
+      assert.isDefined(latestRun);
+      assert.isDefined(lastVisibleItem);
       const command = {
         type: "thread.source-control.record" as const,
         commandId: CommandId.make("runtime-layer-source-control-record"),
@@ -558,6 +575,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(retry.sequence, first.sequence);
       assert.equal(marker?.type, "source_control");
       if (marker?.type !== "source_control") return assert.fail("source-control marker missing");
+      assert.equal(marker.runId, latestRun.id);
+      assert.isAbove(marker.ordinal, lastVisibleItem.ordinal);
+      assert.equal(projection.visibleTurnItems.at(-1)?.item.id, marker.id);
       assert.isTrue(marker.committed);
       assert.deepEqual(marker.pullRequest, command.pullRequest);
     }),
