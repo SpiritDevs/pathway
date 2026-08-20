@@ -11,6 +11,7 @@ import type {
   OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -149,28 +150,36 @@ export function cloudEnvironmentThreadsFromReplicas(
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
   environmentId: EnvironmentId,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
-  const threads: OrchestrationV2ThreadShell[] = [];
-  const seen = new Set<string>();
+  const latestByThreadId = new Map<string, AgentThreadEntity>();
   for (const replica of replicas.values()) {
     for (const value of replica.view.values()) {
-      if (
-        !isAgentThread(value) ||
-        value.environmentId !== environmentId ||
-        value.shell.archivedAt !== null ||
-        value.shell.deletedAt !== null ||
-        seen.has(value.shell.id)
-      ) {
+      if (!isAgentThread(value) || value.environmentId !== environmentId) continue;
+      const existing = latestByThreadId.get(value.shell.id);
+      if (existing === undefined) {
+        latestByThreadId.set(value.shell.id, value);
         continue;
       }
-      seen.add(value.shell.id);
-      threads.push({
-        ...value.shell,
-        latestVisibleMessage:
-          value.shell.latestVisibleMessage === null
-            ? null
-            : { ...value.shell.latestVisibleMessage, text: "" },
-      });
+      const shellUpdatedAt = DateTime.toEpochMillis(value.shell.updatedAt);
+      const existingShellUpdatedAt = DateTime.toEpochMillis(existing.shell.updatedAt);
+      if (
+        shellUpdatedAt > existingShellUpdatedAt ||
+        (shellUpdatedAt === existingShellUpdatedAt && value.updatedAt > existing.updatedAt)
+      ) {
+        latestByThreadId.set(value.shell.id, value);
+      }
     }
+  }
+
+  const threads: OrchestrationV2ThreadShell[] = [];
+  for (const value of latestByThreadId.values()) {
+    if (value.shell.archivedAt !== null || value.shell.deletedAt !== null) continue;
+    threads.push({
+      ...value.shell,
+      latestVisibleMessage:
+        value.shell.latestVisibleMessage === null
+          ? null
+          : { ...value.shell.latestVisibleMessage, text: "" },
+    });
   }
   return threads.length === 0 ? EMPTY_THREADS : threads;
 }

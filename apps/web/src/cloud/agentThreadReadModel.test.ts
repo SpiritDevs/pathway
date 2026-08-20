@@ -2,6 +2,7 @@ import { companyEntityCodec, type CompanySyncEntity } from "@spiritdevs/client-r
 import { EnvironmentId, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import { AgentThreadId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId } from "@spiritdevs/contracts/company";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -210,6 +211,76 @@ describe("cloud Agent Thread read model", () => {
         (thread) => thread.id,
       ),
     ).toEqual(["thread-two"]);
+  });
+
+  it("keeps the newest settled shell when companies contain the same thread", () => {
+    const staleActive = agentThread;
+    const settledAt = DateTime.makeUnsafe("2026-08-17T00:02:00.000Z");
+    const newestSettled = {
+      ...agentThread,
+      shell: {
+        ...agentThread.shell,
+        settledOverride: "settled" as const,
+        settledAt,
+        updatedAt: settledAt,
+      },
+      updatedAt: 3_000,
+    } satisfies typeof agentThread;
+
+    for (const replicas of [
+      new Map([
+        [COMPANY_ID, replica(staleActive)],
+        [OTHER_COMPANY_ID, replica(newestSettled)],
+      ]),
+      new Map([
+        [OTHER_COMPANY_ID, replica(newestSettled)],
+        [COMPANY_ID, replica(staleActive)],
+      ]),
+    ]) {
+      expect(cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID)).toMatchObject([
+        { id: THREAD_ID, settledOverride: "settled", settledAt },
+      ]);
+    }
+  });
+
+  it("keeps the newest active shell when companies contain the same thread", () => {
+    const settledAt = DateTime.makeUnsafe("2026-08-17T00:02:00.000Z");
+    const staleSettled = {
+      ...agentThread,
+      shell: {
+        ...agentThread.shell,
+        settledOverride: "settled" as const,
+        settledAt,
+        updatedAt: settledAt,
+      },
+      updatedAt: 3_000,
+    } satisfies typeof agentThread;
+    const activeAt = DateTime.makeUnsafe("2026-08-17T00:03:00.000Z");
+    const newestActive = {
+      ...agentThread,
+      shell: {
+        ...agentThread.shell,
+        settledOverride: "active" as const,
+        settledAt: null,
+        updatedAt: activeAt,
+      },
+      updatedAt: 4_000,
+    } satisfies typeof agentThread;
+
+    for (const replicas of [
+      new Map([
+        [COMPANY_ID, replica(staleSettled)],
+        [OTHER_COMPANY_ID, replica(newestActive)],
+      ]),
+      new Map([
+        [OTHER_COMPANY_ID, replica(newestActive)],
+        [COMPANY_ID, replica(staleSettled)],
+      ]),
+    ]) {
+      expect(cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID)).toMatchObject([
+        { id: THREAD_ID, settledOverride: "active", settledAt: null },
+      ]);
+    }
   });
 
   it("filters connected environment snapshots without narrowing All companies", () => {
