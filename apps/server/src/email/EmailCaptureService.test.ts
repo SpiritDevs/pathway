@@ -35,7 +35,7 @@ const betaProjectId = ProjectId.make("project-beta");
 
 const projectSettings = (
   projectId: typeof alphaProjectId,
-  mailSlug: "alpha" | "beta",
+  mailSlug: string,
 ): EmailProjectSettings => ({
   projectId,
   mailSlug: EmailMailSlug.make(mailSlug),
@@ -362,6 +362,53 @@ describe("EmailCaptureService SMTP listener", () => {
           expect(
             (yield* capture.getSettings).settings.projects.map(({ projectId }) => projectId),
           ).toEqual([alphaProjectId, betaProjectId]);
+        }).pipe(Effect.provide(testLayer));
+      }),
+    ),
+  );
+
+  it.effect("releases a removed project's slug for the remaining project", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const directory = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-smtp-stale-project-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        );
+        const dependencies = Layer.mergeAll(
+          emailStoreLayerAtPath(join(directory, "mail.sqlite")),
+          emailWaitStoreLayerAtPath(join(directory, "mail.sqlite")),
+          EmailProjectCatalog.layerTest([projects[1]]),
+          ServerSettings.layerTest({
+            emailCapture: {
+              ...DEFAULT_EMAIL_CAPTURE_SETTINGS,
+              listener: { ...DEFAULT_EMAIL_CAPTURE_SETTINGS.listener, enabled: false },
+              projects: [
+                projectSettings(alphaProjectId, "quotecloud-v2"),
+                projectSettings(betaProjectId, "quotecloud-v2-2"),
+              ],
+            },
+          }),
+        );
+        const testLayer = Layer.merge(
+          dependencies,
+          emailCaptureLayer.pipe(Layer.provide(dependencies)),
+        ).pipe(Layer.provideMerge(NodeCrypto.layer), Layer.provideMerge(NodeServices.layer));
+
+        yield* Effect.gen(function* () {
+          const capture = yield* EmailCaptureService;
+          yield* capture.start;
+
+          const reconciled = (yield* capture.getSettings).settings;
+          expect(reconciled.projects.map(({ projectId }) => projectId)).toEqual([betaProjectId]);
+
+          const renamed = yield* capture.updateSettings({
+            ...reconciled,
+            projects: reconciled.projects.map((project) => ({
+              ...project,
+              mailSlug: EmailMailSlug.make("quotecloud-v2"),
+            })),
+          });
+          expect(renamed.settings.projects[0]?.mailSlug).toBe("quotecloud-v2");
         }).pipe(Effect.provide(testLayer));
       }),
     ),

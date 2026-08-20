@@ -46,7 +46,7 @@ import { SMTPServer, type SMTPServerSession } from "smtp-server";
 import * as ServerSettings from "../serverSettings.ts";
 import { analyzeEmailDeliverability } from "./DeliverabilityAnalyzer.ts";
 import { EmailProjectCatalog } from "./EmailProjectCatalog.ts";
-import { deriveMissingProjectSettings, routeEmail, validateUniqueMailSlugs } from "./Routing.ts";
+import { reconcileEmailProjectSettings, routeEmail, validateUniqueMailSlugs } from "./Routing.ts";
 import { detectTwoFactorCode } from "./detectTwoFactorCode.ts";
 import { EmailStore, type EmailAttachmentFile } from "./EmailStore.ts";
 import { EmailWaitStore } from "./EmailWaitStore.ts";
@@ -193,11 +193,14 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       const catalog = yield* projects.list.pipe(
         Effect.mapError((cause) => captureError("storage", errorText(cause))),
       );
-      const derived = deriveMissingProjectSettings({
+      const derived = reconcileEmailProjectSettings({
         projects: catalog,
         configured: current.emailCapture.projects,
       });
-      if (derived.length === current.emailCapture.projects.length) {
+      if (
+        derived.length === current.emailCapture.projects.length &&
+        derived.every((settings, index) => settings === current.emailCapture.projects[index])
+      ) {
         return { settings: current.emailCapture, changed: false } as const;
       }
       const updated = yield* serverSettings

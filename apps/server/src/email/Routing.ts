@@ -26,13 +26,16 @@ function slugWithSuffix(base: string, suffix: number): EmailMailSlug {
   return EmailMailSlug.make(`${prefix || "project"}${suffixText}`);
 }
 
-export function deriveMissingProjectSettings(input: {
+/** Keeps capture routing aligned with the current project catalog, preserving live overrides. */
+export function reconcileEmailProjectSettings(input: {
   readonly projects: ReadonlyArray<EmailProject>;
   readonly configured: ReadonlyArray<EmailProjectSettings>;
 }): ReadonlyArray<EmailProjectSettings> {
-  const byProject = new Map(input.configured.map((settings) => [settings.projectId, settings]));
-  const used = new Set(input.configured.map((settings) => settings.mailSlug));
-  const next = [...input.configured];
+  const currentProjectIds = new Set(input.projects.map((project) => project.projectId));
+  const retained = input.configured.filter((settings) => currentProjectIds.has(settings.projectId));
+  const byProject = new Map(retained.map((settings) => [settings.projectId, settings]));
+  const used = new Set(retained.map((settings) => settings.mailSlug));
+  const next = [...retained];
 
   for (const project of input.projects) {
     if (byProject.has(project.projectId)) continue;

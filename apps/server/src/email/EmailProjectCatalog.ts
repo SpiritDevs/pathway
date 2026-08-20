@@ -37,7 +37,9 @@ export const layer = Layer.effect(
         ),
       ),
       streamChanges: engine.streamDomainEvents.pipe(
-        Stream.filter((event) => event.type === "project.created"),
+        Stream.filter(
+          (event) => event.type === "project.created" || event.type === "project.deleted",
+        ),
         Stream.map(() => undefined),
       ),
     });

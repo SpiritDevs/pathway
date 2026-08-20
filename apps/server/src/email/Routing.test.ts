@@ -1,14 +1,14 @@
 import { EmailMailSlug, ProjectId, type EmailProjectSettings } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { routeEmail } from "./Routing.ts";
+import { reconcileEmailProjectSettings, routeEmail } from "./Routing.ts";
 
 const alphaProjectId = ProjectId.make("project-alpha");
 const betaProjectId = ProjectId.make("project-beta");
 
 const projectSettings = (
   projectId: typeof alphaProjectId,
-  mailSlug: "alpha" | "beta",
+  mailSlug: string,
   capturePassword: string | null,
 ): EmailProjectSettings => ({
   projectId,
@@ -71,5 +71,17 @@ describe("routeEmail password attribution", () => {
     });
 
     expect(attribution).toMatchObject({ projectId: alphaProjectId, matchedBy: "auth-password" });
+  });
+});
+
+describe("reconcileEmailProjectSettings", () => {
+  it("releases a deleted project's slug while preserving the live project's overrides", () => {
+    const current = projectSettings(betaProjectId, "quotecloud-v2-2", "fixed-account-password");
+    const reconciled = reconcileEmailProjectSettings({
+      projects: [{ projectId: betaProjectId, title: "Beta", workspaceRoot: "/work/beta" }],
+      configured: [projectSettings(alphaProjectId, "quotecloud-v2", null), current],
+    });
+
+    expect(reconciled).toEqual([current]);
   });
 });
