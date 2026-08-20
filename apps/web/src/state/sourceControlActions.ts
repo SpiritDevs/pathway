@@ -311,7 +311,12 @@ export function usePreparePullRequestThreadAction(scope: SourceControlActionScop
     reportFailure: false,
   });
   const action = useCallback(
-    async (input: { reference: string; mode: "local" | "worktree"; threadId?: ThreadId }) => {
+    async (input: {
+      reference: string;
+      mode: "local" | "worktree";
+      threadId?: ThreadId;
+      isolateWorktree?: boolean;
+    }) => {
       const target = resolveScope(scope);
       if (target === null) {
         return AsyncResult.failure<never, VcsActionUnavailableError>(
@@ -331,6 +336,7 @@ export function usePreparePullRequestThreadAction(scope: SourceControlActionScop
           reference: input.reference,
           mode: input.mode,
           ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.isolateWorktree ? { isolateWorktree: true } : {}),
         },
       });
     },

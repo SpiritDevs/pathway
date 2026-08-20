@@ -53,6 +53,19 @@ describe("GitPreparePullRequestThreadInput", () => {
     expect(parsed.reference).toBe("#42");
     expect(parsed.mode).toBe("worktree");
   });
+
+  it("accepts an isolated worktree for an owned thread", () => {
+    const parsed = decodePreparePullRequestThreadInput({
+      cwd: "/repo",
+      reference: "#42",
+      mode: "worktree",
+      threadId: "thread-review-42",
+      isolateWorktree: true,
+    });
+
+    expect(parsed.threadId).toBe("thread-review-42");
+    expect(parsed.isolateWorktree).toBe(true);
+  });
 });
 
 describe("GitResolvePullRequestResult", () => {

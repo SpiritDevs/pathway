@@ -4320,6 +4320,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "origin",
         "dirty-rewrite:feature/pr-dirty-worktree",
       ]);
+      yield* runGit(repoDir, ["push", "origin", "dirty-rewrite:refs/pull/89/head"]);
+      const rewrittenHead = (yield* runGit(repoDir, ["rev-parse", "dirty-rewrite"])).stdout.trim();
       yield* runGit(repoDir, [
         "update-ref",
         "refs/remotes/origin/feature/pr-dirty-worktree",
@@ -4363,6 +4365,31 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "uncommitted edit\n",
       );
       expect(setupCalls).toHaveLength(0);
+
+      const isolated = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "89",
+        mode: "worktree",
+        threadId: asThreadId("thread-pr-isolated-review"),
+        isolateWorktree: true,
+      });
+
+      expect(isolated.worktreePath).not.toBe(worktreePath);
+      expect(isolated.branch).toBe("pathway/review-89/thread-pr-isolated-review");
+      expect(isolated.isOnPullRequestHead).toBe(true);
+      expect(
+        (yield* runGit(isolated.worktreePath as string, ["rev-parse", "HEAD"])).stdout.trim(),
+      ).toBe(rewrittenHead);
+      expect(NodeFS.readFileSync(NodePath.join(worktreePath, "dirty.txt"), "utf8")).toBe(
+        "uncommitted edit\n",
+      );
+      expect(setupCalls).toEqual([
+        {
+          threadId: "thread-pr-isolated-review",
+          projectCwd: repoDir,
+          worktreePath: isolated.worktreePath,
+        },
+      ]);
     }),
   );
 

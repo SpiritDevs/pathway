@@ -479,6 +479,7 @@ export function PullRequestDetailPanel({
             reference: detail.url,
             mode: "worktree",
             threadId,
+            isolateWorktree: true,
           });
           if (prepared._tag === "Failure") {
             const description =
@@ -497,7 +498,7 @@ export function PullRequestDetailPanel({
               type: "error",
               title: "The review checkout is behind the pull request",
               description:
-                "Local work kept this checkout from moving to the latest commit. Remove or move that work, then start the review again.",
+                "The isolated review checkout could not be prepared at the latest commit. Start the review again.",
             });
             return;
           }
