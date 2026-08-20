@@ -289,6 +289,71 @@ describe("composerDraftStore clearComposerContent", () => {
   });
 });
 
+describe("composerDraftStore moveComposerContent", () => {
+  const sourceThreadId = ThreadId.make("thread-move-source");
+  const destinationThreadId = ThreadId.make("thread-move-destination");
+  const sourceRef = scopeThreadRef(TEST_ENVIRONMENT_ID, sourceThreadId);
+  const destinationRef = scopeThreadRef(TEST_ENVIRONMENT_ID, destinationThreadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("moves the full payload without revoking previews and keeps destination settings", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "img-moved", previewUrl: "blob:moved" });
+    const terminalContext = makeTerminalContext({ id: "terminal-moved" });
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    const revokeSpy = vi.fn<(url: string) => void>();
+    URL.revokeObjectURL = revokeSpy;
+
+    try {
+      store.setPrompt(sourceRef, "Move this draft");
+      store.addImage(sourceRef, image);
+      store.setTerminalContexts(sourceRef, [terminalContext]);
+      store.setModelSelection(
+        destinationRef,
+        modelSelection(CODEX_DRIVER, "gpt-5.4", { reasoningEffort: "high" }),
+      );
+
+      expect(store.moveComposerContent(sourceRef, destinationRef)).toBe(true);
+
+      expect(useComposerDraftStore.getState().getComposerDraft(sourceRef)).toBeNull();
+      expect(useComposerDraftStore.getState().getComposerDraft(destinationRef)).toMatchObject({
+        images: [{ id: "img-moved", previewUrl: "blob:moved" }],
+        terminalContexts: [{ id: "terminal-moved", threadId: destinationThreadId }],
+        modelSelectionByProvider: {
+          [CODEX_INSTANCE]: {
+            instanceId: CODEX_INSTANCE,
+            model: "gpt-5.4",
+            options: [{ id: "reasoningEffort", value: "high" }],
+          },
+        },
+      });
+      expect(useComposerDraftStore.getState().getComposerDraft(destinationRef)?.prompt).toContain(
+        "Move this draft",
+      );
+      expect(revokeSpy).not.toHaveBeenCalled();
+    } finally {
+      URL.revokeObjectURL = originalRevokeObjectUrl;
+    }
+  });
+
+  it("keeps both composers unchanged when the destination already has content", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(sourceRef, "Source draft");
+    store.setPrompt(destinationRef, "Destination draft");
+
+    expect(store.moveComposerContent(sourceRef, destinationRef)).toBe(false);
+    expect(useComposerDraftStore.getState().getComposerDraft(sourceRef)?.prompt).toBe(
+      "Source draft",
+    );
+    expect(useComposerDraftStore.getState().getComposerDraft(destinationRef)?.prompt).toBe(
+      "Destination draft",
+    );
+  });
+});
+
 describe("composerDraftStore syncPersistedAttachments", () => {
   const threadId = ThreadId.make("thread-sync-persisted");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);

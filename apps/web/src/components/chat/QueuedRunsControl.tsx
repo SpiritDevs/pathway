@@ -43,10 +43,15 @@ import {
   resolveQueuedRunReorder,
   type QueuedThreadRun,
 } from "@spiritdevs/client-runtime/state/thread-workflows";
-import type { EnvironmentId, MessageId, RunId, ThreadId } from "@spiritdevs/contracts";
+import type {
+  ChatAttachment,
+  EnvironmentId,
+  MessageId,
+  RunId,
+  ThreadId,
+} from "@spiritdevs/contracts";
 import {
   BotIcon,
-  CheckIcon,
   Clock3Icon,
   CornerUpRightIcon,
   GripVerticalIcon,
@@ -154,6 +159,16 @@ export function QueuedRunsControl(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent" | "text">>;
+  readonly attachmentUrlById: ReadonlyMap<string, string>;
+  readonly onEditQueuedMessage: (input: {
+    readonly runId: RunId;
+    readonly messageId: MessageId;
+    readonly text: string;
+    readonly attachments: ReadonlyArray<{
+      readonly attachment: ChatAttachment;
+      readonly url: string;
+    }>;
+  }) => Promise<boolean>;
 }) {
   const projection = useThreadProjection(
     scopeThreadRef(props.environmentId, props.threadId),
@@ -161,12 +176,10 @@ export function QueuedRunsControl(props: {
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
-  const edit = useAtomCommand(threadEnvironment.editQueuedRun);
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
   const [dismissedMessageIds, setDismissedMessageIds] = useState<ReadonlySet<MessageId>>(
     () => new Set(),
   );
-  const [editing, setEditing] = useState<{ runId: RunId; draft: string } | null>(null);
   /**
    * The order a completed drag produced, shown until the projection agrees or
    * moves on, alongside the projected order it was committed against.
@@ -296,21 +309,28 @@ export function QueuedRunsControl(props: {
     }
   };
 
-  const saveEdit = async (runId: RunId, originalText: string) => {
-    if (editing === null || editing.runId !== runId) return;
-    const text = editing.draft.trim();
-    if (text.length === 0) return;
-    if (text === originalText) {
-      setEditing(null);
-      return;
-    }
-    setBusyRunId(runId);
+  const restoreToComposer = async (input: {
+    readonly runId: RunId;
+    readonly messageId: MessageId;
+    readonly text: string;
+    readonly attachments: ReadonlyArray<ChatAttachment>;
+  }) => {
+    const resolvedAttachments = input.attachments.flatMap((attachment) => {
+      const url = props.attachmentUrlById.get(attachment.id);
+      return url === undefined ? [] : [{ attachment, url }];
+    });
+    if (resolvedAttachments.length !== input.attachments.length) return;
+    setBusyRunId(input.runId);
     try {
-      await edit({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId, text },
+      const restored = await props.onEditQueuedMessage({
+        runId: input.runId,
+        messageId: input.messageId,
+        text: input.text,
+        attachments: resolvedAttachments,
       });
-      setEditing(null);
+      if (restored) {
+        setDismissedMessageIds((current) => new Set(current).add(input.messageId));
+      }
     } finally {
       setBusyRunId(null);
     }
@@ -332,67 +352,20 @@ export function QueuedRunsControl(props: {
       `Reorder cancelled. Queued message stays at position ${positionOf(String(active.id))} of ${ordered.length}.`,
   };
 
-  /** Everything after the handle and position: the text or its editor, and the row actions. */
+  /** Everything after the handle and position: the text and row actions. */
   const rowBody = (input: {
     readonly runId: RunId | null;
     readonly messageId: MessageId;
     readonly text: string;
+    readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly createdBy: QueuedThreadRun["createdBy"];
   }) => {
     // Provider continuation wakes carry internal text the adapter swaps out on
     // dispatch, so editing or steering them would corrupt the wake.
     const agentAuthored = input.createdBy !== "user";
-    const rowEditing =
-      input.runId !== null && editing !== null && editing.runId === input.runId ? editing : null;
-    if (rowEditing !== null) {
-      return (
-        <>
-          <input
-            aria-label="Edit queued message"
-            autoFocus
-            className="min-w-0 flex-1 rounded-sm border border-border/60 bg-transparent px-1.5 py-0.5 text-xs outline-none focus:border-border"
-            value={rowEditing.draft}
-            onChange={(event) =>
-              setEditing((current) =>
-                current === null ? current : { ...current, draft: event.target.value },
-              )
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                if (input.runId !== null) void saveEdit(input.runId, input.text);
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setEditing(null);
-              }
-            }}
-          />
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Save queued message"
-            className="size-6 text-muted-foreground"
-            disabled={busyRunId !== null || rowEditing.draft.trim().length === 0}
-            onClick={() => {
-              if (input.runId !== null) void saveEdit(input.runId, input.text);
-            }}
-          >
-            <CheckIcon className="size-3" />
-          </Button>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label="Cancel editing queued message"
-            className="size-6 text-muted-foreground"
-            disabled={busyRunId !== null}
-            onClick={() => setEditing(null)}
-          >
-            <XIcon className="size-3" />
-          </Button>
-        </>
-      );
-    }
+    const attachmentsReady = input.attachments.every((attachment) =>
+      props.attachmentUrlById.has(attachment.id),
+    );
 
     return (
       <>
@@ -413,11 +386,24 @@ export function QueuedRunsControl(props: {
           variant="ghost"
           aria-label="Edit queued message"
           className="size-6 text-muted-foreground"
-          disabled={input.runId === null || busyRunId !== null || agentAuthored}
-          title={agentAuthored ? "Agent-queued messages cannot be edited" : undefined}
+          disabled={
+            input.runId === null || busyRunId !== null || agentAuthored || !attachmentsReady
+          }
+          title={
+            agentAuthored
+              ? "Agent-queued messages cannot be edited"
+              : !attachmentsReady
+                ? "Queued attachments are still loading"
+                : "Return to composer"
+          }
           onClick={() => {
             if (input.runId !== null) {
-              setEditing({ runId: input.runId, draft: input.text });
+              void restoreToComposer({
+                runId: input.runId,
+                messageId: input.messageId,
+                text: input.text,
+                attachments: input.attachments,
+              });
             }
           }}
         >
@@ -466,18 +452,18 @@ export function QueuedRunsControl(props: {
     );
   };
 
-  const committedRows = ordered.map(({ run, text, createdBy }, index) =>
+  const committedRows = ordered.map(({ run, text, attachments, createdBy }, index) =>
     sortable ? (
       <SortableQueuedRow
         busy={busyRunId === run.id}
-        disabled={busyRunId !== null || editing?.runId === run.id}
+        disabled={busyRunId !== null}
         key={run.id}
         label={`Reorder queued message ${index + 1} of ${ordered.length}: ${text}`}
         position={index + 1}
         reducedMotion={reducedMotion}
         runId={run.id}
       >
-        {rowBody({ runId: run.id, messageId: run.userMessageId, text, createdBy })}
+        {rowBody({ runId: run.id, messageId: run.userMessageId, text, attachments, createdBy })}
       </SortableQueuedRow>
     ) : (
       <li
@@ -486,7 +472,7 @@ export function QueuedRunsControl(props: {
         key={run.id}
       >
         <QueuedRowPosition position={index + 1} />
-        {rowBody({ runId: run.id, messageId: run.userMessageId, text, createdBy })}
+        {rowBody({ runId: run.id, messageId: run.userMessageId, text, attachments, createdBy })}
       </li>
     ),
   );
@@ -508,7 +494,13 @@ export function QueuedRunsControl(props: {
             className="size-4 shrink-0 p-px text-muted-foreground/60"
           />
           <QueuedRowPosition position={ordered.length + index + 1} />
-          {rowBody({ runId: null, messageId: message.id, text: message.text, createdBy: "user" })}
+          {rowBody({
+            runId: null,
+            messageId: message.id,
+            text: message.text,
+            attachments: [],
+            createdBy: "user",
+          })}
         </li>
       ))}
     </ol>

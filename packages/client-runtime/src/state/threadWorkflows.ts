@@ -1,4 +1,5 @@
 import type {
+  ChatAttachment,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ThreadProjection,
@@ -21,6 +22,7 @@ const MERGE_BACK_BLOCKING_RUN_STATUSES = new Set<Run["status"]>([
 export interface QueuedThreadRun {
   readonly run: Run;
   readonly text: string;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
   /**
    * Who authored the queued message. Provider continuation wakes (for example
    * "Background command completed") are dispatched with `createdBy: "agent"`;
@@ -129,6 +131,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
     return {
       run,
       text: message?.text ?? "Queued message",
+      attachments: message?.attachments ?? [],
       createdBy: message?.createdBy ?? "user",
     };
   });

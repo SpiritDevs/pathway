@@ -54,7 +54,19 @@ describe("thread workflows", () => {
         },
       ],
       messages: [
-        { id: "message-first", text: "First" },
+        {
+          id: "message-first",
+          text: "First",
+          attachments: [
+            {
+              type: "image",
+              id: "attachment-first",
+              name: "first.png",
+              mimeType: "image/png",
+              sizeBytes: 10,
+            },
+          ],
+        },
         { id: "message-later", text: "Later" },
       ],
       providerTurns: [
@@ -84,6 +96,16 @@ describe("thread workflows", () => {
       ["first", "First"],
       ["later", "Later"],
     ]);
+    expect(state.queuedRuns[0]?.attachments).toEqual([
+      {
+        type: "image",
+        id: "attachment-first",
+        name: "first.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+      },
+    ]);
+    expect(state.queuedRuns[1]?.attachments).toEqual([]);
     expect(state.activeRun?.id).toBe("active");
     expect(state.canReorder).toBe(true);
     expect(state.canPromoteToSteer).toBe(true);

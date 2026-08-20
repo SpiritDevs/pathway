@@ -12,10 +12,15 @@ The hint beside the send button shows the shortcut for the other action. Press *
 macOS or **Ctrl+Enter** on other platforms to use it without changing your preference.
 
 Press and hold **Send** to choose where the draft goes. While the agent is working, you can queue
-the message or use it to steer the active turn. You can also start a separate chat in the current
-checkout, or send from the latest completed response in a side chat. Queue and steer are omitted
-when there is no active turn; side chat becomes available after the conversation has a completed
-response. With a keyboard, focus **Send** and press **Arrow Down** to open the same menu.
+the message or use it to steer the active turn. **Start in a new chat** and **Start in a side chat**
+move the draft to that destination without sending it, so you can change its model, mode, or other
+settings first. The side chat starts from the latest completed response. Queue and steer are
+omitted when there is no active turn; side chat becomes available after the conversation has a
+completed response. With a keyboard, focus **Send** and press **Arrow Down** to open the same menu.
+
+On web and desktop, select the pencil beside a queued message to return it to the full composer,
+including its image attachments. The message leaves the queue after its content is ready to edit.
+If the composer already contains a draft, send or clear that draft first.
 
 ## Edit your latest message
 

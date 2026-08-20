@@ -1,4 +1,5 @@
 import {
+  type ChatAttachment,
   type EnvironmentId,
   isProviderDriverKind,
   ProjectId,
@@ -348,6 +349,38 @@ export function readFileAsDataUrl(file: File): Promise<string> {
     });
     reader.readAsDataURL(file);
   });
+}
+
+/** Downloads durable queued attachments into composer-owned files and previews. */
+export async function loadQueuedComposerImages(
+  attachments: ReadonlyArray<{
+    readonly attachment: ChatAttachment;
+    readonly url: string;
+  }>,
+): Promise<ComposerImageAttachment[]> {
+  const images: ComposerImageAttachment[] = [];
+  try {
+    for (const { attachment, url } of attachments) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Could not load ${attachment.name}.`);
+      }
+      const file = new File([await response.blob()], attachment.name, {
+        type: attachment.mimeType,
+      });
+      images.push({
+        ...attachment,
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+    return images;
+  } catch (error) {
+    for (const image of images) {
+      revokeBlobPreviewUrl(image.previewUrl);
+    }
+    throw error;
+  }
 }
 
 export function resolveSendEnvMode(input: {

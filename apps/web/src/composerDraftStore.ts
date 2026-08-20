@@ -548,6 +548,8 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     attachments: PersistedComposerImageAttachment[],
   ) => void;
+  /** Moves the user-authored payload between composers without revoking image previews. */
+  moveComposerContent: (source: ComposerThreadTarget, destination: ComposerThreadTarget) => boolean;
   clearComposerContent: (threadRef: ComposerThreadTarget) => void;
   /**
    * Clears only the prompt text and image attachments, preserving terminal /
@@ -3603,6 +3605,76 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           Promise.resolve().then(() => {
             verifyPersistedAttachments(threadKey, attachments, set);
           });
+        },
+        moveComposerContent: (source, destination) => {
+          const sourceKey = resolveComposerDraftKey(get(), source);
+          const destinationKey = resolveComposerDraftKey(get(), destination);
+          const destinationThreadId = resolveComposerThreadId(get(), destination);
+          if (
+            !sourceKey ||
+            !destinationKey ||
+            !destinationThreadId ||
+            sourceKey === destinationKey
+          ) {
+            return false;
+          }
+
+          let moved = false;
+          set((state) => {
+            const sourceDraft = state.draftsByThreadKey[sourceKey];
+            const destinationDraft =
+              state.draftsByThreadKey[destinationKey] ?? createEmptyThreadDraft();
+            if (
+              sourceDraft === undefined ||
+              !composerDraftHasUserContent(sourceDraft) ||
+              composerDraftHasUserContent(destinationDraft)
+            ) {
+              return state;
+            }
+
+            const nextSourceDraft: ComposerThreadDraftState = {
+              ...sourceDraft,
+              prompt: "",
+              images: [],
+              nonPersistedImageIds: [],
+              persistedAttachments: [],
+              terminalContexts: [],
+              elementContexts: [],
+              issueContexts: [],
+              previewAnnotations: [],
+              reviewComments: [],
+            };
+            const nextDestinationDraft: ComposerThreadDraftState = {
+              ...destinationDraft,
+              prompt: sourceDraft.prompt,
+              images: sourceDraft.images,
+              nonPersistedImageIds: sourceDraft.nonPersistedImageIds,
+              persistedAttachments: sourceDraft.persistedAttachments,
+              terminalContexts: normalizeTerminalContextsForThread(
+                destinationThreadId,
+                sourceDraft.terminalContexts,
+              ),
+              elementContexts: sourceDraft.elementContexts.map((context) => ({
+                ...context,
+                threadId: destinationThreadId,
+              })),
+              issueContexts: sourceDraft.issueContexts,
+              previewAnnotations: sourceDraft.previewAnnotations,
+              reviewComments: sourceDraft.reviewComments,
+            };
+            const nextDraftsByThreadKey = {
+              ...state.draftsByThreadKey,
+              [destinationKey]: nextDestinationDraft,
+            };
+            if (shouldRemoveDraft(nextSourceDraft)) {
+              delete nextDraftsByThreadKey[sourceKey];
+            } else {
+              nextDraftsByThreadKey[sourceKey] = nextSourceDraft;
+            }
+            moved = true;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+          return moved;
         },
         clearComposerContent: (threadRef) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";

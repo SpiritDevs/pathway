@@ -1,6 +1,7 @@
 import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
+  type ChatAttachment,
   type CommandId,
   type EnvironmentId,
   type MessageId,
@@ -227,6 +228,7 @@ import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRo
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  composerDraftHasUserContent,
   deriveComposerControlsLocked,
   deriveSubagentComposerModelSelection,
   useComposerDraftStore,
@@ -358,6 +360,7 @@ import {
   cloneComposerImageForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
+  loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveEditableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -1333,6 +1336,8 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
@@ -1353,6 +1358,9 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const cancelQueuedRun = useAtomCommand(threadEnvironment.cancelQueuedRun, {
+    reportFailure: false,
+  });
   const editAndRestartMessage = useAtomCommand(threadEnvironment.editAndRestartMessage, {
     reportFailure: false,
   });
@@ -1471,6 +1479,7 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const moveComposerDraftContent = useComposerDraftStore((store) => store.moveComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -1488,6 +1497,21 @@ function ChatViewContent(props: ChatViewProps) {
   const composerRef = isPanelPresentation
     ? localComposerRef
     : (sharedComposerRef ?? localComposerRef);
+  const focusComposer = useCallback(() => {
+    composerRef.current?.focusAtEnd();
+  }, [composerRef]);
+  const scheduleComposerFocus = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      focusComposer();
+    });
+  }, [focusComposer]);
+  const resetComposerRefsAfterMove = useCallback(() => {
+    promptRef.current = "";
+    composerImagesRef.current = [];
+    composerTerminalContextsRef.current = [];
+    composerElementContextsRef.current = [];
+    composerRef.current?.resetCursorState();
+  }, [composerRef]);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -2711,7 +2735,26 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return [...attachmentIds];
   }, [presentedServerVisibleTurnItems]);
-  const serverAttachmentIds = isServerThread ? committedServerAttachmentIds : EMPTY_ATTACHMENT_IDS;
+  const queuedServerAttachmentIds = useMemo(() => {
+    if (serverProjection === null) return EMPTY_ATTACHMENT_IDS;
+    const queuedMessageIds = new Set(
+      serverProjection.runs
+        .filter((run) => run.status === "queued")
+        .map((run) => run.userMessageId),
+    );
+    return serverProjection.messages.flatMap((message) =>
+      queuedMessageIds.has(message.id)
+        ? message.attachments.map((attachment) => attachment.id)
+        : [],
+    );
+  }, [serverProjection]);
+  const serverAttachmentIds = useMemo(
+    () =>
+      isServerThread
+        ? [...new Set([...committedServerAttachmentIds, ...queuedServerAttachmentIds])]
+        : EMPTY_ATTACHMENT_IDS,
+    [committedServerAttachmentIds, isServerThread, queuedServerAttachmentIds],
+  );
   const serverAttachmentResources = useMemo(
     () =>
       serverAttachmentIds.map((attachmentId) => ({
@@ -2844,6 +2887,135 @@ function ChatViewContent(props: ChatViewProps) {
     presentedServerVisibleTurnItems,
     serverAttachmentUrlById,
   ]);
+  const onEditQueuedMessage = useCallback(
+    async (input: {
+      readonly runId: RunId;
+      readonly text: string;
+      readonly attachments: ReadonlyArray<{
+        readonly attachment: ChatAttachment;
+        readonly url: string;
+      }>;
+    }): Promise<boolean> => {
+      const draftStore = useComposerDraftStore.getState();
+      if (composerDraftHasUserContent(draftStore.getComposerDraft(composerDraftTarget))) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Composer already has a draft",
+            description: "Send or clear the current draft before editing a queued message.",
+          }),
+        );
+        return false;
+      }
+
+      let images: ComposerImageAttachment[];
+      try {
+        images = await loadQueuedComposerImages(input.attachments);
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not edit queued message",
+            description:
+              error instanceof Error ? error.message : "Its attachments could not be loaded.",
+          }),
+        );
+        return false;
+      }
+
+      if (
+        composerDraftHasUserContent(
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
+        )
+      ) {
+        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Composer already has a draft",
+            description: "Send or clear the current draft before editing a queued message.",
+          }),
+        );
+        return false;
+      }
+
+      let result: Awaited<ReturnType<typeof cancelQueuedRun>>;
+      try {
+        result = await cancelQueuedRun({
+          environmentId,
+          input: { threadId, runId: input.runId },
+        });
+      } catch (error) {
+        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not edit queued message",
+            description: error instanceof Error ? error.message : "The queued message was kept.",
+          }),
+        );
+        return false;
+      }
+      if (result._tag === "Failure") {
+        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not edit queued message",
+              description: error instanceof Error ? error.message : "The queued message was kept.",
+            }),
+          );
+        }
+        return false;
+      }
+
+      const latestDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+      const draftAppearedWhileCancelling = composerDraftHasUserContent(latestDraft);
+      const latestPrompt = latestDraft?.prompt ?? "";
+      const restoredPrompt =
+        draftAppearedWhileCancelling && latestPrompt.length > 0
+          ? `${input.text}\n\n${latestPrompt}`
+          : input.text;
+      setComposerDraftPrompt(composerDraftTarget, restoredPrompt);
+      addComposerDraftImages(composerDraftTarget, images);
+      if (draftAppearedWhileCancelling) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Drafts combined",
+            description:
+              "New composer content appeared while the queue updated, so both were kept.",
+          }),
+        );
+      }
+      if (routeThreadKeyRef.current === routeThreadKey) {
+        promptRef.current = restoredPrompt;
+        composerImagesRef.current = [...(latestDraft?.images ?? []), ...images];
+        composerRef.current?.resetCursorState({
+          cursor: collapseExpandedComposerCursor(restoredPrompt, restoredPrompt.length),
+          prompt: restoredPrompt,
+          detectTrigger: true,
+        });
+        scheduleComposerFocus();
+      }
+      return true;
+    },
+    [
+      addComposerDraftImages,
+      cancelQueuedRun,
+      composerDraftTarget,
+      composerImagesRef,
+      composerRef,
+      environmentId,
+      promptRef,
+      routeThreadKey,
+      scheduleComposerFocus,
+      setComposerDraftPrompt,
+      threadId,
+    ],
+  );
   const serverTimelineEntries = useMemo(
     () =>
       deriveTimelineEntriesFromVisibleTurnItems({
@@ -3120,14 +3292,6 @@ function ChatViewContent(props: ChatViewProps) {
     [draftId, routeThreadKey, routeThreadRef, serverThread],
   );
 
-  const focusComposer = useCallback(() => {
-    composerRef.current?.focusAtEnd();
-  }, [composerRef]);
-  const scheduleComposerFocus = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      focusComposer();
-    });
-  }, [focusComposer]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       composerRef.current?.addTerminalContext(selection);
@@ -5607,68 +5771,119 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const sideChatCreateInFlightRef = useRef(false);
-  const createSideChat = useCallback(async () => {
-    if (
-      sideChatCreateInFlightRef.current ||
-      !activeThread ||
-      !latestSideChatSourceRun ||
-      activeEnvironmentUnavailable
-    ) {
-      return;
-    }
-
-    sideChatCreateInFlightRef.current = true;
-    try {
-      const targetThreadId = newThreadId();
-      const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
-      const result = await forkThreadFromRun({
-        environmentId,
-        input: {
-          sourceThreadId: activeThread.id,
-          targetThreadId,
-          runId: latestSideChatSourceRun.id,
-          forkKind: "side_chat",
-          title: `${activeThread.title} side chat`,
-        },
-      });
-
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          setThreadError(
-            activeThread.id,
-            error instanceof Error ? error.message : "Failed to start a side chat.",
-          );
-        }
+  const createSideChat = useCallback(
+    async (options?: { moveCurrentComposerDraft?: boolean }) => {
+      if (
+        sideChatCreateInFlightRef.current ||
+        !activeThread ||
+        !latestSideChatSourceRun ||
+        activeEnvironmentUnavailable
+      ) {
         return;
       }
 
-      const ownerThreadRef = panelOwnerThreadRef ?? activeThreadRef;
-      if (!ownerThreadRef) return;
-      await openForkedThreadSideChatWhenReady({
-        parentThreadRef: ownerThreadRef,
-        targetThreadRef,
-        waitForThreadShell,
-        openThread: (parentRef, childThreadId) => {
-          useRightPanelStore.getState().openThread(parentRef, childThreadId);
-        },
-        onThreadUnavailable: (message) => {
-          setThreadError(activeThread.id, message);
-        },
-      });
-    } finally {
-      sideChatCreateInFlightRef.current = false;
-    }
-  }, [
-    activeEnvironmentUnavailable,
-    activeThread,
-    activeThreadRef,
-    environmentId,
-    forkThreadFromRun,
-    latestSideChatSourceRun,
-    panelOwnerThreadRef,
-    setThreadError,
-  ]);
+      sideChatCreateInFlightRef.current = true;
+      try {
+        const preparedModelSelection =
+          options?.moveCurrentComposerDraft === true
+            ? (composerRef.current?.getSendContext().selectedModelSelection ?? null)
+            : null;
+        const targetThreadId = newThreadId();
+        const targetThreadRef = scopeThreadRef(environmentId, targetThreadId);
+        const result = await forkThreadFromRun({
+          environmentId,
+          input: {
+            sourceThreadId: activeThread.id,
+            targetThreadId,
+            runId: latestSideChatSourceRun.id,
+            forkKind: "side_chat",
+            title: `${activeThread.title} side chat`,
+          },
+        });
+
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(
+              activeThread.id,
+              error instanceof Error ? error.message : "Failed to start a side chat.",
+            );
+          }
+          return;
+        }
+
+        if (
+          options?.moveCurrentComposerDraft === true &&
+          !moveComposerDraftContent(composerDraftTarget, targetThreadRef)
+        ) {
+          const cleanupResult = await deleteThread({
+            environmentId,
+            input: { threadId: targetThreadId },
+          });
+          if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+            console.warn(
+              "Failed to clean up an empty side chat after its draft could not be moved.",
+              squashAtomCommandFailure(cleanupResult),
+            );
+          }
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not prepare side chat",
+              description: "The composer draft stayed in this chat.",
+            }),
+          );
+          return;
+        }
+        if (options?.moveCurrentComposerDraft === true) {
+          if (preparedModelSelection !== null) {
+            setComposerDraftModelSelection(targetThreadRef, preparedModelSelection, {
+              replaceOptions: true,
+            });
+          }
+          setComposerDraftRuntimeMode(targetThreadRef, runtimeMode);
+          setComposerDraftInteractionMode(targetThreadRef, interactionMode);
+          resetComposerRefsAfterMove();
+        }
+
+        const ownerThreadRef = panelOwnerThreadRef ?? activeThreadRef;
+        if (!ownerThreadRef) return;
+        await openForkedThreadSideChatWhenReady({
+          parentThreadRef: ownerThreadRef,
+          targetThreadRef,
+          waitForThreadShell,
+          openThread: (parentRef, childThreadId) => {
+            useRightPanelStore.getState().openThread(parentRef, childThreadId);
+          },
+          onThreadUnavailable: (message) => {
+            setThreadError(activeThread.id, message);
+          },
+        });
+      } finally {
+        sideChatCreateInFlightRef.current = false;
+      }
+    },
+    [
+      activeEnvironmentUnavailable,
+      activeThread,
+      activeThreadRef,
+      composerDraftTarget,
+      composerRef,
+      deleteThread,
+      environmentId,
+      forkThreadFromRun,
+      latestSideChatSourceRun,
+      moveComposerDraftContent,
+      panelOwnerThreadRef,
+      resetComposerRefsAfterMove,
+      runtimeMode,
+      interactionMode,
+      setComposerDraftInteractionMode,
+      setComposerDraftModelSelection,
+      setComposerDraftRuntimeMode,
+      setThreadError,
+    ],
+  );
 
   const [continuationRequest, setContinuationRequest] = useState<
     | {
@@ -6482,13 +6697,60 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
-  const onSendInNewChat = () => {
-    void onSend(undefined, "auto", undefined, "new-chat");
-  };
+  const onStartInNewChat = useCallback(async () => {
+    if (!activeProjectRef || !activeThread || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+    let opened: Awaited<ReturnType<typeof handleNewThread>> = null;
+    let moved = false;
+    try {
+      opened = await handleNewThread(activeProjectRef, {
+        branch: activeThreadBranch,
+        envMode: sendEnvMode,
+        forceNew: true,
+        navigate: false,
+        startFromOrigin,
+        worktreePath: activeThread.worktreePath,
+      });
+      if (opened === null) {
+        throw new Error("The new chat draft could not be created.");
+      }
+      moved = moveComposerDraftContent(composerDraftTarget, opened.draftId);
+      if (!moved) {
+        throw new Error("The composer draft could not be moved to the new chat.");
+      }
+      await navigate({
+        to: "/threads/draft/$draftId",
+        params: buildDraftThreadRouteParams(opened.draftId),
+      });
+    } catch (error) {
+      if (moved && opened !== null) {
+        moveComposerDraftContent(opened.draftId, composerDraftTarget);
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not prepare new chat",
+          description: error instanceof Error ? error.message : "The draft stayed in this chat.",
+        }),
+      );
+    } finally {
+      sendInFlightRef.current = false;
+    }
+  }, [
+    activeProjectRef,
+    activeThread,
+    activeThreadBranch,
+    composerDraftTarget,
+    handleNewThread,
+    moveComposerDraftContent,
+    navigate,
+    sendEnvMode,
+    startFromOrigin,
+  ]);
 
-  const onSendInSideChat = () => {
-    void onSend(undefined, "auto", undefined, "side-chat");
-  };
+  const onStartInSideChat = useCallback(() => {
+    void createSideChat({ moveCurrentComposerDraft: true });
+  }, [createSideChat]);
 
   const onRecoverPushFailure = useCallback(
     async (prompt: string): Promise<boolean> => {
@@ -7803,9 +8065,11 @@ function ChatViewContent(props: ChatViewProps) {
                   )}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl
+                      attachmentUrlById={serverAttachmentUrlById}
                       environmentId={activeThread.environmentId}
-                      threadId={activeThread.id}
                       optimisticMessages={optimisticUserMessages}
+                      onEditQueuedMessage={onEditQueuedMessage}
+                      threadId={activeThread.id}
                     />
                   ) : null}
                   <div
@@ -7887,8 +8151,8 @@ function ChatViewContent(props: ChatViewProps) {
                               latestSideChatSourceRun !== null &&
                               !activeEnvironmentUnavailable
                             }
-                            onSendInNewChat={onSendInNewChat}
-                            onSendInSideChat={onSendInSideChat}
+                            onStartInNewChat={onStartInNewChat}
+                            onStartInSideChat={onStartInSideChat}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={
                               onSelectActivePendingUserInputOption

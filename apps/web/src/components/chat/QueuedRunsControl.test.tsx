@@ -39,14 +39,17 @@ import { QueuedRunsControl } from "./QueuedRunsControl";
 const queuedRun = (id: string, text: string, createdBy: "user" | "agent" = "user") => ({
   run: { id: `run:${id}`, userMessageId: `message:${id}` },
   text,
+  attachments: [],
   createdBy,
 });
 
 const render = (optimisticMessages: ReadonlyArray<unknown> = []) =>
   renderToStaticMarkup(
     <QueuedRunsControl
+      attachmentUrlById={new Map()}
       environmentId={"environment:test" as never}
       optimisticMessages={optimisticMessages as never}
+      onEditQueuedMessage={async () => true}
       threadId={"thread:test" as never}
     />,
   );

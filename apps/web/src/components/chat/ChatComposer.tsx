@@ -452,8 +452,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onSendWithMode: (mode: "queue" | "steer") => void;
-  onSendInNewChat: () => void;
-  onSendInSideChat: () => void;
+  onStartInNewChat: () => void;
+  onStartInSideChat: () => void;
 }) {
   return (
     <>
@@ -490,8 +490,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
         onSendWithMode={props.onSendWithMode}
-        onSendInNewChat={props.onSendInNewChat}
-        onSendInSideChat={props.onSendInSideChat}
+        onStartInNewChat={props.onStartInNewChat}
+        onStartInSideChat={props.onStartInSideChat}
       />
     </>
   );
@@ -633,8 +633,8 @@ export interface ChatComposerProps {
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   sideChatAvailable: boolean;
-  onSendInNewChat: () => void;
-  onSendInSideChat: () => void;
+  onStartInNewChat: () => void;
+  onStartInSideChat: () => void;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
@@ -723,8 +723,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onInterrupt,
     onImplementPlanInNewThread,
     sideChatAvailable,
-    onSendInNewChat,
-    onSendInSideChat,
+    onStartInNewChat,
+    onStartInSideChat,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
     onAdvanceActivePendingUserInput,
@@ -2627,12 +2627,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [submitComposer],
   );
-  const handleSendInNewChatPrimaryAction = useCallback(() => {
-    void onSendInNewChat();
-  }, [onSendInNewChat]);
-  const handleSendInSideChatPrimaryAction = useCallback(() => {
-    void onSendInSideChat();
-  }, [onSendInSideChat]);
+  const handleStartInNewChatPrimaryAction = useCallback(() => {
+    void onStartInNewChat();
+  }, [onStartInNewChat]);
+  const handleStartInSideChatPrimaryAction = useCallback(() => {
+    void onStartInSideChat();
+  }, [onStartInSideChat]);
   const scheduleComposerCollapseCheck = useCallback(() => {
     if (!isMobileViewport) {
       return;
@@ -3401,8 +3401,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onInterrupt={handleInterruptPrimaryAction}
                   onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                   onSendWithMode={handleSendWithModePrimaryAction}
-                  onSendInNewChat={handleSendInNewChatPrimaryAction}
-                  onSendInSideChat={handleSendInSideChatPrimaryAction}
+                  onStartInNewChat={handleStartInNewChatPrimaryAction}
+                  onStartInSideChat={handleStartInSideChatPrimaryAction}
                 />
               </div>
             </div>

@@ -51,8 +51,8 @@ interface ComposerPrimaryActionsProps {
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onSendWithMode?: (mode: "queue" | "steer") => void;
-  onSendInNewChat?: () => void;
-  onSendInSideChat?: () => void;
+  onStartInNewChat?: () => void;
+  onStartInSideChat?: () => void;
 }
 
 export type ComposerSendMenuAction = "queue" | "steer" | "new-chat" | "side-chat";
@@ -113,8 +113,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onInterrupt,
   onImplementPlanInNewThread,
   onSendWithMode,
-  onSendInNewChat,
-  onSendInSideChat,
+  onStartInNewChat,
+  onStartInSideChat,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -379,9 +379,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const sendMenuActions = composerSendMenuActions({ isRunning, sideChatAvailable });
   const sendButtonTooltip = isRunning
     ? activeTurnSendMode === "queue"
-      ? "Queue behind the active turn. Hold for send options"
-      : "Send now to steer the active turn. Hold for send options"
-    : "Send message. Hold for send options";
+      ? "Queue behind the active turn. Hold for message options"
+      : "Send now to steer the active turn. Hold for message options"
+    : "Send message. Hold for message options";
 
   return (
     <Menu
@@ -397,7 +397,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         render={<span />}
         tabIndex={-1}
       >
-        <span className="sr-only">Send options</span>
+        <span className="sr-only">Message options</span>
       </MenuTrigger>
       <Tooltip>
         <TooltipTrigger render={sendButton} />
@@ -423,17 +423,17 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           }
           if (action === "new-chat") {
             return (
-              <MenuItem key={action} onClick={() => onSendInNewChat?.()}>
+              <MenuItem key={action} onClick={() => onStartInNewChat?.()}>
                 <MessageSquarePlusIcon />
-                Send in a new chat
+                Start in a new chat
               </MenuItem>
             );
           }
           return (
-            <MenuItem key={action} disabled={disabled} onClick={() => onSendInSideChat?.()}>
+            <MenuItem key={action} disabled={disabled} onClick={() => onStartInSideChat?.()}>
               <PanelRightOpenIcon />
               <span className="grid">
-                <span>Send in a side chat</span>
+                <span>Start in a side chat</span>
                 {disabled ? (
                   <span className="text-muted-foreground text-xs">
                     Available after a completed turn

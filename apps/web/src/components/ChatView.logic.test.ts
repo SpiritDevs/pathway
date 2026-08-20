@@ -11,7 +11,7 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
@@ -30,6 +30,7 @@ import {
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  loadQueuedComposerImages,
   openForkedThreadSideChatWhenReady,
   resolvePanelSurfaceOwnerThreadRef,
   shortcutScopeOwnsEvent,
@@ -77,6 +78,43 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   });
 }
+
+describe("loadQueuedComposerImages", () => {
+  it("downloads queued image attachments as editable composer files", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["image bytes"], { type: "image/png" })));
+    const previewSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:queued-image");
+
+    try {
+      const images = await loadQueuedComposerImages([
+        {
+          attachment: {
+            type: "image",
+            id: "queued-image",
+            name: "queued.png",
+            mimeType: "image/png",
+            sizeBytes: 11,
+          },
+          url: "https://example.test/queued.png",
+        },
+      ]);
+
+      expect(fetchSpy).toHaveBeenCalledWith("https://example.test/queued.png");
+      expect(images).toHaveLength(1);
+      expect(images[0]).toMatchObject({
+        id: "queued-image",
+        name: "queued.png",
+        mimeType: "image/png",
+        previewUrl: "blob:queued-image",
+      });
+      expect(images[0]?.file).toBeInstanceOf(File);
+    } finally {
+      fetchSpy.mockRestore();
+      previewSpy.mockRestore();
+    }
+  });
+});
 
 describe("openForkedThreadSideChatWhenReady", () => {
   const parentThreadRef = { environmentId, threadId };
