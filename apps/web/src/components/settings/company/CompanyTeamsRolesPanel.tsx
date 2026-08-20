@@ -8,6 +8,7 @@ import {
   ArchiveIcon,
   PencilIcon,
   PlusIcon,
+  RotateCcwIcon,
   ShieldIcon,
   Trash2Icon,
   UsersRoundIcon,
@@ -18,6 +19,15 @@ import { newCompanyDomainId } from "../../../cloud/companyAdmin";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
@@ -36,6 +46,8 @@ import {
   PermissionTooltip,
 } from "./CompanySettingsShared";
 import { CompanySettingsSheet } from "./CompanySettingsSheet";
+import { CompanyAssignmentPicker } from "./CompanyAssignmentPicker";
+import { applyVisibleAssignmentDelta } from "./companyAssignmentPicker.logic";
 import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
 type RoleRow = CompanySettings["directory"]["roles"][number];
@@ -69,6 +81,37 @@ function TeamSheet({
   const [memberIds, setMemberIds] =
     useState<ReadonlySet<CompanyMemberRow["id"]>>(existingMemberIds);
   const [pending, setPending] = useState(false);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const memberItems = [...members]
+    .sort((a, b) => (a.displayName || a.email).localeCompare(b.displayName || b.email))
+    .map((member) => {
+      const selected = memberIds.has(member.id);
+      const addable = member.state === "active" && team?.archivedAt !== null;
+      return {
+        id: member.id,
+        primaryLabel: member.displayName || member.email,
+        secondaryLabel: member.email,
+        searchableText: `${member.displayName} ${member.email}`,
+        status: member.state,
+        statusLabel:
+          member.state === "active" ? undefined : member.state === "locked" ? "Locked" : "Left",
+        selected,
+        mayAdd: addable,
+        mayRemove: selected,
+        disabledReason:
+          !selected && team?.archivedAt !== null
+            ? "Archived teams cannot gain members."
+            : !selected && member.state !== "active"
+              ? `${member.state === "locked" ? "Locked" : "Left"} memberships cannot be added.`
+              : undefined,
+      } as const;
+    });
+  const dirty =
+    team !== null &&
+    (name !== team.name ||
+      description !== team.description ||
+      memberIds.size !== existingMemberIds.size ||
+      [...memberIds].some((id) => !existingMemberIds.has(id)));
 
   const submit = async () => {
     if (
@@ -97,24 +140,14 @@ function TeamSheet({
           description,
         });
       }
-      for (const memberId of memberIds) {
-        if (existingMemberIds.has(memberId)) continue;
-        await settings.admin.addTeamMember({
-          companyId: settings.companyId,
-          teamId,
-          membershipId: memberId,
-        });
-      }
-      if (team !== null) {
-        for (const member of team.members) {
-          if (memberIds.has(member.id)) continue;
-          await settings.admin.removeTeamMember({
-            companyId: settings.companyId,
-            teamId,
-            membershipId: member.id,
-          });
-        }
-      }
+      const addMembershipIds = [...memberIds].filter((id) => !existingMemberIds.has(id));
+      const removeMembershipIds = [...existingMemberIds].filter((id) => !memberIds.has(id));
+      await settings.admin.updateTeamMembers({
+        companyId: settings.companyId,
+        teamId,
+        addMembershipIds,
+        removeMembershipIds,
+      });
       onOpenChange(false);
     } catch (error) {
       reportError(team === null ? "Could not create team" : "Could not update team", error);
@@ -123,11 +156,20 @@ function TeamSheet({
     }
   };
 
-  const toggleMember = (memberId: CompanyMemberRow["id"]) => {
-    const next = new Set(memberIds);
-    if (next.has(memberId)) next.delete(memberId);
-    else next.add(memberId);
-    setMemberIds(next);
+  const changeLifecycle = async (operation: "archive" | "restore") => {
+    if (settings.admin === null || settings.companyId === null || team === null || pending) return;
+    setPending(true);
+    try {
+      await (operation === "archive"
+        ? settings.admin.archiveTeam({ companyId: settings.companyId, teamId: team.id })
+        : settings.admin.restoreTeam({ companyId: settings.companyId, teamId: team.id }));
+      onOpenChange(false);
+    } catch (error) {
+      reportError(`Could not ${operation} team`, error);
+    } finally {
+      setPending(false);
+      setArchiveDialogOpen(false);
+    }
   };
 
   return (
@@ -136,6 +178,28 @@ function TeamSheet({
       onOpenChange={onOpenChange}
       title={team === null ? "Create team" : "Edit team"}
       description="Teams group members and scope access to company work."
+      leadingFooter={
+        team === null ? null : team.archivedAt === null ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-destructive"
+            disabled={pending}
+            onClick={() => setArchiveDialogOpen(true)}
+          >
+            <ArchiveIcon /> Archive team
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => void changeLifecycle("restore")}
+          >
+            <RotateCcwIcon /> Restore team
+          </Button>
+        )
+      }
       footer={
         <>
           <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
@@ -158,56 +222,44 @@ function TeamSheet({
           onChange={(event) => setDescription(event.currentTarget.value)}
         />
       </label>
-      <fieldset className="space-y-2">
-        <legend className="text-xs font-medium">Members</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {members
-            .filter((member) => member.state === "active")
-            .map((member) => (
-              <label key={member.id} className="flex items-start gap-2 rounded-lg border p-2.5">
-                <Checkbox
-                  checked={memberIds.has(member.id)}
-                  disabled={team?.archivedAt !== null && !existingMemberIds.has(member.id)}
-                  onCheckedChange={() => toggleMember(member.id)}
-                />
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-medium">
-                    {member.displayName || member.email}
-                  </span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {member.email}
-                  </span>
-                </span>
-              </label>
-            ))}
-        </div>
-      </fieldset>
-      {team !== null && team.archivedAt === null ? (
-        <div className="border-t pt-5">
-          <Button
-            variant="ghost"
-            className="text-destructive"
-            disabled={pending}
-            onClick={() => {
-              if (
-                settings.admin === null ||
-                settings.companyId === null ||
-                !window.confirm(`Archive ${team.name}?`)
-              ) {
-                return;
-              }
-              setPending(true);
-              void settings.admin
-                .archiveTeam({ companyId: settings.companyId, teamId: team.id })
-                .then(() => onOpenChange(false))
-                .catch((error) => reportError("Could not archive team", error))
-                .finally(() => setPending(false));
-            }}
-          >
-            <ArchiveIcon /> Archive team
-          </Button>
-        </div>
-      ) : null}
+      <CompanyAssignmentPicker
+        label="Members"
+        items={memberItems}
+        pending={pending}
+        showStatusFilter
+        onToggle={(id, selected) => {
+          setMemberIds((current) =>
+            applyVisibleAssignmentDelta(current, {
+              addIds: selected ? [id] : [],
+              removeIds: selected ? [] : [id],
+            }),
+          );
+        }}
+        onVisibleChange={(delta) =>
+          setMemberIds((current) => applyVisibleAssignmentDelta(current, delta))
+        }
+      />
+      <AlertDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Archive {team?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Archiving hides this team from new assignments. It does not remove work, memberships,
+              roles, or access.{dirty ? " Unsaved form edits will not be saved." : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={pending}
+              onClick={() => void changeLifecycle("archive")}
+            >
+              Archive team
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </CompanySettingsSheet>
   );
 }

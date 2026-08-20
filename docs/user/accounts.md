@@ -30,6 +30,17 @@ editing any of these opens a floating panel from the right so you can make chang
 your place. Pathway keeps the membership and service permissions needed for sync and environments
 internally for an individual workspace; they do not require separate setup.
 
+Member, team, and role assignment panels include local search, **All**, **Selected**, and
+**Unselected** filters, result and selection counts, and **Select visible** / **Clear visible**
+actions. Member lists can also filter by Active, Locked, or Left state. “Visible” means every result
+matching the current search and filters, including rows outside the scroll viewport. If more than
+500 assignments would change, narrow the search or filters first.
+
+Archiving a team hides it from new assignments; it does not delete the team or remove its work,
+memberships, roles, or access. Revoke access separately when that is the intent. Archived teams can
+be restored from the same team editor, and existing archived assignments remain available for
+cleanup.
+
 If you belong to more than one company, the account menu lets you choose the company scope used
 throughout Pathway. **All companies** combines company-owned projects, agent threads, issues,
 email, and other company data. Choosing one company filters those areas to that company. Environments

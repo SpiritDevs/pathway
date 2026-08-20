@@ -379,10 +379,32 @@ it.
 
 #### Company
 
-An organization the account belongs to, modelled as a Clerk organization. Has identity and
-membership independent of whoever created it. In v1 membership grants nothing — no shared
-billing, visibility, or data — which is what makes email-domain matching an acceptable way to
-offer it. See [decisions/0005](./decisions/0005-company-via-clerk-organizations.md).
+A Convex-owned tenancy boundary for projects, issues, environments, integrations, permissions, and
+sync. Clerk proves user identity but does not own company membership or authorization. Personal and
+organisation workspaces use the same company model. See
+[decisions/0007](./decisions/0007-convex-company-local-first-sync.md).
+
+#### Company membership
+
+The durable relationship between one user and one company. It has `active`, `locked`, or `left`
+state and remains after departure so historical work can still name the person who performed it.
+
+#### Team membership
+
+The many-to-many join between a company membership and a team. It is separate from a role
+assignment: joining a team determines which team scope a membership participates in, while a role
+assignment determines permissions.
+
+#### Role assignment
+
+A grant of one role to one company membership at company or team scope. The assignment is an
+administered record with its own durable ID and lifecycle.
+
+#### Archived team
+
+A named team scope retired from new assignments. Its work, team memberships, role assignments,
+and authorization behavior remain intact. Restoring clears `archivedAt`; it does not reconstruct
+or alter assignments.
 
 #### Domain auto-join
 

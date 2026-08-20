@@ -151,7 +151,7 @@ describe("company settings derivation", () => {
     const rows = deriveMemberRows(directory);
     expect(rows.map((row) => row.displayName)).toEqual(["Ada Owner", "Zoe Member"]);
     expect(rows[0]?.isOwner).toBe(true);
-    expect(rows[1]?.teams).toEqual([{ id: TEAM_ID, name: "Design" }]);
+    expect(rows[1]?.teams).toEqual([{ id: TEAM_ID, name: "Design", archivedAt: null }]);
     expect(rows[1]?.roles).toEqual([
       expect.objectContaining({ roleName: "Admin", scopeLabel: "Company" }),
       expect.objectContaining({ roleName: "Team lead", scopeLabel: "Design" }),

@@ -74,7 +74,11 @@ export interface CompanyMemberRow {
   readonly state: MembershipEntityType["state"];
   readonly isOwner: boolean;
   readonly joinedAt: number;
-  readonly teams: ReadonlyArray<{ readonly id: TeamEntityType["id"]; readonly name: string }>;
+  readonly teams: ReadonlyArray<{
+    readonly id: TeamEntityType["id"];
+    readonly name: string;
+    readonly archivedAt: number | null;
+  }>;
   readonly roles: ReadonlyArray<MemberRoleRow>;
 }
 
@@ -106,7 +110,7 @@ export function deriveMemberRows(input: CompanyDirectoryEntities): ReadonlyArray
       const teams = (teamIdsByMembership.get(membership.id) ?? [])
         .flatMap((teamId) => {
           const team = teamById.get(teamId);
-          return team ? [{ id: team.id, name: team.name }] : [];
+          return team ? [{ id: team.id, name: team.name, archivedAt: team.archivedAt }] : [];
         })
         .sort((a, b) => a.name.localeCompare(b.name));
       const roles = (assignmentsByMembership.get(membership.id) ?? [])

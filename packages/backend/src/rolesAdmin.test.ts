@@ -710,3 +710,147 @@ describe("draining role administration off the change feed", () => {
     expect(outsider.cursor).toBe(outsider.latestVersion);
   });
 });
+
+describe("atomic company role assignment deltas", () => {
+  it("adds and removes company assignments with one epoch bump per effective batch", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createRole(t);
+
+    await asManager(t).mutation(api.roles.updateCompanyAssignments, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      additions: [{ id: ASSIGNMENT_ID, roleId: ROLE_ID }],
+      removeAssignmentIds: [],
+    });
+    expect((await feedRows(t))[1]).toMatchObject({
+      entityKind: "roleAssignment",
+      entityId: ASSIGNMENT_ID,
+      changeKind: "upsert",
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(2);
+
+    await asManager(t).mutation(api.roles.updateCompanyAssignments, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      additions: [],
+      removeAssignmentIds: [ASSIGNMENT_ID],
+    });
+    expect((await feedRows(t))[2]).toMatchObject({
+      entityId: ASSIGNMENT_ID,
+      changeKind: "tombstone",
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(3);
+  });
+
+  it("is idempotent and validates duplicates, wrong membership, and inactive additions before writes", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createRole(t);
+    await asManager(t).mutation(api.roles.updateCompanyAssignments, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      additions: [{ id: ASSIGNMENT_ID, roleId: ROLE_ID }],
+      removeAssignmentIds: [],
+    });
+    await asManager(t).mutation(api.roles.updateCompanyAssignments, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      additions: [{ id: ASSIGNMENT_ID, roleId: ROLE_ID }],
+      removeAssignmentIds: [],
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(2);
+
+    await expect(
+      asManager(t).mutation(api.roles.updateCompanyAssignments, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        additions: [
+          { id: OTHER_ASSIGNMENT_ID, roleId: ROLE_ID },
+          { id: OTHER_ASSIGNMENT_ID, roleId: ROLE_ID },
+        ],
+        removeAssignmentIds: [],
+      }),
+    ).rejects.toThrow("duplicates");
+    await expect(
+      asManager(t).mutation(api.roles.updateCompanyAssignments, {
+        companyId: COMPANY_ID,
+        membershipId: LOCKED_MEMBERSHIP_ID,
+        additions: [{ id: OTHER_ASSIGNMENT_ID, roleId: ROLE_ID }],
+        removeAssignmentIds: [],
+      }),
+    ).rejects.toThrow("not active");
+    await expect(
+      asManager(t).mutation(api.roles.updateCompanyAssignments, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        additions: [],
+        removeAssignmentIds: ["0198c0de-cccc-7ccc-8ccc-000000000101"],
+      }),
+    ).rejects.toThrow("this membership's company-scoped assignments");
+    expect(await feedRows(t)).toHaveLength(2);
+  });
+
+  it("refuses to remove a team-scoped assignment through the company endpoint", async () => {
+    const t = harness();
+    await seed(t);
+    await createRole(t);
+    await asManager(t).mutation(api.roles.assign, {
+      companyId: COMPANY_ID,
+      id: ASSIGNMENT_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      assignment: { roleId: ROLE_ID, scope: { kind: "team", teamId: TEAM_ID } },
+    });
+
+    await expect(
+      asManager(t).mutation(api.roles.updateCompanyAssignments, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        additions: [],
+        removeAssignmentIds: [ASSIGNMENT_ID],
+      }),
+    ).rejects.toThrow("company-scoped assignments");
+  });
+
+  it("rejects more than 500 effective removals without a partial write", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createRole(t);
+    const assignmentIds = await t.run(async (ctx) => {
+      const role = await ctx.db
+        .query("roles")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", seeded.companyDocId).eq("id", ROLE_ID),
+        )
+        .unique();
+      if (role === null) throw new Error("expected role");
+      const ids: string[] = [];
+      for (let index = 0; index <= 500; index += 1) {
+        const id = `0198c0de-7777-7777-8777-${String(index).padStart(12, "0")}`;
+        await ctx.db.insert("roleAssignments", {
+          id,
+          companyId: seeded.companyDocId,
+          membershipId: seeded.readerDocId,
+          roleId: role._id,
+          scope: "company",
+          teamId: null,
+          createdAt: seeded.now,
+        });
+        ids.push(id);
+      }
+      return ids;
+    });
+
+    await expect(
+      asManager(t).mutation(api.roles.updateCompanyAssignments, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        additions: [],
+        removeAssignmentIds: assignmentIds,
+      }),
+    ).rejects.toThrow("at most 500");
+    expect(
+      await t.run(async (ctx) => (await ctx.db.query("roleAssignments").collect()).length),
+    ).toBeGreaterThanOrEqual(501);
+  });
+});

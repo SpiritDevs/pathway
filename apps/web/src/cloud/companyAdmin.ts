@@ -142,6 +142,27 @@ export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
   archiveTeam: mutationReference<{ readonly companyId: CompanyId; readonly teamId: TeamId }, null>(
     "teams:archive",
   ),
+  restoreTeam: mutationReference<{ readonly companyId: CompanyId; readonly teamId: TeamId }, null>(
+    "teams:restore",
+  ),
+  updateTeamMembers: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly teamId: TeamId;
+      readonly addMembershipIds: ReadonlyArray<MembershipId>;
+      readonly removeMembershipIds: ReadonlyArray<MembershipId>;
+    },
+    null
+  >("teams:updateMembers"),
+  updateMemberTeams: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly membershipId: MembershipId;
+      readonly addTeamIds: ReadonlyArray<TeamId>;
+      readonly removeTeamIds: ReadonlyArray<TeamId>;
+    },
+    null
+  >("teams:updateForMembership"),
   addTeamMember: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -176,6 +197,15 @@ export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
     { readonly companyId: CompanyId; readonly assignmentId: RoleAssignmentId },
     null
   >("roles:unassign"),
+  updateMemberCompanyRoles: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly membershipId: MembershipId;
+      readonly additions: ReadonlyArray<{ readonly id: RoleAssignmentId; readonly roleId: RoleId }>;
+      readonly removeAssignmentIds: ReadonlyArray<RoleAssignmentId>;
+    },
+    null
+  >("roles:updateCompanyAssignments"),
 } as const;
 
 const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -262,6 +292,22 @@ export interface CompanyAdminClient {
     readonly companyId: CompanyId;
     readonly teamId: TeamId;
   }) => Promise<void>;
+  readonly restoreTeam: (args: {
+    readonly companyId: CompanyId;
+    readonly teamId: TeamId;
+  }) => Promise<void>;
+  readonly updateTeamMembers: (args: {
+    readonly companyId: CompanyId;
+    readonly teamId: TeamId;
+    readonly addMembershipIds: ReadonlyArray<MembershipId>;
+    readonly removeMembershipIds: ReadonlyArray<MembershipId>;
+  }) => Promise<void>;
+  readonly updateMemberTeams: (args: {
+    readonly companyId: CompanyId;
+    readonly membershipId: MembershipId;
+    readonly addTeamIds: ReadonlyArray<TeamId>;
+    readonly removeTeamIds: ReadonlyArray<TeamId>;
+  }) => Promise<void>;
   readonly addTeamMember: (args: {
     readonly companyId: CompanyId;
     readonly teamId: TeamId;
@@ -287,6 +333,15 @@ export interface CompanyAdminClient {
   readonly unassignRole: (args: {
     readonly companyId: CompanyId;
     readonly assignmentId: RoleAssignmentId;
+  }) => Promise<void>;
+  readonly updateMemberCompanyRoles: (args: {
+    readonly companyId: CompanyId;
+    readonly membershipId: MembershipId;
+    readonly additions: ReadonlyArray<{
+      readonly id: RoleAssignmentId;
+      readonly roleId: RoleId;
+    }>;
+    readonly removeAssignmentIds: ReadonlyArray<RoleAssignmentId>;
   }) => Promise<void>;
   readonly close: () => Promise<void>;
 }
@@ -333,6 +388,11 @@ export function makeCompanyAdminClient(options: {
     createTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.createTeam, args),
     updateTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.updateTeam, args),
     archiveTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.archiveTeam, args),
+    restoreTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.restoreTeam, args),
+    updateTeamMembers: (args) =>
+      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.updateTeamMembers, args),
+    updateMemberTeams: (args) =>
+      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.updateMemberTeams, args),
     addTeamMember: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.addTeamMember, args),
     removeTeamMember: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.removeTeamMember, args),
     createRole: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.createRole, args),
@@ -340,6 +400,8 @@ export function makeCompanyAdminClient(options: {
     removeRole: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.removeRole, args),
     assignRole: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.assignRole, args),
     unassignRole: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.unassignRole, args),
+    updateMemberCompanyRoles: (args) =>
+      mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.updateMemberCompanyRoles, args),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

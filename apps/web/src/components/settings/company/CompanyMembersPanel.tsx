@@ -18,7 +18,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { newCompanyDomainId, type CompanyInvitationSummary } from "../../../cloud/companyAdmin";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { stackedThreadToast, toastManager } from "../../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "../settingsLayout";
@@ -34,6 +33,8 @@ import {
   PermissionTooltip,
 } from "./CompanySettingsShared";
 import { CompanySettingsSheet } from "./CompanySettingsSheet";
+import { CompanyAssignmentPicker } from "./CompanyAssignmentPicker";
+import { applyVisibleAssignmentDelta } from "./companyAssignmentPicker.logic";
 import { useCompanySettings, type CompanySettings } from "./useCompanySettings";
 
 function reportError(title: string, error: unknown): void {
@@ -68,8 +69,28 @@ function InviteMemberSheet({
   const [roleIds, setRoleIds] = useState<ReadonlySet<RoleId>>(new Set());
   const [teamIds, setTeamIds] = useState<ReadonlySet<TeamId>>(new Set());
   const [pending, setPending] = useState(false);
-  const roles = sortRoles(directory.roles);
-  const teams = directory.teams.filter((team) => team.archivedAt === null);
+  const roles = [...sortRoles(directory.roles)].sort((a, b) => a.name.localeCompare(b.name));
+  const teams = directory.teams
+    .filter((team) => team.archivedAt === null)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const roleItems = roles.map((role) => ({
+    id: role.id,
+    primaryLabel: role.name,
+    secondaryLabel: role.description || `${role.permissions.length} permissions`,
+    searchableText: `${role.name} ${role.description}`,
+    selected: roleIds.has(role.id),
+    mayAdd: true,
+    mayRemove: true,
+  }));
+  const teamItems = teams.map((team) => ({
+    id: team.id,
+    primaryLabel: team.name,
+    secondaryLabel: team.description,
+    searchableText: `${team.name} ${team.description}`,
+    selected: teamIds.has(team.id),
+    mayAdd: true,
+    mayRemove: true,
+  }));
 
   const toggle = <A,>(values: ReadonlySet<A>, value: A): ReadonlySet<A> => {
     const next = new Set(values);
@@ -132,43 +153,26 @@ function InviteMemberSheet({
           }}
         />
       </label>
-      {roles.length > 0 ? (
-        <fieldset className="space-y-2">
-          <legend className="text-xs font-medium">Company roles</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {roles.map((role) => (
-              <label key={role.id} className="flex items-start gap-2 rounded-lg border p-2.5">
-                <Checkbox
-                  checked={roleIds.has(role.id)}
-                  onCheckedChange={() => setRoleIds(toggle(roleIds, role.id))}
-                />
-                <span className="min-w-0">
-                  <span className="block text-xs font-medium">{role.name}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {role.description || `${role.permissions.length} permissions`}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      ) : null}
-      {teams.length > 0 ? (
-        <fieldset className="space-y-2">
-          <legend className="text-xs font-medium">Teams</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {teams.map((team) => (
-              <label key={team.id} className="flex items-center gap-2 rounded-lg border p-2.5">
-                <Checkbox
-                  checked={teamIds.has(team.id)}
-                  onCheckedChange={() => setTeamIds(toggle(teamIds, team.id))}
-                />
-                <span className="truncate text-xs font-medium">{team.name}</span>
-              </label>
-            ))}
-          </div>
-        </fieldset>
-      ) : null}
+      <CompanyAssignmentPicker
+        key={`invite-roles-${open}`}
+        label="Company roles"
+        items={roleItems}
+        pending={pending}
+        onToggle={(id) => setRoleIds(toggle(roleIds, id))}
+        onVisibleChange={(delta) =>
+          setRoleIds((current) => applyVisibleAssignmentDelta(current, delta))
+        }
+      />
+      <CompanyAssignmentPicker
+        key={`invite-teams-${open}`}
+        label="Teams"
+        items={teamItems}
+        pending={pending}
+        onToggle={(id) => setTeamIds(toggle(teamIds, id))}
+        onVisibleChange={(delta) =>
+          setTeamIds((current) => applyVisibleAssignmentDelta(current, delta))
+        }
+      />
     </CompanySettingsSheet>
   );
 }
@@ -269,8 +273,48 @@ function MemberEditSheet({
     member.roles.filter((role) => role.isCompanyScoped).map((role) => role.roleId),
   );
   const assignedTeamIds = new Set(member.teams.map((team) => team.id));
-  const roles = sortRoles(directory.roles);
-  const teams = directory.teams.filter((team) => team.archivedAt === null);
+  const roles = [...sortRoles(directory.roles)].sort((a, b) => a.name.localeCompare(b.name));
+  const teams = directory.teams
+    .filter((team) => team.archivedAt === null || assignedTeamIds.has(team.id))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const roleItems = roles.map((role) => {
+    const selected = assignedCompanyRoleIds.has(role.id);
+    return {
+      id: role.id,
+      primaryLabel: role.name,
+      secondaryLabel: role.description || `${role.permissions.length} permissions`,
+      searchableText: `${role.name} ${role.description}`,
+      selected,
+      mayAdd: member.state === "active" && manageRolesGate.enabled,
+      mayRemove: selected && manageRolesGate.enabled,
+      disabledReason: !manageRolesGate.enabled
+        ? (manageRolesGate.tooltip ?? undefined)
+        : !selected && member.state !== "active"
+          ? "Only active memberships may receive new roles."
+          : undefined,
+    };
+  });
+  const teamItems = teams.map((team) => {
+    const selected = assignedTeamIds.has(team.id);
+    return {
+      id: team.id,
+      primaryLabel: team.name,
+      secondaryLabel: team.description,
+      searchableText: `${team.name} ${team.description}`,
+      status: team.archivedAt === null ? undefined : ("archived" as const),
+      statusLabel: team.archivedAt === null ? undefined : "Archived",
+      selected,
+      mayAdd: team.archivedAt === null && member.state === "active" && manageTeamsGate.enabled,
+      mayRemove: selected && manageTeamsGate.enabled,
+      disabledReason: !manageTeamsGate.enabled
+        ? (manageTeamsGate.tooltip ?? undefined)
+        : !selected && team.archivedAt !== null
+          ? "Archived teams cannot gain members."
+          : !selected && member.state !== "active"
+            ? "Only active memberships may join teams."
+            : undefined,
+    };
+  });
 
   const run = async (label: string, operation: () => Promise<void>): Promise<boolean> => {
     if (pendingAction !== null) return false;
@@ -289,7 +333,7 @@ function MemberEditSheet({
   const toggleRole = (roleId: RoleId, assigned: boolean) => {
     if (admin === null || companyId === null) return;
     if (assigned) {
-      void run(`assign-${roleId}`, () =>
+      void run(`roles-assign-${roleId}`, () =>
         admin.assignRole({
           companyId,
           id: RoleAssignmentId.make(newCompanyDomainId()),
@@ -301,7 +345,7 @@ function MemberEditSheet({
     }
     const assignment = member.roles.find((role) => role.isCompanyScoped && role.roleId === roleId);
     if (assignment === undefined) return;
-    void run(`unassign-${assignment.assignmentId}`, () =>
+    void run(`roles-unassign-${assignment.assignmentId}`, () =>
       admin.unassignRole({ companyId, assignmentId: assignment.assignmentId }),
     );
   };
@@ -320,74 +364,57 @@ function MemberEditSheet({
         <span className="text-xs text-muted-foreground">{member.email}</span>
       </div>
 
-      <fieldset
-        className="space-y-2"
-        disabled={pendingAction !== null || member.state !== "active"}
-      >
-        <legend className="text-xs font-medium">Company roles</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {roles.map((role) => (
-            <PermissionTooltip key={role.id} tooltip={manageRolesGate.tooltip}>
-              <label className="flex items-start gap-2 rounded-lg border p-2.5">
-                <Checkbox
-                  checked={assignedCompanyRoleIds.has(role.id)}
-                  disabled={!manageRolesGate.enabled}
-                  onCheckedChange={(checked) => toggleRole(role.id, checked === true)}
-                />
-                <span className="min-w-0">
-                  <span className="block text-xs font-medium">{role.name}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {role.description || `${role.permissions.length} permissions`}
-                  </span>
-                </span>
-              </label>
-            </PermissionTooltip>
-          ))}
-        </div>
-      </fieldset>
+      <CompanyAssignmentPicker
+        label="Company roles"
+        items={roleItems}
+        pending={pendingAction !== null}
+        onToggle={(id, selected) => toggleRole(id, selected)}
+        onVisibleChange={(delta) => {
+          if (admin === null || companyId === null) return;
+          const removeAssignmentIds = delta.removeIds.flatMap((roleId) => {
+            const assignment = member.roles.find(
+              (candidate) => candidate.isCompanyScoped && candidate.roleId === roleId,
+            );
+            return assignment ? [assignment.assignmentId] : [];
+          });
+          void run("roles-bulk", () =>
+            admin.updateMemberCompanyRoles({
+              companyId,
+              membershipId: member.id,
+              additions: delta.addIds.map((roleId) => ({
+                id: RoleAssignmentId.make(newCompanyDomainId()),
+                roleId,
+              })),
+              removeAssignmentIds,
+            }),
+          );
+        }}
+      />
 
-      <fieldset
-        className="space-y-2"
-        disabled={pendingAction !== null || member.state !== "active"}
-      >
-        <legend className="text-xs font-medium">Teams</legend>
-        {teams.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
-            No active teams are available.
-          </p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {teams.map((team) => (
-              <PermissionTooltip key={team.id} tooltip={manageTeamsGate.tooltip}>
-                <label className="flex items-center gap-2 rounded-lg border p-2.5">
-                  <Checkbox
-                    checked={assignedTeamIds.has(team.id)}
-                    disabled={!manageTeamsGate.enabled}
-                    onCheckedChange={(checked) => {
-                      if (admin === null || companyId === null) return;
-                      const shouldAssign = checked === true;
-                      void run(`${shouldAssign ? "add" : "remove"}-team-${team.id}`, () =>
-                        shouldAssign
-                          ? admin.addTeamMember({
-                              companyId,
-                              teamId: team.id,
-                              membershipId: member.id,
-                            })
-                          : admin.removeTeamMember({
-                              companyId,
-                              teamId: team.id,
-                              membershipId: member.id,
-                            }),
-                      );
-                    }}
-                  />
-                  <span className="truncate text-xs font-medium">{team.name}</span>
-                </label>
-              </PermissionTooltip>
-            ))}
-          </div>
-        )}
-      </fieldset>
+      <CompanyAssignmentPicker
+        label="Teams"
+        items={teamItems}
+        pending={pendingAction !== null}
+        onToggle={(teamId, selected) => {
+          if (admin === null || companyId === null) return;
+          void run(`teams-${selected ? "add" : "remove"}-${teamId}`, () =>
+            selected
+              ? admin.addTeamMember({ companyId, teamId, membershipId: member.id })
+              : admin.removeTeamMember({ companyId, teamId, membershipId: member.id }),
+          );
+        }}
+        onVisibleChange={(delta) => {
+          if (admin === null || companyId === null) return;
+          void run("teams-bulk", () =>
+            admin.updateMemberTeams({
+              companyId,
+              membershipId: member.id,
+              addTeamIds: delta.addIds,
+              removeTeamIds: delta.removeIds,
+            }),
+          );
+        }}
+      />
 
       {member.state !== "left" ? (
         <div className="space-y-3 border-t pt-5">

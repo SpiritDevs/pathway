@@ -106,6 +106,23 @@ Removing a team must atomically clear or reassign team-scoped labels, cycles, wo
 and project references that would otherwise become invalid. An issue has one workflow owner even
 when several teams can see it.
 
+### Team lifecycle and assignment batches
+
+Archiving a team retires it from new member and role assignments; it is not deletion. Existing
+work, team memberships, role assignments, and effective access remain unchanged. Restore clears
+the archive marker and makes the same team available for new assignments again. Archive and restore
+emit team upserts but do not increment the authorization epoch.
+
+Administration can reconcile team members, one membership's teams, or one membership's
+company-scoped roles with atomic add/remove deltas. Each mutation validates the complete request
+before any write, emits all effective upserts and tombstones through one feed append, and increments
+the authorization epoch once when anything changed. Existing additions and absent removals are
+no-ops. Effective batches are capped at 500 changes; clients narrow local search or filters before
+submitting a larger selection.
+
+The settings UI searches and virtualizes the already-replicated company directory. It does not page
+assignment options from Convex or issue extra list queries.
+
 Authorization changes increment the company authorization epoch. Backend queries and mutations
 always check current authority; the epoch additionally tells local replicas that previously cached
 visibility can no longer be trusted. See [cloud-sync.md](./cloud-sync.md#cursors-and-authorization-epochs).

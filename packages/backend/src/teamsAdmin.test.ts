@@ -614,3 +614,176 @@ describe("draining team administration off the change feed", () => {
     expect(outsider.cursor).toBe(outsider.latestVersion);
   });
 });
+
+describe("reversible archive and atomic member deltas", () => {
+  it("restores with an ordinary upsert, is idempotent, and never bumps the epoch", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    await asManager(t).mutation(api.teams.archive, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    await asManager(t).mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    await asManager(t).mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID });
+
+    const rows = await feedRows(t);
+    expect(rows).toHaveLength(3);
+    expect(rows[2]).toMatchObject({
+      entityKind: "team",
+      entityId: TEAM_ID,
+      changeKind: "upsert",
+      payload: expect.objectContaining({ archivedAt: null }),
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(1);
+  });
+
+  it("enforces restore permission and company-scoped team lookup", async () => {
+    const t = harness();
+    await seed(t);
+    await createTeam(t);
+    await asManager(t).mutation(api.teams.archive, { companyId: COMPANY_ID, teamId: TEAM_ID });
+
+    await expect(
+      asReader(t).mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID }),
+    ).rejects.toThrow("teams.manage");
+    await expect(
+      asManager(t).mutation(api.teams.restore, {
+        companyId: COMPANY_ID,
+        teamId: OTHER_TEAM_ID,
+      }),
+    ).rejects.toThrow(`No team ${OTHER_TEAM_ID}`);
+  });
+
+  it("applies a team-oriented composite delta in one feed append and one epoch bump", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    await asManager(t).mutation(api.teams.updateMembers, {
+      companyId: COMPANY_ID,
+      teamId: TEAM_ID,
+      addMembershipIds: [MANAGER_MEMBERSHIP_ID, READER_MEMBERSHIP_ID],
+      removeMembershipIds: [],
+    });
+
+    const rows = await feedRows(t);
+    expect(rows.slice(1).map((row) => row.entityId)).toEqual([
+      `${TEAM_ID}:${MANAGER_MEMBERSHIP_ID}`,
+      `${TEAM_ID}:${READER_MEMBERSHIP_ID}`,
+    ]);
+    expect(await epochOf(t, seeded.companyDocId)).toBe(2);
+
+    await asManager(t).mutation(api.teams.updateMembers, {
+      companyId: COMPANY_ID,
+      teamId: TEAM_ID,
+      addMembershipIds: [MANAGER_MEMBERSHIP_ID],
+      removeMembershipIds: [],
+    });
+    expect(await feedRows(t)).toHaveLength(3);
+    expect(await epochOf(t, seeded.companyDocId)).toBe(2);
+  });
+
+  it("validates the entire delta before writing and permits locked cleanup", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("teamMemberships", {
+        companyId: seeded.companyDocId,
+        id: `${TEAM_ID}:${LOCKED_MEMBERSHIP_ID}`,
+        teamId: (await ctx.db.query("teams").first())!._id,
+        membershipId: seeded.lockedDocId,
+        createdAt: seeded.now,
+      });
+    });
+
+    await expect(
+      asManager(t).mutation(api.teams.updateMembers, {
+        companyId: COMPANY_ID,
+        teamId: TEAM_ID,
+        addMembershipIds: [READER_MEMBERSHIP_ID, "0198c0de-ffff-7fff-8fff-000000000009"],
+        removeMembershipIds: [],
+      }),
+    ).rejects.toThrow("No membership");
+    expect(
+      await t.run(async (ctx) => (await ctx.db.query("teamMemberships").collect()).length),
+    ).toBe(1);
+
+    await asManager(t).mutation(api.teams.updateMembers, {
+      companyId: COMPANY_ID,
+      teamId: TEAM_ID,
+      addMembershipIds: [],
+      removeMembershipIds: [LOCKED_MEMBERSHIP_ID],
+    });
+    expect(
+      await t.run(async (ctx) => (await ctx.db.query("teamMemberships").collect()).length),
+    ).toBe(0);
+  });
+
+  it("applies membership-oriented deltas and rejects duplicates and overlap", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    await createTeam(t, OTHER_TEAM_ID, "Beta");
+    await asManager(t).mutation(api.teams.updateForMembership, {
+      companyId: COMPANY_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+      addTeamIds: [TEAM_ID, OTHER_TEAM_ID],
+      removeTeamIds: [],
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(2);
+
+    await expect(
+      asManager(t).mutation(api.teams.updateForMembership, {
+        companyId: COMPANY_ID,
+        membershipId: READER_MEMBERSHIP_ID,
+        addTeamIds: [TEAM_ID],
+        removeTeamIds: [TEAM_ID],
+      }),
+    ).rejects.toThrow("both added and removed");
+  });
+
+  it("rejects more than 500 effective changes before creating any joins", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    const membershipIds = await t.run(async (ctx) => {
+      const ids: string[] = [];
+      for (let index = 0; index <= 500; index += 1) {
+        const suffix = String(index).padStart(12, "0");
+        const id = `0198c0de-1234-7123-8123-${suffix}`;
+        const userId = await ctx.db.insert("users", {
+          clerkSubject: `batch-${index}`,
+          email: `batch-${index}@example.test`,
+          displayName: `Batch ${index}`,
+          imageUrl: null,
+          createdAt: seeded.now,
+          updatedAt: seeded.now,
+        });
+        await ctx.db.insert("memberships", {
+          id,
+          companyId: seeded.companyDocId,
+          userId,
+          state: "active",
+          displayNameSnapshot: `Batch ${index}`,
+          emailSnapshot: `batch-${index}@example.test`,
+          invitedByMembershipId: null,
+          joinedAt: seeded.now,
+          createdAt: seeded.now,
+          updatedAt: seeded.now,
+        });
+        ids.push(id);
+      }
+      return ids;
+    });
+
+    await expect(
+      asManager(t).mutation(api.teams.updateMembers, {
+        companyId: COMPANY_ID,
+        teamId: TEAM_ID,
+        addMembershipIds: membershipIds,
+        removeMembershipIds: [],
+      }),
+    ).rejects.toThrow("at most 500");
+    expect(
+      await t.run(async (ctx) => (await ctx.db.query("teamMemberships").collect()).length),
+    ).toBe(0);
+  });
+});

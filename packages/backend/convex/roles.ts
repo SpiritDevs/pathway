@@ -55,6 +55,7 @@ const roleSummary = v.object({
  * unassign in batches rather than discovering the ceiling as a failed transaction.
  */
 const ROLE_REMOVE_MAX_ASSIGNMENTS = 500;
+const ASSIGNMENT_BATCH_LIMIT = 500;
 
 /** The switch catalog the role editor renders. Static, so it needs no company scope. */
 export const availablePermissions = query({
@@ -510,6 +511,149 @@ export const unassign = mutation({
       ],
       // The revocation itself. Without the bump a client keeps serving records offline that it may
       // no longer read, because nothing else tells it to purge them.
+      bumpEpoch: true,
+    });
+    return null;
+  },
+});
+
+export const updateCompanyAssignments = mutation({
+  args: {
+    companyId: domainIdArg,
+    membershipId: domainIdArg,
+    additions: v.array(v.object({ id: domainIdArg, roleId: domainIdArg })),
+    removeAssignmentIds: v.array(domainIdArg),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
+    requirePermission(actor, "roles.manage");
+
+    const additionIds = new Set(args.additions.map((addition) => addition.id));
+    const additionRoleIds = new Set(args.additions.map((addition) => addition.roleId));
+    const removalIds = new Set(args.removeAssignmentIds);
+    if (
+      additionIds.size !== args.additions.length ||
+      additionRoleIds.size !== args.additions.length ||
+      removalIds.size !== args.removeAssignmentIds.length
+    ) {
+      throw backendError("invalid-arguments", "Role assignment deltas cannot contain duplicates.");
+    }
+    for (const id of additionIds) {
+      assertDomainId(id, "A role assignment id");
+      if (removalIds.has(id)) {
+        throw backendError("invalid-arguments", "An assignment cannot be both added and removed.");
+      }
+    }
+
+    const membership = await ctx.db
+      .query("memberships")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.membershipId),
+      )
+      .unique();
+    if (membership === null) {
+      throw backendError("entity-not-found", `No membership ${args.membershipId} in this company.`);
+    }
+    const existingForMembership = await ctx.db
+      .query("roleAssignments")
+      .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+      .collect();
+
+    const additions: Array<{ id: string; role: Doc<"roles"> }> = [];
+    for (const addition of args.additions) {
+      const role = await requireRole(ctx, actor.company._id, addition.roleId);
+      const assignmentWithId = await assignmentByDomainId(ctx, actor.company._id, addition.id);
+      if (assignmentWithId !== null) {
+        if (
+          assignmentWithId.membershipId === membership._id &&
+          assignmentWithId.roleId === role._id &&
+          assignmentWithId.scope === "company" &&
+          assignmentWithId.teamId === null
+        ) {
+          continue;
+        }
+        throw backendError("invalid-arguments", `A role assignment ${addition.id} already exists.`);
+      }
+      if (
+        existingForMembership.some(
+          (assignment) =>
+            assignment.roleId === role._id &&
+            assignment.scope === "company" &&
+            assignment.teamId === null,
+        )
+      ) {
+        throw backendError("invalid-arguments", "That role is already assigned at company scope.");
+      }
+      if (membership.state !== "active") {
+        throw backendError("invalid-arguments", "That membership is not active.");
+      }
+      additions.push({ id: addition.id, role });
+    }
+
+    const removals: Doc<"roleAssignments">[] = [];
+    for (const assignmentId of args.removeAssignmentIds) {
+      const assignment = await assignmentByDomainId(ctx, actor.company._id, assignmentId);
+      if (assignment === null) continue;
+      if (
+        assignment.membershipId !== membership._id ||
+        assignment.scope !== "company" ||
+        assignment.teamId !== null
+      ) {
+        throw backendError(
+          "invalid-arguments",
+          "Only this membership's company-scoped assignments may be removed.",
+        );
+      }
+      removals.push(assignment);
+    }
+    if (additions.length + removals.length > ASSIGNMENT_BATCH_LIMIT) {
+      throw backendError(
+        "invalid-arguments",
+        `One assignment batch may make at most ${ASSIGNMENT_BATCH_LIMIT} changes.`,
+      );
+    }
+    if (additions.length === 0 && removals.length === 0) return null;
+
+    const changes: CompanyChange[] = [];
+    const now = Date.now();
+    for (const addition of additions) {
+      const assignmentDocId = await ctx.db.insert("roleAssignments", {
+        id: addition.id,
+        companyId: actor.company._id,
+        membershipId: membership._id,
+        roleId: addition.role._id,
+        scope: "company",
+        teamId: null,
+        createdAt: now,
+      });
+      const assignment = await ctx.db.get(assignmentDocId);
+      if (assignment === null) {
+        throw backendError("entity-not-found", "The new role assignment vanished.");
+      }
+      changes.push({
+        entityKind: "roleAssignment",
+        entityId: assignment.id,
+        changeKind: "upsert",
+        versionDocId: assignmentDocId,
+        payload: await encodeRoleAssignment(ctx, assignment),
+      });
+    }
+    for (const assignment of removals) {
+      await ctx.db.delete(assignment._id);
+      changes.push({
+        entityKind: "roleAssignment",
+        entityId: assignment.id,
+        changeKind: "tombstone",
+        versionDocId: null,
+        payload: null,
+      });
+    }
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
       bumpEpoch: true,
     });
     return null;

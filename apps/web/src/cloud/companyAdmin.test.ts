@@ -1,4 +1,10 @@
-import type { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
+import type {
+  CompanyId,
+  MembershipId,
+  RoleAssignmentId,
+  RoleId,
+  TeamId,
+} from "@spiritdevs/contracts/company";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -64,6 +70,9 @@ describe("company admin function references", () => {
       createTeam: "teams:create",
       updateTeam: "teams:update",
       archiveTeam: "teams:archive",
+      restoreTeam: "teams:restore",
+      updateTeamMembers: "teams:updateMembers",
+      updateMemberTeams: "teams:updateForMembership",
       addTeamMember: "teams:addMember",
       removeTeamMember: "teams:removeMember",
       createRole: "roles:create",
@@ -71,7 +80,55 @@ describe("company admin function references", () => {
       removeRole: "roles:remove",
       assignRole: "roles:assign",
       unassignRole: "roles:unassign",
+      updateMemberCompanyRoles: "roles:updateCompanyAssignments",
     });
+  });
+
+  it("forwards atomic assignment deltas unchanged", async () => {
+    const fake = fakeClient();
+    const admin = makeCompanyAdminClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: async () => "token",
+      client: fake.client,
+    });
+    const roleId = "role-1" as RoleId;
+    const assignmentId = "assignment-1" as RoleAssignmentId;
+
+    await admin.updateMemberTeams({
+      companyId: COMPANY_ID,
+      membershipId: MEMBERSHIP_ID,
+      addTeamIds: [TEAM_ID],
+      removeTeamIds: [],
+    });
+    await admin.updateMemberCompanyRoles({
+      companyId: COMPANY_ID,
+      membershipId: MEMBERSHIP_ID,
+      additions: [{ id: assignmentId, roleId }],
+      removeAssignmentIds: [],
+    });
+
+    expect(fake.calls).toEqual([
+      {
+        kind: "mutation",
+        name: "teams:updateForMembership",
+        args: {
+          companyId: COMPANY_ID,
+          membershipId: MEMBERSHIP_ID,
+          addTeamIds: [TEAM_ID],
+          removeTeamIds: [],
+        },
+      },
+      {
+        kind: "mutation",
+        name: "roles:updateCompanyAssignments",
+        args: {
+          companyId: COMPANY_ID,
+          membershipId: MEMBERSHIP_ID,
+          additions: [{ id: assignmentId, roleId }],
+          removeAssignmentIds: [],
+        },
+      },
+    ]);
   });
 
   it("authenticates once and forwards mutation arguments", async () => {

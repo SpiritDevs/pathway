@@ -34,6 +34,7 @@ import {
   encodeTeam,
   encodeTeamMembership,
   teamMembershipDomainId,
+  type CompanyChange,
 } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
 import {
@@ -51,6 +52,21 @@ const teamSummary = v.object({
   memberCount: v.number(),
   archivedAt: v.union(v.number(), v.null()),
 });
+
+const ASSIGNMENT_BATCH_LIMIT = 500;
+
+function assertDeltaIds(additions: readonly string[], removals: readonly string[]): void {
+  const add = new Set(additions);
+  const remove = new Set(removals);
+  if (add.size !== additions.length || remove.size !== removals.length) {
+    throw backendError("invalid-arguments", "Assignment deltas cannot contain duplicate ids.");
+  }
+  for (const id of add) {
+    if (remove.has(id)) {
+      throw backendError("invalid-arguments", "An id cannot be both added and removed.");
+    }
+  }
+}
 
 /**
  * Holds a client-minted domain id to the bound `validateOperationBatch` applies to the sync
@@ -109,6 +125,23 @@ async function requireActiveMembership(
   }
   if (membership.state !== "active") {
     throw backendError("invalid-arguments", "That membership is not active.");
+  }
+  return membership;
+}
+
+async function requireMembership(
+  ctx: QueryCtx,
+  companyId: Id<"companies">,
+  membershipId: string,
+): Promise<Doc<"memberships">> {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_company_and_domain_id", (q) =>
+      q.eq("companyId", companyId).eq("id", membershipId),
+    )
+    .unique();
+  if (membership === null) {
+    throw backendError("entity-not-found", `No membership ${membershipId} in this company.`);
   }
   return membership;
 }
@@ -291,6 +324,225 @@ export const archive = mutation({
           payload: encodeTeam({ ...team, ...patch }),
         },
       ],
+    });
+    return null;
+  },
+});
+
+export const restore = mutation({
+  args: { companyId: domainIdArg, teamId: domainIdArg },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
+    requirePermission(actor, "teams.manage");
+    const team = await requireTeam(ctx, actor.company._id, args.teamId);
+    if (team.archivedAt === null) return null;
+
+    const now = Date.now();
+    const patch = { archivedAt: null, updatedAt: now };
+    await ctx.db.patch(team._id, patch);
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "team",
+          entityId: team.id,
+          changeKind: "upsert",
+          versionDocId: team._id,
+          payload: encodeTeam({ ...team, ...patch }),
+        },
+      ],
+    });
+    return null;
+  },
+});
+
+export const updateMembers = mutation({
+  args: {
+    companyId: domainIdArg,
+    teamId: domainIdArg,
+    addMembershipIds: v.array(domainIdArg),
+    removeMembershipIds: v.array(domainIdArg),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
+    requirePermission(actor, "teams.manage");
+    assertDeltaIds(args.addMembershipIds, args.removeMembershipIds);
+    const team = await requireTeam(ctx, actor.company._id, args.teamId);
+
+    const additions: Doc<"memberships">[] = [];
+    const removals: Array<{
+      membership: Doc<"memberships">;
+      join: Doc<"teamMemberships">;
+    }> = [];
+    for (const membershipId of args.addMembershipIds) {
+      const membership = await requireMembership(ctx, actor.company._id, membershipId);
+      const existing = await ctx.db
+        .query("teamMemberships")
+        .withIndex("by_team_and_membership", (q) =>
+          q.eq("teamId", team._id).eq("membershipId", membership._id),
+        )
+        .unique();
+      if (existing !== null) continue;
+      if (team.archivedAt !== null) {
+        throw backendError("invalid-arguments", "An archived team does not take new members.");
+      }
+      if (membership.state !== "active") {
+        throw backendError("invalid-arguments", "That membership is not active.");
+      }
+      additions.push(membership);
+    }
+    for (const membershipId of args.removeMembershipIds) {
+      const membership = await requireMembership(ctx, actor.company._id, membershipId);
+      const join = await ctx.db
+        .query("teamMemberships")
+        .withIndex("by_team_and_membership", (q) =>
+          q.eq("teamId", team._id).eq("membershipId", membership._id),
+        )
+        .unique();
+      if (join !== null) removals.push({ membership, join });
+    }
+    if (additions.length + removals.length > ASSIGNMENT_BATCH_LIMIT) {
+      throw backendError(
+        "invalid-arguments",
+        `One assignment batch may change at most ${ASSIGNMENT_BATCH_LIMIT} memberships.`,
+      );
+    }
+    if (additions.length === 0 && removals.length === 0) return null;
+
+    const changes: CompanyChange[] = [];
+    const now = Date.now();
+    for (const membership of additions) {
+      const joinDocId = await ctx.db.insert("teamMemberships", {
+        companyId: actor.company._id,
+        id: teamMembershipDomainId(team.id, membership.id),
+        teamId: team._id,
+        membershipId: membership._id,
+        createdAt: now,
+      });
+      const join = await ctx.db.get(joinDocId);
+      if (join === null)
+        throw backendError("entity-not-found", "The new team membership vanished.");
+      changes.push({
+        entityKind: "teamMembership",
+        entityId: teamMembershipDomainId(team.id, membership.id),
+        changeKind: "upsert",
+        versionDocId: joinDocId,
+        payload: await encodeTeamMembership(ctx, join),
+      });
+    }
+    for (const { membership, join } of removals) {
+      await ctx.db.delete(join._id);
+      changes.push({
+        entityKind: "teamMembership",
+        entityId: teamMembershipDomainId(team.id, membership.id),
+        changeKind: "tombstone",
+        versionDocId: null,
+        payload: null,
+      });
+    }
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
+      bumpEpoch: true,
+    });
+    return null;
+  },
+});
+
+export const updateForMembership = mutation({
+  args: {
+    companyId: domainIdArg,
+    membershipId: domainIdArg,
+    addTeamIds: v.array(domainIdArg),
+    removeTeamIds: v.array(domainIdArg),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
+    requirePermission(actor, "teams.manage");
+    assertDeltaIds(args.addTeamIds, args.removeTeamIds);
+    const membership = await requireMembership(ctx, actor.company._id, args.membershipId);
+
+    const additions: Doc<"teams">[] = [];
+    const removals: Array<{ team: Doc<"teams">; join: Doc<"teamMemberships"> }> = [];
+    for (const teamId of args.addTeamIds) {
+      const team = await requireTeam(ctx, actor.company._id, teamId);
+      const existing = await ctx.db
+        .query("teamMemberships")
+        .withIndex("by_team_and_membership", (q) =>
+          q.eq("teamId", team._id).eq("membershipId", membership._id),
+        )
+        .unique();
+      if (existing !== null) continue;
+      if (membership.state !== "active") {
+        throw backendError("invalid-arguments", "That membership is not active.");
+      }
+      if (team.archivedAt !== null) {
+        throw backendError("invalid-arguments", "An archived team does not take new members.");
+      }
+      additions.push(team);
+    }
+    for (const teamId of args.removeTeamIds) {
+      const team = await requireTeam(ctx, actor.company._id, teamId);
+      const join = await ctx.db
+        .query("teamMemberships")
+        .withIndex("by_team_and_membership", (q) =>
+          q.eq("teamId", team._id).eq("membershipId", membership._id),
+        )
+        .unique();
+      if (join !== null) removals.push({ team, join });
+    }
+    if (additions.length + removals.length > ASSIGNMENT_BATCH_LIMIT) {
+      throw backendError(
+        "invalid-arguments",
+        `One assignment batch may change at most ${ASSIGNMENT_BATCH_LIMIT} teams.`,
+      );
+    }
+    if (additions.length === 0 && removals.length === 0) return null;
+
+    const changes: CompanyChange[] = [];
+    const now = Date.now();
+    for (const team of additions) {
+      const joinDocId = await ctx.db.insert("teamMemberships", {
+        companyId: actor.company._id,
+        id: teamMembershipDomainId(team.id, membership.id),
+        teamId: team._id,
+        membershipId: membership._id,
+        createdAt: now,
+      });
+      const join = await ctx.db.get(joinDocId);
+      if (join === null)
+        throw backendError("entity-not-found", "The new team membership vanished.");
+      changes.push({
+        entityKind: "teamMembership",
+        entityId: teamMembershipDomainId(team.id, membership.id),
+        changeKind: "upsert",
+        versionDocId: joinDocId,
+        payload: await encodeTeamMembership(ctx, join),
+      });
+    }
+    for (const { team, join } of removals) {
+      await ctx.db.delete(join._id);
+      changes.push({
+        entityKind: "teamMembership",
+        entityId: teamMembershipDomainId(team.id, membership.id),
+        changeKind: "tombstone",
+        versionDocId: null,
+        payload: null,
+      });
+    }
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
+      bumpEpoch: true,
     });
     return null;
   },

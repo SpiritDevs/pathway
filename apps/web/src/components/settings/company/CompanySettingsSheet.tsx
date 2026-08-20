@@ -10,6 +10,7 @@ export function CompanySettingsSheet({
   children,
   description,
   footer,
+  leadingFooter,
   onOpenChange,
   open,
   title,
@@ -17,6 +18,7 @@ export function CompanySettingsSheet({
   readonly children: ReactNode;
   readonly description: string;
   readonly footer: ReactNode;
+  readonly leadingFooter?: ReactNode;
   readonly onOpenChange: (open: boolean) => void;
   readonly open: boolean;
   readonly title: string;
@@ -50,7 +52,10 @@ export function CompanySettingsSheet({
       <SheetPanel className="@container/settings space-y-5 p-5">
         <SettingsSurfaceProvider surface="sheet">{children}</SettingsSurfaceProvider>
       </SheetPanel>
-      <SheetFooter className="px-5">{footer}</SheetFooter>
+      <SheetFooter className="flex-col items-stretch gap-2 px-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-h-8 items-center">{leadingFooter}</div>
+        <div className="flex items-center justify-end gap-2">{footer}</div>
+      </SheetFooter>
     </RightPanelSheet>
   );
 }
