@@ -115,6 +115,9 @@ something that genuinely needs a path — starting a thread in it, a Git action,
 running an investigation — Pathway asks you to set a directory and then continues what you were
 doing. Nothing is hidden from you until then.
 
+When you create an issue while viewing all companies, the project picker shows one flat project
+list. Choosing a project also selects the company that owns it.
+
 ## Statuses, labels, and issue keys
 
 **Settings → Issues → Statuses** is where the workflow lives. Each status has a name, a colour, a

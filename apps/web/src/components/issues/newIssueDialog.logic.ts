@@ -30,25 +30,11 @@ export function canResizeNewIssueDialog({
   return dialogHeight + 1 < viewportHeight * NEW_ISSUE_DIALOG_MAX_VIEWPORT_RATIO;
 }
 
-export interface IssueCompanyChoice {
-  readonly id: string;
-  readonly name: string;
-}
-
-export interface IssueProjectCompanyGroup<P> {
-  /** Null for projects with no company provenance — a purely local checkout. */
-  readonly companyId: string | null;
-  /** Null when the group needs no heading, which is the single-company case. */
-  readonly heading: string | null;
-  readonly projects: ReadonlyArray<P>;
-}
-
 /**
  * The projects a new issue may be filed against, given the company it is destined for.
  *
- * A project id can be shared by several companies, so narrowing matches on the full owner list
- * rather than the canonical `companyId`, which is deliberately null once an option spans more
- * than one company.
+ * Narrowing matches the recorded owner list so older replicated options still resolve while the
+ * canonical project owner drives new selections.
  *
  * An empty owner list means the project carries no company provenance at all — a local checkout
  * seen before any company replica has loaded. Those stay eligible: hiding a project because we do
@@ -62,42 +48,4 @@ export function issueProjectsForCompany<P extends { readonly companyIds: Readonl
   return projects.filter(
     (project) => project.companyIds.length === 0 || project.companyIds.includes(companyId),
   );
-}
-
-/**
- * Groups the project menu by owning company, for the "no destination chosen yet" case where the
- * flat list would silently mix two workspaces.
- *
- * A project shared by several companies appears under each of them: the menu doubles as the
- * destination picker, so each entry has to name exactly one company to commit to. Companies are
- * listed in registry order and only companies with projects get a heading, so the menu never
- * shows an empty section.
- */
-export function groupIssueProjectsByCompany<
-  P extends { readonly companyIds: ReadonlyArray<string> },
->(
-  projects: ReadonlyArray<P>,
-  companies: ReadonlyArray<IssueCompanyChoice>,
-): ReadonlyArray<IssueProjectCompanyGroup<P>> {
-  const groups: Array<IssueProjectCompanyGroup<P>> = [];
-  // One company needs no headings: every project in the menu belongs to it.
-  const heading = companies.length > 1;
-  for (const company of companies) {
-    const owned = projects.filter((project) => project.companyIds.includes(company.id));
-    if (owned.length === 0) continue;
-    groups.push({
-      companyId: company.id,
-      heading: heading ? company.name : null,
-      projects: owned,
-    });
-  }
-  const unowned = projects.filter((project) => project.companyIds.length === 0);
-  if (unowned.length > 0) {
-    groups.push({
-      companyId: null,
-      heading: heading ? "No company" : null,
-      projects: unowned,
-    });
-  }
-  return groups;
 }

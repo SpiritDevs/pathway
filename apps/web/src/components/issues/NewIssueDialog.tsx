@@ -10,7 +10,7 @@ import {
   ISSUE_MAX_PARENT_DEPTH,
   ProjectId,
 } from "@spiritdevs/contracts";
-import { CompanyId } from "@spiritdevs/contracts/company";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import type {
   ChatAttachmentId,
   Issue,
@@ -45,7 +45,6 @@ import {
   XIcon,
 } from "lucide-react";
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -120,7 +119,6 @@ import {
 import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import {
   canResizeNewIssueDialog,
-  groupIssueProjectsByCompany,
   issueProjectsForCompany,
   resolveIssueProjectOptionId,
 } from "./newIssueDialog.logic";
@@ -341,15 +339,13 @@ export function NewIssueDialog({
     () => issueProjectsForCompany(projects, companyId),
     [companyId, projects],
   );
-  const projectGroups = useMemo(
-    () => (companyId === null ? groupIssueProjectsByCompany(projects, companies) : []),
-    [companies, companyId, projects],
-  );
   // Deliberately resolved against the unfiltered list: narrowing it by company would make this
   // change whenever the destination does, and the reset effect below keys off it — a company
   // switch would wipe the title the user had already typed. A default the chosen company does
   // not own is dropped by the pruning effect instead.
   const availableDefaultProjectId = resolveIssueProjectOptionId(defaultProjectId, projects);
+  const defaultProjectCompanyId =
+    projects.find((project) => project.id === availableDefaultProjectId)?.companyId ?? null;
   const titleRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -388,7 +384,7 @@ export function NewIssueDialog({
     }
     setTitle("");
     setDescription("");
-    setCompanyId(activeCompanyId);
+    setCompanyId(activeCompanyId ?? defaultProjectCompanyId);
     setStatusId(defaultStatusId);
     setPriority("none");
     setAssignee(null);
@@ -412,6 +408,7 @@ export function NewIssueDialog({
     defaultMilestoneId,
     defaultParentId,
     availableDefaultProjectId,
+    defaultProjectCompanyId,
     defaultStatusId,
     open,
   ]);
@@ -1075,50 +1072,21 @@ export function NewIssueDialog({
                     >
                       <span className="text-muted-foreground">No project</span>
                     </PickerOption>
-                    {companyId === null
-                      ? // No destination yet, so the flat list would mix workspaces. Grouping
-                        // names the owner of every project, and picking one commits the issue to
-                        // that company — the same choice the header chip makes, from the other end.
-                        projectGroups.map((group) => (
-                          <Fragment key={group.companyId ?? "no-company"}>
-                            {group.heading === null ? null : (
-                              <p className="px-2 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">
-                                {group.heading}
-                              </p>
-                            )}
-                            {group.projects.map((project) => (
-                              <PickerOption
-                                key={`${group.companyId ?? "no-company"}:${project.id}`}
-                                onSelect={() => {
-                                  if (group.companyId !== null) {
-                                    setCompanyId(CompanyId.make(group.companyId));
-                                  }
-                                  setProjectId(project.id);
-                                  setMilestoneId(null);
-                                  close();
-                                }}
-                                selected={project.id === projectId}
-                              >
-                                <FolderIcon className="size-4 text-muted-foreground" />
-                                <span className="truncate">{project.title}</span>
-                              </PickerOption>
-                            ))}
-                          </Fragment>
-                        ))
-                      : availableProjects.map((project) => (
-                          <PickerOption
-                            key={project.id}
-                            onSelect={() => {
-                              setProjectId(project.id);
-                              setMilestoneId(null);
-                              close();
-                            }}
-                            selected={project.id === projectId}
-                          >
-                            <FolderIcon className="size-4 text-muted-foreground" />
-                            <span className="truncate">{project.title}</span>
-                          </PickerOption>
-                        ))}
+                    {availableProjects.map((project) => (
+                      <PickerOption
+                        key={project.id}
+                        onSelect={() => {
+                          if (project.companyId !== null) setCompanyId(project.companyId);
+                          setProjectId(project.id);
+                          setMilestoneId(null);
+                          close();
+                        }}
+                        selected={project.id === projectId}
+                      >
+                        <FolderIcon className="size-4 text-muted-foreground" />
+                        <span className="truncate">{project.title}</span>
+                      </PickerOption>
+                    ))}
                     <button
                       className="mt-1 min-h-8 w-full border-t border-border/60 px-2 pt-2 text-start text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11"
                       onClick={() => {

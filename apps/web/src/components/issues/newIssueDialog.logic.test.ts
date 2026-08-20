@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canResizeNewIssueDialog,
-  groupIssueProjectsByCompany,
   issueProjectsForCompany,
   resolveAvailableIssueProjectId,
   resolveIssueProjectOptionId,
@@ -46,8 +45,6 @@ describe("new issue project selection", () => {
 });
 
 describe("new issue dialog project destinations", () => {
-  const ACME = { id: "company-acme", name: "Acme" };
-  const BOLT = { id: "company-bolt", name: "Bolt" };
   const acmeOnly = { id: "project-acme", title: "Acme app", companyIds: ["company-acme"] };
   const boltOnly = { id: "project-bolt", title: "Bolt app", companyIds: ["company-bolt"] };
   const shared = {
@@ -70,25 +67,5 @@ describe("new issue dialog project destinations", () => {
     // A local checkout seen before any company replica loads has no provenance. Filtering it out
     // hid every project in the picker whenever the persisted company had no live replica.
     expect(issueProjectsForCompany([local], "company-acme")).toEqual([local]);
-  });
-
-  it("groups by company and lists a shared project under each owner", () => {
-    expect(groupIssueProjectsByCompany(projects, [ACME, BOLT])).toEqual([
-      { companyId: "company-acme", heading: "Acme", projects: [acmeOnly, shared] },
-      { companyId: "company-bolt", heading: "Bolt", projects: [boltOnly, shared] },
-      { companyId: null, heading: "No company", projects: [local] },
-    ]);
-  });
-
-  it("drops headings when there is only one company to group by", () => {
-    expect(groupIssueProjectsByCompany([acmeOnly], [ACME])).toEqual([
-      { companyId: "company-acme", heading: null, projects: [acmeOnly] },
-    ]);
-  });
-
-  it("omits a company that has no projects rather than showing an empty section", () => {
-    expect(groupIssueProjectsByCompany([acmeOnly], [ACME, BOLT])).toEqual([
-      { companyId: "company-acme", heading: "Acme", projects: [acmeOnly] },
-    ]);
   });
 });

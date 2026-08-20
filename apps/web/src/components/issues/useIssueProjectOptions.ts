@@ -273,8 +273,8 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
     });
     if (!allCompanies) return scopedOptions;
 
-    // Menus and filters use the project id as their value. In All, represent a shared id once
-    // while retaining every owning company for issue-owner narrowing in detail views.
+    // Menus and filters use the project id as their value. In All, represent a replicated id once,
+    // keep its canonical company, and retain every observed company id for older issue narrowing.
     const byId = new Map<string, IssueProjectOption>();
     for (const option of scopedOptions) {
       const current = byId.get(String(option.id));
@@ -284,7 +284,6 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
       }
       byId.set(String(option.id), {
         ...current,
-        companyId: null,
         companyIds: [...new Set([...current.companyIds, ...option.companyIds])],
         projectIds: [...new Set([...current.projectIds, ...option.projectIds])],
         environmentProjects: [
