@@ -1785,14 +1785,39 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             wc.ipc.on(ELEMENT_PICKED_CHANNEL, onMessage);
             wc.once("destroyed", onDestroyed);
             wc.once("did-start-navigation", onNavigated);
-            if (!wc.isFocused()) wc.focus();
-            wc.send(START_PICK_CHANNEL, annotationTheme);
           });
           yield* Ref.update(pickSessionsRef, (sessions) =>
             replaceMap(sessions, (copy) => {
               copy.set(tabId, { cancel });
             }),
           );
+          const snapshotDataUrl = yield* attemptPromise(
+            { operation: "pickElement.captureSnapshot", tabId, webContentsId: wc.id },
+            () => wc.capturePage(),
+          ).pipe(
+            Effect.flatMap((image) =>
+              attempt(
+                { operation: "pickElement.encodeSnapshot", tabId, webContentsId: wc.id },
+                () => image.toDataURL(),
+              ),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning(
+                "Preview annotation snapshot capture failed; using the live page.",
+                {
+                  tabId,
+                  webContentsId: wc.id,
+                  cause: error,
+                },
+              ).pipe(Effect.as(null)),
+            ),
+          );
+          const active = (yield* Ref.get(pickSessionsRef)).get(tabId);
+          if (!active || active.cancel !== cancel) return;
+          yield* attempt({ operation: "pickElement.start", tabId, webContentsId: wc.id }, () => {
+            if (!wc.isFocused()) wc.focus();
+            wc.send(START_PICK_CHANNEL, annotationTheme, snapshotDataUrl);
+          });
         });
         runFork(
           registerPickElement().pipe(

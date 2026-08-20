@@ -203,7 +203,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   }, [navigate, pathname]);
 
   return (
-    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={sidebarProviderStyle}>
+    <SidebarProvider
+      className="h-dvh! min-h-0!"
+      defaultOpen
+      hoverReveal
+      style={sidebarProviderStyle}
+    >
       <ProjectProjectionRetention />
       <PrimaryNavigationRail
         expanded={isPrimaryNavigationExpanded}
@@ -226,7 +231,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
                     side="left"
                     collapsible="offcanvas"
                     data-app-sidebar=""
-                    className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full! md:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]!"
+                    className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:absolute! md:inset-y-0 md:left-0! md:h-full!"
                     resizable={{
                       maxWidth: sidebarMaximumWidth,
                       minWidth: THREAD_SIDEBAR_MIN_WIDTH,

@@ -12,6 +12,16 @@ import {
   resolveIssueEnvironmentProject,
 } from "./useIssueProjectOptions";
 
+const repositoryIdentity = {
+  canonicalKey: "github.com/spiritdevs/pathway",
+  locator: {
+    source: "git-remote" as const,
+    remoteName: "origin",
+    remoteUrl: "https://github.com/spiritdevs/pathway.git",
+  },
+  rootPath: "/projects/pathway",
+};
+
 function group(
   title: string,
   representativeId: string,
@@ -51,14 +61,31 @@ function binding(
   cloudProjectId: string,
   environmentId: string,
   localProjectId: string,
+  options?: {
+    readonly status?: EnvironmentBindingEntity["status"];
+    readonly withRepositoryIdentity?: boolean;
+    readonly workspaceRoot?: string;
+  },
 ): EnvironmentBindingEntity {
   return {
     id,
     cloudProjectId,
     environmentId,
     localProjectId,
-    status: "active",
+    localWorkspaceRoot: options?.workspaceRoot ?? `/projects/${localProjectId}`,
+    status: options?.status ?? "active",
+    ...(options?.withRepositoryIdentity ? { repositoryIdentity } : {}),
   } as EnvironmentBindingEntity;
+}
+
+function withRepositoryIdentity(groupSnapshot: SidebarProjectSnapshot): SidebarProjectSnapshot {
+  return {
+    ...groupSnapshot,
+    memberProjects: groupSnapshot.memberProjects.map((member) => ({
+      ...member,
+      repositoryIdentity,
+    })),
+  };
 }
 
 describe("buildIssueProjectOptions", () => {
@@ -100,6 +127,59 @@ describe("buildIssueProjectOptions", () => {
         environmentProjects: [],
       },
     ]);
+  });
+
+  it("groups recreated checkout ids through their shared repository binding lineage", () => {
+    const options = buildIssueProjectOptions({
+      groups: [withRepositoryIdentity(group("Pathway", "pathway-current", "pathway-current"))],
+      cloudProjects: [
+        cloudProject("pathway-previous", "Pathway"),
+        cloudProject("pathway-current", "Pathway", "binding-current"),
+      ],
+      environmentBindings: [
+        binding("binding-previous", "pathway-previous", "previous-machine", "pathway-previous", {
+          status: "revoked",
+          withRepositoryIdentity: true,
+        }),
+        binding("binding-current", "pathway-current", "local", "pathway-current", {
+          withRepositoryIdentity: true,
+        }),
+      ],
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      id: "pathway-current",
+      projectIds: ["pathway-current", "pathway-previous"],
+      environmentBindings: [{ id: "binding-current", status: "active" }],
+    });
+  });
+
+  it("uses a same-environment macOS path to migrate a pre-identity binding", () => {
+    const repositoryGroup = withRepositoryIdentity(
+      group("Pathway", "pathway-current", "pathway-current"),
+    );
+    const current = {
+      ...repositoryGroup,
+      memberProjects: repositoryGroup.memberProjects.map((member) => ({
+        ...member,
+        workspaceRoot: "/Users/corey/Github/pathway",
+      })),
+    };
+    const options = buildIssueProjectOptions({
+      groups: [current],
+      cloudProjects: [cloudProject("pathway-previous", "Pathway")],
+      environmentBindings: [
+        binding("binding-previous", "pathway-previous", "local", "pathway-previous", {
+          status: "revoked",
+          workspaceRoot: "/Users/corey/GitHub/pathway",
+        }),
+      ],
+      caseInsensitiveEnvironmentIds: new Set([EnvironmentId.make("local")]),
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]?.projectIds).toEqual(["pathway-current", "pathway-previous"]);
   });
 
   it("defaults agent execution to the preferred environment and honors an explicit choice", () => {

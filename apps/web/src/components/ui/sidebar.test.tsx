@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  Sidebar,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuSubButton,
@@ -48,6 +49,24 @@ describe("sidebar interactive cursors", () => {
 
     expect(html).toContain("[-webkit-app-region:no-drag]");
     expect(html).toContain("size-[var(--workspace-titlebar-control-size)]!");
+  });
+
+  it("exposes the desktop hover target without expanding the sidebar gap", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider defaultOpen={false} hoverReveal>
+        <Sidebar>
+          <SidebarTrigger />
+        </Sidebar>
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain('data-hover-revealed="false"');
+    expect(html).toContain('data-slot="sidebar-hover-target"');
+    expect(html).toContain('data-sidebar-hover-target="true"');
+    expect(html).toContain("group-data-[collapsible=offcanvas]:w-0");
+    expect(html).toContain("group-data-[collapsible=offcanvas]:-translate-x-full");
+    expect(html).toContain("group-data-[hover-revealed=true]:translate-x-0!");
+    expect(html).toContain("motion-reduce:transition-none");
   });
 
   it("uses shared geometry and icon constraints for menu buttons by default", () => {

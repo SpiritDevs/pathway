@@ -1,6 +1,6 @@
 import { companyEntityCodec, type CompanySyncEntity } from "@spiritdevs/client-runtime/sync";
 import { EnvironmentId, ProjectId, ThreadId } from "@spiritdevs/contracts";
-import { AgentThreadId } from "@spiritdevs/contracts/cloudProject";
+import { AgentThreadId, EnvironmentRegistrationId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -24,9 +24,26 @@ const ENVIRONMENT_ID = EnvironmentId.make("environment-one");
 const CLOUD_PROJECT_ID = "cloud-project-one";
 const LOCAL_PROJECT_ID = "local-project-one";
 const THREAD_ID = "thread-one";
+const repositoryIdentity = {
+  canonicalKey: "github.com/spiritdevs/pathway",
+  locator: {
+    source: "git-remote" as const,
+    remoteName: "origin",
+    remoteUrl: "https://github.com/spiritdevs/pathway.git",
+  },
+  rootPath: "/work/pathway",
+};
 
 type AgentThreadSyncEntity = Extract<CompanySyncEntity, { readonly entityKind: "agentThread" }>;
 type CloudProjectSyncEntity = Extract<CompanySyncEntity, { readonly entityKind: "cloudProject" }>;
+type EnvironmentBindingSyncEntity = Extract<
+  CompanySyncEntity,
+  { readonly entityKind: "environmentBinding" }
+>;
+type EnvironmentRegistrationSyncEntity = Extract<
+  CompanySyncEntity,
+  { readonly entityKind: "environmentRegistration" }
+>;
 
 function entity(kind: "cloudProject" | "environmentBinding" | "agentThread", payload: unknown) {
   const codec = companyEntityCodec(kind);
@@ -52,11 +69,12 @@ const binding = entity("environmentBinding", {
   environmentId: ENVIRONMENT_ID,
   localProjectId: LOCAL_PROJECT_ID,
   localWorkspaceRoot: "/work/pathway",
+  repositoryIdentity,
   status: "active",
   lastSeenAt: 2_000,
   createdAt: 1_000,
   updatedAt: 2_000,
-});
+}) as EnvironmentBindingSyncEntity;
 
 const agentThread = entity("agentThread", {
   id: `${ENVIRONMENT_ID}:${THREAD_ID}`,
@@ -170,6 +188,7 @@ describe("cloud Agent Thread read model", () => {
         id: LOCAL_PROJECT_ID,
         title: "Pathway",
         workspaceRoot: "/work/pathway",
+        repositoryIdentity,
       },
     ]);
     expect(appAtomRegistry.get(cloudEnvironmentThreadsAtom(ENVIRONMENT_ID))).toMatchObject([
@@ -181,6 +200,77 @@ describe("cloud Agent Thread read model", () => {
         latestVisibleMessage: { id: "message-one", role: "assistant", text: "" },
       },
     ]);
+  });
+
+  it("keeps a recreated checkout visible in company scope by repository identity", () => {
+    const recreated = {
+      ...cloudEnvironmentProjectsFromReplicas(
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      )[0]!,
+      id: ProjectId.make("recreated-local-project"),
+    };
+
+    expect(
+      companyScopedEnvironmentProjects(
+        [recreated],
+        COMPANY_ID,
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      ).map((project) => project.id),
+    ).toEqual(["recreated-local-project"]);
+  });
+
+  it("matches a legacy binding's path case-insensitively on macOS", () => {
+    const { repositoryIdentity: _repositoryIdentity, ...legacyBinding } = binding;
+    const registration: EnvironmentRegistrationSyncEntity = {
+      entityKind: "environmentRegistration",
+      id: EnvironmentRegistrationId.make("registration-local"),
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: "thumbprint",
+      descriptor: {
+        environmentId: ENVIRONMENT_ID,
+        label: "This Mac",
+        platform: { os: "darwin", arch: "arm64" },
+        serverVersion: "2026.8.0",
+        capabilities: { repositoryIdentity: true },
+      },
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+      lastSeenAt: 1_000,
+      serviceRoleIds: [],
+      teamIds: [],
+      state: "active",
+      registeredByMembershipId: null,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const recreated = {
+      ...cloudEnvironmentProjectsFromReplicas(
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      )[0]!,
+      id: ProjectId.make("recreated-local-project"),
+      workspaceRoot: "/work/Pathway",
+    };
+
+    expect(
+      companyScopedEnvironmentProjects(
+        [recreated],
+        COMPANY_ID,
+        new Map([
+          [
+            COMPANY_ID,
+            replica(
+              cloudProject,
+              { ...legacyBinding, localProjectId: ProjectId.make("previous-local-project") },
+              registration,
+            ),
+          ],
+        ]),
+        ENVIRONMENT_ID,
+      ).map((project) => project.id),
+    ).toEqual(["recreated-local-project"]);
   });
 
   it("uses the selected replica or every replica for company scope", () => {

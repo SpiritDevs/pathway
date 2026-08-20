@@ -28,6 +28,7 @@ const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "100vw";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH = 16 * 16;
+const SIDEBAR_HOVER_REVEAL_CLOSE_DELAY_MS = 100;
 
 type SidebarContextProps = {
   state: ResponsiveSidebarState;
@@ -36,6 +37,10 @@ type SidebarContextProps = {
   openMobile: boolean;
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
+  hoverRevealEnabled: boolean;
+  hoverRevealed: boolean;
+  startHoverReveal: () => void;
+  stopHoverReveal: () => void;
   toggleSidebar: () => void;
 };
 
@@ -95,17 +100,24 @@ function SidebarProvider({
   defaultOpen = true,
   open: openProp,
   onOpenChange: setOpenProp,
+  hoverReveal = false,
   className,
   style,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
+  hoverReveal?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
+  // Previewing is deliberately separate from `open`: it must neither persist
+  // nor expand the sidebar gap while the panel floats over the workspace.
+  const [hoverRevealed, setHoverRevealed] = React.useState(false);
+  const hoverTargetCountRef = React.useRef(0);
+  const hoverRevealCloseTimerRef = React.useRef<number | null>(null);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -140,17 +152,81 @@ function SidebarProvider({
   // This makes it easier to style the sidebar with Tailwind classes.
   const state = resolveSidebarState({ isMobile, open, openMobile });
 
+  const clearHoverRevealCloseTimer = React.useCallback(() => {
+    if (hoverRevealCloseTimerRef.current === null) return;
+    window.clearTimeout(hoverRevealCloseTimerRef.current);
+    hoverRevealCloseTimerRef.current = null;
+  }, []);
+
+  const startHoverReveal = React.useCallback(() => {
+    if (!hoverReveal || isMobile) return;
+    hoverTargetCountRef.current += 1;
+    clearHoverRevealCloseTimer();
+    if (!open) {
+      setHoverRevealed(true);
+    }
+  }, [clearHoverRevealCloseTimer, hoverReveal, isMobile, open]);
+
+  const stopHoverReveal = React.useCallback(() => {
+    if (!hoverReveal || isMobile) return;
+    hoverTargetCountRef.current = Math.max(0, hoverTargetCountRef.current - 1);
+    if (hoverTargetCountRef.current > 0) return;
+
+    clearHoverRevealCloseTimer();
+    hoverRevealCloseTimerRef.current = window.setTimeout(() => {
+      hoverRevealCloseTimerRef.current = null;
+      setHoverRevealed(false);
+    }, SIDEBAR_HOVER_REVEAL_CLOSE_DELAY_MS);
+  }, [clearHoverRevealCloseTimer, hoverReveal, isMobile]);
+
+  React.useEffect(() => {
+    if (!hoverReveal || isMobile) {
+      hoverTargetCountRef.current = 0;
+      clearHoverRevealCloseTimer();
+      setHoverRevealed(false);
+      return;
+    }
+    if (open) {
+      clearHoverRevealCloseTimer();
+      setHoverRevealed(false);
+    } else if (hoverTargetCountRef.current > 0) {
+      setHoverRevealed(true);
+    }
+  }, [clearHoverRevealCloseTimer, hoverReveal, isMobile, open]);
+
+  React.useEffect(
+    () => () => {
+      clearHoverRevealCloseTimer();
+    },
+    [clearHoverRevealCloseTimer],
+  );
+
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
       isMobile,
+      hoverRevealEnabled: hoverReveal,
+      hoverRevealed,
       open,
       openMobile,
       setOpen,
       setOpenMobile,
       state,
+      startHoverReveal,
+      stopHoverReveal,
       toggleSidebar,
     }),
-    [state, open, setOpen, isMobile, openMobile, toggleSidebar],
+    [
+      hoverReveal,
+      hoverRevealed,
+      isMobile,
+      open,
+      openMobile,
+      setOpen,
+      startHoverReveal,
+      state,
+      stopHoverReveal,
+      toggleSidebar,
+    ],
   );
 
   return (
@@ -191,7 +267,16 @@ function Sidebar({
   collapsible?: "offcanvas" | "icon" | "none";
   resizable?: boolean | SidebarResizableOptions;
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+  const {
+    hoverRevealEnabled,
+    hoverRevealed,
+    isMobile,
+    state,
+    openMobile,
+    setOpenMobile,
+    startHoverReveal,
+    stopHoverReveal,
+  } = useSidebar();
   const resolvedResizable = React.useMemo<SidebarResolvedResizableOptions | null>(() => {
     if (isMobile || collapsible === "none" || !resizable) {
       return null;
@@ -272,16 +357,35 @@ function Sidebar({
     );
   }
 
+  const { onPointerEnter, onPointerLeave, ...desktopProps } = props;
+
   return (
     <SidebarInstanceContext value={instanceContextValue}>
       <div
         className="group peer hidden text-sidebar-foreground md:block"
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
+        data-hover-revealed={hoverRevealed}
         data-slot="sidebar"
         data-state={state}
         data-variant={variant}
       >
+        {hoverRevealEnabled ? (
+          <div
+            aria-hidden="true"
+            className={cn(
+              "absolute inset-y-0 z-30 hidden w-8 md:block group-data-[state=expanded]:hidden",
+              side === "left" ? "left-0" : "right-0",
+            )}
+            data-slot="sidebar-hover-target"
+            onPointerEnter={(event) => {
+              if (event.pointerType !== "touch") startHoverReveal();
+            }}
+            onPointerLeave={(event) => {
+              if (event.pointerType !== "touch") stopHoverReveal();
+            }}
+          />
+        ) : null}
         {/* This is what handles the sidebar gap on desktop */}
         <div
           className={cn(
@@ -296,10 +400,10 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[transform,width] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:flex group-data-[state=expanded]:duration-200 group-data-[hover-revealed=true]:z-40 group-data-[hover-revealed=true]:translate-x-0! group-data-[hover-revealed=true]:duration-[220ms] group-data-[hover-revealed=true]:shadow-xl",
             side === "left"
-              ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
-              : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
+              ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
+              : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
             // Adjust the padding for floating and inset variants.
             variant === "floating" || variant === "inset"
               ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -307,7 +411,15 @@ function Sidebar({
             className,
           )}
           data-slot="sidebar-container"
-          {...props}
+          onPointerEnter={(event) => {
+            onPointerEnter?.(event);
+            if (!event.defaultPrevented && event.pointerType !== "touch") startHoverReveal();
+          }}
+          onPointerLeave={(event) => {
+            onPointerLeave?.(event);
+            if (!event.defaultPrevented && event.pointerType !== "touch") stopHoverReveal();
+          }}
+          {...desktopProps}
         >
           <div
             className="flex h-full w-full flex-col bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5"
@@ -322,8 +434,14 @@ function Sidebar({
   );
 }
 
-function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar();
+function SidebarTrigger({
+  className,
+  onClick,
+  onPointerEnter,
+  onPointerLeave,
+  ...props
+}: React.ComponentProps<typeof Button>) {
+  const { hoverRevealEnabled, startHoverReveal, stopHoverReveal, toggleSidebar } = useSidebar();
   const isOpen = useSidebarVisibility();
 
   return (
@@ -333,11 +451,20 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         className,
       )}
       data-sidebar="trigger"
+      data-sidebar-hover-target={hoverRevealEnabled ? "true" : undefined}
       data-slot="sidebar-trigger"
       aria-pressed={isOpen}
       onClick={(event) => {
         onClick?.(event);
         toggleSidebar();
+      }}
+      onPointerEnter={(event) => {
+        onPointerEnter?.(event);
+        if (!event.defaultPrevented && event.pointerType !== "touch") startHoverReveal();
+      }}
+      onPointerLeave={(event) => {
+        onPointerLeave?.(event);
+        if (!event.defaultPrevented && event.pointerType !== "touch") stopHoverReveal();
       }}
       size="icon"
       variant="ghost"

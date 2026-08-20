@@ -4,6 +4,7 @@ import {
   AgentThreadEntity,
   CloudProjectSyncEntity,
   EnvironmentBindingEntity,
+  EnvironmentRegistrationEntity,
 } from "@spiritdevs/client-runtime/sync";
 import type {
   EnvironmentId,
@@ -11,6 +12,7 @@ import type {
   OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import { normalizeProjectPathForComparison } from "@spiritdevs/shared/path";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
@@ -21,10 +23,43 @@ const EMPTY_PROJECTS: ReadonlyArray<OrchestrationProjectShell> = Object.freeze([
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const isCloudProject = Schema.is(CloudProjectSyncEntity);
 const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
+const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
 const isAgentThread = Schema.is(AgentThreadEntity);
 
 function iso(timestamp: number): string {
   return new Date(timestamp).toISOString();
+}
+
+function comparisonPath(value: string, caseInsensitive: boolean): string {
+  const normalized = normalizeProjectPathForComparison(value);
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+export function environmentBindingMatchesProject(
+  binding: EnvironmentBindingEntity,
+  project: Pick<OrchestrationProjectShell, "id" | "workspaceRoot" | "repositoryIdentity"> & {
+    readonly environmentId: EnvironmentId;
+  },
+  caseInsensitivePath: boolean,
+): boolean {
+  if (binding.environmentId !== project.environmentId) {
+    return (
+      binding.repositoryIdentity?.canonicalKey !== undefined &&
+      binding.repositoryIdentity.canonicalKey === project.repositoryIdentity?.canonicalKey
+    );
+  }
+  if (binding.localProjectId === project.id) return true;
+  if (
+    binding.repositoryIdentity?.canonicalKey !== undefined &&
+    binding.repositoryIdentity.canonicalKey === project.repositoryIdentity?.canonicalKey
+  ) {
+    return true;
+  }
+  return (
+    project.workspaceRoot !== null &&
+    comparisonPath(binding.localWorkspaceRoot, caseInsensitivePath) ===
+      comparisonPath(project.workspaceRoot, caseInsensitivePath)
+  );
 }
 
 export function companyScopedEnvironmentProjects(
@@ -36,17 +71,30 @@ export function companyScopedEnvironmentProjects(
   if (companyId === null) return projects;
   const replica = replicas.get(companyId);
   if (replica === undefined) return EMPTY_PROJECTS;
-  const projectIds = new Set<string>();
+  const bindings: EnvironmentBindingEntity[] = [];
+  let caseInsensitive = false;
   for (const value of replica.view.values()) {
+    if (
+      isEnvironmentRegistration(value) &&
+      value.environmentId === environmentId &&
+      (value.descriptor.platform.os === "darwin" || value.descriptor.platform.os === "windows")
+    ) {
+      caseInsensitive = true;
+      continue;
+    }
     if (
       isEnvironmentBinding(value) &&
       value.environmentId === environmentId &&
       value.status === "active"
     ) {
-      projectIds.add(value.localProjectId);
+      bindings.push(value);
     }
   }
-  const filtered = projects.filter((project) => projectIds.has(project.id));
+  const filtered = projects.filter((project) =>
+    bindings.some((binding) =>
+      environmentBindingMatchesProject(binding, { ...project, environmentId }, caseInsensitive),
+    ),
+  );
   return filtered.length === projects.length ? projects : filtered;
 }
 
@@ -125,6 +173,9 @@ export function cloudEnvironmentProjectsFromReplicas(
         id: value.localProjectId,
         title: project.name,
         workspaceRoot: value.localWorkspaceRoot,
+        ...(value.repositoryIdentity === undefined
+          ? {}
+          : { repositoryIdentity: value.repositoryIdentity }),
         defaultModelSelection: null,
         scripts: [],
         createdAt: iso(project.createdAt),

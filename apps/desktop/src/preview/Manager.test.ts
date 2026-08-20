@@ -1603,6 +1603,9 @@ describe("PreviewManager", () => {
     withManager((manager) =>
       Effect.gen(function* () {
         const listeners = new Map<string, (...args: unknown[]) => void>();
+        const capturePage = vi.fn(async () => ({
+          toDataURL: () => "data:image/png;base64,frozen-preview",
+        }));
         fromId.mockReturnValue({
           id: 42,
           isDestroyed: () => false,
@@ -1631,12 +1634,25 @@ describe("PreviewManager", () => {
             on: vi.fn(),
             off: vi.fn(),
           },
+          capturePage,
         } as never);
 
         yield* manager.createTab("tab_1");
         yield* manager.registerWebview("tab_1", 42);
+        let resolveAnnotationStarted: (() => void) | undefined;
+        const annotationStarted = new Promise<void>((resolve) => {
+          resolveAnnotationStarted = resolve;
+        });
+        webviewSend.mockImplementationOnce(() => resolveAnnotationStarted?.());
         const pick = yield* manager.pickElement("tab_1").pipe(Effect.forkChild);
-        yield* Effect.yieldNow;
+        yield* Effect.promise(() => annotationStarted);
+
+        expect(capturePage).toHaveBeenCalledOnce();
+        expect(webviewSend).toHaveBeenCalledWith(
+          "preview:start-pick",
+          expect.objectContaining({ colorScheme: "light" }),
+          "data:image/png;base64,frozen-preview",
+        );
 
         listeners.get("did-start-navigation")?.({}, "about:blank", false, false);
         yield* Effect.yieldNow;
@@ -1644,6 +1660,77 @@ describe("PreviewManager", () => {
 
         listeners.get("did-start-navigation")?.({}, "https://example.com/next", false, true);
         expect(yield* Fiber.join(pick)).toBeNull();
+      }),
+    ),
+  );
+
+  effectIt.effect("does not start annotation after cancellation during snapshot capture", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let resolveCapture: ((image: { toDataURL: () => string }) => void) | undefined;
+        const pendingCapture = new Promise<{ toDataURL: () => string }>((resolve) => {
+          resolveCapture = resolve;
+        });
+        let resolveEncoded: (() => void) | undefined;
+        const encoded = new Promise<void>((resolve) => {
+          resolveEncoded = resolve;
+        });
+        let resolveCaptureStarted: (() => void) | undefined;
+        const captureStarted = new Promise<void>((resolve) => {
+          resolveCaptureStarted = resolve;
+        });
+        const capturePage = vi.fn(() => {
+          resolveCaptureStarted?.();
+          return pendingCapture;
+        });
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          isFocused: () => true,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          on: vi.fn(),
+          once: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand: vi.fn(async () => undefined),
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+          capturePage,
+        } as never);
+
+        yield* manager.createTab("tab_cancel_pick");
+        yield* manager.registerWebview("tab_cancel_pick", 42);
+        const pick = yield* manager.pickElement("tab_cancel_pick").pipe(Effect.forkChild);
+        yield* Effect.promise(() => captureStarted);
+
+        yield* manager.cancelPickElement("tab_cancel_pick");
+        expect(yield* Fiber.join(pick)).toBeNull();
+
+        resolveCapture?.({
+          toDataURL: () => {
+            resolveEncoded?.();
+            return "data:image/png;base64,late-preview";
+          },
+        });
+        yield* Effect.promise(() => encoded);
+
+        expect(webviewSend).not.toHaveBeenCalledWith(
+          "preview:start-pick",
+          expect.anything(),
+          expect.anything(),
+        );
       }),
     ),
   );

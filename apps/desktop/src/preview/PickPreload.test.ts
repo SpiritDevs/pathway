@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
+import { isolateAnnotationChromeEvent } from "./AnnotationEventIsolation.ts";
 import { computeLabelPosition } from "./PickLabelPosition.ts";
 
 const VIEWPORT = { viewportWidth: 1280, viewportHeight: 800 };
@@ -82,5 +83,40 @@ describe("computeLabelPosition", () => {
     });
     expect(x).toBeGreaterThanOrEqual(0);
     expect(y).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("isolateAnnotationChromeEvent", () => {
+  const event = (type: string) => ({
+    type,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  });
+
+  it("keeps annotation chrome pointer events away from the inspected page", () => {
+    const pointerDown = event("pointerdown");
+
+    isolateAnnotationChromeEvent(pointerDown, false);
+
+    expect(pointerDown.stopPropagation).toHaveBeenCalledOnce();
+    expect(pointerDown.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("preserves page focus when the toolbar is clicked", () => {
+    const mouseDown = event("mousedown");
+
+    isolateAnnotationChromeEvent(mouseDown, true);
+
+    expect(mouseDown.preventDefault).toHaveBeenCalledOnce();
+    expect(mouseDown.stopPropagation).toHaveBeenCalledOnce();
+  });
+
+  it("allows editor controls to receive their normal mouse defaults", () => {
+    const mouseDown = event("mousedown");
+
+    isolateAnnotationChromeEvent(mouseDown, false);
+
+    expect(mouseDown.preventDefault).not.toHaveBeenCalled();
+    expect(mouseDown.stopPropagation).toHaveBeenCalledOnce();
   });
 });

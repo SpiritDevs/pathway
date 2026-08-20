@@ -1,12 +1,17 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
-import { CloudProjectSyncEntity, EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
+import {
+  CloudProjectSyncEntity,
+  EnvironmentBindingEntity,
+  EnvironmentRegistrationEntity,
+} from "@spiritdevs/client-runtime/sync";
 import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Schema from "effect/Schema";
 import { useMemo } from "react";
 
 import { scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
+import { environmentBindingMatchesProject } from "~/cloud/agentThreadReadModel";
 import { syncedIssueDomainFromReplica } from "~/cloud/issueDomainReadModel";
 import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { useProjectGroups } from "../projects/useProjectGroups";
@@ -121,10 +126,11 @@ export function buildIssueProjectOptions(input: {
   readonly groups: ReadonlyArray<SidebarProjectSnapshot>;
   readonly cloudProjects: ReadonlyArray<CloudProjectSyncEntity>;
   readonly environmentBindings: ReadonlyArray<EnvironmentBindingEntity>;
+  readonly caseInsensitiveEnvironmentIds?: ReadonlySet<EnvironmentId>;
   readonly companyId?: CompanyId | null;
 }): ReadonlyArray<IssueProjectOption> {
   const cloudProjects = input.cloudProjects.filter((project) => project.archivedAt === null);
-  const environmentBindings = input.environmentBindings.filter(
+  const activeEnvironmentBindings = input.environmentBindings.filter(
     (binding) => binding.status !== "revoked",
   );
   const usedCloudIds = new Set<string>();
@@ -132,14 +138,21 @@ export function buildIssueProjectOptions(input: {
     const memberById = new Map(
       group.memberProjects.map((member) => [String(member.id), member] as const),
     );
-    const memberRefs = new Set(
-      group.memberProjects.map((member) => `${member.environmentId}:${member.id}`),
+    // A recreated checkout has a new local id, but its prior binding is still valuable lineage.
+    // Repository identity (or the same path on the same machine for legacy rows) keeps old ids as
+    // aliases without making a revoked binding eligible as an execution target.
+    const lineageBindings = input.environmentBindings.filter((binding) =>
+      group.memberProjects.some((member) =>
+        environmentBindingMatchesProject(
+          binding,
+          member,
+          input.caseInsensitiveEnvironmentIds?.has(member.environmentId) ?? false,
+        ),
+      ),
     );
-    const matchingBindings = environmentBindings.filter((binding) =>
-      memberRefs.has(`${binding.environmentId}:${binding.localProjectId}`),
-    );
+    const matchingBindings = lineageBindings.filter((binding) => binding.status !== "revoked");
     const boundCloudProjectIds = new Set(
-      matchingBindings.map((binding) => String(binding.cloudProjectId)),
+      lineageBindings.map((binding) => String(binding.cloudProjectId)),
     );
     const matchingCloudProjects = cloudProjects.filter(
       (project) => boundCloudProjectIds.has(project.id) || memberById.has(project.id),
@@ -165,6 +178,9 @@ export function buildIssueProjectOptions(input: {
       group.memberProjects[0];
     const id = canonicalCloudProject?.id ?? localProject?.id ?? group.id;
     const projectIds = new Set<ProjectId>(group.memberProjects.map((member) => member.id));
+    for (const project of matchingCloudProjects) {
+      projectIds.add(ProjectId.make(String(project.id)));
+    }
     projectIds.add(ProjectId.make(String(id)));
 
     return {
@@ -237,7 +253,7 @@ export function buildIssueProjectOptions(input: {
       localProject: null,
       environmentProjects: [],
       companyProject: project,
-      environmentBindings: environmentBindings.filter(
+      environmentBindings: activeEnvironmentBindings.filter(
         (binding) => String(binding.cloudProjectId) === String(project.id),
       ),
     });
@@ -258,13 +274,25 @@ export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
       return buildIssueProjectOptions({ groups, cloudProjects: [], environmentBindings: [] });
     }
     const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
+    const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
     const allCompanies = replicas.size > 1;
     const scopedOptions = [...replicas].flatMap(([companyId, replica]) => {
       const domain = syncedIssueDomainFromReplica(replica);
+      const caseInsensitiveEnvironmentIds = new Set(
+        [...replica.view.values()]
+          .filter(isEnvironmentRegistration)
+          .filter(
+            (registration) =>
+              registration.descriptor.platform.os === "darwin" ||
+              registration.descriptor.platform.os === "windows",
+          )
+          .map((registration) => registration.environmentId),
+      );
       const options = buildIssueProjectOptions({
         groups,
         cloudProjects: domain.cloudProjects,
         environmentBindings: [...replica.view.values()].filter(isEnvironmentBinding),
+        caseInsensitiveEnvironmentIds,
         companyId,
       });
       // An unregistered local checkout has no company provenance. It is safe to offer only when

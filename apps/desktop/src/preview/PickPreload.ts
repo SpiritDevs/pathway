@@ -15,6 +15,7 @@ import type {
 } from "@spiritdevs/contracts";
 
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
+import { isolateAnnotationChromeEvent } from "./AnnotationEventIsolation.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
@@ -30,6 +31,26 @@ const PRIMARY_FILL = "color-mix(in srgb, var(--pathway-primary) 10%, transparent
 const MAX_MARQUEE_ELEMENTS = 20;
 const CONTENT_LAYER_Z_INDEX = 1;
 const CHROME_LAYER_Z_INDEX = 10;
+const CHROME_POINTER_EVENTS = [
+  "pointerdown",
+  "pointerup",
+  "pointercancel",
+  "pointermove",
+  "pointerover",
+  "pointerout",
+  "mousedown",
+  "mouseup",
+  "mousemove",
+  "mouseover",
+  "mouseout",
+  "click",
+  "dblclick",
+  "auxclick",
+  "contextmenu",
+  "touchstart",
+  "touchend",
+  "touchcancel",
+] as const;
 
 type AnnotationTool = "select" | "marquee" | "draw" | "erase";
 
@@ -329,7 +350,7 @@ function strokeBounds(
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function startAnnotation(): void {
+function startAnnotation(snapshotDataUrl: string | null): void {
   activeSession?.teardown(false);
   let finished = false;
   const host = document.createElement("div");
@@ -350,6 +371,26 @@ function startAnnotation(): void {
   cursorStyle.textContent = `html[data-pathway-annotation-tool] body, html[data-pathway-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
   document.documentElement.appendChild(cursorStyle);
   shadowRoot.appendChild(root);
+
+  if (snapshotDataUrl) {
+    const snapshot = document.createElement("img");
+    snapshot.setAttribute(OVERLAY_ATTRIBUTE, "");
+    snapshot.alt = "";
+    snapshot.draggable = false;
+    snapshot.src = snapshotDataUrl;
+    snapshot.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "width:100%",
+      "height:100%",
+      "max-width:none",
+      "object-fit:fill",
+      "pointer-events:none",
+      "user-select:none",
+      "z-index:0",
+    ].join(";");
+    root.appendChild(snapshot);
+  }
 
   const hoverOutline = createBox(PRIMARY, PRIMARY_FILL);
   const marqueeBox = createBox(PRIMARY, PRIMARY_FILL);
@@ -377,6 +418,15 @@ function startAnnotation(): void {
     "pointer-events-auto fixed hidden max-h-[calc(100vh-16px)] w-[min(360px,calc(100vw-16px))] flex-col overflow-hidden rounded-xl border border-border bg-popover/96 text-popover-foreground shadow-2xl backdrop-blur-xl";
   editor.style.zIndex = String(CHROME_LAYER_Z_INDEX);
   root.appendChild(editor);
+
+  for (const eventType of CHROME_POINTER_EVENTS) {
+    root.addEventListener(eventType, (event) => {
+      isolateAnnotationChromeEvent(
+        event,
+        event.target instanceof Node && toolbar.contains(event.target),
+      );
+    });
+  }
 
   const composerRow = document.createElement("div");
   composerRow.className = "flex items-start gap-2 p-2";
@@ -1236,10 +1286,17 @@ function startAnnotation(): void {
   };
 }
 
-ipcRenderer.on(START_PICK_CHANNEL, (_event, theme: DesktopPreviewAnnotationTheme | undefined) => {
-  if (theme) annotationTheme = theme;
-  startAnnotation();
-});
+ipcRenderer.on(
+  START_PICK_CHANNEL,
+  (
+    _event,
+    theme: DesktopPreviewAnnotationTheme | undefined,
+    snapshotDataUrl: string | null | undefined,
+  ) => {
+    if (theme) annotationTheme = theme;
+    startAnnotation(typeof snapshotDataUrl === "string" ? snapshotDataUrl : null);
+  },
+);
 ipcRenderer.on(ANNOTATION_THEME_CHANNEL, (_event, theme: DesktopPreviewAnnotationTheme) => {
   annotationTheme = theme;
   activeSession?.applyTheme(theme);
