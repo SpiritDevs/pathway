@@ -222,6 +222,13 @@ function resolvePullRequestWorktreeLocalBranchName(
   return `pathway/pr-${pullRequest.number}/${suffix}`;
 }
 
+function resolvePullRequestIsolatedWorktreeBranchName(
+  pullRequest: ResolvedPullRequest,
+  threadId: string,
+): string {
+  return `pathway/review-${pullRequest.number}/${sanitizeBranchFragment(threadId)}`;
+}
+
 function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
   const trimmed = url?.trim() ?? "";
   if (trimmed.length === 0) {
@@ -1938,8 +1945,23 @@ export const make = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const localPullRequestBranch =
-        resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      let localPullRequestBranch: string;
+      if (input.isolateWorktree) {
+        if (!input.threadId) {
+          return yield* new GitManagerError({
+            operation: "preparePullRequestThread",
+            cwd: input.cwd,
+            detail: "An isolated pull request worktree requires a thread id.",
+          });
+        }
+        localPullRequestBranch = resolvePullRequestIsolatedWorktreeBranchName(
+          pullRequest,
+          input.threadId,
+        );
+      } else {
+        localPullRequestBranch =
+          resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      }
 
       // Git refuses to move a branch that is checked out in a worktree, so the
       // reuse paths cannot go through materializePullRequestHeadBranch and instead
@@ -2045,7 +2067,7 @@ export const make = Effect.gen(function* () {
         if (localBranch) {
           return localBranch;
         }
-        if (localPullRequestBranch === pullRequest.headBranch) {
+        if (input.isolateWorktree || localPullRequestBranch === pullRequest.headBranch) {
           return null;
         }
 
