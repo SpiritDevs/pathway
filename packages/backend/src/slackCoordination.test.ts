@@ -153,6 +153,46 @@ describe("Slack controller coordination", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("saves the first V2 watched channel for a draft integration", async () => {
+    const t = harness();
+    await seed(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      const integration = await ctx.db
+        .query("slackIntegrations")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", company!._id).eq("id", INTEGRATION_ID),
+        )
+        .unique();
+      await ctx.db.patch(integration!._id, {
+        state: "draft",
+        activatedAt: null,
+        preferredEnvironmentId: null,
+        backupEnvironmentIds: [],
+      });
+    });
+
+    const saved = await asOwner(t).mutation(api.slackOperations.saveWatchV2, {
+      companyId: COMPANY_ID,
+      integrationId: INTEGRATION_ID,
+      id: "01990000-0000-7000-8000-000000000013",
+      channelId: "C123",
+      channelName: "general",
+      rules: [],
+      expectedRevision: null,
+    });
+
+    expect(saved).toMatchObject({
+      channelId: "C123",
+      channelName: "general",
+      configurationVersion: 2,
+      revision: 1,
+    });
+  });
+
   it("clears stale protocol capabilities and fences a V2 lease before credential access", async () => {
     const t = harness();
     await seed(t);

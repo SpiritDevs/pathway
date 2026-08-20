@@ -42,6 +42,30 @@ const COMPANY_VALUE = "__company__";
 const TRIAGE_VALUE = "__triage__";
 const EMPTY_CYCLES: readonly SlackCycleOption[] = [];
 
+const CONDITION_OPERATOR_LABELS = {
+  all: "All",
+  any: "Any",
+} as const;
+
+const CONDITION_TYPE_LABELS: Record<SlackConditionLeaf["type"], string> = {
+  prefix: "Starts with",
+  reaction: "Reaction",
+  botMention: "Bot mention",
+  everyMessage: "Every message",
+};
+
+const INVESTIGATION_TIMING_LABELS = {
+  off: "Off",
+  immediate: "Immediately",
+  status: "When status changes",
+} as const;
+
+const ASSIGNMENT_LABELS: Record<SlackAssignmentPolicy, string> = {
+  off: "Off",
+  immediate: "Immediately",
+  "after-investigation": "After investigation",
+};
+
 function createViewId(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
 }
@@ -99,7 +123,7 @@ function ConditionTreeEditor({
           value={group.operator}
         >
           <SelectTrigger className="w-28" size="xs">
-            <SelectValue />
+            <SelectValue>{CONDITION_OPERATOR_LABELS[group.operator]}</SelectValue>
           </SelectTrigger>
           <SelectPopup>
             <SelectItem value="all">All</SelectItem>
@@ -212,7 +236,7 @@ function ConditionLeafEditor({
         value={node.type}
       >
         <SelectTrigger className="w-32 shrink-0" size="sm">
-          <SelectValue />
+          <SelectValue>{CONDITION_TYPE_LABELS[node.type]}</SelectValue>
         </SelectTrigger>
         <SelectPopup>
           <SelectItem value="prefix">Starts with</SelectItem>
@@ -307,6 +331,20 @@ export function SlackRouteRuleEditor({
 }: SlackRouteRuleEditorProps) {
   const teamStatuses = statuses.filter((status) => status.teamId === rule.teamId);
   const teamCycles = cycles.filter((cycle) => cycle.teamId === rule.teamId);
+  const selectedTeamLabel = rule.teamId
+    ? (teams.find((team) => team.id === rule.teamId)?.name ?? "Unknown team")
+    : "Company-wide";
+  const selectedProjectLabel = rule.projectId
+    ? (projects.find((project) => project.id === rule.projectId)?.name ?? "Unknown project")
+    : "No project";
+  const initialStatusId =
+    rule.initialPlacement.kind === "status" ? rule.initialPlacement.statusId : null;
+  const initialStatusLabel = initialStatusId
+    ? (teamStatuses.find((status) => status.id === initialStatusId)?.name ?? "Unknown status")
+    : "Triage";
+  const selectedCycleLabel = rule.cycleId
+    ? (teamCycles.find((cycle) => cycle.id === rule.cycleId)?.name ?? "Unknown cycle")
+    : "No cycle";
 
   return (
     <section
@@ -422,7 +460,7 @@ export function SlackRouteRuleEditor({
                 value={rule.teamId ?? COMPANY_VALUE}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{selectedTeamLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   <SelectItem value={COMPANY_VALUE}>Company-wide</SelectItem>
@@ -444,7 +482,7 @@ export function SlackRouteRuleEditor({
                 value={rule.projectId ?? NONE_VALUE}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{selectedProjectLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   <SelectItem value={NONE_VALUE}>No project</SelectItem>
@@ -477,7 +515,7 @@ export function SlackRouteRuleEditor({
                 }
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{initialStatusLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   <SelectItem value={TRIAGE_VALUE}>Triage</SelectItem>
@@ -504,7 +542,7 @@ export function SlackRouteRuleEditor({
                 value={rule.cycleId ?? NONE_VALUE}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>{selectedCycleLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   <SelectItem value={NONE_VALUE}>No cycle</SelectItem>
@@ -551,6 +589,14 @@ export function SlackRuleAutomationEditor({
     rule.investigation.kind === "status" ? "status" : rule.investigation.kind;
   const successStatusId =
     rule.investigation.kind === "off" ? null : rule.investigation.successStatusId;
+  const triggerStatusId =
+    rule.investigation.kind === "status" ? rule.investigation.triggerStatusId : null;
+  const triggerStatusLabel = triggerStatusId
+    ? (teamStatuses.find((status) => status.id === triggerStatusId)?.name ?? "Unknown status")
+    : "Choose status";
+  const successStatusLabel = successStatusId
+    ? (teamStatuses.find((status) => status.id === successStatusId)?.name ?? "Unknown status")
+    : "Keep current status";
 
   const setInvestigation = (timing: "off" | "immediate" | "status") => {
     const next: SlackInvestigationPolicy =
@@ -597,7 +643,7 @@ export function SlackRuleAutomationEditor({
             value={investigationTiming}
           >
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue>{INVESTIGATION_TIMING_LABELS[investigationTiming]}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               <SelectItem value="off">Off</SelectItem>
@@ -616,7 +662,7 @@ export function SlackRuleAutomationEditor({
             value={rule.assignment}
           >
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue>{ASSIGNMENT_LABELS[rule.assignment]}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               <SelectItem value="off">Off</SelectItem>
@@ -642,7 +688,7 @@ export function SlackRuleAutomationEditor({
               value={rule.investigation.triggerStatusId}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Choose status" />
+                <SelectValue placeholder="Choose status">{triggerStatusLabel}</SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 {teamStatuses.map((status) => (
@@ -663,7 +709,7 @@ export function SlackRuleAutomationEditor({
               value={rule.investigation.successStatusId ?? NONE_VALUE}
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue>{successStatusLabel}</SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 <SelectItem value={NONE_VALUE}>Keep current status</SelectItem>
