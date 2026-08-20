@@ -870,8 +870,8 @@ function PullRequestsRouteView() {
       )[0];
   }, [allProjects, environmentId, search.host, search.repository, search.selectedEnvironmentId]);
 
-  // The selection is resolved the same way the scope is: an id from another environment can
-  // never be read here, and one that arrived before the projects did is not yet wrong.
+  // The selection carries its environment explicitly. Old links without one still resolve by
+  // repository, preferring the primary environment when several checkouts can answer.
   const linkedProject = useMemo(
     () =>
       search.selectedProjectId === undefined
@@ -1054,7 +1054,11 @@ function PullRequestsRouteView() {
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
-          error="Update this environment's Pathway server to browse pull requests."
+          error={
+            scopedProjectId === undefined
+              ? "Connect an environment with pull request support to browse this workspace."
+              : "This project has no connected checkout with pull request support."
+          }
         />
       ) : firstLoad ? (
         <PullRequestListGhost rows={7} />

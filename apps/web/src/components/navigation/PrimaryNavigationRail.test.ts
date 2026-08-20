@@ -39,8 +39,6 @@ describe("resolvePrimaryNavigationDestination", () => {
     ["/email", "email"],
     ["/contacts", "contacts"],
     ["/time-tracker", "time-tracker"],
-    ["/files", "files"],
-    ["/browser", "browser"],
     ["/orchestrator", "orchestrator"],
     ["/orchestrator/agents", "orchestrator"],
     ["/usage", "settings"],
@@ -73,8 +71,6 @@ describe("primary navigation view order", () => {
       "calendar",
       "contacts",
       "time-tracker",
-      "files",
-      "browser",
     ]);
   });
 
@@ -85,6 +81,8 @@ describe("primary navigation view order", () => {
         "issues",
         "dashboard",
         "issues",
+        "files",
+        "browser",
         "future-view",
       ]),
     ).toEqual([
@@ -96,8 +94,6 @@ describe("primary navigation view order", () => {
       "email",
       "contacts",
       "time-tracker",
-      "files",
-      "browser",
     ]);
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("dashboard");
     expect(PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS).not.toContain("orchestrator");
@@ -116,11 +112,9 @@ describe("primary navigation view order", () => {
       "email",
       "contacts",
       "time-tracker",
-      "files",
-      "browser",
     ]);
     expect(movePrimaryNavigationDestination(order, "threads", "up")).toBe(order);
-    expect(movePrimaryNavigationDestination(order, "browser", "down")).toBe(order);
+    expect(movePrimaryNavigationDestination(order, "time-tracker", "down")).toBe(order);
   });
 });
 

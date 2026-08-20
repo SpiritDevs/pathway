@@ -44,11 +44,7 @@ export function resolveSecondarySidebarKind(pathname: string): SecondarySidebarK
     pathname === "/contacts" ||
     pathname.startsWith("/contacts/") ||
     pathname === "/time-tracker" ||
-    pathname.startsWith("/time-tracker/") ||
-    pathname === "/files" ||
-    pathname.startsWith("/files/") ||
-    pathname === "/browser" ||
-    pathname.startsWith("/browser/")
+    pathname.startsWith("/time-tracker/")
   ) {
     return null;
   }

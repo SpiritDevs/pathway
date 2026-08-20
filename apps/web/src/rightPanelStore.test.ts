@@ -632,6 +632,24 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(pullRequestSurfaceId(first));
   });
 
+  it("retains the environment that owns a workspace pull request", () => {
+    useRightPanelStore.getState().openPullRequest(refA, {
+      environmentId: refB.environmentId,
+      projectId: "project-b",
+      repository: "spiritdevs/pathway",
+      number: 34,
+    });
+
+    const [surface] = selectThreadRightPanelState(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    ).surfaces;
+    expect(surface?.kind).toBe("pull-request");
+    expect(surface?.kind === "pull-request" ? surface.environmentId : null).toBe(
+      refB.environmentId,
+    );
+  });
+
   it("tracks one surface per terminal session", () => {
     useRightPanelStore.getState().openTerminal(refA, "term-1");
     useRightPanelStore.getState().openTerminal(refA, "term-2");

@@ -19,13 +19,11 @@ import { Route as OrchestratorRouteImport } from './routes/orchestrator'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as IssuesRouteImport } from './routes/issues'
-import { Route as FilesRouteImport } from './routes/files'
 import { Route as EmailRouteImport } from './routes/email'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ContactsRouteImport } from './routes/contacts'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as CalendarRouteImport } from './routes/calendar'
-import { Route as BrowserRouteImport } from './routes/browser'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
@@ -117,11 +115,6 @@ const IssuesRoute = IssuesRouteImport.update({
   path: '/issues',
   getParentRoute: () => rootRouteImport,
 } as any)
-const FilesRoute = FilesRouteImport.update({
-  id: '/files',
-  path: '/files',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const EmailRoute = EmailRouteImport.update({
   id: '/email',
   path: '/email',
@@ -145,11 +138,6 @@ const ConnectRoute = ConnectRouteImport.update({
 const CalendarRoute = CalendarRouteImport.update({
   id: '/calendar',
   path: '/calendar',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BrowserRoute = BrowserRouteImport.update({
-  id: '/browser',
-  path: '/browser',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChatRoute = ChatRouteImport.update({
@@ -361,13 +349,11 @@ const ChatThreadsEnvironmentIdThreadIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
-  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -419,13 +405,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
-  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -478,13 +462,11 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_chat': typeof ChatRouteWithChildren
-  '/browser': typeof BrowserRoute
   '/calendar': typeof CalendarRoute
   '/connect': typeof ConnectRoute
   '/contacts': typeof ContactsRoute
   '/dashboard': typeof DashboardRoute
   '/email': typeof EmailRoute
-  '/files': typeof FilesRoute
   '/issues': typeof IssuesRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
@@ -538,13 +520,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
     | '/dashboard'
     | '/email'
-    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -596,13 +576,11 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
     | '/dashboard'
     | '/email'
-    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -654,13 +632,11 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_chat'
-    | '/browser'
     | '/calendar'
     | '/connect'
     | '/contacts'
     | '/dashboard'
     | '/email'
-    | '/files'
     | '/issues'
     | '/login'
     | '/onboarding'
@@ -714,13 +690,11 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ChatRoute: typeof ChatRouteWithChildren
-  BrowserRoute: typeof BrowserRoute
   CalendarRoute: typeof CalendarRoute
   ConnectRoute: typeof ConnectRoute
   ContactsRoute: typeof ContactsRoute
   DashboardRoute: typeof DashboardRoute
   EmailRoute: typeof EmailRoute
-  FilesRoute: typeof FilesRoute
   IssuesRoute: typeof IssuesRoute
   LoginRoute: typeof LoginRoute
   OnboardingRoute: typeof OnboardingRoute
@@ -808,13 +782,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IssuesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/files': {
-      id: '/files'
-      path: '/files'
-      fullPath: '/files'
-      preLoaderRoute: typeof FilesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/email': {
       id: '/email'
       path: '/email'
@@ -848,13 +815,6 @@ declare module '@tanstack/react-router' {
       path: '/calendar'
       fullPath: '/calendar'
       preLoaderRoute: typeof CalendarRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/browser': {
-      id: '/browser'
-      path: '/browser'
-      fullPath: '/browser'
-      preLoaderRoute: typeof BrowserRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_chat': {
@@ -1241,13 +1201,11 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ChatRoute: ChatRouteWithChildren,
-  BrowserRoute: BrowserRoute,
   CalendarRoute: CalendarRoute,
   ConnectRoute: ConnectRoute,
   ContactsRoute: ContactsRoute,
   DashboardRoute: DashboardRoute,
   EmailRoute: EmailRoute,
-  FilesRoute: FilesRoute,
   IssuesRoute: IssuesRoute,
   LoginRoute: LoginRoute,
   OnboardingRoute: OnboardingRoute,

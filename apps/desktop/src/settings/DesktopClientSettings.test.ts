@@ -43,8 +43,6 @@ const clientSettings: ClientSettings = {
     "email",
     "contacts",
     "time-tracker",
-    "files",
-    "browser",
   ],
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,

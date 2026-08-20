@@ -204,8 +204,6 @@ export const ClientSettingsSchema = Schema.Struct({
         "email",
         "contacts",
         "time-tracker",
-        "files",
-        "browser",
       ]),
     ),
   ),

@@ -20,10 +20,8 @@ import {
   CalendarDaysIcon,
   Clock3Icon,
   ContactRoundIcon,
-  FilesIcon,
   FolderKanbanIcon,
   GitPullRequestIcon,
-  Globe2Icon,
   LayoutDashboardIcon,
   ListTodoIcon,
   MailIcon,
@@ -68,8 +66,6 @@ export const PRIMARY_NAVIGATION_MOVABLE_DESTINATIONS = [
   "email",
   "contacts",
   "time-tracker",
-  "files",
-  "browser",
 ] as const;
 
 export type MovablePrimaryNavigationDestination =
@@ -121,8 +117,6 @@ export type PrimaryNavigationDestination =
   | "email"
   | "contacts"
   | "time-tracker"
-  | "files"
-  | "browser"
   | "orchestrator"
   | "settings";
 
@@ -186,12 +180,6 @@ export function resolvePrimaryNavigationDestination(
   }
   if (pathname === "/time-tracker" || pathname.startsWith("/time-tracker/")) {
     return "time-tracker";
-  }
-  if (pathname === "/files" || pathname.startsWith("/files/")) {
-    return "files";
-  }
-  if (pathname === "/browser" || pathname.startsWith("/browser/")) {
-    return "browser";
   }
   if (pathname === "/orchestrator" || pathname.startsWith("/orchestrator/")) {
     return "orchestrator";
@@ -564,12 +552,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigateToTimeTracker = useCallback(() => {
     void navigate({ to: "/time-tracker" });
   }, [navigate]);
-  const navigateToFiles = useCallback(() => {
-    void navigate({ to: "/files" });
-  }, [navigate]);
-  const navigateToBrowser = useCallback(() => {
-    void navigate({ to: "/browser" });
-  }, [navigate]);
   const navigateToOrchestrator = useCallback(() => {
     void navigate({ to: "/orchestrator" });
   }, [navigate]);
@@ -633,18 +615,6 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         label: "Time Tracker",
         onNavigate: navigateToTimeTracker,
       },
-      files: {
-        destination: "files",
-        icon: FilesIcon,
-        label: "Files",
-        onNavigate: navigateToFiles,
-      },
-      browser: {
-        destination: "browser",
-        icon: Globe2Icon,
-        label: "Browser",
-        onNavigate: navigateToBrowser,
-      },
       orchestrator: {
         destination: "orchestrator",
         icon: BotIcon,
@@ -660,12 +630,10 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     }),
     [
       emailUnreadCount,
-      navigateToBrowser,
       navigateToCalendar,
       navigateToContacts,
       navigateToDashboard,
       navigateToEmail,
-      navigateToFiles,
       navigateToIssues,
       navigateToOrchestrator,
       navigateToPullRequests,

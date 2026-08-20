@@ -91,8 +91,6 @@ describe("ClientSettings primary navigation view order", () => {
       "email",
       "contacts",
       "time-tracker",
-      "files",
-      "browser",
     ]);
     expect(
       decodeClientSettingsPatch({ primaryNavigationViewOrder: ["email", "threads"] })
