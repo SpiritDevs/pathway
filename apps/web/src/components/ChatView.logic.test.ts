@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   RunId,
@@ -24,6 +25,7 @@ import {
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
   deriveComposerSendState,
+  deriveLockedProvider,
   dismissBranchMismatchForSession,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
@@ -190,6 +192,38 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("deriveLockedProvider", () => {
+  const providers = [
+    {
+      instanceId: ProviderInstanceId.make("codex_work"),
+      driver: ProviderDriverKind.make("codex"),
+    },
+  ];
+  const startedThread = makeThread({ latestRun: completedTurn });
+
+  it("resolves a settled thread's custom instance id to its provider driver", () => {
+    expect(
+      deriveLockedProvider({
+        thread: startedThread,
+        selectedProvider: null,
+        threadProvider: "codex_work",
+        providers,
+      }),
+    ).toBe("codex");
+  });
+
+  it("does not mistake a missing custom instance id for a provider driver", () => {
+    expect(
+      deriveLockedProvider({
+        thread: startedThread,
+        selectedProvider: null,
+        threadProvider: "codex_personal",
+        providers,
+      }),
+    ).toBeNull();
+  });
+});
 
 function editableV2Projection(
   input: {

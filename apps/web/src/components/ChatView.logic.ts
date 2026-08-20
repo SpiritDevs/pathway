@@ -481,22 +481,17 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   return Boolean(thread && (thread.latestRun !== null || thread.itemCount > 0 || thread.runtime));
 }
 
-// `threadProvider` is the open branded driver kind carried by the session.
-// Unknown driver kinds degrade to `null` (i.e. "unlocked"), which is the safe
-// rollback / fork behavior — the routing layer is the right place to surface
-// "driver not installed" errors, not the lock state.
-//
-// `selectedProvider` takes the same open-string shape because the composer
-// now tracks the picker selection as a `ProviderInstanceId` (e.g.
-// `codex_personal`). Custom instance ids that don't directly match a
-// registered driver resolve to `null` here, which matches the existing
-// "unknown driver -> unlocked" semantics. Callers that want the lock to track
-// a custom instance's underlying driver kind should resolve the instance id
-// upstream and pass the correlated kind.
+// A live runtime carries its provider driver directly. Settled threads no
+// longer have that runtime, so their persisted instance selection must be
+// resolved through the current provider catalogue before it can become a
+// driver lock. Instance and driver ids share the same open slug syntax; never
+// infer one brand from the other or a custom id such as `codex_work` will lock
+// the composer to a nonexistent driver after the thread settles.
 export function deriveLockedProvider(input: {
   thread: Thread | null | undefined;
   selectedProvider: string | null;
   threadProvider: string | null;
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver">>;
 }): ProviderDriverKind | null {
   if (!threadHasStarted(input.thread)) {
     return null;
@@ -505,15 +500,13 @@ export function deriveLockedProvider(input: {
   if (sessionProvider && isProviderDriverKind(sessionProvider)) {
     return sessionProvider;
   }
-  const narrowedThreadProvider =
-    input.threadProvider && isProviderDriverKind(input.threadProvider)
-      ? input.threadProvider
-      : null;
-  const narrowedSelectedProvider =
-    input.selectedProvider && isProviderDriverKind(input.selectedProvider)
-      ? input.selectedProvider
-      : null;
-  return narrowedThreadProvider ?? narrowedSelectedProvider ?? null;
+  const resolveDriver = (selection: string | null): ProviderDriverKind | null => {
+    if (!selection) return null;
+    const instance = input.providers.find((provider) => provider.instanceId === selection);
+    if (instance) return instance.driver;
+    return input.providers.find((provider) => provider.driver === selection)?.driver ?? null;
+  };
+  return resolveDriver(input.threadProvider) ?? resolveDriver(input.selectedProvider);
 }
 
 export function getStartedThreadModelChangeBlockReason(input: {
