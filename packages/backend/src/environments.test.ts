@@ -41,6 +41,19 @@ const PROJECT_ID = "0198f900-0000-7000-8000-000000000401";
 const BINDING_ID = "0198f900-0000-7000-8000-000000000501";
 const TRUSTED_SENDER_ID = "0198f900-0000-7000-8000-000000000701";
 const THUMBPRINT = "thumbprint-registry-one";
+const REPOSITORY_IDENTITY = {
+  canonicalKey: "github.com/spiritdevs/pathway",
+  locator: {
+    source: "git-remote" as const,
+    remoteName: "origin",
+    remoteUrl: "https://github.com/spiritdevs/pathway.git",
+  },
+  rootPath: "/workspace/pathway",
+  displayName: "spiritdevs/pathway",
+  provider: "github",
+  owner: "spiritdevs",
+  name: "pathway",
+};
 
 const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") => ({
   environmentId,
@@ -337,6 +350,54 @@ describe("environment registry", () => {
       localProjectId: PROJECT_ID,
     });
     expect(await feedRows(t)).toHaveLength(versionAfterRelease);
+  });
+
+  it("reconnects a recreated checkout to its repository's existing company project", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    const owner = asUser(t, "manager");
+    const original = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      repositoryIdentity: REPOSITORY_IDENTITY,
+      name: "Pathway",
+    };
+
+    await owner.mutation(api.cloudProjects.ensureEnvironmentProject, original);
+    await owner.mutation(api.cloudProjects.releaseEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+    });
+
+    const recreatedProjectId = "0198f900-0000-7000-8000-000000000402";
+    expect(
+      await owner.mutation(api.cloudProjects.ensureEnvironmentProject, {
+        ...original,
+        localProjectId: recreatedProjectId,
+        localWorkspaceRoot: "/different/checkout/pathway",
+      }),
+    ).toBe(PROJECT_ID);
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cloudProjects").collect()).toHaveLength(1);
+      expect(await ctx.db.query("environmentBindings").collect()).toMatchObject([
+        {
+          cloudProjectId: expect.any(String),
+          localProjectId: PROJECT_ID,
+          repositoryKey: REPOSITORY_IDENTITY.canonicalKey,
+          status: "revoked",
+        },
+        {
+          cloudProjectId: expect.any(String),
+          localProjectId: recreatedProjectId,
+          repositoryKey: REPOSITORY_IDENTITY.canonicalKey,
+          status: "active",
+        },
+      ]);
+    });
   });
 
   it("persists the preferred environment binding for future project work", async () => {

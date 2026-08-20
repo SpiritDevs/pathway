@@ -95,6 +95,7 @@ export const makeCloudProjectPublisher = Effect.fn("cloud.project_publisher.make
           environmentId: options.environmentId,
           localProjectId: project.id,
           localWorkspaceRoot: project.workspaceRoot,
+          repositoryIdentity: project.repositoryIdentity ?? null,
           name: project.title,
         }),
       ).pipe(Effect.asVoid),

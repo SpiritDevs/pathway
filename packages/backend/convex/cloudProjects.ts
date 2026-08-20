@@ -17,7 +17,7 @@ import {
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
-import { domainIdArg } from "./lib/validators.ts";
+import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
 
 function trimmed(value: string, label: string): string {
   const result = value.trim();
@@ -97,6 +97,7 @@ export const ensureEnvironmentProject = mutation({
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.union(v.string(), v.null()),
+    repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     name: v.string(),
   },
   returns: domainIdArg,
@@ -110,6 +111,8 @@ export const ensureEnvironmentProject = mutation({
       args.localWorkspaceRoot === null
         ? null
         : trimmed(args.localWorkspaceRoot, "A local workspace root");
+    const repositoryIdentity = args.repositoryIdentity;
+    const repositoryKey = repositoryIdentity?.canonicalKey ?? null;
 
     const registration = await ctx.db
       .query("environmentRegistrations")
@@ -132,15 +135,32 @@ export const ensureEnvironmentProject = mutation({
             )
             .collect()
         ).find((row) => row.localProjectId === localProjectId) ?? null);
-    let project =
-      binding === null
-        ? await ctx.db
-            .query("cloudProjects")
-            .withIndex("by_company_and_domain_id", (q) =>
-              q.eq("companyId", actor.company._id).eq("id", localProjectId),
-            )
-            .unique()
-        : await ctx.db.get(binding.cloudProjectId);
+    let project = binding === null ? null : await ctx.db.get(binding.cloudProjectId);
+    if (project === null && repositoryKey !== null) {
+      const repositoryBindings = await ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_repository", (q) =>
+          q.eq("companyId", actor.company._id).eq("repositoryKey", repositoryKey),
+        )
+        .collect();
+      for (const candidate of repositoryBindings.toSorted((left, right) => {
+        const leftActive = left.status === "active" ? 1 : 0;
+        const rightActive = right.status === "active" ? 1 : 0;
+        return rightActive - leftActive || right.updatedAt - left.updatedAt;
+      })) {
+        const candidateProject = await ctx.db.get(candidate.cloudProjectId);
+        if (candidateProject !== null && candidateProject.deletedAt === null) {
+          project = candidateProject;
+          break;
+        }
+      }
+    }
+    project ??= await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", localProjectId),
+      )
+      .unique();
     const now = Date.now();
     let projectChanged = false;
     if (project === null) {
@@ -194,6 +214,7 @@ export const ensureEnvironmentProject = mutation({
         environmentId,
         localProjectId,
         localWorkspaceRoot,
+        ...(repositoryIdentity === undefined ? {} : { repositoryIdentity, repositoryKey }),
         status: "active",
         lastSeenAt: now,
         createdAt: now,
@@ -211,10 +232,14 @@ export const ensureEnvironmentProject = mutation({
     } else if (
       binding !== null &&
       (binding.localWorkspaceRoot !== localWorkspaceRoot ||
-        binding.status !== (localWorkspaceRoot === null ? "missing" : "active"))
+        binding.status !== (localWorkspaceRoot === null ? "missing" : "active") ||
+        (repositoryIdentity !== undefined &&
+          JSON.stringify(binding.repositoryIdentity ?? null) !==
+            JSON.stringify(repositoryIdentity)))
     ) {
       await ctx.db.patch(binding._id, {
         ...(localWorkspaceRoot === null ? {} : { localWorkspaceRoot }),
+        ...(repositoryIdentity === undefined ? {} : { repositoryIdentity, repositoryKey }),
         status: localWorkspaceRoot === null ? "missing" : "active",
         lastSeenAt: now,
         updatedAt: now,

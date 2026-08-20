@@ -167,6 +167,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly environmentId: EnvironmentId;
       readonly localProjectId: string;
       readonly localWorkspaceRoot: string | null;
+      readonly repositoryIdentity?: EnvironmentProject["repositoryIdentity"];
       readonly name: string;
     },
     string
@@ -312,11 +313,11 @@ export interface EnvironmentControlClient {
   readonly ensureEnvironmentProject: (args: {
     readonly companyId: CompanyId;
     /**
-     * Only the four fields the mutation sends. Narrower than `EnvironmentProject` on purpose: a
-     * caller that has just created a project holds those four and nothing else, and widening the
-     * parameter to the full shell would force it to invent a repository identity and a script list.
+     * Only the fields the mutation sends. Repository identity remains optional because a caller
+     * that has just created a project has not received its asynchronous enrichment yet.
      */
-    readonly project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "title">;
+    readonly project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "title"> &
+      Partial<Pick<EnvironmentProject, "repositoryIdentity">>;
   }) => Promise<void>;
   readonly setPreferredEnvironmentBinding: (args: {
     readonly companyId: CompanyId;
@@ -456,6 +457,7 @@ export function makeEnvironmentControlClient(options: {
         environmentId: project.environmentId,
         localProjectId: project.id,
         localWorkspaceRoot: project.workspaceRoot,
+        repositoryIdentity: project.repositoryIdentity ?? null,
         name: project.title,
       }),
     setPreferredEnvironmentBinding: (args) =>

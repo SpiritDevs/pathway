@@ -24,6 +24,7 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { RepositoryIdentity } from "./environment.ts";
 import { ChatAttachmentId } from "./chatAttachment.ts";
 import {
   EnvironmentBindingId,
@@ -518,6 +519,11 @@ export const SyncEnvironmentBindingPayload = Schema.Struct({
   environmentId: EnvironmentId,
   localProjectId: ProjectId,
   localWorkspaceRoot: TrimmedNonEmptyString,
+  /**
+   * Repository identity observed by the bound environment. Optional for rows published before
+   * repository-aware cloud grouping shipped; a connected environment fills it on reconciliation.
+   */
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   status: EnvironmentBindingStatus,
   lastSeenAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,

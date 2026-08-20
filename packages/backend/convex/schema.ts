@@ -26,6 +26,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { repositoryIdentityArg } from "./lib/validators.ts";
+
 /** Client-generated domain id (UUIDv7). Distinct from a Convex `_id`. */
 const domainId = v.string();
 
@@ -478,6 +480,10 @@ export default defineSchema({
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.string(),
+    /** Optional while environments running older publishers still have bindings in the feed. */
+    repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
+    /** Storage-only index key derived from `repositoryIdentity.canonicalKey`. */
+    repositoryKey: v.optional(v.union(v.string(), v.null())),
     status: v.union(
       /** Import-only state. Pending bindings do not enter the feed until completion activates them. */
       v.literal("pending"),
@@ -496,6 +502,7 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_company_and_repository", ["companyId", "repositoryKey"])
     .index("by_environment", ["environmentId"]),
 
   /**

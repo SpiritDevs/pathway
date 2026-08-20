@@ -25,6 +25,21 @@ import { v } from "convex/values";
  */
 export const domainIdArg = v.string();
 
+/** `RepositoryIdentity` from `contracts/environment`. */
+export const repositoryIdentityArg = v.object({
+  canonicalKey: v.string(),
+  locator: v.object({
+    source: v.literal("git-remote"),
+    remoteName: v.string(),
+    remoteUrl: v.string(),
+  }),
+  rootPath: v.optional(v.string()),
+  displayName: v.optional(v.string()),
+  provider: v.optional(v.string()),
+  owner: v.optional(v.string()),
+  name: v.optional(v.string()),
+});
+
 /** `SyncActor` from `contracts/cloudSync`. */
 export const syncActorArg = v.union(
   v.object({ kind: v.literal("member"), membershipId: domainIdArg }),

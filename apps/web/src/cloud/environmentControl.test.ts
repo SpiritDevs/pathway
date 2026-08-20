@@ -293,6 +293,7 @@ describe("environment control function references", () => {
         environmentId: ENVIRONMENT_ID,
         localProjectId: "project-a",
         localWorkspaceRoot: "/workspace/pathway",
+        repositoryIdentity: null,
         name: "Pathway",
       },
     });
