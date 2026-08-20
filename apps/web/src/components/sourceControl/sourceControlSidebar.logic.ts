@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
 
 import type { SidebarProjectGroupMember } from "~/sidebarProjectGrouping";
 import type { WorkspaceProject } from "../projects/workspaceProjects.logic";

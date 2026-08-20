@@ -32,12 +32,10 @@ import {
   pullRequestEntryKey,
   rankPullRequestMatches,
   readPullRequestListSnapshot,
-  resolveProjectScope,
   withDiffStat,
   writePullRequestListSnapshot,
   scorePullRequestMatch,
   type PullRequestDiffStats,
-  type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
 import { pullRequestReviewActivityKey } from "../lib/pullRequestReviewActivity";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
@@ -52,6 +50,11 @@ import { PullRequestListEmptyState } from "../components/pullRequest/PullRequest
 import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
+import { useWorkspaceProjects } from "../components/projects/useWorkspaceProjects";
+import {
+  findSourceControlProjectEntry,
+  sourceControlProjectEntries,
+} from "../components/sourceControl/sourceControlSidebar.logic";
 import { InlineRightPanelPortal } from "../components/preview/InlineRightPanelPresence";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
@@ -72,10 +75,22 @@ import {
   type PullRequestSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
-import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
+import {
+  useAllEnvironmentShellsBootstrapped,
+  useProjects,
+  useServerConfigs,
+} from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
-import { pullRequestEnvironment, useActivePullRequestReviewKeys } from "../state/pullRequests";
-import { useEnvironmentQuery } from "../state/query";
+import {
+  combinePullRequestListResults,
+  pullRequestEnvironment,
+  useActivePullRequestReviewKeysForEnvironments,
+  usePullRequestListAcrossEnvironments,
+  usePullRequestStatsAcrossEnvironments,
+  type PullRequestEnvironmentTarget,
+  type SourcedPullRequestListEntry,
+  type SourcedPullRequestListResult,
+} from "../state/pullRequests";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -99,6 +114,8 @@ export interface PullRequestsSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  /** Environment owning the selected PR; absent on old links, which resolve through the project. */
+  readonly selectedEnvironmentId?: EnvironmentId;
   readonly q?: string;
 }
 
@@ -156,6 +173,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
+    ...(typeof raw.selectedEnvironmentId === "string" && raw.selectedEnvironmentId
+      ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
+      : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
   }),
   component: PullRequestsRouteView,
@@ -166,29 +186,57 @@ function PullRequestsRouteView() {
   const navigate = useNavigate({ from: Route.fullPath });
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
-  const capabilityKnown = primaryEnvironment !== null && primaryEnvironment.serverConfig !== null;
-  const pullRequestsSupported =
-    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
-  // The primary environment may still be connecting, or may predate this feature. In either
-  // case every query remains idle until the server has explicitly advertised these APIs.
-  const pullRequestEnvironmentId = pullRequestsSupported ? environmentId : null;
-  const activeReviewKeys = useActivePullRequestReviewKeys(environmentId);
+  const serverConfigs = useServerConfigs();
   const allProjects = useProjects();
+  const workspaceProjects = useWorkspaceProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
   // the one wrong answer the empty state can give.
   const projectsKnown = useAllEnvironmentShellsBootstrapped();
-  // The page reads one environment, so a project from another one could neither be listed
-  // nor acted on: scoping here keeps the filter and the selection honest.
-  const projects = useMemo(
-    () => allProjects.filter((project) => project.environmentId === environmentId),
-    [allProjects, environmentId],
+  const sourceControlProjects = useMemo(
+    () => sourceControlProjectEntries(workspaceProjects, environmentId),
+    [environmentId, workspaceProjects],
   );
-  // The scope the URL asks for, once the environment has had its say about whether it exists.
-  const scopedProjectId = useMemo(
-    () => resolveProjectScope(search.projectId, projects, projectsKnown),
-    [projects, projectsKnown, search.projectId],
+  const selectedProject = useMemo(
+    () => findSourceControlProjectEntry(sourceControlProjects, search.projectId),
+    [search.projectId, sourceControlProjects],
   );
+  // Keep a not-yet-replicated id during bootstrap, but canonicalise old local ids once Convex and
+  // the environment shells have answered.
+  const scopedProjectId =
+    selectedProject?.projectId ?? (!projectsKnown ? search.projectId : undefined);
+  const pullRequestTargets = useMemo<ReadonlyArray<PullRequestEnvironmentTarget>>(() => {
+    const candidates =
+      scopedProjectId === undefined
+        ? [
+            ...new Map(
+              allProjects
+                .filter((project) => project.workspaceRoot !== null)
+                .map((project) => [project.environmentId, project] as const),
+            ).values(),
+          ].map((project) => ({ environmentId: project.environmentId }))
+        : (selectedProject?.targetProjects.map((project) => ({
+            environmentId: project.environmentId,
+            projectId: project.id,
+          })) ?? []);
+    return candidates
+      .filter(
+        (target) =>
+          serverConfigs.get(target.environmentId)?.environment.capabilities.pullRequests === true,
+      )
+      .toSorted(
+        (left, right) =>
+          Number(right.environmentId === environmentId) -
+          Number(left.environmentId === environmentId),
+      );
+  }, [allProjects, environmentId, scopedProjectId, selectedProject, serverConfigs]);
+  const pullRequestEnvironmentIds = useMemo(
+    () => pullRequestTargets.map((target) => target.environmentId),
+    [pullRequestTargets],
+  );
+  const capabilityKnown = projectsKnown;
+  const pullRequestsSupported = pullRequestTargets.length > 0;
+  const activeReviewKeys = useActivePullRequestReviewKeysForEnvironments(pullRequestEnvironmentIds);
   const rightPanelRef = useMemo(
     () => (environmentId === null ? null : scopeThreadRef(environmentId, PULL_REQUESTS_PANEL_ID)),
     [environmentId],
@@ -238,6 +286,9 @@ function PullRequestsRouteView() {
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedEnvironmentId
+              ? { selectedEnvironmentId: next.selectedEnvironmentId }
+              : {}),
             ...(next.q ? { q: next.q } : {}),
           };
         },
@@ -252,6 +303,7 @@ function PullRequestsRouteView() {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
+    selectedEnvironmentId: undefined,
   };
   const updateListScope = (patch: {
     [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
@@ -272,7 +324,10 @@ function PullRequestsRouteView() {
   const querySettled = typedQuery === sentQuery;
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const environmentScopeKey = pullRequestTargets
+    .map((target) => `${target.environmentId}:${target.projectId ?? "*"}`)
+    .join(",");
+  const scopeKey = `${environmentScopeKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -292,25 +347,21 @@ function PullRequestsRouteView() {
     setPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
   }, [filterKey]);
 
-  const listQuery = useEnvironmentQuery(
-    pullRequestEnvironmentId === null
-      ? null
-      : pullRequestEnvironment.list({
-          environmentId: pullRequestEnvironmentId,
-          input: {
-            state: search.state,
-            // The hosts narrow by involvement themselves — GitHub by author and review request,
-            // and so on — so asking them is the difference between a page of results and a page
-            // of everything with the answer somewhere further down it.
-            involvement: search.involvement,
-            limit: pageSize,
-            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
-            ...(search.host ? { host: search.host } : {}),
-            ...(sentQuery ? { query: sentQuery } : {}),
-            ...(sentCursors ? { cursors: sentCursors } : {}),
-          },
-        }),
+  const listInput = useMemo(
+    () => ({
+      state: search.state,
+      // The hosts narrow by involvement themselves — GitHub by author and review request,
+      // and so on — so asking them is the difference between a page of results and a page
+      // of everything with the answer somewhere further down it.
+      involvement: search.involvement,
+      limit: pageSize,
+      ...(search.host ? { host: search.host } : {}),
+      ...(sentQuery ? { query: sentQuery } : {}),
+      ...(sentCursors ? { cursors: sentCursors } : {}),
+    }),
+    [pageSize, search.host, search.involvement, search.state, sentCursors, sentQuery],
   );
+  const listQuery = usePullRequestListAcrossEnvironments(pullRequestTargets, listInput);
 
   /**
    * The same filters with nothing typed, read whether or not anything is. It is the same atom the
@@ -322,20 +373,16 @@ function PullRequestsRouteView() {
    * say which question it belongs to: mid-switch the text has already changed and the data has
    * not, and a search's answer would file itself under the workspace.
    */
-  const baselineQuery = useEnvironmentQuery(
-    pullRequestEnvironmentId === null
-      ? null
-      : pullRequestEnvironment.list({
-          environmentId: pullRequestEnvironmentId,
-          input: {
-            state: search.state,
-            involvement: search.involvement,
-            limit: PAGE_SIZE,
-            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
-            ...(search.host ? { host: search.host } : {}),
-          },
-        }),
+  const baselineInput = useMemo(
+    () => ({
+      state: search.state,
+      involvement: search.involvement,
+      limit: PAGE_SIZE,
+      ...(search.host ? { host: search.host } : {}),
+    }),
+    [search.host, search.involvement, search.state],
   );
+  const baselineQuery = usePullRequestListAcrossEnvironments(pullRequestTargets, baselineInput);
   // The priority groups' own reads. The feed below is paginated by recency, so an older authored
   // or review-requested row can be missing from its first page; partitioned from these
   // server-filtered reads instead, the priority view is complete up front and a continuation can
@@ -343,34 +390,30 @@ function PullRequestsRouteView() {
   // so no partitions are read for one. These are the same atoms the Authored and Reviewing tabs
   // ask for, so switching to either is answered from cache.
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
-  const authoredQuery = useEnvironmentQuery(
-    pullRequestEnvironmentId === null || !partitionsWanted
-      ? null
-      : pullRequestEnvironment.list({
-          environmentId: pullRequestEnvironmentId,
-          input: {
-            state: search.state,
-            involvement: "authored",
-            limit: PAGE_SIZE,
-            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
-            ...(search.host ? { host: search.host } : {}),
-          },
-        }),
+  const authoredInput = useMemo(
+    () => ({
+      state: search.state,
+      involvement: "authored" as const,
+      limit: PAGE_SIZE,
+      ...(search.host ? { host: search.host } : {}),
+    }),
+    [search.host, search.state],
   );
-  const reviewingQuery = useEnvironmentQuery(
-    pullRequestEnvironmentId === null || !partitionsWanted
-      ? null
-      : pullRequestEnvironment.list({
-          environmentId: pullRequestEnvironmentId,
-          input: {
-            state: search.state,
-            involvement: "reviewing",
-            limit: PAGE_SIZE,
-            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
-            ...(search.host ? { host: search.host } : {}),
-          },
-        }),
+  const reviewingInput = useMemo(
+    () => ({
+      state: search.state,
+      involvement: "reviewing" as const,
+      limit: PAGE_SIZE,
+      ...(search.host ? { host: search.host } : {}),
+    }),
+    [search.host, search.state],
   );
+  const partitionTargets = useMemo(
+    () => (partitionsWanted ? pullRequestTargets : []),
+    [partitionsWanted, pullRequestTargets],
+  );
+  const authoredQuery = usePullRequestListAcrossEnvironments(partitionTargets, authoredInput);
+  const reviewingQuery = usePullRequestListAcrossEnvironments(partitionTargets, reviewingInput);
   // The header's refresh punches through the server's cache before re-reading; the error and
   // empty states retry plainly, because a failure is never cached.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
@@ -385,9 +428,11 @@ function PullRequestsRouteView() {
   const refreshFromHost = async () => {
     setInvalidating(true);
     try {
-      if (pullRequestEnvironmentId !== null) {
-        await invalidate({ environmentId: pullRequestEnvironmentId, input: {} });
-      }
+      await Promise.all(
+        pullRequestTargets.map((target) =>
+          invalidate({ environmentId: target.environmentId, input: {} }),
+        ),
+      );
     } finally {
       setInvalidating(false);
     }
@@ -405,12 +450,15 @@ function PullRequestsRouteView() {
   // out: a longer page reads as growth, and a search shows the rows it already has, narrowed
   // here, until the hosts answer for themselves.
   const [loaded, setLoaded] = useState<{
-    environmentId: EnvironmentId | null;
+    environmentScopeKey: string;
     scope: string;
     query: string;
-    data: PullRequestListResult;
+    data: SourcedPullRequestListResult;
     /** The priority groups' own answers, carried so a cold start has whole groups too. */
-    partitions?: PullRequestPartitionsSnapshot;
+    partitions?: {
+      readonly authored: ReadonlyArray<SourcedPullRequestListEntry>;
+      readonly reviewing: ReadonlyArray<SourcedPullRequestListEntry>;
+    };
   } | null>(null);
   // A reload recreates the registry the queries live in, so with nothing held the page would
   // cold-start into skeletons even though almost every row is unchanged. The last answer for
@@ -418,25 +466,38 @@ function PullRequestsRouteView() {
   // at once — narrowed to the current filters like any carried answer — and the live read
   // reconciles them in place by key rather than replacing them with ghosts.
   useEffect(() => {
-    if (environmentId === null) return;
+    const target = pullRequestTargets.length === 1 ? pullRequestTargets[0] : undefined;
     setLoaded((current) => {
-      // Another environment's rows could not even be narrowed — nothing on a row says which
-      // environment read it — so its snapshot beats holding them.
-      if (current !== null && current.environmentId === environmentId) return current;
+      if (current !== null && current.environmentScopeKey === environmentScopeKey) return current;
+      // Multi-environment answers are intentionally not filed under one environment's cache key.
+      // Their live reads still compose independently cached per-environment query atoms.
+      if (target === undefined) return null;
       const snapshot = readPullRequestListSnapshot(
         typeof window === "undefined" ? undefined : window.localStorage,
-        environmentId,
+        target.environmentId,
       );
       if (snapshot === null) return null;
+      const data = combinePullRequestListResults([{ target, data: snapshot.data }]);
+      const sourceEntries = (entries: ReadonlyArray<PullRequestListEntry>) =>
+        combinePullRequestListResults([
+          { target, data: { ...snapshot.data, entries, errors: [], nextCursors: {} } },
+        ]).entries;
       return {
-        environmentId,
+        environmentScopeKey,
         scope: snapshot.scope,
         query: "",
-        data: snapshot.data,
-        ...(snapshot.partitions === undefined ? {} : { partitions: snapshot.partitions }),
+        data,
+        ...(snapshot.partitions === undefined
+          ? {}
+          : {
+              partitions: {
+                authored: sourceEntries(snapshot.partitions.authored),
+                reviewing: sourceEntries(snapshot.partitions.reviewing),
+              },
+            }),
       };
     });
-  }, [environmentId]);
+  }, [environmentScopeKey, pullRequestTargets]);
   useEffect(() => {
     // Only once this query has settled. While a search is being swapped in or out the text has
     // already changed and the data has not, so recording them together would file the previous
@@ -453,22 +514,23 @@ function PullRequestsRouteView() {
         partitionsWanted && authoredQuery.data !== null && reviewingQuery.data !== null
           ? { authored: authoredQuery.data.entries, reviewing: reviewingQuery.data.entries }
           : current !== null &&
-              current.environmentId === environmentId &&
+              current.environmentScopeKey === environmentScopeKey &&
               current.scope === scopeKey
             ? current.partitions
             : undefined;
       // A search's answer is the search's, not the workspace's, so only unsearched lists
       // persist. Written here where the held partitions are in reach, so a feed settling
       // ahead of them cannot overwrite a stored snapshot that already had both groups.
-      if (environmentId !== null && sentQuery.length === 0) {
+      const snapshotTarget = pullRequestTargets.length === 1 ? pullRequestTargets[0] : undefined;
+      if (snapshotTarget !== undefined && sentQuery.length === 0) {
         writePullRequestListSnapshot(
           typeof window === "undefined" ? undefined : window.localStorage,
-          environmentId,
+          snapshotTarget.environmentId,
           { scope: scopeKey, data, ...(partitions === undefined ? {} : { partitions }) },
         );
       }
       return {
-        environmentId,
+        environmentScopeKey,
         scope: scopeKey,
         query: sentQuery,
         data,
@@ -476,7 +538,7 @@ function PullRequestsRouteView() {
       };
     });
   }, [
-    environmentId,
+    environmentScopeKey,
     scopeKey,
     sentQuery,
     listQuery.data,
@@ -484,6 +546,7 @@ function PullRequestsRouteView() {
     partitionsWanted,
     authoredQuery.data,
     reviewingQuery.data,
+    pullRequestTargets,
   ]);
   // Changing a filter asks a question nothing has answered yet, and the page is already holding
   // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
@@ -492,16 +555,37 @@ function PullRequestsRouteView() {
   // right after all. Another environment's rows are dropped rather than narrowed: nothing on a
   // row says which environment read it.
   const narrowed = useMemo(() => {
-    if (loaded === null || loaded.environmentId !== environmentId || loaded.scope === scopeKey) {
+    if (
+      loaded === null ||
+      loaded.environmentScopeKey !== environmentScopeKey ||
+      loaded.scope === scopeKey
+    ) {
       return null;
     }
-    const entries = narrowPullRequestsToFilters(loaded.data.entries, {
+    const narrowedEntries = narrowPullRequestsToFilters(loaded.data.entries, {
       state: search.state,
-      projectId: scopedProjectId,
+      projectId: undefined,
       host: search.host,
     });
+    const targetProjectIds = new Set(
+      pullRequestTargets.flatMap((target) =>
+        target.projectId === undefined ? [] : [target.projectId],
+      ),
+    );
+    const entries =
+      scopedProjectId === undefined
+        ? narrowedEntries
+        : narrowedEntries.filter((entry) => targetProjectIds.has(entry.projectId));
     return entries.length === 0 ? null : { ...loaded.data, entries };
-  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, search.state]);
+  }, [
+    environmentScopeKey,
+    loaded,
+    pullRequestTargets,
+    scopeKey,
+    scopedProjectId,
+    search.host,
+    search.state,
+  ]);
   // With nothing typed and nothing to carry on from, the answer is taken from the read that is
   // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
   // text has gone — the data cannot say which question it belongs to, but the read it came from
@@ -533,7 +617,7 @@ function PullRequestsRouteView() {
   // the order again.
   const [ordered, setOrdered] = useState<{
     key: string;
-    entries: ReadonlyArray<PullRequestListEntry>;
+    entries: ReadonlyArray<SourcedPullRequestListEntry>;
   } | null>(null);
   useEffect(() => {
     if (!answered) return;
@@ -614,7 +698,7 @@ function PullRequestsRouteView() {
       authoredQuery.refresh();
       reviewingQuery.refresh();
     },
-    { enabled: pullRequestEnvironmentId !== null },
+    { enabled: pullRequestTargets.length > 0 },
   );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
@@ -718,7 +802,9 @@ function PullRequestsRouteView() {
     // authored row older than it. Once the live reads land they take over; with neither,
     // the local grouping is still better than nothing.
     const held =
-      loaded !== null && loaded.environmentId === environmentId && loaded.scope === scopeKey
+      loaded !== null &&
+      loaded.environmentScopeKey === environmentScopeKey &&
+      loaded.scope === scopeKey
         ? loaded.partitions
         : undefined;
     const authored = partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined;
@@ -732,7 +818,7 @@ function PullRequestsRouteView() {
   }, [
     authoredQuery.data?.entries,
     entries,
-    environmentId,
+    environmentScopeKey,
     loaded,
     partitionsWanted,
     reviewingQuery.data?.entries,
@@ -743,26 +829,8 @@ function PullRequestsRouteView() {
 
   // Keyed by every row being shown — the partitions can hold rows the feed has not paged to —
   // so scrolling further asks only about what is new.
-  const statsInput = useMemo(
-    () => ({
-      refs: groups
-        .flatMap((group) => group.entries)
-        .map((entry) => ({
-          projectId: entry.projectId,
-          repository: entry.repository,
-          number: entry.number,
-        })),
-    }),
-    [groups],
-  );
-  const statsQuery = useEnvironmentQuery(
-    pullRequestEnvironmentId === null || statsInput.refs.length === 0
-      ? null
-      : pullRequestEnvironment.listStats({
-          environmentId: pullRequestEnvironmentId,
-          input: statsInput,
-        }),
-  );
+  const statsEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
+  const statsQuery = usePullRequestStatsAcrossEnvironments(statsEntries);
   // Adding or removing one row keys a fresh stats query with nothing in it yet, so the counts
   // are merged into what is already held rather than rebuilt: every count on screen stays until
   // its replacement arrives.
@@ -775,42 +843,75 @@ function PullRequestsRouteView() {
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
-  const projectIdForRepository = useMemo(() => {
+  const projectForRepository = useMemo(() => {
     const repository = search.repository?.toLowerCase();
     if (repository === undefined) return undefined;
-    const identity = projects.find(
-      (project) =>
-        project.repositoryIdentity?.owner &&
-        project.repositoryIdentity.name &&
-        `${project.repositoryIdentity.owner}/${project.repositoryIdentity.name}`.toLowerCase() ===
-          repository &&
-        // The same `owner/name` can exist on two hosts. Without this the first match wins, and
-        // a link that named its host opens the pull request from the other one.
-        (search.host === undefined ||
-          pullRequestHostOf(
-            project.repositoryIdentity,
-            project.repositoryIdentity.provider as SourceControlProviderKind,
-          ) === search.host.toLowerCase()),
-    );
-    return identity?.id;
-  }, [projects, search.host, search.repository]);
+    return allProjects
+      .filter(
+        (project) =>
+          project.repositoryIdentity?.owner &&
+          project.repositoryIdentity.name &&
+          `${project.repositoryIdentity.owner}/${project.repositoryIdentity.name}`.toLowerCase() ===
+            repository &&
+          // The same `owner/name` can exist on two hosts. Without this the first match wins, and
+          // a link that named its host opens the pull request from the other one.
+          (search.host === undefined ||
+            pullRequestHostOf(
+              project.repositoryIdentity,
+              project.repositoryIdentity.provider as SourceControlProviderKind,
+            ) === search.host.toLowerCase()),
+      )
+      .toSorted(
+        (left, right) =>
+          Number(right.environmentId === search.selectedEnvironmentId) -
+            Number(left.environmentId === search.selectedEnvironmentId) ||
+          Number(right.environmentId === environmentId) -
+            Number(left.environmentId === environmentId),
+      )[0];
+  }, [allProjects, environmentId, search.host, search.repository, search.selectedEnvironmentId]);
 
   // The selection is resolved the same way the scope is: an id from another environment can
   // never be read here, and one that arrived before the projects did is not yet wrong.
-  const linkedProjectId = useMemo(
-    () => resolveProjectScope(search.selectedProjectId, projects, projectsKnown),
-    [projects, projectsKnown, search.selectedProjectId],
+  const linkedProject = useMemo(
+    () =>
+      search.selectedProjectId === undefined
+        ? undefined
+        : allProjects.find(
+            (project) =>
+              project.id === search.selectedProjectId &&
+              (search.selectedEnvironmentId === undefined ||
+                project.environmentId === search.selectedEnvironmentId),
+          ),
+    [allProjects, search.selectedEnvironmentId, search.selectedProjectId],
   );
   // The scope filter stands in as a last resort: a link can carry `projectId` with a repository
   // whose identity the inference above cannot match, and refusing to open it because of the
   // weaker signal would ignore the stronger one the URL spelled out.
-  const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
+  const scopedTarget =
+    selectedProject?.targetProjects.find(
+      (project) => project.environmentId === search.selectedEnvironmentId,
+    ) ?? selectedProject?.targetProjects[0];
+  const selectedProjectId =
+    linkedProject?.id ??
+    (!projectsKnown ? search.selectedProjectId : undefined) ??
+    projectForRepository?.id ??
+    scopedTarget?.id;
+  const selectedEnvironmentId =
+    linkedProject?.environmentId ??
+    search.selectedEnvironmentId ??
+    projectForRepository?.environmentId ??
+    scopedTarget?.environmentId;
   const linkedSelection = useMemo(
     () =>
-      search.repository && search.number && selectedProjectId
-        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
+      search.repository && search.number && selectedProjectId && selectedEnvironmentId
+        ? {
+            environmentId: selectedEnvironmentId,
+            repository: search.repository,
+            number: search.number,
+            projectId: selectedProjectId,
+          }
         : null,
-    [search.number, search.repository, selectedProjectId],
+    [search.number, search.repository, selectedEnvironmentId, selectedProjectId],
   );
   useEffect(() => {
     if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
@@ -820,6 +921,7 @@ function PullRequestsRouteView() {
   const selected =
     rightPanelState.isOpen && activePullRequestSurface !== null
       ? {
+          environmentId: activePullRequestSurface.environmentId,
           repository: activePullRequestSurface.repository,
           number: activePullRequestSurface.number,
           projectId: activePullRequestSurface.projectId as ProjectId,
@@ -834,6 +936,7 @@ function PullRequestsRouteView() {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
+            selectedEnvironmentId: surface.environmentId,
           },
     );
 
@@ -874,21 +977,22 @@ function PullRequestsRouteView() {
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
     const byHost = new Map<string, PullRequestExpectedHost>();
-    for (const project of projects) {
+    for (const project of allProjects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
       const host = pullRequestHostOf(project.repositoryIdentity, kind);
       if (!byHost.has(host)) byHost.set(host, { host, kind });
     }
     return [...byHost.values()];
-  }, [projects]);
+  }, [allProjects]);
 
   // Stable so the memoized rows can skip re-rendering when the list around them changes.
   const selectEntry = useCallback(
-    (entry: PullRequestListEntry) => {
+    (entry: SourcedPullRequestListEntry) => {
       if (rightPanelRef === null) return;
       useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
       updateSearch({
+        selectedEnvironmentId: entry.environmentId,
         repository: entry.repository,
         number: entry.number,
         selectedProjectId: entry.projectId,
@@ -960,7 +1064,7 @@ function PullRequestsRouteView() {
         <PullRequestListGhost rows={7} />
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
-          hasProjects={!projectsKnown || projects.length > 0}
+          hasProjects={!projectsKnown || sourceControlProjects.length > 0}
           refreshing={refreshing}
           onRefresh={() => void refreshFromHost()}
           query={typedQuery}
@@ -1002,9 +1106,12 @@ function PullRequestsRouteView() {
                     scorePullRequestMatch(entry, typedQuery) <= MATCHED_ELSEWHERE_SCORE
                   }
                   selected={
-                    selected?.repository === entry.repository && selected.number === entry.number
+                    selected?.repository === entry.repository &&
+                    selected.number === entry.number &&
+                    (selected.environmentId === undefined ||
+                      selected.environmentId === entry.environmentId)
                   }
-                  onSelect={selectEntry}
+                  onSelect={() => selectEntry(entry)}
                 />
               ))}
             </div>
@@ -1111,17 +1218,19 @@ function PullRequestsRouteView() {
     useRightPanelStore.getState().closeAllSurfaces(rightPanelRef);
     selectSurfaceInUrl(null);
   };
+  const panelEnvironmentId =
+    selectedPullRequestSurface?.environmentId ??
+    projectForRepository?.environmentId ??
+    environmentId;
   const rightPanelVisible =
-    rightPanelState.isOpen &&
-    activePullRequestSurface !== null &&
-    pullRequestEnvironmentId !== null;
+    rightPanelState.isOpen && activePullRequestSurface !== null && panelEnvironmentId !== null;
   const panelPullRequestSurface = rightPanelUsesSheet
     ? selectedPullRequestSurface
     : activePullRequestSurface;
   const pullRequestPanelDefaultWidth =
     typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2);
   const renderPullRequestPanel = (mode: "inline" | "sheet", layoutControls: ReactNode) =>
-    panelPullRequestSurface && pullRequestEnvironmentId !== null ? (
+    panelPullRequestSurface && panelEnvironmentId !== null ? (
       <RightPanelTabs
         mode={mode}
         layoutControls={layoutControls}
@@ -1171,7 +1280,7 @@ function PullRequestsRouteView() {
       >
         <PullRequestDetailPanel
           key={panelPullRequestSurface.id}
-          environmentId={pullRequestEnvironmentId}
+          environmentId={panelPullRequestSurface.environmentId ?? panelEnvironmentId}
           reference={{
             projectId: panelPullRequestSurface.projectId as ProjectId,
             repository: panelPullRequestSurface.repository,
@@ -1204,7 +1313,7 @@ function PullRequestsRouteView() {
         ) : null}
         {shouldMountRightPanelSheet({
           usesSheet: rightPanelUsesSheet,
-          hasContent: selectedPullRequestSurface !== null && pullRequestEnvironmentId !== null,
+          hasContent: selectedPullRequestSurface !== null && panelEnvironmentId !== null,
         }) ? (
           <RightPanelSheet
             open={rightPanelVisible}

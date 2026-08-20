@@ -5,10 +5,10 @@ import type { PullRequestInvolvement, PullRequestListState } from "@spiritdevs/c
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
-export interface PullRequestGroup {
+export interface PullRequestGroup<Entry extends PullRequestListEntry = PullRequestListEntry> {
   readonly key: PullRequestGroupKey;
   readonly label: string;
-  readonly entries: ReadonlyArray<PullRequestListEntry>;
+  readonly entries: ReadonlyArray<Entry>;
 }
 
 /** The signed-in account per host, as the listing reports it. */
@@ -31,7 +31,9 @@ function normalize(value: string | null | undefined): string | null {
  * about the others.
  */
 function isAuthoredByViewer(entry: PullRequestListEntry, viewers: PullRequestViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
+  const sourcedViewer = (entry as PullRequestListEntry & { readonly viewerLogin?: string | null })
+    .viewerLogin;
+  const viewer = normalize(sourcedViewer === undefined ? viewers[entry.host] : sourcedViewer);
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
@@ -48,11 +50,11 @@ export function matchesPullRequestQuery(entry: PullRequestListEntry, query: stri
  * The server returns the involvement superset for a state, so switching between the Reviewing
  * and Authored tabs never waits on the network.
  */
-export function filterPullRequestsByInvolvement(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function filterPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
   involvement: PullRequestInvolvement,
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   if (involvement === "reviewing") {
     return entries.filter((entry) => entry.viewerReviewRequested);
   }
@@ -75,14 +77,14 @@ export function filterPullRequestsByInvolvement(
  * it needs to know who is signed in on each host, and the search text because searching is the
  * hosts' own answer; both are narrowed where that knowledge already lives.
  */
-export function narrowPullRequestsToFilters(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function narrowPullRequestsToFilters<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   filters: {
     readonly state: PullRequestListState;
     readonly projectId: string | undefined;
     readonly host: string | undefined;
   },
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   return entries.filter(
     (entry) =>
       (filters.state === "all" || entry.state === filters.state) &&
@@ -95,11 +97,11 @@ export function narrowPullRequestsToFilters(
  * Only relationships the list data actually carries: no "previously reviewed" bucket is
  * inferred, because the listing has no review history.
  */
-export function groupPullRequestsByInvolvement(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function groupPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
-): ReadonlyArray<PullRequestGroup> {
-  const buckets: Record<PullRequestGroupKey, PullRequestListEntry[]> = {
+): ReadonlyArray<PullRequestGroup<Entry>> {
+  const buckets: Record<PullRequestGroupKey, Entry[]> = {
     reviewRequested: [],
     authored: [],
     others: [],
@@ -131,11 +133,11 @@ export function pullRequestEntryKey(entry: PullRequestListEntry): string {
  * server-filtered reads, the feed fills "Others" in its own order, and a continuation can only
  * append — a row it carries that a partition already holds is dropped rather than moved.
  */
-export function partitionPullRequestsWithPriority(
-  entries: ReadonlyArray<PullRequestListEntry>,
-  authored: ReadonlyArray<PullRequestListEntry>,
-  reviewRequested: ReadonlyArray<PullRequestListEntry>,
-): ReadonlyArray<PullRequestGroup> {
+export function partitionPullRequestsWithPriority<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
+  authored: ReadonlyArray<Entry>,
+  reviewRequested: ReadonlyArray<Entry>,
+): ReadonlyArray<PullRequestGroup<Entry>> {
   const authoredByKey = new Map(authored.map((entry) => [pullRequestEntryKey(entry), entry]));
   // A row can be both authored and review-requested; authored wins, as the local grouping has it.
   const reviewByKey = new Map(
@@ -144,7 +146,7 @@ export function partitionPullRequestsWithPriority(
       return authoredByKey.has(key) ? [] : [[key, entry] as const];
     }),
   );
-  const others: PullRequestListEntry[] = [];
+  const others: Entry[] = [];
   for (const entry of entries) {
     const key = pullRequestEntryKey(entry);
     // The feed's copy of a partitioned row is at least as fresh — it replaces in place.
@@ -353,10 +355,10 @@ export function scorePullRequestMatch(entry: PullRequestListEntry, query: string
  * Search results in the order they answer the question, most convincing first, and by recency
  * among equals. Only for a search: without one, a listing is a timeline and recency is the order.
  */
-export function rankPullRequestMatches(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function rankPullRequestMatches<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   query: string,
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   if (query.trim().length === 0) return entries;
   return entries.toSorted((left, right) => {
     const byScore = scorePullRequestMatch(right, query) - scorePullRequestMatch(left, query);
@@ -369,11 +371,11 @@ export function rankPullRequestMatches(
  * listing that carried them is not second-guessed — and only where they have arrived, since a row
  * draws perfectly well without them in the meantime.
  */
-export function withDiffStat(
-  entry: PullRequestListEntry,
+export function withDiffStat<Entry extends PullRequestListEntry>(
+  entry: Entry,
   statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
-): PullRequestListEntry {
+): Entry {
   if (entry.additions !== 0 || entry.deletions !== 0) return entry;
   const stat = statsByRow.get(`${entry.projectId} ${entry.number}`);
-  return stat === undefined ? entry : { ...entry, ...stat };
+  return stat === undefined ? entry : ({ ...entry, ...stat } as Entry);
 }

@@ -194,7 +194,7 @@ function ProjectDashboard({ project }: { readonly project: WorkspaceProject }) {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <WhereItLivesTile connections={connections} hasCheckout={project.checkoutCount > 0} />
-            <IssueRollupTile rollup={rollup} />
+            <IssueRollupTile projectIds={[...projectIds]} rollup={rollup} />
             <MilestonesTile milestones={milestoneProgress} />
             <ProjectUsageTile connections={connections} />
             <RecentThreadsTile project={project} />

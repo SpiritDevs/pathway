@@ -9,6 +9,7 @@
  */
 import { useAtomValue } from "@effect/atom-react";
 import { ProjectId, type EnvironmentId } from "@spiritdevs/contracts";
+import { Link } from "@tanstack/react-router";
 import {
   CircleDotIcon,
   ClockIcon,
@@ -149,41 +150,58 @@ export function WhereItLivesTile({
   );
 }
 
-export function IssueRollupTile({ rollup }: { readonly rollup: IssueRollup }) {
+export function IssueRollupTile({
+  projectIds,
+  rollup,
+}: {
+  readonly projectIds: ReadonlyArray<string>;
+  readonly rollup: IssueRollup;
+}) {
   const percent = rollup.total === 0 ? 0 : Math.round((rollup.done / rollup.total) * 100);
   return (
-    <DashboardTile icon={<CircleDotIcon />} title="Issues">
-      {rollup.total === 0 ? (
-        <TileEmpty>No issues yet. File one to start tracking work here.</TileEmpty>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <Stat label="Total" value={rollup.total} />
-            <Stat label="In progress" value={rollup.inProgress} />
-            <Stat label="Not started" value={rollup.notStarted} />
-            <Stat label="Overdue" value={rollup.overdue} tone="warning" />
-          </div>
-          <div className="mt-4">
-            <div className="mb-1.5 flex items-baseline justify-between text-xs text-muted-foreground">
-              <span>
-                {rollup.done} of {rollup.total} done
-              </span>
-              <span className="tabular-nums">{percent}%</span>
+    <Link
+      aria-label="View issues for this project"
+      className="group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      search={{ project: projectIds.join(",") }}
+      to="/issues"
+    >
+      <DashboardTile
+        className="h-full transition-colors group-hover:border-border group-hover:bg-accent/20"
+        icon={<CircleDotIcon />}
+        title="Issues"
+      >
+        {rollup.total === 0 ? (
+          <TileEmpty>No issues yet. File one to start tracking work here.</TileEmpty>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="Total" value={rollup.total} />
+              <Stat label="In progress" value={rollup.inProgress} />
+              <Stat label="Not started" value={rollup.notStarted} />
+              <Stat label="Overdue" value={rollup.overdue} tone="warning" />
             </div>
-            <div
-              className="h-1.5 overflow-hidden rounded-full bg-muted"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label="Issues completed"
-            >
-              <div className="h-full rounded-full bg-success" style={{ width: `${percent}%` }} />
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-baseline justify-between text-xs text-muted-foreground">
+                <span>
+                  {rollup.done} of {rollup.total} done
+                </span>
+                <span className="tabular-nums">{percent}%</span>
+              </div>
+              <div
+                className="h-1.5 overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+                aria-label="Issues completed"
+              >
+                <div className="h-full rounded-full bg-success" style={{ width: `${percent}%` }} />
+              </div>
             </div>
-          </div>
-        </>
-      )}
-    </DashboardTile>
+          </>
+        )}
+      </DashboardTile>
+    </Link>
   );
 }
 
@@ -308,19 +326,26 @@ export function RecentThreadsTile({ project }: { readonly project: WorkspaceProj
       ) : (
         <ul className="space-y-2">
           {recent.map((thread) => (
-            <li key={`${thread.environmentId}:${thread.id}`} className="flex items-start gap-2">
-              <ClockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm">{thread.title ?? "Untitled thread"}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {[
-                    thread.branch,
-                    thread.updatedAt === null ? null : formatRelativeTimeLabel(thread.updatedAt),
-                  ]
-                    .filter((part): part is string => Boolean(part))
-                    .join(" · ")}
-                </p>
-              </div>
+            <li key={`${thread.environmentId}:${thread.id}`}>
+              <Link
+                aria-label={`Open thread ${thread.title ?? "Untitled thread"}`}
+                className="-mx-2 flex items-start gap-2 rounded-md px-2 py-1 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
+                params={{ environmentId: thread.environmentId, threadId: thread.id }}
+                to="/threads/$environmentId/$threadId"
+              >
+                <ClockIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{thread.title ?? "Untitled thread"}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {[
+                      thread.branch,
+                      thread.updatedAt === null ? null : formatRelativeTimeLabel(thread.updatedAt),
+                    ]
+                      .filter((part): part is string => Boolean(part))
+                      .join(" · ")}
+                  </p>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>
@@ -365,11 +390,29 @@ export function PullRequestsTile({
         <ul className="space-y-2">
           {pullRequests.map((pullRequest) => (
             <li key={`${pullRequest.host}:${pullRequest.number}`} className="min-w-0 text-sm">
-              <p className="truncate">{pullRequest.title}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                #{pullRequest.number}
-                {pullRequest.author === null ? "" : ` · ${pullRequest.author.login}`}
-              </p>
+              <Link
+                aria-label={`View pull request #${pullRequest.number}: ${pullRequest.title}`}
+                className="-mx-2 flex min-w-0 items-start gap-2 rounded-md px-2 py-1 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring"
+                search={{
+                  involvement: "all",
+                  state: "open",
+                  projectId: ProjectId.make(projectId),
+                  host: pullRequest.host,
+                  repository: pullRequest.repository,
+                  number: pullRequest.number,
+                  selectedProjectId: pullRequest.projectId,
+                  selectedEnvironmentId: targetEnvironmentId,
+                }}
+                to="/pull-requests"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate">{pullRequest.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    #{pullRequest.number}
+                    {pullRequest.author === null ? "" : ` · ${pullRequest.author.login}`}
+                  </p>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>

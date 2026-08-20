@@ -9,7 +9,7 @@
  * remain singleton surfaces.
  */
 import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
-import { ThreadId, type ScopedThreadRef } from "@spiritdevs/contracts";
+import { ThreadId, type EnvironmentId, type ScopedThreadRef } from "@spiritdevs/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -55,6 +55,8 @@ export type RightPanelSurface =
        */
       id: `pull-request:${string}`;
       kind: "pull-request";
+      /** Present for workspace PRs that may be owned by a non-primary environment. */
+      environmentId?: EnvironmentId;
       projectId: string;
       repository: string;
       number: number;
@@ -104,7 +106,12 @@ interface RightPanelStoreState {
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
-    target: { projectId: string; repository: string; number: number },
+    target: {
+      environmentId?: EnvironmentId;
+      projectId: string;
+      repository: string;
+      number: number;
+    },
   ) => void;
   openThread: (ref: ScopedThreadRef, threadId: ThreadId) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
@@ -210,6 +217,7 @@ export function pullRequestSurfaceId(target: {
 }
 
 export function pullRequestSurface(target: {
+  environmentId?: EnvironmentId;
   projectId: string;
   repository: string;
   number: number;
@@ -217,6 +225,7 @@ export function pullRequestSurface(target: {
   return {
     id: pullRequestSurfaceId(target),
     kind: "pull-request",
+    ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
     projectId: target.projectId,
     repository: target.repository,
     number: target.number,
