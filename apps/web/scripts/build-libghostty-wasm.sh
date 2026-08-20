@@ -99,7 +99,7 @@ log "building ${GHOSTTY_REVISION} for wasm32-freestanding"
 (
   cd "${GHOSTTY_SOURCE_DIR}"
   # The pinned revision rides along as semver build metadata so the artifact
-  # identifies its own provenance through ghostty_build_info(); mobile's
+  # identifies its own provenance through ghostty_build_info(); the root native
   # VERSION file stays the single source of truth for the pin.
   "${GHOSTTY_ZIG}" build \
     -Demit-lib-vt \

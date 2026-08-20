@@ -11,9 +11,6 @@ export interface PathwayPublicConfig {
   readonly relayUrl: string | undefined;
   /** Convex deployment the always-on cloud-sync engine talks to. */
   readonly convexUrl: string | undefined;
-  readonly mobileOtlpTracesUrl: string | undefined;
-  readonly mobileOtlpTracesDataset: string | undefined;
-  readonly mobileOtlpTracesToken: string | undefined;
   readonly relayClientOtlpTracesUrl: string | undefined;
   readonly relayClientOtlpTracesDataset: string | undefined;
   readonly relayClientOtlpTracesToken: string | undefined;
@@ -43,14 +40,12 @@ export function loadRepoEnv({
       ? {
           PATHWAY_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
           VITE_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
-          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
         }
       : {}),
     ...(config.clerkJwtTemplate
       ? {
           PATHWAY_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
           VITE_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
-          EXPO_PUBLIC_CLERK_JWT_TEMPLATE: config.clerkJwtTemplate,
         }
       : {}),
     ...(config.clerkCliOAuthClientId
@@ -69,24 +64,6 @@ export function loadRepoEnv({
       ? {
           PATHWAY_CONVEX_URL: config.convexUrl,
           VITE_PATHWAY_CONVEX_URL: config.convexUrl,
-        }
-      : {}),
-    ...(config.mobileOtlpTracesUrl
-      ? {
-          PATHWAY_MOBILE_OTLP_TRACES_URL: config.mobileOtlpTracesUrl,
-          EXPO_PUBLIC_OTLP_TRACES_URL: config.mobileOtlpTracesUrl,
-        }
-      : {}),
-    ...(config.mobileOtlpTracesDataset
-      ? {
-          PATHWAY_MOBILE_OTLP_TRACES_DATASET: config.mobileOtlpTracesDataset,
-          EXPO_PUBLIC_OTLP_TRACES_DATASET: config.mobileOtlpTracesDataset,
-        }
-      : {}),
-    ...(config.mobileOtlpTracesToken
-      ? {
-          PATHWAY_MOBILE_OTLP_TRACES_TOKEN: config.mobileOtlpTracesToken,
-          EXPO_PUBLIC_OTLP_TRACES_TOKEN: config.mobileOtlpTracesToken,
         }
       : {}),
     ...(config.relayClientOtlpTracesUrl
@@ -116,13 +93,11 @@ export function resolvePublicConfig(...sources: readonly Environment[]): Pathway
       sources,
       "PATHWAY_CLERK_PUBLISHABLE_KEY",
       "VITE_CLERK_PUBLISHABLE_KEY",
-      "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY",
     ),
     clerkJwtTemplate: firstNonEmpty(
       sources,
       "PATHWAY_CLERK_JWT_TEMPLATE",
       "VITE_CLERK_JWT_TEMPLATE",
-      "EXPO_PUBLIC_CLERK_JWT_TEMPLATE",
     ),
     clerkCliOAuthClientId: firstNonEmpty(
       sources,
@@ -131,21 +106,6 @@ export function resolvePublicConfig(...sources: readonly Environment[]): Pathway
     ),
     relayUrl: firstNonEmpty(sources, "PATHWAY_RELAY_URL", "VITE_PATHWAY_RELAY_URL"),
     convexUrl: firstNonEmpty(sources, "PATHWAY_CONVEX_URL", "VITE_PATHWAY_CONVEX_URL"),
-    mobileOtlpTracesUrl: firstNonEmpty(
-      sources,
-      "PATHWAY_MOBILE_OTLP_TRACES_URL",
-      "EXPO_PUBLIC_OTLP_TRACES_URL",
-    ),
-    mobileOtlpTracesDataset: firstNonEmpty(
-      sources,
-      "PATHWAY_MOBILE_OTLP_TRACES_DATASET",
-      "EXPO_PUBLIC_OTLP_TRACES_DATASET",
-    ),
-    mobileOtlpTracesToken: firstNonEmpty(
-      sources,
-      "PATHWAY_MOBILE_OTLP_TRACES_TOKEN",
-      "EXPO_PUBLIC_OTLP_TRACES_TOKEN",
-    ),
     relayClientOtlpTracesUrl: firstNonEmpty(
       sources,
       "PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL",
