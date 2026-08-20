@@ -26,7 +26,7 @@ export function parsePathwayProjectFile(contents: string): PathwayProjectFile | 
 /**
  * Build the publishable JSON Schema document for `pathway.json` (draft 2020-12).
  *
- * Served from the marketing site at {@link Pathway_PROJECT_FILE_SCHEMA_URL} so
+ * Served from the public Pathway site at {@link Pathway_PROJECT_FILE_SCHEMA_URL} so
  * editors get LSP support via a `$schema` reference.
  */
 export function buildPathwayProjectFileJsonSchema(): Record<string, unknown> {

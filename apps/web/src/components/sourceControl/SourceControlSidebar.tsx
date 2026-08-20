@@ -16,6 +16,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import {
+  findSourceControlProjectEntry,
   pullRequestProjectSearch,
   sourceControlProjectEntries,
 } from "./sourceControlSidebar.logic";
@@ -30,7 +31,8 @@ export function SourceControlSidebar() {
   const environmentId = usePrimaryEnvironmentId();
   const projects = sourceControlProjectEntries(useWorkspaceProjects(), environmentId);
   const selectedProjectId =
-    typeof rawSearch.projectId === "string" ? rawSearch.projectId : undefined;
+    typeof rawSearch.projectId === "string" ? (rawSearch.projectId as ProjectId) : undefined;
+  const selectedProject = findSourceControlProjectEntry(projects, selectedProjectId);
 
   const selectProject = (projectId: ProjectId | undefined) => {
     if (isMobile) setOpenMobile(false);
@@ -73,7 +75,7 @@ export function SourceControlSidebar() {
                   <SidebarMenuItem key={project.projectKey}>
                     <SidebarMenuButton
                       disabled={unavailable}
-                      isActive={selectedProjectId === String(projectId)}
+                      isActive={selectedProject?.projectId === projectId}
                       onClick={() => {
                         if (targetProject !== null) selectProject(projectId);
                       }}

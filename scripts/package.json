@@ -11,12 +11,10 @@
     "@spiritdevs/contracts": "workspace:*",
     "@spiritdevs/shared": "workspace:*",
     "effect": "catalog:",
-    "pngjs": "7.0.0",
     "yaml": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@types/pngjs": "6.0.5",
     "vite-plus": "catalog:"
   }
 }
