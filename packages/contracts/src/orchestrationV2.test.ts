@@ -209,6 +209,7 @@ describe("orchestration V2 contracts", () => {
       commandId: "command-source-control-1",
       threadId: "thread-1",
       committed: true,
+      commitSha: "abc123",
       pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
     const item = decodeOrchestrationV2TurnItemJson({
@@ -228,12 +229,18 @@ describe("orchestration V2 contracts", () => {
       updatedAt: "2026-04-20T00:00:00.000Z",
       type: "source_control",
       committed: true,
+      commitSha: "abc123",
       pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
 
     expect(command.type).toBe("thread.source-control.record");
+    if (command.type !== "thread.source-control.record") {
+      throw new Error("expected source-control command");
+    }
     expect(item.type).toBe("source_control");
     if (item.type !== "source_control") throw new Error("expected source-control marker");
+    expect(command.commitSha).toBe("abc123");
+    expect(item.commitSha).toBe("abc123");
     expect(item.pullRequest?.number).toBe(47);
   });
 

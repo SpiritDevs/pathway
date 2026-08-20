@@ -290,7 +290,7 @@ describe("buildThreadFeed", () => {
     ]);
     const activity = feed.find((entry) => entry.type === "activity-group")?.activities[0];
 
-    expect(activity?.summary).toBe("pushed, committed, PR created");
+    expect(activity?.summary).toBe("Committed, pushed, and PR created");
     expect(activity?.detail).toBe("PR #47");
     expect(activity?.prominent).toBe(true);
   });

@@ -2,6 +2,8 @@ import type { GitRunStackedActionResult } from "@spiritdevs/contracts";
 
 export interface SourceControlMarkerResult {
   readonly committed: boolean;
+  /** SHA of the commit this action created, when it created one. */
+  readonly commitSha?: string;
   readonly pullRequest: { readonly number: number; readonly url: string } | null;
 }
 
@@ -16,8 +18,12 @@ export function sourceControlMarkerFromGitResult(
     return null;
   }
 
+  const committed = result.commit.status === "created";
+  const commitSha = committed ? result.commit.commitSha : undefined;
+
   return {
-    committed: result.commit.status === "created",
+    committed,
+    ...(commitSha === undefined ? {} : { commitSha }),
     pullRequest,
   };
 }

@@ -19,6 +19,7 @@ describe("sourceControlMarkerFromGitResult", () => {
   it("records a pushed commit", () => {
     expect(sourceControlMarkerFromGitResult(result())).toEqual({
       committed: true,
+      commitSha: "abc123",
       pullRequest: null,
     });
   });
@@ -37,6 +38,7 @@ describe("sourceControlMarkerFromGitResult", () => {
       ),
     ).toEqual({
       committed: true,
+      commitSha: "abc123",
       pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
   });
@@ -55,8 +57,15 @@ describe("sourceControlMarkerFromGitResult", () => {
       ),
     ).toEqual({
       committed: true,
+      commitSha: "abc123",
       pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
     });
+  });
+
+  it("omits the SHA when the push carried no new commit", () => {
+    expect(
+      sourceControlMarkerFromGitResult(result({ commit: { status: "skipped_no_changes" } })),
+    ).toEqual({ committed: false, pullRequest: null });
   });
 
   it("does not record skipped pushes or existing pull requests", () => {
@@ -73,6 +82,6 @@ describe("sourceControlMarkerFromGitResult", () => {
           },
         }),
       ),
-    ).toEqual({ committed: true, pullRequest: null });
+    ).toEqual({ committed: true, commitSha: "abc123", pullRequest: null });
   });
 });

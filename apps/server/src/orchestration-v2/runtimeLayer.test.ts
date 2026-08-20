@@ -562,6 +562,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         commandId: CommandId.make("runtime-layer-source-control-record"),
         threadId,
         committed: true,
+        commitSha: "abc123",
         pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
       };
 
@@ -579,6 +580,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isAbove(marker.ordinal, lastVisibleItem.ordinal);
       assert.equal(projection.visibleTurnItems.at(-1)?.item.id, marker.id);
       assert.isTrue(marker.committed);
+      assert.equal(marker.commitSha, command.commitSha);
       assert.deepEqual(marker.pullRequest, command.pullRequest);
     }),
   );

@@ -26,6 +26,7 @@ describe("V2LifecycleRow", () => {
       updatedAt: now,
       type: "source_control",
       committed: true,
+      commitSha: "abc1234567890",
       pullRequest: null,
     };
 
@@ -43,6 +44,8 @@ describe("V2LifecycleRow", () => {
       }),
     );
     expect(markup).toContain("Committed and pushed");
+    expect(markup).toContain("abc1234");
+    expect(markup).toContain('title="Commit abc1234567890"');
     expect(markup.match(/data-timeline-divider-separator/g)).toHaveLength(2);
   });
 });

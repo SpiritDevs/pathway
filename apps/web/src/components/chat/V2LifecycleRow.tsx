@@ -206,22 +206,35 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "source_control") {
+    const commitSha = item.commitSha;
     return (
       <TimelineSystemDivider
         label={sourceControlMarkerLabel(item)}
         icon={GitCommitHorizontalIcon}
         detail={
-          item.pullRequest === null ? null : (
-            <a
-              href={item.pullRequest.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
-              aria-label={`Open PR #${item.pullRequest.number}`}
-            >
-              #{item.pullRequest.number}
-              <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
-            </a>
+          commitSha === undefined && item.pullRequest === null ? null : (
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              {commitSha === undefined ? null : (
+                <span
+                  className="rounded border border-border/70 px-1.5 py-0.5 font-mono text-[10px]"
+                  title={`Commit ${commitSha}`}
+                >
+                  {commitSha.slice(0, 7)}
+                </span>
+              )}
+              {item.pullRequest === null ? null : (
+                <a
+                  href={item.pullRequest.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
+                  aria-label={`Open PR #${item.pullRequest.number}`}
+                >
+                  #{item.pullRequest.number}
+                  <ExternalLinkIcon aria-hidden="true" className="size-2.5" />
+                </a>
+              )}
+            </span>
           )
         }
       />
