@@ -15,17 +15,23 @@ const sourceControlItem = {
 
 describe("source control timeline markers", () => {
   it("describes the completed source-control steps", () => {
-    expect(sourceControlMarkerLabel(sourceControlItem)).toBe("pushed");
+    expect(sourceControlMarkerLabel(sourceControlItem)).toBe("Pushed");
     expect(sourceControlMarkerLabel({ ...sourceControlItem, committed: true })).toBe(
-      "pushed and committed",
+      "Committed and pushed",
     );
     expect(
       sourceControlMarkerLabel({
         ...sourceControlItem,
-        committed: true,
         pullRequest: { number: 47, url: "https://github.com/SpiritDevs/pathway/pull/47" },
       }),
-    ).toBe("pushed, committed, PR created");
+    ).toBe("Pushed and PR created");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        committed: true,
+        pullRequest: { number: 47, url: "https://example.com/pull/47" },
+      }),
+    ).toBe("Committed, pushed, and PR created");
   });
 });
 

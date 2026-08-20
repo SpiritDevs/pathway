@@ -29,11 +29,11 @@ export function TimelineSystemDivider(props: {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-2 py-2 text-[11px] text-muted-foreground",
+        "grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 py-2 text-[11px] text-muted-foreground",
         props.tone === "danger" && "text-destructive",
       )}
     >
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+      <span aria-hidden="true" data-timeline-divider-separator className="h-px bg-border/70" />
       {props.onAction ? (
         <button
           type="button"
@@ -47,7 +47,7 @@ export function TimelineSystemDivider(props: {
       ) : (
         <span className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-1">{content}</span>
       )}
-      <span aria-hidden="true" className="h-px flex-1 bg-border/70" />
+      <span aria-hidden="true" data-timeline-divider-separator className="h-px bg-border/70" />
     </div>
   );
 }
