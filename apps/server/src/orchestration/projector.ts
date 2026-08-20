@@ -216,6 +216,7 @@ export function projectEvent(
           const nextProject = {
             id: payload.projectId,
             title: payload.title,
+            titleIsCustom: payload.titleIsCustom ?? false,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
             defaultThreadEnvMode: null,
@@ -246,6 +247,9 @@ export function projectEvent(
               ? {
                   ...project,
                   ...(payload.title !== undefined ? { title: payload.title } : {}),
+                  ...(payload.titleIsCustom !== undefined
+                    ? { titleIsCustom: payload.titleIsCustom }
+                    : {}),
                   ...(payload.workspaceRoot !== undefined
                     ? { workspaceRoot: payload.workspaceRoot }
                     : {}),

@@ -46,6 +46,8 @@ export type ProjectScript = typeof ProjectScript.Type;
 export const Project = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
+  // Optional on the wire so clients can still read snapshots from older servers.
+  titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -89,6 +91,7 @@ export const ProjectMutation = Schema.Union([
     commandId: CommandId,
     projectId: ProjectId,
     title: Schema.optional(TrimmedNonEmptyString),
+    titleIsCustom: Schema.optional(Schema.Boolean),
     workspaceRoot: Schema.optional(TrimmedNonEmptyString),
     createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
     defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),

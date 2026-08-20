@@ -463,6 +463,7 @@ export function ProjectDetail({
     async (
       input: Partial<{
         title: string;
+        titleIsCustom: boolean;
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
         faviconPath: string | null;
@@ -502,8 +503,7 @@ export function ProjectDetail({
         return;
       }
       if (title === group.displayName) return;
-      if (group.memberProjects.every((member) => member.title === title)) return;
-      await updateAllMembers({ title }, "Failed to rename project");
+      await updateAllMembers({ title, titleIsCustom: true }, "Failed to rename project");
     },
     [group.displayName, group.memberProjects, updateAllMembers],
   );

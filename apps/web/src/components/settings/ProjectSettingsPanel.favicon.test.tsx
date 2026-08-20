@@ -296,6 +296,43 @@ describe("Project settings favicon selection", () => {
     ).not.toBeNull();
   });
 
+  it("persists a repository-basename rename as an explicit group title", async () => {
+    const detail = renderDetail(null);
+    const nameInput = visitElements(
+      detail,
+      (element) => element.props["aria-label"] === "Project name",
+    );
+    expect(nameInput).not.toBeNull();
+
+    (nameInput?.props.onBlur as ((event: unknown) => void) | undefined)?.({
+      currentTarget: { value: "pathway" },
+    });
+    await flushPromises();
+
+    expect(commands.updateProject.mock.calls).toEqual([
+      [
+        {
+          environmentId: localEnvironmentId,
+          input: {
+            projectId: ProjectId.make("project-local"),
+            title: "pathway",
+            titleIsCustom: true,
+          },
+        },
+      ],
+      [
+        {
+          environmentId: remoteEnvironmentId,
+          input: {
+            projectId: ProjectId.make("project-remote"),
+            title: "pathway",
+            titleIsCustom: true,
+          },
+        },
+      ],
+    ]);
+  });
+
   it("keeps the prior projected icon and reports a failed grouped save", async () => {
     commands.updateProject.mockResolvedValueOnce({
       _tag: "Failure",

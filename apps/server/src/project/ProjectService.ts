@@ -33,6 +33,7 @@ export interface ProjectUpdateInput {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly title?: string;
+  readonly titleIsCustom?: boolean;
   readonly workspaceRoot?: string;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly faviconPath?: ProjectFaviconPath | null;
@@ -130,6 +131,7 @@ export const make = Effect.gen(function* () {
   ): Project => ({
     id: row.projectId,
     title: row.title,
+    titleIsCustom: row.titleIsCustom === 1,
     workspaceRoot: row.workspaceRoot,
     repositoryIdentity: enrichment?.repositoryIdentity ?? null,
     faviconPath: row.faviconPath ?? enrichment?.faviconPath ?? null,
@@ -336,6 +338,11 @@ export const make = Effect.gen(function* () {
           commandId: input.commandId,
           projectId: input.projectId,
           ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.titleIsCustom !== undefined
+            ? { titleIsCustom: input.titleIsCustom }
+            : input.title !== undefined
+              ? { titleIsCustom: true }
+              : {}),
           ...(workspaceRoot === undefined || workspaceRoot === existing.value.workspaceRoot
             ? {}
             : { workspaceRoot }),

@@ -101,6 +101,7 @@ it.layer(TestLayer)("ProjectService", (it) => {
         ],
       });
       assert.equal(created.workspaceRoot, "/work/project");
+      assert.isFalse(created.titleIsCustom);
       assert.isNull(created.repositoryIdentity);
       assert.isNull(created.faviconPath);
 
@@ -122,15 +123,22 @@ it.layer(TestLayer)("ProjectService", (it) => {
         faviconPath: "brand assets/project icon.svg",
       });
       assert.equal(updated.title, "Renamed");
+      assert.isTrue(updated.titleIsCustom);
       assert.equal(updated.createdAt, created.createdAt);
 
       const sql = yield* SqlClient.SqlClient;
-      const faviconRows = yield* sql<{ readonly faviconPath: string | null }>`
-        SELECT favicon_path AS "faviconPath"
+      const faviconRows = yield* sql<{
+        readonly faviconPath: string | null;
+        readonly titleIsCustom: number;
+      }>`
+        SELECT
+          favicon_path AS "faviconPath",
+          title_is_custom AS "titleIsCustom"
         FROM projection_projects
         WHERE project_id = ${projectId}
       `;
       assert.equal(faviconRows[0]?.faviconPath, "brand assets/project icon.svg");
+      assert.equal(faviconRows[0]?.titleIsCustom, 1);
 
       const byId = yield* service.getById(projectId);
       const byWorkspace = yield* service.getByWorkspaceRoot("/work/project/");

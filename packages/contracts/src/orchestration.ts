@@ -64,6 +64,7 @@ export type CorrelationId = typeof CorrelationId.Type;
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
+  titleIsCustom: Schema.optional(Schema.Boolean),
   // Null for a rootless project: one created from a name alone, with a directory
   // attached later. Every path-shaped feature (worktrees, scripts, checkpoints,
   // file search, favicon) degrades to a no-op until it is set.
@@ -431,6 +432,7 @@ export const ProjectMetaUpdateCommand = Schema.Struct({
   commandId: CommandId,
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
+  titleIsCustom: Schema.optional(Schema.Boolean),
   // Attaches (or moves) the directory of a project. Absent = leave unchanged.
   // Deliberately not nullable: a root can be attached or changed but never
   // cleared, because threads, worktrees, and checkpoints hang off it.

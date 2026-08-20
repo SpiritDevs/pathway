@@ -93,6 +93,17 @@ describe("buildProjectGroups", () => {
     );
   });
 
+  it("uses an explicitly renamed title even when it matches the repository name", () => {
+    const projects = [
+      makeProject("first", "/work/pathway", { title: "pathway", titleIsCustom: true }),
+      makeProject("second", "/work/pathway-2", { title: "pathway", titleIsCustom: true }),
+    ];
+
+    expect(buildProjectGroups({ projects, settings: settings("repository") })[0]?.label).toBe(
+      "pathway",
+    );
+  });
+
   it("keeps physical clones in separate groups when requested", () => {
     const projects = [
       makeProject("pathway", "/work/pathway"),

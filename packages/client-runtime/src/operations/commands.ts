@@ -45,6 +45,7 @@ export interface CreateProjectInput extends CommandMetadata {
 export interface UpdateProjectInput extends CommandMetadata {
   readonly projectId: ProjectId;
   readonly title?: string;
+  readonly titleIsCustom?: boolean;
   readonly workspaceRoot?: string;
   readonly createWorkspaceRootIfMissing?: boolean;
   readonly defaultModelSelection?: ModelSelection | null;
@@ -346,6 +347,7 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     commandId: yield* allocateCommandId(input),
     projectId: input.projectId,
     ...(input.title === undefined ? {} : { title: input.title }),
+    ...(input.titleIsCustom === undefined ? {} : { titleIsCustom: input.titleIsCustom }),
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
     ...(input.createWorkspaceRootIfMissing === undefined
       ? {}

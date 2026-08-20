@@ -23,6 +23,8 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 export const ProjectionProject = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
+  // SQLite boolean: 0 for inferred titles, 1 for explicit user renames.
+  titleIsCustom: Schema.optional(Schema.Number),
   // Null for a rootless project, whose directory is attached later.
   workspaceRoot: Schema.NullOr(Schema.String),
   defaultModelSelection: Schema.NullOr(ModelSelection),

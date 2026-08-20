@@ -1045,6 +1045,9 @@ const makeWsRpcLayer = (
               commandId: mutation.commandId,
               projectId: mutation.projectId,
               ...(mutation.title === undefined ? {} : { title: mutation.title }),
+              ...(mutation.titleIsCustom === undefined
+                ? {}
+                : { titleIsCustom: mutation.titleIsCustom }),
               ...(mutation.workspaceRoot === undefined
                 ? {}
                 : { workspaceRoot: mutation.workspaceRoot }),

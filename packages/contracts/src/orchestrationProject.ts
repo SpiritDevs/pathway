@@ -9,6 +9,9 @@ import { ProjectScript } from "./project.ts";
 export const OrchestrationProjectShell = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
+  // Distinguishes an explicit rename from the inferred directory/repository title.
+  // Optional so cached snapshots from older servers still decode.
+  titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
