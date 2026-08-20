@@ -409,8 +409,25 @@ function SlackWorkspaceWizardController({
       if (draft.channelId === null || draft.channelName === null) {
         throw new Error("Choose a Slack channel before saving routing rules.");
       }
+      const companyId = CompanyId.make(draft.ownerId);
+      if (draft.watchId === null) {
+        const definitions = await client.listWatchDefinitions(companyId, draft.integrationId);
+        const existing = definitions.find((definition) => definition.channelId === draft.channelId);
+        if (existing !== undefined) {
+          return {
+            ...draft,
+            channelName: existing.channelName,
+            watchId: existing.id,
+            watchRevision: existing.revision,
+            rules:
+              "configurationVersion" in existing
+                ? existing.rules.map(ruleFromContract)
+                : legacyRulesFromWatch(existing),
+          };
+        }
+      }
       const saved = await client.saveV2Watch({
-        companyId: CompanyId.make(draft.ownerId),
+        companyId,
         integrationId: draft.integrationId,
         id: draft.watchId ?? wizardEntityId("slack-watch"),
         channelId: draft.channelId,
@@ -423,7 +440,7 @@ function SlackWorkspaceWizardController({
         watchId: saved.id,
         watchRevision: saved.revision,
       };
-      await onChanged(CompanyId.make(draft.ownerId));
+      await onChanged(companyId);
       return nextDraft;
     },
     [client, onChanged],

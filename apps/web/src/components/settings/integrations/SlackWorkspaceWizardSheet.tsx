@@ -587,6 +587,8 @@ function ConnectSlackStep({
   readonly onRetryChannels: () => void;
   readonly ownerLocked: boolean;
 }) {
+  const selectedChannel = channels.find((channel) => channel.id === draft.channelId);
+
   return (
     <section aria-labelledby="slack-connect-heading" className="space-y-5">
       <div>
@@ -732,7 +734,14 @@ function ConnectSlackStep({
               value={draft.channelId}
             >
               <SelectTrigger disabled={channels.length === 0}>
-                <SelectValue placeholder="Choose a channel" />
+                <SelectValue placeholder="Choose a channel">
+                  {selectedChannel ? (
+                    <span className="flex items-center gap-2">
+                      <HashIcon className="size-3.5" /> {selectedChannel.name}
+                      {selectedChannel.isPrivate ? <LockIcon className="size-3" /> : null}
+                    </span>
+                  ) : null}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup>
                 {channels.map((channel) => (
