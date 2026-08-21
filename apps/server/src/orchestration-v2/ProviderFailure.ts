@@ -11,6 +11,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import type * as DateTime from "effect/DateTime";
+import * as Predicate from "effect/Predicate";
 
 import type { IdAllocatorV2Shape } from "./IdAllocator.ts";
 
@@ -20,13 +21,42 @@ export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
 const DEFAULT_PROVIDER_FAILURE_MESSAGE = "Provider turn failed.";
 
 function stringField(value: unknown, key: "message" | "code"): string | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
+  if (!Predicate.isObject(value)) return undefined;
   try {
     const candidate = (value as Record<string, unknown>)[key];
     return typeof candidate === "string" ? candidate : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Error boundaries add transport-safe context by wrapping their cause. Prefer
+ * the most specific message/code in that chain without serializing arbitrary
+ * provider payloads or stacks onto the wire.
+ */
+function nestedCauseStringField(value: unknown, key: "message" | "code"): string | undefined {
+  let current = value;
+  let candidate: string | undefined;
+  const visited = new Set<unknown>();
+
+  for (let depth = 0; depth < 16 && Predicate.isObject(current); depth += 1) {
+    if (visited.has(current)) break;
+    visited.add(current);
+
+    const currentCandidate = stringField(current, key);
+    if (currentCandidate !== undefined && currentCandidate.trim().length > 0) {
+      candidate = currentCandidate;
+    }
+
+    try {
+      current = (current as Record<string, unknown>).cause;
+    } catch {
+      break;
+    }
+  }
+
+  return candidate;
 }
 
 function redactUrl(match: string): string {
@@ -97,10 +127,10 @@ export function makeProviderFailure(input: {
 }): OrchestrationV2ProviderFailure {
   const rawMessage =
     input.message ??
-    (input.cause instanceof Error ? input.cause.message : stringField(input.cause, "message")) ??
+    nestedCauseStringField(input.cause, "message") ??
     DEFAULT_PROVIDER_FAILURE_MESSAGE;
   const message = boundedText(rawMessage, MAX_PROVIDER_FAILURE_MESSAGE_LENGTH);
-  const rawCode = input.code ?? stringField(input.cause, "code") ?? null;
+  const rawCode = input.code ?? nestedCauseStringField(input.cause, "code") ?? null;
   const code =
     rawCode === null ? null : boundedText(rawCode, MAX_PROVIDER_FAILURE_CODE_LENGTH) || null;
 

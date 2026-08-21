@@ -486,13 +486,23 @@ export class RunExecutionIngestError extends Schema.TaggedErrorClass<RunExecutio
   "RunExecutionIngestError",
   {
     runId: Schema.String,
+    phase: Schema.optional(Schema.Literals(["provider_event", "run_finalization", "event_stream"])),
+    providerEventType: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.providerEventType !== undefined) {
+      return `Failed while ingesting orchestration V2 provider event ${this.providerEventType} for run ${this.runId}.`;
+    }
+    if (this.phase === "run_finalization") {
+      return `Failed while finalizing orchestration V2 run execution ${this.runId}.`;
+    }
     return `Failed while ingesting orchestration V2 run execution ${this.runId}.`;
   }
 }
+
+const isRunExecutionIngestError = Schema.is(RunExecutionIngestError);
 
 export const RunExecutionServiceV2Error = Schema.Union([
   RunExecutionStartError,
@@ -927,7 +937,12 @@ export const layer: Layer.Layer<
                 failureItemPersisted: terminal.status === "failed",
               }).pipe(
                 Effect.mapError(
-                  (cause) => new RunExecutionIngestError({ runId: input.run.id, cause }),
+                  (cause) =>
+                    new RunExecutionIngestError({
+                      runId: input.run.id,
+                      phase: "run_finalization",
+                      cause,
+                    }),
                 ),
               );
               if (isRunOwnedSubagentTerminalStatus(terminal.status)) {
@@ -1188,11 +1203,30 @@ export const layer: Layer.Layer<
                   yield* finalizeRootRun(event);
                 }
                 yield* trackChildLifecycle(event, shouldDeliver);
-              }),
+              }).pipe(
+                Effect.mapError((cause) =>
+                  isRunExecutionIngestError(cause)
+                    ? cause
+                    : new RunExecutionIngestError({
+                        runId: input.run.id,
+                        phase: "provider_event",
+                        providerEventType: event.type,
+                        cause,
+                      }),
+                ),
+              ),
             ),
             Stream.takeUntilEffect(() => shouldStopProviderEventIngestion),
             Stream.runDrain,
-            Effect.mapError((cause) => new RunExecutionIngestError({ runId: input.run.id, cause })),
+            Effect.mapError((cause) =>
+              isRunExecutionIngestError(cause)
+                ? cause
+                : new RunExecutionIngestError({
+                    runId: input.run.id,
+                    phase: "event_stream",
+                    cause,
+                  }),
+            ),
             Effect.flatMap(() =>
               Effect.gen(function* () {
                 const terminal = yield* Ref.get(terminalEvent);

@@ -47,6 +47,7 @@ import {
   makeProviderEventRoutingState,
   type ProviderEventRouteIdentity,
   routeProviderEvent,
+  RunExecutionIngestError,
   RunExecutionServiceV2,
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
@@ -68,6 +69,27 @@ const RunExecutionTestLayer = runExecutionServiceLayer.pipe(
 it("keeps recoverable turn failures reusable and reserves error for broken threads", () => {
   assert.equal(finalProviderThreadStatus("reusable"), "idle");
   assert.equal(finalProviderThreadStatus("broken"), "error");
+});
+
+it("identifies the provider event or finalization phase that failed", () => {
+  const runId = RunId.make("run:ingestion-diagnostics");
+  assert.equal(
+    new RunExecutionIngestError({
+      runId,
+      phase: "provider_event",
+      providerEventType: "turn_item.updated",
+      cause: new Error("write failed"),
+    }).message,
+    `Failed while ingesting orchestration V2 provider event turn_item.updated for run ${runId}.`,
+  );
+  assert.equal(
+    new RunExecutionIngestError({
+      runId,
+      phase: "run_finalization",
+      cause: new Error("write failed"),
+    }).message,
+    `Failed while finalizing orchestration V2 run execution ${runId}.`,
+  );
 });
 
 it.effect("routes shared-runtime events only to their owning root run", () =>

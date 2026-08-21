@@ -83,6 +83,33 @@ it("does not serialize arbitrary provider causes", () => {
   });
 });
 
+it("reports the deepest safe message and code from wrapped failures", () => {
+  const failure = makeProviderFailure({
+    cause: Object.assign(new Error("Failed while ingesting orchestration V2 run execution."), {
+      code: "outer_error",
+      cause: Object.assign(new Error("UNIQUE constraint failed: turn item position"), {
+        code: "SQLITE_CONSTRAINT_UNIQUE",
+      }),
+    }),
+  });
+
+  assert.equal(failure.message, "UNIQUE constraint failed: turn item position");
+  assert.equal(failure.code, "SQLITE_CONSTRAINT_UNIQUE");
+});
+
+it("bounds cyclic wrapped failures without serializing their payloads", () => {
+  const cause: { message: string; cause?: unknown; payload: { token: string } } = {
+    message: "actionable failure",
+    payload: { token: "private-provider-token" },
+  };
+  cause.cause = cause;
+
+  const failure = makeProviderFailure({ cause });
+
+  assert.equal(failure.message, "actionable failure");
+  assert.notInclude(failure.message, "private-provider-token");
+});
+
 it.effect("keys terminal failure items by provider turn across retries and fallback paths", () =>
   Effect.gen(function* () {
     const idAllocator = yield* IdAllocatorV2;
