@@ -12,6 +12,7 @@ import { environmentCatalog } from "../connection/catalog";
 import { runtime } from "../lib/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useAtomCommand } from "../state/use-atom-command";
+import { markCloudSyncReset } from "./syncReset";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
 
 let relayTokenProvider: (() => Promise<string | null>) | null = null;
@@ -57,9 +58,16 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
     const nextAccount = isSignedIn && userId ? userId : null;
     observedAccountRef.current = nextAccount;
 
-    const queueAccountCleanup = () => {
+    /**
+     * Runs once per account transition, after the previous transition settles. Signing out marks
+     * the account's cloud-sync replica for a full reset (see `syncReset.ts`): the next sign-in
+     * discards it and re-bootstraps everything from Convex. The wipe itself is deferred to the
+     * sync runtime because only it can know when the replica databases are safely closed.
+     */
+    const queueAccountCleanup = (account: string) => {
       const previousTransition = accountTransitionRef.current ?? Promise.resolve();
       accountTransitionRef.current = previousTransition.then(async () => {
+        markCloudSyncReset(account);
         const results = await Promise.all([
           removeRelayEnvironments(),
           settleAsyncResult(() =>
@@ -79,8 +87,8 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
 
     if (!isSignedIn || !userId) {
       deactivateManagedRelayAuthentication();
-      if (previousAccount !== null) {
-        void queueAccountCleanup();
+      if (typeof previousAccount === "string") {
+        void queueAccountCleanup(previousAccount);
       }
     } else {
       const tokenProvider = () => getToken(resolveRelayClerkTokenOptions());
@@ -100,7 +108,7 @@ export function ManagedRelayAuthProvider({ children }: { readonly children: Reac
       };
       if (previousAccount !== undefined && previousAccount !== null && previousAccount !== userId) {
         deactivateManagedRelayAuthentication();
-        activateAfterTransition(queueAccountCleanup());
+        activateAfterTransition(queueAccountCleanup(previousAccount));
       } else {
         activateAfterTransition(accountTransitionRef.current ?? Promise.resolve());
       }

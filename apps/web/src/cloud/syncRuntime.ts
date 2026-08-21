@@ -9,8 +9,10 @@
  * what starts anything, and only when {@link hasCloudSyncPublicConfig} agrees.
  *
  * Everything durable is scoped by the Clerk account id, matching the IndexedDB database name
- * (`pathway:cloud-sync/<scope>/<companyId>`) and the Web Locks leader name, so signing in as
- * somebody else never reads the previous person's replica.
+ * (`pathway:cloud-sync/<scope>/<companyId>`) and the Web Locks leader name. Signing out marks the
+ * scope for a full reset (`syncReset.ts`); the next sign-in discards the replica and every scoped
+ * storage key before connecting, so a returning session re-bootstraps everything from Convex —
+ * the same fresh start a first install gets.
  *
  * @module cloud/syncRuntime
  */
@@ -29,6 +31,7 @@ import {
   makeSyncEngine,
   makeWebLeaderElection,
   SyncStore,
+  SyncStoreError,
   SyncTransport,
   SyncTransportError,
   SYNC_INDEXED_DB_PREFIX,
@@ -79,6 +82,12 @@ import {
   registerEnvironmentAutomatically,
 } from "./environmentRegistration";
 import { hasCloudSyncPublicConfig, resolveCloudSyncConvexUrl } from "./publicConfig";
+import {
+  clearCloudSyncNamespaceKeys,
+  clearCloudSyncReset,
+  readCloudSyncReset,
+  type SyncResetStorage,
+} from "./syncReset";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
 import {
@@ -798,6 +807,56 @@ export function classifyCloudSyncConnectionError(
 }
 
 /**
+ * Discards every replica database and scoped storage key the account owns, in the store and on
+ * disk. Unsent outbox work is discarded with them: a sign-out reset is a fresh install, and the
+ * user asked for it by signing out.
+ *
+ * Only the sync runtime may run this — inside a leadership pass, when it is the one writer with
+ * no other connection open — which is why sign-out marks a reset (`syncReset.ts`) instead of
+ * deleting anything itself: a `deleteDatabase` that landed after a quick re-sign-in could destroy
+ * a freshly bootstrapped replica.
+ */
+export const discardCloudSyncLocalReplica = Effect.fn("web.cloudSync.discardLocalReplica")(
+  function* (scope: string, storage?: SyncResetStorage | null) {
+    const store = yield* SyncStore;
+    const companyIds = yield* store.listCompanyIds;
+    yield* Effect.forEach(companyIds, (companyId) => store.clear(companyId), { discard: true });
+    const removedKeys = yield* Effect.sync(() => clearCloudSyncNamespaceKeys(scope, storage));
+    yield* Effect.logWarning(
+      "Cloud sync local replica discarded for a fresh start after sign-out.",
+      { scope, companyCount: companyIds.length, removedStorageKeys: removedKeys },
+    );
+  },
+);
+
+/**
+ * The leadership pass opens with this: when sign-out marked the scope for a reset, discard the
+ * local replica first so every engine bootstraps from Convex as if this browser had never seen
+ * the account. The marker clears only after the discard succeeds, so a failed or interrupted wipe
+ * is retried by the next pass instead of being silently skipped.
+ */
+export const discardCloudSyncLocalReplicaIfResetPending = Effect.fn(
+  "web.cloudSync.discardLocalReplicaIfResetPending",
+)(function* (scope: string, storage?: SyncResetStorage | null) {
+  if (!readCloudSyncReset(scope, storage)) return;
+  yield* discardCloudSyncLocalReplica(scope, storage).pipe(
+    // The connection may only fail with transport trouble — a store failure during the wipe is
+    // exactly that for the engine's backoff, and leaving the marker set retries the wipe later.
+    Effect.catch((error: SyncTransportError | SyncStoreError) =>
+      error._tag === "SyncStoreError"
+        ? Effect.fail(
+            new SyncTransportError({
+              reason: "transport",
+              message: `Discarding the local replica for a sign-out reset failed: ${error.message}`,
+            }),
+          )
+        : Effect.fail(error),
+    ),
+  );
+  clearCloudSyncReset(scope, storage);
+});
+
+/**
  * The complete browser runtime: one leader election, one IndexedDB store, and — only once this tab
  * is the leader — one Convex connection with an engine per company, all owned by the surrounding
  * scope.
@@ -853,7 +912,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
   );
   const clientId = options.clientId ?? readCloudSyncClientId({ scope: options.scope });
 
-  const connect = Effect.gen(function* () {
+  const openConnection = Effect.gen(function* () {
     // #region DEBUG
     yield* Effect.sync(() => debugCloudSync("H2", "connection-started"));
     // #endregion DEBUG
@@ -922,6 +981,15 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
       companies: cloudSyncCompaniesStream(client),
     } satisfies CloudSyncConnection;
   });
+
+  // Every leadership pass opens with the pending sign-out reset, so a marked scope reconnects
+  // onto an empty replica and bootstraps from Convex instead of resuming.
+  const connect = Effect.flatMap(
+    discardCloudSyncLocalReplicaIfResetPending(options.scope).pipe(
+      Effect.provideService(SyncStore, store.service),
+    ),
+    () => openConnection,
+  );
 
   const engines = runCloudSyncEngines({
     clientId,
