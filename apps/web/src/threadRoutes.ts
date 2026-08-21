@@ -20,6 +20,13 @@ type DraftThreadRouteState = {
 
 export type ThreadRouteRenderState = "loading" | "ready" | "missing";
 
+export function promotedDraftCanNavigateToCanonicalThread(input: {
+  readonly serverThreadStarted: boolean;
+  readonly hasVisibleUserMessage: boolean;
+}): boolean {
+  return input.serverThreadStarted && input.hasVisibleUserMessage;
+}
+
 export function resolveThreadRouteRenderState(input: {
   bootstrapComplete: boolean;
   serverThreadExists: boolean;

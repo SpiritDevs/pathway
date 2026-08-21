@@ -10,8 +10,12 @@ import {
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
-import { buildThreadRouteParams, promotedDraftThreadIsFilteredOut } from "../threadRoutes";
-import { useThreadRefs, useThreadShell } from "../state/entities";
+import {
+  buildThreadRouteParams,
+  promotedDraftCanNavigateToCanonicalThread,
+  promotedDraftThreadIsFilteredOut,
+} from "../threadRoutes";
+import { useThreadRefs, useThreadShell, useThreadVisibleTurnItems } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
@@ -46,7 +50,16 @@ function DraftChatThreadRouteView() {
     promotedThreadVisible: serverThread !== null,
   });
   const serverThreadStarted = threadHasStarted(serverThread);
-  const canonicalThreadRef = serverThreadStarted ? serverThreadRef : null;
+  const serverVisibleTurnItems = useThreadVisibleTurnItems(serverThreadRef);
+  // ChatView owns the optimistic first message while this draft route stays
+  // mounted. Do not remount it on the canonical route until that message is
+  // present in the server projection, or the user briefly sees an empty chat.
+  const canonicalThreadRef = promotedDraftCanNavigateToCanonicalThread({
+    serverThreadStarted,
+    hasVisibleUserMessage: serverVisibleTurnItems.some((row) => row.item.type === "user_message"),
+  })
+    ? serverThreadRef
+    : null;
 
   useEffect(() => {
     if (!inferredThreadRef || draftSession?.promotedTo) {

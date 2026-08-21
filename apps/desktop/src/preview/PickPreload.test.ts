@@ -119,4 +119,16 @@ describe("isolateAnnotationChromeEvent", () => {
     expect(mouseDown.preventDefault).not.toHaveBeenCalled();
     expect(mouseDown.stopPropagation).toHaveBeenCalledOnce();
   });
+
+  it("focuses an editor control before isolating its pointer down", () => {
+    const pointerDown = event("pointerdown");
+    const focusTarget = { focus: vi.fn() };
+
+    isolateAnnotationChromeEvent(pointerDown, false, focusTarget);
+
+    expect(focusTarget.focus).toHaveBeenCalledOnce();
+    expect(focusTarget.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(pointerDown.stopPropagation).toHaveBeenCalledOnce();
+    expect(pointerDown.preventDefault).not.toHaveBeenCalled();
+  });
 });

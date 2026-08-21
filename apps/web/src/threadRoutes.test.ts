@@ -6,6 +6,7 @@ import { DraftId } from "./composerDraftStore";
 import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
+  promotedDraftCanNavigateToCanonicalThread,
   promotedDraftThreadIsFilteredOut,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
@@ -117,6 +118,27 @@ describe("threadRoutes", () => {
         promotedThreadVisible: true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps a promoted draft mounted until its first user message is visible", () => {
+    expect(
+      promotedDraftCanNavigateToCanonicalThread({
+        serverThreadStarted: true,
+        hasVisibleUserMessage: false,
+      }),
+    ).toBe(false);
+    expect(
+      promotedDraftCanNavigateToCanonicalThread({
+        serverThreadStarted: false,
+        hasVisibleUserMessage: true,
+      }),
+    ).toBe(false);
+    expect(
+      promotedDraftCanNavigateToCanonicalThread({
+        serverThreadStarted: true,
+        hasVisibleUserMessage: true,
+      }),
+    ).toBe(true);
   });
 
   it("renders authoritative server-thread shells when bootstrap is complete", () => {

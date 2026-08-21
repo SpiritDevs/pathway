@@ -421,10 +421,16 @@ function startAnnotation(snapshotDataUrl: string | null): void {
 
   for (const eventType of CHROME_POINTER_EVENTS) {
     root.addEventListener(eventType, (event) => {
-      isolateAnnotationChromeEvent(
-        event,
-        event.target instanceof Node && toolbar.contains(event.target),
-      );
+      const target = event.target;
+      const isToolbarEvent = target instanceof Node && toolbar.contains(target);
+      const focusTarget =
+        !isToolbarEvent &&
+        (target instanceof HTMLInputElement ||
+          target instanceof HTMLSelectElement ||
+          target instanceof HTMLTextAreaElement)
+          ? target
+          : null;
+      isolateAnnotationChromeEvent(event, isToolbarEvent, focusTarget);
     });
   }
 
