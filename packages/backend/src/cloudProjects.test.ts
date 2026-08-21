@@ -2,7 +2,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
 
-import { api } from "../convex/_generated/api.js";
+import { api, internal } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
@@ -134,7 +134,7 @@ async function seed(t: Harness) {
       deletedAt: null,
       version: 0,
     });
-    return { projectId, bindingId, threadId, milestoneId };
+    return { companyId, projectId, bindingId, threadId, milestoneId };
   });
 }
 
@@ -264,5 +264,149 @@ describe("company project deletion", () => {
         }),
       ]),
     );
+  });
+});
+
+/** A second company the same environment (and user) is registered with. */
+async function seedSecondCompany(t: Harness) {
+  return await t.run(async (ctx) => {
+    const companyId = await ctx.db.insert("companies", {
+      id: "0198c0de-bbbb-7bbb-8bbb-000000000001",
+      name: "Second Test Co",
+      workspaceKind: "organization",
+      issueKeyPrefix: "STC",
+      nextIssueNumber: 1,
+      lifecycleState: "active",
+      deletionScheduledAt: null,
+      purgeAfter: null,
+      authorizationEpoch: 1,
+      syncVersion: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", "project_owner"))
+      .unique();
+    if (user === null) throw new Error("seed missing user");
+    const membershipId = await ctx.db.insert("memberships", {
+      id: "0198c0de-bbbb-7bbb-8bbb-000000000002",
+      companyId,
+      userId: user._id,
+      state: "active",
+      displayNameSnapshot: "Project Owner",
+      emailSnapshot: "project_owner@example.test",
+      invitedByMembershipId: null,
+      joinedAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    await ctx.db.insert("companyOwners", {
+      companyId,
+      membershipId,
+      grantedByMembershipId: null,
+      createdAt: NOW,
+    });
+    return { companyId };
+  });
+}
+
+describe("single-company project ownership", () => {
+  it("reconciliation refreshes an owned project but never mints one", async () => {
+    const t = harness();
+    await seed(t);
+
+    const result = await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "local-unowned",
+      localWorkspaceRoot: "/work/unowned",
+      name: "Unowned",
+      allowCreate: false,
+    });
+    expect(result).toBeNull();
+
+    const created = await t.run(async (ctx) =>
+      (await ctx.db.query("cloudProjects").collect()).filter((row) => row.id === "local-unowned"),
+    );
+    expect(created).toEqual([]);
+  });
+
+  it("does not mirror a checkout into a second company that did not own it", async () => {
+    const t = harness();
+    await seed(t);
+    const second = await seedSecondCompany(t);
+
+    const result = await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: "0198c0de-bbbb-7bbb-8bbb-000000000001",
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: LOCAL_PROJECT_ID,
+      localWorkspaceRoot: "/work/pathway",
+      name: "Pathway",
+    });
+    expect(result).toBe(PROJECT_ID);
+
+    const foreignRows = await t.run(async (ctx) => ({
+      projects: (await ctx.db.query("cloudProjects").collect()).filter(
+        (row) => row.companyId === second.companyId,
+      ),
+      bindings: (await ctx.db.query("environmentBindings").collect()).filter(
+        (row) => row.companyId === second.companyId,
+      ),
+    }));
+    expect(foreignRows.projects).toEqual([]);
+    expect(foreignRows.bindings).toEqual([]);
+  });
+});
+
+describe("stale environment binding reclamation", () => {
+  it("marks bindings stale when the environment has no active registration", async () => {
+    const t = harness();
+    const ids = await seed(t);
+
+    await t.mutation(internal.cloudProjects.revokeStaleEnvironmentBindings, {});
+
+    const state = await t.run(async (ctx) => ({
+      binding: await ctx.db.get(ids.bindingId),
+      project: await ctx.db.get(ids.projectId),
+      changes: (await ctx.db.query("syncChanges").collect())
+        .slice()
+        .sort((left, right) => left.version - right.version),
+    }));
+    expect(state.binding).toMatchObject({ status: "stale" });
+    // The stale binding was the preferred one, and nothing replaced it.
+    expect(state.project).toMatchObject({ preferredBindingId: null });
+    expect(state.changes.map((change) => [change.entityKind, change.entityId])).toEqual([
+      ["environmentBinding", BINDING_ID],
+      ["cloudProject", PROJECT_ID],
+    ]);
+  });
+
+  it("leaves bindings of actively registered environments alone", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("environmentRegistrations", {
+        id: "0198c0de-cccc-7ccc-8ccc-000000000001",
+        companyId: ids.companyId,
+        environmentId: ENVIRONMENT_ID,
+        publicKeyThumbprint: "thumbprint",
+        descriptor: { platform: { os: "darwin" } },
+        relayLinkState: "linked",
+        managedEndpointAvailable: false,
+        lastSeenAt: NOW,
+        serviceRoleIds: [],
+        teamIds: [],
+        state: "active",
+        registeredByMembershipId: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+    });
+
+    await t.mutation(internal.cloudProjects.revokeStaleEnvironmentBindings, {});
+
+    const binding = await t.run(async (ctx) => await ctx.db.get(ids.bindingId));
+    expect(binding).toMatchObject({ status: "active" });
   });
 });

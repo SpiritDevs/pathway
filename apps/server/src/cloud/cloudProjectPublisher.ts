@@ -88,6 +88,10 @@ export const makeCloudProjectPublisher = Effect.fn("cloud.project_publisher.make
     });
 
   return {
+    // Reconciliation refreshes projects this company already owns; it must not create them.
+    // An environment registered with several companies runs one publisher per company, and
+    // blanket creation would copy every checkout into each of them. A project lives in exactly
+    // one company (ADR 0011); ownership is minted only by an explicit assignment.
     publish: (project: Project) =>
       authorized((convex) =>
         convex.mutation(api.cloudProjects.ensureEnvironmentProject, {
@@ -97,6 +101,7 @@ export const makeCloudProjectPublisher = Effect.fn("cloud.project_publisher.make
           localWorkspaceRoot: project.workspaceRoot,
           repositoryIdentity: project.repositoryIdentity ?? null,
           name: project.title,
+          allowCreate: false,
         }),
       ).pipe(Effect.asVoid),
     release: (localProjectId: Project["id"]) =>

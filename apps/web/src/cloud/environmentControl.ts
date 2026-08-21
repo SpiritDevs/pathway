@@ -170,7 +170,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly repositoryIdentity?: EnvironmentProject["repositoryIdentity"];
       readonly name: string;
     },
-    string
+    string | null
   >("cloudProjects:ensureEnvironmentProject"),
   setPreferredEnvironmentBinding: mutationReference<
     {

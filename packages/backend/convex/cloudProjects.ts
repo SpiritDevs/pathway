@@ -3,11 +3,12 @@
 import { v } from "convex/values";
 
 import type { Doc } from "./_generated/dataModel.js";
-import { mutation } from "./_generated/server.js";
+import { mutation, internalMutation } from "./_generated/server.js";
 import {
   appendCompanyChanges,
   encodeCloudProject,
   encodeEnvironmentBinding,
+  type CompanyChange,
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
@@ -90,6 +91,11 @@ export const createCompanyProject = mutation({
  * you the binding, not the project: the project lands, and the binding follows when that
  * environment registers and republishes. Gating the whole call on the registration made a project
  * unassignable from every machine except the one holding it.
+ *
+ * `allowCreate` defaults to true. Reconciliation passes false: it refreshes projects this company
+ * already owns but must never mint ownership, because an environment registered with several
+ * companies would otherwise copy every checkout into each of them. Only an explicit assignment —
+ * the assign dialog or an issue flow — creates a company project for a checkout.
  */
 export const ensureEnvironmentProject = mutation({
   args: {
@@ -99,8 +105,9 @@ export const ensureEnvironmentProject = mutation({
     localWorkspaceRoot: v.union(v.string(), v.null()),
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     name: v.string(),
+    allowCreate: v.optional(v.boolean()),
   },
-  returns: domainIdArg,
+  returns: v.union(domainIdArg, v.null()),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "projects.manage");
@@ -164,6 +171,27 @@ export const ensureEnvironmentProject = mutation({
     const now = Date.now();
     let projectChanged = false;
     if (project === null) {
+      // A project lives in exactly one company (ADR 0011). Another company this environment is
+      // registered with may already own this checkout; adopting it here would mirror the project
+      // into two companies. Report the owner's id and bind nothing in this company.
+      const foreignBinding = (
+        await ctx.db
+          .query("environmentBindings")
+          .withIndex("by_environment", (q) => q.eq("environmentId", environmentId))
+          .collect()
+      ).find(
+        (row) =>
+          row.localProjectId === localProjectId &&
+          row.status !== "revoked" &&
+          row.companyId !== actor.company._id,
+      );
+      const foreignProject =
+        foreignBinding === undefined ? null : await ctx.db.get(foreignBinding.cloudProjectId);
+      if (foreignProject !== null && foreignProject.deletedAt === null) {
+        return foreignProject.id;
+      }
+      if (args.allowCreate === false) return null;
+
       const projectDocId = await ctx.db.insert("cloudProjects", {
         id: localProjectId,
         companyId: actor.company._id,
@@ -413,6 +441,86 @@ export const releaseEnvironmentProject = mutation({
             ]),
       ],
     });
+    return null;
+  },
+});
+
+/**
+ * Marks bindings stale when their environment's registration is gone or revoked.
+ *
+ * A re-paired machine gets a new environment id, and nothing else retires the old bindings: the
+ * publisher only releases on local project deletion. Left active, orphaned rows keep dead
+ * checkouts eligible as work targets and keep ghost duplicates of the same repository alive in
+ * every client. Stale, not revoked — revocation is the durable "this checkout was deleted" signal
+ * environments consume, while staleness just means "this machine is no longer one of ours".
+ */
+export const revokeStaleEnvironmentBindings = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const candidates = (await ctx.db.query("environmentBindings").collect()).filter(
+      (binding) => binding.status === "active" || binding.status === "missing",
+    );
+    const now = Date.now();
+    const changesByCompany = new Map<string, CompanyChange[]>();
+    for (const binding of candidates) {
+      const registration = await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_company_and_environment", (q) =>
+          q.eq("companyId", binding.companyId).eq("environmentId", binding.environmentId),
+        )
+        .unique();
+      if (registration !== null && registration.state === "active") continue;
+
+      await ctx.db.patch(binding._id, { status: "stale", lastSeenAt: now, updatedAt: now });
+      const stale = await ctx.db.get(binding._id);
+      if (stale === null) throw backendError("entity-not-found", "A project binding vanished.");
+      const changes = changesByCompany.get(binding.companyId) ?? [];
+      changes.push({
+        entityKind: "environmentBinding",
+        entityId: stale.id,
+        changeKind: "upsert",
+        versionDocId: stale._id,
+        payload: await encodeEnvironmentBinding(ctx, stale),
+      });
+
+      const project = await ctx.db.get(stale.cloudProjectId);
+      if (project !== null && project.preferredBindingId === stale.id) {
+        const replacement = (
+          await ctx.db
+            .query("environmentBindings")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", binding.companyId).eq("cloudProjectId", project._id),
+            )
+            .collect()
+        ).find((row) => row._id !== stale._id && row.status === "active");
+        await ctx.db.patch(project._id, {
+          preferredBindingId: replacement?.id ?? null,
+          updatedAt: now,
+        });
+        const changedProject = await ctx.db.get(project._id);
+        if (changedProject === null) {
+          throw backendError("entity-not-found", "The project vanished.");
+        }
+        changes.push({
+          entityKind: "cloudProject",
+          entityId: changedProject.id,
+          changeKind: "upsert",
+          versionDocId: changedProject._id,
+          payload: encodeCloudProject(changedProject),
+        });
+      }
+      changesByCompany.set(binding.companyId, changes);
+    }
+
+    for (const [companyId, changes] of changesByCompany) {
+      if (changes.length === 0) continue;
+      await appendCompanyChanges(ctx, {
+        companyId,
+        actor: { kind: "system", source: "automation" },
+        changes,
+      });
+    }
     return null;
   },
 });

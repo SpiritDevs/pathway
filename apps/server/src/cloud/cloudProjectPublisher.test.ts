@@ -74,6 +74,7 @@ describe("cloud project publisher", () => {
             localWorkspaceRoot: "/work/pathway",
             repositoryIdentity: null,
             name: "Pathway",
+            allowCreate: false,
           },
         },
         {
