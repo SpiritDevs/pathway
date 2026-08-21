@@ -1,6 +1,7 @@
 import {
   AVAILABLE_CONNECTION_STATE,
   connectionProjectionPhase,
+  type SupervisorConnectionState,
 } from "@spiritdevs/client-runtime/connection";
 import {
   createEnvironmentShellAtoms,
@@ -22,6 +23,21 @@ export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   shellStateValueAtom: environmentShell.stateValueAtom,
 });
 
+// A snapshot-less environment holds the landing open only while it is within
+// its first two attempts; once it has burned those, later retries must not
+// keep flipping the gate between settled and loading.
+export function environmentHoldsLanding(connection: SupervisorConnectionState): boolean {
+  if (!connection.desired || connection.attempt > 2) {
+    return false;
+  }
+  if (connectionProjectionPhase(connection) !== "disconnected") {
+    return true;
+  }
+  // A retrying environment is only transiently disconnected; wait out its
+  // early backoff before settling without its snapshot.
+  return connection.phase === "backoff";
+}
+
 export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
   const catalog = AsyncResult.value(get(environmentCatalog.catalogAtom));
   if (Option.isNone(catalog)) {
@@ -35,12 +51,7 @@ export const allEnvironmentShellsBootstrappedAtom = Atom.make((get) => {
       AsyncResult.value(get(environmentCatalog.stateAtom(environmentId))),
       () => AVAILABLE_CONNECTION_STATE,
     );
-    if (connectionProjectionPhase(connection) !== "disconnected") {
-      return false;
-    }
-    // A retrying environment is only transiently disconnected; give it its
-    // first retries before letting the landing settle without its snapshot.
-    if (connection.phase === "backoff" && connection.desired && connection.attempt <= 2) {
+    if (environmentHoldsLanding(connection)) {
       return false;
     }
   }
