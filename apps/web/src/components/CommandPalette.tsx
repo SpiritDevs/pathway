@@ -5,7 +5,11 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
-import { canCreateProjectInEnvironment } from "@spiritdevs/client-runtime/operations/projects";
+import {
+  canCreateProjectInEnvironment,
+  getDefaultCloneUrl,
+  normalizePastedCloneUrl,
+} from "@spiritdevs/client-runtime/operations/projects";
 import {
   connectionStatusText,
   RelayConnectionRegistration,
@@ -2419,7 +2423,7 @@ function OpenCommandPaletteDialog(props: {
           source: addProjectCloneFlow.source,
           repositoryInput: rawRepository,
           repository: null,
-          remoteUrl: rawRepository,
+          remoteUrl: normalizePastedCloneUrl(rawRepository),
         });
         setHighlightedItemValue(null);
         setQuery(destinationPath);
@@ -2456,7 +2460,7 @@ function OpenCommandPaletteDialog(props: {
         source: addProjectCloneFlow.source,
         repositoryInput: rawRepository,
         repository,
-        remoteUrl: repository.sshUrl,
+        remoteUrl: getDefaultCloneUrl(repository),
       });
       setHighlightedItemValue(null);
       setQuery(destinationPath);
