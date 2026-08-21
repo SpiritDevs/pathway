@@ -366,6 +366,7 @@ describe("ManagedEndpointProvider", () => {
           providerKind: "cloudflare_tunnel",
         },
         runtime: {
+          environmentId: "env_ABC",
           providerKind: "cloudflare_tunnel",
           connectorToken: "connector-token",
           tunnelId: "tunnel-id",

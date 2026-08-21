@@ -1,3 +1,4 @@
+import { PATHWAY_APPLICATION_ID } from "@spiritdevs/contracts";
 import {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkProofInvalidReason,
@@ -215,7 +216,10 @@ const make = Effect.gen(function* () {
           stage: "authorize_capabilities",
         });
       }
-      if (verified.descriptor.environmentId !== verified.environmentId) {
+      if (
+        verified.descriptor.environmentId !== verified.environmentId ||
+        verified.descriptor.applicationId !== PATHWAY_APPLICATION_ID
+      ) {
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
           environmentId: verified.environmentId,

@@ -3,6 +3,15 @@ import * as Schema from "effect/Schema";
 
 import { EnvironmentId, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+/**
+ * Stable product boundary for environments that participate in Pathway discovery and remote
+ * control. Optional on the wire so replicas containing pre-boundary registrations still decode;
+ * consumers must require the Pathway value before treating a remote environment as connectable.
+ */
+export const PATHWAY_APPLICATION_ID = "pathway" as const;
+export const ExecutionEnvironmentApplicationId = Schema.Literal(PATHWAY_APPLICATION_ID);
+export type ExecutionEnvironmentApplicationId = typeof ExecutionEnvironmentApplicationId.Type;
+
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
   "linux",
@@ -122,6 +131,7 @@ export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabi
 
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
+  applicationId: Schema.optionalKey(ExecutionEnvironmentApplicationId),
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   /** Optional for compatibility with servers released before hardware classification shipped. */
@@ -132,6 +142,12 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;
+
+export function isPathwayEnvironmentDescriptor(
+  descriptor: Pick<ExecutionEnvironmentDescriptor, "applicationId">,
+): boolean {
+  return descriptor.applicationId === PATHWAY_APPLICATION_ID;
+}
 
 export const EnvironmentConnectionState = Schema.Literals([
   "connecting",

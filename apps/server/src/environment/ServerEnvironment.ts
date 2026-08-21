@@ -1,4 +1,8 @@
-import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  PATHWAY_APPLICATION_ID,
+  type ExecutionEnvironmentDescriptor,
+} from "@spiritdevs/contracts";
 import {
   HostProcessArchitecture,
   HostProcessHostname,
@@ -141,6 +145,7 @@ export const make = Effect.gen(function* () {
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
+    applicationId: PATHWAY_APPLICATION_ID,
     label,
     platform: {
       os: platformOs(hostPlatform),

@@ -1,4 +1,9 @@
-import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  isPathwayEnvironmentDescriptor,
+  PATHWAY_APPLICATION_ID,
+  type ExecutionEnvironmentDescriptor,
+} from "@spiritdevs/contracts";
 import type { RelayManagedEndpoint } from "@spiritdevs/contracts/relay";
 import {
   exchangeRemoteDpopAccessToken,
@@ -75,6 +80,18 @@ const fetchDescriptor = Effect.fn("clientRuntime.connection.remote.fetchDescript
   );
 });
 
+function requirePathwayDescriptor(descriptor: ExecutionEnvironmentDescriptor) {
+  return isPathwayEnvironmentDescriptor(descriptor)
+    ? Effect.void
+    : Effect.fail(
+        new ConnectionBlockedError({
+          reason: "unsupported",
+          detail:
+            "This environment belongs to a legacy application and cannot be opened in Pathway.",
+        }),
+      );
+}
+
 export const make = Effect.gen(function* () {
   const signer = yield* ManagedRelay.ManagedRelayDpopSigner;
   const presentation = yield* ClientCapabilities.ClientPresentation;
@@ -116,6 +133,7 @@ export const make = Effect.gen(function* () {
           actual: descriptor.environmentId,
         });
       }
+      yield* requirePathwayDescriptor(descriptor);
       if (!canReuseDescriptor) {
         yield* Ref.update(bearerDescriptors, (current) => {
           const next = new Map(current);
@@ -201,6 +219,7 @@ export const make = Effect.gen(function* () {
       if (
         Option.isSome(cached) &&
         cached.value.environmentId === input.expectedEnvironmentId &&
+        cached.value.applicationId === PATHWAY_APPLICATION_ID &&
         cached.value.dpopThumbprint === thumbprint &&
         cached.value.expiresAtEpochMs > now + TOKEN_EXPIRY_SAFETY_MARGIN_MS
       ) {
@@ -245,6 +264,7 @@ export const make = Effect.gen(function* () {
           actual: descriptor.environmentId,
         });
       }
+      yield* requirePathwayDescriptor(descriptor);
       const bootstrapProof = yield* signer
         .createProof({
           method: "POST",
@@ -273,6 +293,7 @@ export const make = Effect.gen(function* () {
       const issuedAt = yield* Clock.currentTimeMillis;
       const token = new TokenStore.RemoteDpopAccessToken({
         environmentId: descriptor.environmentId,
+        applicationId: PATHWAY_APPLICATION_ID,
         label: descriptor.label,
         endpoint: bootstrap.endpoint,
         accessToken: access.access_token,

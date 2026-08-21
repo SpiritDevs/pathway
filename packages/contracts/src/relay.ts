@@ -157,6 +157,7 @@ export const RelayManagedEndpointOrigin = Schema.Struct({
 export type RelayManagedEndpointOrigin = typeof RelayManagedEndpointOrigin.Type;
 
 export const RelayManagedEndpointRuntimeConfig = Schema.Struct({
+  environmentId: EnvironmentId,
   providerKind: RelayManagedEndpointProviderKind,
   connectorToken: TrimmedNonEmptyString,
   tunnelId: Schema.optional(TrimmedNonEmptyString),

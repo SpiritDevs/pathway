@@ -15,6 +15,7 @@ import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { CLOUD_ENDPOINT_RUNTIME_CONFIG, decodeRuntimeConfig } from "./config.ts";
 
 function bytesToString(bytes: Uint8Array): string {
@@ -96,6 +97,7 @@ export function classifyRelayClientOutput(line: string): "connected" | "warning"
 function runtimeConfigKey(config: RelayManagedEndpointRuntimeConfig): string {
   return JSON.stringify({
     providerKind: config.providerKind,
+    environmentId: config.environmentId,
     connectorToken: config.connectorToken,
     tunnelId: config.tunnelId ?? null,
     tunnelName: config.tunnelName ?? null,
@@ -117,6 +119,8 @@ const stopConnector = (connector: ActiveConnector | null) =>
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const relayClient = yield* RelayClient.RelayClient;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const environmentId = yield* environment.getEnvironmentId;
   const runtimeScope = yield* Scope.Scope;
   const activeRef = yield* Ref.make<ActiveConnector | null>(null);
   const desiredConfigRef = yield* Ref.make<RelayManagedEndpointRuntimeConfig | null>(null);
@@ -251,6 +255,16 @@ export const make = Effect.gen(function* () {
     );
 
   reconcileConfig = Effect.fn("CloudManagedEndpointRuntime.reconcileConfig")(function* (config) {
+    if (config && config.environmentId !== environmentId) {
+      yield* stopActive;
+      return {
+        status: "failed",
+        providerKind: config.providerKind,
+        reason: `Managed endpoint configuration belongs to environment ${config.environmentId}, not ${environmentId}.`,
+        ...(config.tunnelId ? { tunnelId: config.tunnelId } : {}),
+        ...(config.tunnelName ? { tunnelName: config.tunnelName } : {}),
+      } satisfies CloudManagedEndpointRuntimeStatus;
+    }
     if (!config || config.providerKind !== "cloudflare_tunnel") {
       yield* stopActive;
       return config

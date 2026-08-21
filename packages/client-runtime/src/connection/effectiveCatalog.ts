@@ -4,7 +4,7 @@
  *
  * @module connection/effectiveCatalog
  */
-import type { EnvironmentId } from "@spiritdevs/contracts";
+import { isPathwayEnvironmentDescriptor, type EnvironmentId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -43,7 +43,11 @@ function registryEntries(
   if (replica === null) return new Map();
   const registrations = new Map<EnvironmentId, EnvironmentRegistrationEntity>();
   for (const entity of replica.view.values()) {
-    if (isEnvironmentRegistrationEntity(entity) && entity.state === "active") {
+    if (
+      isEnvironmentRegistrationEntity(entity) &&
+      entity.state === "active" &&
+      isPathwayEnvironmentDescriptor(entity.descriptor)
+    ) {
       registrations.set(entity.environmentId, entity);
     }
   }

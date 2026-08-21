@@ -57,6 +57,7 @@ const REPOSITORY_IDENTITY = {
 
 const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") => ({
   environmentId,
+  applicationId: "pathway" as const,
   label,
   platform: { os: "darwin" as const, arch: "arm64" as const },
   serverVersion: "1.2.3",
@@ -215,6 +216,24 @@ interface BootstrapPage {
 }
 
 describe("environment registry", () => {
+  it("rejects registrations from an unmarked legacy application", async () => {
+    const t = harness();
+    await seed(t);
+    const { applicationId: _applicationId, ...legacyDescriptor } = descriptor();
+
+    await expect(
+      asUser(t, "manager").mutation(api.environments.register, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        publicKeyThumbprint: THUMBPRINT,
+        descriptor: legacyDescriptor,
+        relayLinkState: "linked",
+        managedEndpointAvailable: true,
+        serviceRoleIds: [],
+      }),
+    ).rejects.toThrow("Only Pathway environments may publish");
+  });
+
   it("takes ownership of a project whose environment the company has not registered", async () => {
     const t = harness();
     await seed(t);

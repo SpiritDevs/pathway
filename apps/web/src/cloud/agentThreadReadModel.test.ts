@@ -45,6 +45,30 @@ type EnvironmentRegistrationSyncEntity = Extract<
   { readonly entityKind: "environmentRegistration" }
 >;
 
+const pathwayRegistration: EnvironmentRegistrationSyncEntity = {
+  entityKind: "environmentRegistration",
+  id: EnvironmentRegistrationId.make("registration-pathway"),
+  environmentId: ENVIRONMENT_ID,
+  publicKeyThumbprint: "thumbprint",
+  descriptor: {
+    environmentId: ENVIRONMENT_ID,
+    applicationId: "pathway",
+    label: "This Mac",
+    platform: { os: "darwin", arch: "arm64" },
+    serverVersion: "2026.8.0",
+    capabilities: { repositoryIdentity: true },
+  },
+  relayLinkState: "linked",
+  managedEndpointAvailable: true,
+  lastSeenAt: 1_000,
+  serviceRoleIds: [],
+  teamIds: [],
+  state: "active",
+  registeredByMembershipId: null,
+  createdAt: 1_000,
+  updatedAt: 2_000,
+};
+
 function entity(kind: "cloudProject" | "environmentBinding" | "agentThread", payload: unknown) {
   const codec = companyEntityCodec(kind);
   if (codec === null) throw new Error(`missing ${kind} codec`);
@@ -168,8 +192,14 @@ const otherAgentThread = {
 } satisfies typeof agentThread;
 
 function replica(...values: ReadonlyArray<CompanySyncEntity>) {
+  const entities = values.some(
+    (value) =>
+      value.entityKind === "environmentRegistration" && value.environmentId === ENVIRONMENT_ID,
+  )
+    ? values
+    : [pathwayRegistration, ...values];
   return {
-    view: new Map(values.map((value) => [`${value.entityKind}:${value.id}`, value] as const)),
+    view: new Map(entities.map((value) => [`${value.entityKind}:${value.id}`, value] as const)),
   };
 }
 
@@ -230,6 +260,7 @@ describe("cloud Agent Thread read model", () => {
       publicKeyThumbprint: "thumbprint",
       descriptor: {
         environmentId: ENVIRONMENT_ID,
+        applicationId: "pathway",
         label: "This Mac",
         platform: { os: "darwin", arch: "arm64" },
         serverVersion: "2026.8.0",
@@ -301,6 +332,20 @@ describe("cloud Agent Thread read model", () => {
         (thread) => thread.id,
       ),
     ).toEqual(["thread-two"]);
+  });
+
+  it("does not surface projects or threads owned by an unmarked legacy application", () => {
+    const { applicationId: _applicationId, ...legacyDescriptor } = pathwayRegistration.descriptor;
+    const legacyRegistration = {
+      ...pathwayRegistration,
+      id: EnvironmentRegistrationId.make("registration-legacy"),
+      descriptor: legacyDescriptor,
+    } satisfies EnvironmentRegistrationSyncEntity;
+    const legacyReplica = replica(legacyRegistration, cloudProject, binding, agentThread);
+    const replicas = new Map([[COMPANY_ID, legacyReplica]]);
+
+    expect(cloudEnvironmentProjectsFromReplicas(replicas, ENVIRONMENT_ID)).toEqual([]);
+    expect(cloudEnvironmentThreadsFromReplicas(replicas, ENVIRONMENT_ID)).toEqual([]);
   });
 
   it("keeps the newest settled shell when companies contain the same thread", () => {

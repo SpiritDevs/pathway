@@ -12,9 +12,13 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as RelayClient from "@spiritdevs/shared/relayClient";
+import { EnvironmentId } from "@spiritdevs/contracts";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
+
+const ENVIRONMENT_ID = EnvironmentId.make("environment-test");
 
 const relayClientAvailableLayer = Layer.succeed(
   RelayClient.RelayClient,
@@ -39,6 +43,10 @@ const runtimeDependencies = (
     relayClientLayer,
     Layer.mock(ServerSecretStore.ServerSecretStore)({
       get: () => Effect.succeed(Option.none()),
+    }),
+    Layer.succeed(ServerEnvironment.ServerEnvironment, {
+      getEnvironmentId: Effect.succeed(ENVIRONMENT_ID),
+      getDescriptor: Effect.die("unused"),
     }),
   );
 
@@ -155,18 +163,21 @@ describe("CloudManagedEndpointRuntime", () => {
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
 
       yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-1",
         tunnelId: "tunnel-1",
         tunnelName: "pathway-env-1",
       });
       yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-1",
         tunnelId: "tunnel-1",
         tunnelName: "pathway-env-1",
       });
       yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token-2",
         tunnelId: "tunnel-1",
@@ -210,10 +221,12 @@ describe("CloudManagedEndpointRuntime", () => {
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
 
       const started = yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token",
       });
       const unsupported = yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "manual",
         connectorToken: "manual-token",
       });
@@ -221,6 +234,28 @@ describe("CloudManagedEndpointRuntime", () => {
       expect(started.status).toBe("running");
       expect(unsupported).toEqual({ status: "unsupported", providerKind: "manual" });
       expect(killed).toEqual([200]);
+    }),
+  );
+
+  it.effect("refuses a connector configuration owned by another environment", () =>
+    Effect.gen(function* () {
+      const spawn = vi.fn();
+      const runtime = yield* buildCloudManagedEndpointRuntime(ChildProcessSpawner.make(spawn));
+
+      const status = yield* runtime.applyConfig({
+        environmentId: EnvironmentId.make("another-environment"),
+        providerKind: "cloudflare_tunnel",
+        connectorToken: "foreign-token",
+        tunnelId: "foreign-tunnel",
+      });
+
+      expect(status).toMatchObject({
+        status: "failed",
+        providerKind: "cloudflare_tunnel",
+        reason: expect.stringContaining("another-environment"),
+        tunnelId: "foreign-tunnel",
+      });
+      expect(spawn).not.toHaveBeenCalled();
     }),
   );
 
@@ -246,6 +281,7 @@ describe("CloudManagedEndpointRuntime", () => {
       );
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
       const config = {
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel" as const,
         connectorToken: "token",
         tunnelId: "tunnel-1",
@@ -292,6 +328,7 @@ describe("CloudManagedEndpointRuntime", () => {
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
 
       const started = yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token",
         tunnelId: "tunnel-1",
@@ -340,6 +377,7 @@ describe("CloudManagedEndpointRuntime", () => {
       );
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
       const config = {
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel" as const,
         connectorToken: "token",
         tunnelId: "tunnel-1",
@@ -392,6 +430,7 @@ describe("CloudManagedEndpointRuntime", () => {
 
       const first = yield* runtime
         .applyConfig({
+          environmentId: ENVIRONMENT_ID,
           providerKind: "cloudflare_tunnel",
           connectorToken: "token-1",
         })
@@ -399,6 +438,7 @@ describe("CloudManagedEndpointRuntime", () => {
       yield* Deferred.await(firstSpawnEntered);
       const second = yield* runtime
         .applyConfig({
+          environmentId: ENVIRONMENT_ID,
           providerKind: "cloudflare_tunnel",
           connectorToken: "token-2",
         })
@@ -429,6 +469,7 @@ describe("CloudManagedEndpointRuntime", () => {
       const runtime = yield* buildCloudManagedEndpointRuntime(spawner);
 
       const status = yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token",
         tunnelId: "tunnel-1",
@@ -462,6 +503,7 @@ describe("CloudManagedEndpointRuntime", () => {
       );
 
       const status = yield* runtime.applyConfig({
+        environmentId: ENVIRONMENT_ID,
         providerKind: "cloudflare_tunnel",
         connectorToken: "token",
       });

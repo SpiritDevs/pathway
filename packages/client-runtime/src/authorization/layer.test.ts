@@ -20,6 +20,7 @@ const ENDPOINT = {
 };
 const DESCRIPTOR = {
   environmentId: ENVIRONMENT_ID,
+  applicationId: "pathway" as const,
   label: "Remote environment",
   platform: {
     os: "linux",
@@ -235,10 +236,38 @@ describe("RemoteEnvironmentAuthorization", () => {
     }),
   );
 
+  it.effect("rejects a remote descriptor from an unmarked legacy application", () =>
+    Effect.gen(function* () {
+      const { applicationId: _applicationId, ...legacyDescriptor } = DESCRIPTOR;
+      const harness = yield* makeHarness({
+        responses: [Response.json(legacyDescriptor)],
+      });
+
+      const failure = yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        return yield* remote
+          .authorizeBearer({
+            expectedEnvironmentId: ENVIRONMENT_ID,
+            httpBaseUrl: ENDPOINT.httpBaseUrl,
+            wsBaseUrl: ENDPOINT.wsBaseUrl,
+            bearerToken: "bearer-token",
+          })
+          .pipe(Effect.flip);
+      }).pipe(Effect.provide(harness.layer));
+
+      expect(failure).toMatchObject({
+        _tag: "ConnectionBlockedError",
+        reason: "unsupported",
+      });
+      expect(harness.fetch.calls).toHaveLength(1);
+    }),
+  );
+
   it.effect("reuses a valid persisted environment token without contacting the relay", () =>
     Effect.gen(function* () {
       const cached = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
+        applicationId: "pathway",
         label: DESCRIPTOR.label,
         endpoint: ENDPOINT,
         accessToken: "cached-access-token",
@@ -271,6 +300,7 @@ describe("RemoteEnvironmentAuthorization", () => {
     Effect.gen(function* () {
       const expired = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
+        applicationId: "pathway",
         label: DESCRIPTOR.label,
         endpoint: ENDPOINT,
         accessToken: "expired-access-token",
@@ -310,6 +340,7 @@ describe("RemoteEnvironmentAuthorization", () => {
     Effect.gen(function* () {
       const cached = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
+        applicationId: "pathway",
         label: DESCRIPTOR.label,
         endpoint: ENDPOINT,
         accessToken: "invalid-access-token",
@@ -349,6 +380,7 @@ describe("RemoteEnvironmentAuthorization", () => {
     Effect.gen(function* () {
       const cached = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
+        applicationId: "pathway",
         label: DESCRIPTOR.label,
         endpoint: ENDPOINT,
         accessToken: "cached-access-token",

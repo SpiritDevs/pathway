@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@spiritdevs/contracts";
+import { EnvironmentId, ExecutionEnvironmentApplicationId } from "@spiritdevs/contracts";
 import { RelayManagedEndpoint } from "@spiritdevs/contracts/relay";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -12,6 +12,7 @@ export class RemoteDpopAccessToken extends Schema.Class<RemoteDpopAccessToken>(
   "@spiritdevs/client-runtime/authorization/RemoteDpopAccessToken",
 )({
   environmentId: EnvironmentId,
+  applicationId: Schema.optionalKey(ExecutionEnvironmentApplicationId),
   label: Schema.String,
   endpoint: RelayManagedEndpoint,
   accessToken: Schema.String,

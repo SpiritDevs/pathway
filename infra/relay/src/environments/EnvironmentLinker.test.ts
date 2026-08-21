@@ -3,6 +3,7 @@ import type {
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
 } from "@spiritdevs/contracts/relay";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { RELAY_LINK_PROOF_TYP } from "@spiritdevs/shared/relayJwt";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -81,6 +82,7 @@ const makeRequest = Effect.gen(function* () {
     environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
     descriptor: {
       environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
+      applicationId: "pathway",
       label: "Link Test Environment",
       platform: { os: "darwin", arch: "arm64" },
       serverVersion: "0.0.0-test",
@@ -148,7 +150,11 @@ function testLayer(input?: {
                 wsBaseUrl: "wss://managed.example.test/ws",
                 providerKind: "cloudflare_tunnel",
               },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
+              runtime: {
+                environmentId: EnvironmentId.make("env-link-test"),
+                providerKind: "cloudflare_tunnel",
+                connectorToken: "connector-token",
+              },
             }),
         }),
       ),
@@ -208,6 +214,7 @@ describe("EnvironmentLinker", () => {
         environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
         descriptor: {
           environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
+          applicationId: "pathway",
           label: "Link Test Environment",
           platform: { os: "darwin", arch: "arm64" },
           serverVersion: "0.0.0-test",
@@ -289,6 +296,35 @@ describe("EnvironmentLinker", () => {
       ),
     );
   });
+
+  it.effect("rejects a link proof from an unmarked legacy application", () =>
+    Effect.gen(function* () {
+      const { request, payload } = yield* makeRequest;
+      const { applicationId: _applicationId, ...legacyDescriptor } = payload.descriptor;
+      const legacyPayload = {
+        ...payload,
+        jti: "legacy-application-proof-jti",
+        descriptor: legacyDescriptor,
+      } satisfies RelayEnvironmentLinkProofPayload;
+      const legacyRequest = {
+        ...request,
+        proof: signTestJwt(legacyPayload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
+      };
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", request: legacyRequest }),
+      );
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result) && isEnvironmentLinkProofInvalid(result.failure)) {
+        expect(result.failure).toMatchObject({
+          environmentId: "env-link-test",
+          reason: "descriptor_mismatch",
+          stage: "validate_descriptor",
+        });
+      }
+    }).pipe(Effect.provide(testLayer())),
+  );
 
   it.effect("rejects replayed JWT ids", () =>
     Effect.gen(function* () {

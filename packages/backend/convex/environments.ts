@@ -37,6 +37,7 @@ const relayLinkState = v.union(
 /** Hand-mirrored `ExecutionEnvironmentDescriptor` from `contracts/environment`. */
 const executionEnvironmentDescriptor = v.object({
   environmentId: v.string(),
+  applicationId: v.optional(v.literal("pathway")),
   label: v.string(),
   platform: v.object({
     os: v.union(
@@ -117,6 +118,7 @@ const REGISTRY_MAX_ROWS = 2_000;
 
 type Descriptor = {
   readonly environmentId: string;
+  readonly applicationId?: "pathway";
   readonly label: string;
   readonly platform: { readonly os: string; readonly arch: string };
   readonly device?: {
@@ -146,6 +148,7 @@ function descriptorKey(value: Descriptor): string {
   const capabilities = value.capabilities;
   return JSON.stringify([
     value.environmentId,
+    value.applicationId,
     value.label,
     value.platform.os,
     value.platform.arch,
@@ -319,6 +322,12 @@ export const register = mutation({
     const environmentId = requireTrimmed(args.environmentId, "An environment id");
     requireTrimmed(args.descriptor.label, "An environment label");
     requireTrimmed(args.descriptor.serverVersion, "A server version");
+    if (args.descriptor.applicationId !== "pathway") {
+      throw backendError(
+        "invalid-arguments",
+        "Only Pathway environments may publish to the Pathway registry.",
+      );
+    }
     if (args.descriptor.environmentId !== environmentId) {
       throw backendError(
         "invalid-arguments",

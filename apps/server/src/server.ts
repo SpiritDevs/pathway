@@ -438,6 +438,7 @@ const AuthLayerLive = EnvironmentAuth.layer.pipe(
 const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   RelayClientLive,
   CloudManagedEndpointRuntime.layer.pipe(
+    Layer.provide(ServerEnvironment.layer),
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(RelayClientLive),
   ),

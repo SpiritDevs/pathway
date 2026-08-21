@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { EnvironmentId } from "@spiritdevs/contracts";
 import type {
   RelayManagedEndpoint,
   RelayManagedEndpointOrigin,
@@ -827,6 +828,7 @@ export const make = Effect.gen(function* () {
       return {
         endpoint: managedEndpointForHostname(hostname),
         runtime: {
+          environmentId: EnvironmentId.make(input.environmentId),
           providerKind: "cloudflare_tunnel",
           connectorToken,
           tunnelId: tunnel.id,

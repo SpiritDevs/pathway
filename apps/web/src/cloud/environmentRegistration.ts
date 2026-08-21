@@ -84,6 +84,7 @@ export function environmentRegistrationMatchesInfo(
     registration.relayLinkState === info.relayLinkState &&
     registration.managedEndpointAvailable === info.managedEndpointAvailable &&
     current.environmentId === incoming.environmentId &&
+    current.applicationId === incoming.applicationId &&
     current.label === incoming.label &&
     current.platform.os === incoming.platform.os &&
     current.platform.arch === incoming.platform.arch &&

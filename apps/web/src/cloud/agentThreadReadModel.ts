@@ -11,6 +11,7 @@ import type {
   OrchestrationProjectShell,
   OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
+import { isPathwayEnvironmentDescriptor } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { normalizeProjectPathForComparison } from "@spiritdevs/shared/path";
 import * as DateTime from "effect/DateTime";
@@ -25,6 +26,23 @@ const isCloudProject = Schema.is(CloudProjectSyncEntity);
 const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
 const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
 const isAgentThread = Schema.is(AgentThreadEntity);
+
+function hasPathwayEnvironmentRegistration(
+  replica: CompanyRegistryReplicaState,
+  environmentId: EnvironmentId,
+): boolean {
+  for (const value of replica.view.values()) {
+    if (
+      isEnvironmentRegistration(value) &&
+      value.environmentId === environmentId &&
+      value.state === "active" &&
+      isPathwayEnvironmentDescriptor(value.descriptor)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function iso(timestamp: number): string {
   return new Date(timestamp).toISOString();
@@ -71,6 +89,7 @@ export function companyScopedEnvironmentProjects(
   if (companyId === null) return projects;
   const replica = replicas.get(companyId);
   if (replica === undefined) return EMPTY_PROJECTS;
+  if (!hasPathwayEnvironmentRegistration(replica, environmentId)) return EMPTY_PROJECTS;
   const bindings: EnvironmentBindingEntity[] = [];
   let caseInsensitive = false;
   for (const value of replica.view.values()) {
@@ -107,6 +126,7 @@ export function companyScopedEnvironmentThreads(
   if (companyId === null) return threads;
   const replica = replicas.get(companyId);
   if (replica === undefined) return EMPTY_THREADS;
+  if (!hasPathwayEnvironmentRegistration(replica, environmentId)) return EMPTY_THREADS;
   const threadIds = new Set<string>();
   for (const value of replica.view.values()) {
     if (isAgentThread(value) && value.environmentId === environmentId) {
@@ -152,6 +172,7 @@ export function cloudEnvironmentProjectsFromReplicas(
   const projects: OrchestrationProjectShell[] = [];
   const seen = new Set<string>();
   for (const replica of replicas.values()) {
+    if (!hasPathwayEnvironmentRegistration(replica, environmentId)) continue;
     const cloudProjects = new Map(
       [...replica.view.values()]
         .filter(isCloudProject)
@@ -203,6 +224,7 @@ export function cloudEnvironmentThreadsFromReplicas(
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   const latestByThreadId = new Map<string, AgentThreadEntity>();
   for (const replica of replicas.values()) {
+    if (!hasPathwayEnvironmentRegistration(replica, environmentId)) continue;
     for (const value of replica.view.values()) {
       if (!isAgentThread(value) || value.environmentId !== environmentId) continue;
       const existing = latestByThreadId.get(value.shell.id);

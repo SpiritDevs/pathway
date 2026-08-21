@@ -43,6 +43,7 @@ function registration(input: {
     publicKeyThumbprint: "thumbprint",
     descriptor: {
       environmentId: input.environmentId,
+      applicationId: "pathway",
       label: input.label,
       platform: { os: "darwin", arch: "arm64" },
       ...(input.deviceKind ? { device: { kind: input.deviceKind, model: "MacBook Pro" } } : {}),
@@ -109,6 +110,24 @@ describe("effective connection catalog", () => {
         device: { kind: "laptop", model: "MacBook Pro" },
       },
     });
+  });
+
+  it("excludes registrations from before the Pathway application boundary", () => {
+    const legacy = registration({
+      environmentId: REGISTRY_ENVIRONMENT_ID,
+      label: "Legacy application",
+      lastSeenAt: 12_345,
+    });
+    const { applicationId: _applicationId, ...legacyDescriptor } = legacy.descriptor;
+    const merged = mergeEffectiveConnectionCatalog({
+      localEntries: new Map(),
+      replica: replica({
+        ...legacy,
+        descriptor: legacyDescriptor,
+      }),
+    });
+
+    expect(merged.has(REGISTRY_ENVIRONMENT_ID)).toBe(false);
   });
 
   it("prefers same-id local configuration and fills only missing freshness", () => {
