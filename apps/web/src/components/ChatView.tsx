@@ -2060,6 +2060,33 @@ function ChatViewContent(props: ChatViewProps) {
   const handleNewThreadInActiveProject = useCallback(() => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   }, [activeProjectRef, handleNewThread]);
+  const handleRenameActiveThread = useCallback(
+    (title: string) => {
+      if (!isServerThread || !activeThread) return;
+      const trimmed = title.trim();
+      if (trimmed.length === 0) {
+        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        return;
+      }
+      if (trimmed === activeThread.title) return;
+      void updateThreadMetadata({
+        environmentId: activeThread.environmentId,
+        input: { threadId: activeThread.id, title: trimmed },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to rename thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [activeThread, isServerThread, updateThreadMetadata],
+  );
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -7939,6 +7966,7 @@ function ChatViewContent(props: ChatViewProps) {
                 : null}
             <ChatHeader
               activeThreadEnvironmentId={activeThread.environmentId}
+              activeThreadId={activeThread.id}
               activeThreadTitle={activeThread.title}
               activeProjectName={activeProject?.title}
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
@@ -7946,6 +7974,7 @@ function ChatViewContent(props: ChatViewProps) {
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProject}
               onOpenThread={onOpenRelatedThread}
+              {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
             />
           </header>
         ) : null}
