@@ -433,6 +433,9 @@
         min-height: 100dvh;
         align-items: center;
         justify-content: center;
+        /* The frameless window must stay movable while every boot gate renders
+           this surface; nothing interactive lives inside it. */
+        -webkit-app-region: drag;
       }
 
       #boot-shell {

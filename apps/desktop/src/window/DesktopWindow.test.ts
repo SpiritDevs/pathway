@@ -1050,7 +1050,7 @@ describe("DesktopWindow", () => {
           const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
           // 1. WSL-only boot shows the connecting splash.
-          yield* desktopWindow.showConnectingSplash;
+          yield* desktopWindow.showConnectingSplash();
           assert.equal(yield* Ref.get(scenario.createCalls), 1);
 
           // 2. Backend reports ready, but opening the real main fails. The pool
@@ -1086,7 +1086,7 @@ describe("DesktopWindow", () => {
         yield* Effect.gen(function* () {
           const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-          yield* desktopWindow.showConnectingSplash;
+          yield* desktopWindow.showConnectingSplash();
           assert.equal(yield* Ref.get(scenario.createCalls), 1);
 
           // Taskbar/dock activation during cold boot must bring the splash back
@@ -1107,7 +1107,7 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-        yield* desktopWindow.showConnectingSplash;
+        yield* desktopWindow.showConnectingSplash();
         yield* desktopWindow.dispatchMenuAction("open-settings");
 
         assert.equal(yield* Ref.get(scenario.createCalls), 1);
@@ -1126,7 +1126,7 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
 
-        yield* desktopWindow.showConnectingSplash;
+        yield* desktopWindow.showConnectingSplash();
         const readyExit = yield* Effect.exit(
           desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773")),
         );

@@ -1,5 +1,4 @@
 export type ClerkAuthGateState = "authenticated" | "loading" | "onboarding" | "public" | "redirect";
-export type WorkspaceValidationState = "checking" | "valid" | "unavailable";
 
 const PUBLIC_AUTH_PATHNAMES = new Set(["/login", "/register"]);
 
@@ -9,25 +8,27 @@ const PUBLIC_AUTH_PATHNAMES = new Set(["/login", "/register"]);
  * itself requires a signed-in user, so it is not in the public set.
  * `onboardingComplete` is `undefined` while the Clerk user object is still
  * loading — the gate holds rather than guessing.
+ *
+ * Workspace recovery validation never holds this gate. It runs in the
+ * background; if it finds the profile's workspace missing it restarts
+ * onboarding by clearing the completion marker, which flips this decision on a
+ * later render.
  */
 export function resolveClerkAuthGateState({
   isLoaded,
   isSignedIn,
   onboardingComplete,
   pathname,
-  workspaceValidation,
 }: {
   readonly isLoaded: boolean;
   readonly isSignedIn: boolean | undefined;
   readonly onboardingComplete: boolean | undefined;
   readonly pathname: string;
-  readonly workspaceValidation: WorkspaceValidationState;
 }): ClerkAuthGateState {
   if (PUBLIC_AUTH_PATHNAMES.has(pathname)) return "public";
   if (!isLoaded) return "loading";
   if (!isSignedIn) return "redirect";
   if (onboardingComplete === undefined) return "loading";
   if (!onboardingComplete && pathname !== "/onboarding") return "onboarding";
-  if (onboardingComplete && workspaceValidation === "checking") return "loading";
   return "authenticated";
 }

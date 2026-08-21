@@ -73,10 +73,7 @@ import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
-import {
-  resolveClerkAuthGateState,
-  type WorkspaceValidationState,
-} from "../components/clerk/authGate.logic";
+import { resolveClerkAuthGateState } from "../components/clerk/authGate.logic";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -180,7 +177,7 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
     () => getToken(resolveConvexClerkTokenOptions()),
     [getToken],
   );
-  const workspaceValidation = useWorkspaceRecoveryValidation({
+  useWorkspaceRecoveryValidation({
     enabled: onboardingComplete === true,
     fetchToken: fetchConvexToken,
     user,
@@ -190,7 +187,6 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
     isSignedIn,
     onboardingComplete,
     pathname,
-    workspaceValidation,
   });
 
   useEffect(() => {
@@ -210,21 +206,19 @@ function ConfiguredClerkAuthGate({ pathname }: { readonly pathname: string }) {
   return <RootRouteContent pathname={pathname} />;
 }
 
-interface WorkspaceValidationResult {
-  readonly key: string;
-  readonly status: Exclude<WorkspaceValidationState, "checking">;
-}
-
 /**
- * Confirms that a completed Clerk profile has a matching Convex workspace. Only a successful empty
- * catalog restarts onboarding; a network, token, or configuration failure leaves existing profile
- * state untouched so a transient outage cannot lock the user out.
+ * Confirms in the background that a completed Clerk profile still has a matching
+ * Convex workspace. Never holds the app: only an authoritative empty catalog
+ * restarts onboarding — by clearing the completion marker, which flips the auth
+ * gate on a later render. A network, token, or configuration failure leaves
+ * existing profile state untouched so a transient outage cannot lock the user
+ * out.
  */
 function useWorkspaceRecoveryValidation(options: {
   readonly enabled: boolean;
   readonly fetchToken: () => Promise<string | null>;
   readonly user: ReturnType<typeof useUser>["user"];
-}): WorkspaceValidationState {
+}): void {
   const convexUrl = resolveCloudSyncConvexUrl();
   const completionMarker = options.user
     ? parseProfileMetadata(options.user.unsafeMetadata)?.onboardingCompletedAt
@@ -233,7 +227,6 @@ function useWorkspaceRecoveryValidation(options: {
     options.enabled && options.user && completionMarker && convexUrl
       ? `${options.user.id}:${completionMarker}`
       : null;
-  const [result, setResult] = useState<WorkspaceValidationResult | null>(null);
 
   useEffect(() => {
     const user = options.user;
@@ -243,7 +236,7 @@ function useWorkspaceRecoveryValidation(options: {
     void (async () => {
       try {
         const { hasUsableOnboardingWorkspace } = await import("../cloud/onboardingProvisioning");
-        const recovery = await recoverMissingOnboardingWorkspace({
+        await recoverMissingOnboardingWorkspace({
           hasUsableWorkspace: async () => {
             const hasWorkspace = await hasUsableOnboardingWorkspace({
               convexUrl,
@@ -260,12 +253,8 @@ function useWorkspaceRecoveryValidation(options: {
             });
           },
         });
-        if (cancelled) return;
-        if (recovery === "valid") {
-          setResult({ key: validationKey, status: "valid" });
-        }
       } catch {
-        if (!cancelled) setResult({ key: validationKey, status: "unavailable" });
+        // A failed check must never restart onboarding; the next boot retries.
       }
     })();
 
@@ -273,10 +262,6 @@ function useWorkspaceRecoveryValidation(options: {
       cancelled = true;
     };
   }, [convexUrl, options.fetchToken, options.user, validationKey]);
-
-  if (!options.enabled) return "valid";
-  if (convexUrl === null) return "unavailable";
-  return result?.key === validationKey ? result.status : "checking";
 }
 
 function RootRouteContent({ pathname }: { readonly pathname: string }) {
