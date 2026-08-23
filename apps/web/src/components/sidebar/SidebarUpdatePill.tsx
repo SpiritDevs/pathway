@@ -142,6 +142,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
     : showUpdateDetails
       ? isDesktopUpdateButtonDisabled(state)
       : !canCheckForUpdate(state);
+  const isInteractionDisabled = disabled || isActionPending;
   const visible = isElectron && (!dismissed || !showUpdateDetails);
   const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
   const arm64Description =
@@ -150,7 +151,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const handleAction = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !state) return;
-    if (disabled || isActionPending) return;
+    if (isInteractionDisabled) return;
 
     setIsActionPending(true);
 
@@ -260,7 +261,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
         );
       })
       .finally(() => setIsActionPending(false));
-  }, [action, disabled, isActionPending, prefersReducedMotion, state]);
+  }, [action, isInteractionDisabled, prefersReducedMotion, state]);
 
   const handleCheckAnimationIteration = useCallback(() => {
     setIsCheckAnimationLatched(
@@ -308,7 +309,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
               ? "bg-update-surface text-update-foreground"
               : "text-[var(--sidebar-icon-color)]",
             expanded ? "h-7 w-full rounded-lg" : "size-9 rounded-md",
-            disabled && "cursor-not-allowed opacity-60",
+            isInteractionDisabled && "cursor-not-allowed opacity-60",
           )}
         >
           <div
@@ -325,10 +326,10 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                 <button
                   type="button"
                   aria-label={tooltip}
-                  aria-disabled={disabled || isActionPending || undefined}
-                  disabled={disabled || isActionPending}
+                  aria-disabled={isInteractionDisabled || undefined}
                   className={cn(
-                    "update-main relative flex h-full flex-1 items-center enabled:cursor-pointer",
+                    "update-main relative flex h-full flex-1 items-center",
+                    isInteractionDisabled ? "cursor-not-allowed" : "cursor-pointer",
                     expanded ? "gap-2 px-2" : "justify-center px-0",
                   )}
                   onClick={handleAction}
