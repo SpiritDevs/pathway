@@ -2,7 +2,7 @@ import type { UsageProviderKind } from "@spiritdevs/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { DailyTotals, HourlyTotals } from "@spiritdevs/shared/usageMerge";
+import type { DailyTotals, HourlyTotals, ModelTotals } from "@spiritdevs/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -32,6 +32,17 @@ const WINDOW_OPTIONS = [
   { days: 30, label: "30 days" },
   { days: 90, label: "90 days" },
 ] as const;
+
+export function sortUsageModels(
+  models: readonly ModelTotals[],
+  metric: UsageChartMetric,
+): readonly ModelTotals[] {
+  return metric === "tokens"
+    ? models.toSorted(
+        (left, right) => right.totalTokens - left.totalTokens || right.costUsd - left.costUsd,
+      )
+    : models;
+}
 
 export function UsagePage({ embedded = false }: { embedded?: boolean }) {
   const [windowSelection, setWindowSelection] = useState(() => ({
@@ -69,6 +80,10 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
     const byHour = new Map(merged.hourly.map((entry) => [entry.hourStart, entry]));
     return hours.map((hourStart) => byHour.get(hourStart) ?? zeroHour(hourStart));
   }, [isPast24Hours, merged.daily, merged.hourly, hours]);
+  const breakdownModels = useMemo(
+    () => sortUsageModels(merged.models, metric),
+    [merged.models, metric],
+  );
 
   // Ranked by whatever the toggle is showing, so the bars always descend.
   const orderedProviders = useMemo(
@@ -349,14 +364,14 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {merged.models.length === 0 ? (
+                      {breakdownModels.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="py-6 text-center text-muted-foreground">
                             No activity in this window.
                           </td>
                         </tr>
                       ) : (
-                        merged.models.map((model) => (
+                        breakdownModels.map((model) => (
                           <tr
                             key={`${model.provider}:${model.model}`}
                             className="border-b border-border/50"
