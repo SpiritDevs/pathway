@@ -870,6 +870,34 @@ export const replaceEnvironmentLinkAndCredential = mutation({
         q.eq("userId", args.userId).eq("environmentId", args.environmentId),
       )
       .unique();
+    const linksForKey = await ctx.db
+      .query("relayEnvironmentLinks")
+      .withIndex("by_key_and_revoked", (q) =>
+        q.eq("environmentPublicKey", args.environmentPublicKey).eq("revokedAt", null),
+      )
+      .collect();
+    const linksForDevice =
+      args.createdByDeviceId === null
+        ? []
+        : await ctx.db
+            .query("relayEnvironmentLinks")
+            .withIndex("by_user_device_and_revoked", (q) =>
+              q
+                .eq("userId", args.userId)
+                .eq("createdByDeviceId", args.createdByDeviceId)
+                .eq("revokedAt", null),
+            )
+            .collect();
+    const staleLinks = Array.from(
+      new Map(
+        [...linksForKey, ...linksForDevice]
+          .filter((row) => row._id !== previousLink?._id)
+          .map((row) => [row._id, row] as const),
+      ).values(),
+    );
+    for (const staleLink of staleLinks) {
+      await ctx.db.patch(staleLink._id, { revokedAt: args.now, updatedAt: args.now });
+    }
     const previousKey = previousLink?.environmentPublicKey;
     const link = {
       userId: args.userId,
@@ -913,6 +941,20 @@ export const replaceEnvironmentLinkAndCredential = mutation({
     }
     if (previousKey !== undefined && previousKey !== args.environmentPublicKey) {
       await revokeCredentialsIfUnlinked(ctx, args.environmentId, previousKey, args.now);
+    }
+    const staleCredentialKeys = new Map(
+      staleLinks.map((row) => [
+        `${row.environmentId}\u0000${row.environmentPublicKey}`,
+        { environmentId: row.environmentId, environmentPublicKey: row.environmentPublicKey },
+      ]),
+    );
+    for (const stale of staleCredentialKeys.values()) {
+      await revokeCredentialsIfUnlinked(
+        ctx,
+        stale.environmentId,
+        stale.environmentPublicKey,
+        args.now,
+      );
     }
     return null;
   },

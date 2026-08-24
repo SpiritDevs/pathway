@@ -123,6 +123,9 @@ export const make = Effect.gen(function* () {
     );
 
   const environmentIdRaw = yield* Effect.gen(function* () {
+    if (serverConfig.desktopEnvironmentId !== undefined) {
+      return serverConfig.desktopEnvironmentId;
+    }
     const persisted = yield* readPersistedEnvironmentId;
     if (persisted) {
       return persisted;

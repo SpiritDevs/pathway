@@ -54,6 +54,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
       assert.equal(environment.baseDir, "/tmp/pathway");
       assert.equal(environment.stateDir, "/tmp/pathway/userdata");
+      assert.equal(environment.hostEnvironmentIdPath, "/tmp/pathway/desktop-environment-id");
       assert.equal(environment.desktopSettingsPath, "/tmp/pathway/userdata/desktop-settings.json");
       assert.equal(environment.clientSettingsPath, "/tmp/pathway/userdata/client-settings.json");
       assert.equal(

@@ -701,8 +701,7 @@ export const makeServerLayer = Layer.unwrap(
                 times: CloudManagedEndpointRuntime.MAX_AUTOMATIC_CONNECTOR_ATTEMPTS - 1,
                 while: (error) =>
                   error._tag !== "EnvironmentHttpBadRequestError" &&
-                  error._tag !== "EnvironmentHttpUnauthorizedError" &&
-                  error._tag !== "EnvironmentHttpConflictError",
+                  error._tag !== "EnvironmentHttpUnauthorizedError",
                 schedule: Schedule.exponential("1 second").pipe(
                   Schedule.modifyDelay(({ duration }) =>
                     Effect.succeed(Duration.min(duration, Duration.seconds(30))),

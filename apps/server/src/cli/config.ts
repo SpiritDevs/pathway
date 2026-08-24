@@ -279,6 +279,7 @@ export const resolveServerConfig = (
       () => mode === "desktop",
     );
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
+    const desktopEnvironmentId = bootstrap?.desktopEnvironmentId;
     const desktopParentPid = bootstrap?.desktopParentPid;
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
@@ -340,6 +341,7 @@ export const resolveServerConfig = (
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
+      ...(desktopEnvironmentId === undefined ? {} : { desktopEnvironmentId }),
       desktopParentPid,
       desktopTelemetryFd,
       desktopTelemetryControlFd,

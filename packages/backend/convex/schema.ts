@@ -1046,11 +1046,9 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_environment", ["environmentId"])
     .index("by_environment_and_key", ["environmentId", "environmentPublicKey"])
-    .index("by_environment_key_and_revoked", [
-      "environmentId",
-      "environmentPublicKey",
-      "revokedAt",
-    ]),
+    .index("by_environment_key_and_revoked", ["environmentId", "environmentPublicKey", "revokedAt"])
+    .index("by_key_and_revoked", ["environmentPublicKey", "revokedAt"])
+    .index("by_user_device_and_revoked", ["userId", "createdByDeviceId", "revokedAt"]),
 
   relayManagedEndpointAllocations: defineTable({
     userId: v.string(),

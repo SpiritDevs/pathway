@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { EnvironmentId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -72,6 +73,38 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.pushAutoSettlement).toBe(true);
       expect(second.runtime?.mode).toBe("server");
       expect(second.device?.hostname).toBeTruthy();
+    }),
+  );
+
+  it.effect("uses the desktop host environment id instead of rebuildable server state", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "pathway-desktop-environment-test-",
+      });
+      const serverConfig = yield* makeServerConfig(baseDir);
+      yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
+      yield* fileSystem.writeFileString(serverConfig.environmentIdPath, "stale-userdata-id\n");
+      const desktopEnvironmentId = EnvironmentId.make("desktop-host-id");
+
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(
+              ServerConfig.layer({
+                ...serverConfig,
+                mode: "desktop",
+                desktopEnvironmentId,
+              }),
+            ),
+          ),
+        ),
+      );
+
+      expect(descriptor.environmentId).toBe(desktopEnvironmentId);
     }),
   );
 

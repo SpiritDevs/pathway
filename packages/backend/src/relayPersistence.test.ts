@@ -35,6 +35,31 @@ const reserve = (environmentId: string, now = "2026-08-14T00:00:00.000Z") => ({
   now,
 });
 
+const replaceLink = (input: {
+  readonly userId: string;
+  readonly environmentId: string;
+  readonly environmentPublicKey: string;
+  readonly deviceId: string | null;
+  readonly credentialId: string;
+  readonly credentialHash: string;
+  readonly now: string;
+}) => ({
+  userId: input.userId,
+  environmentId: input.environmentId,
+  environmentLabel: "Studio",
+  environmentPublicKey: input.environmentPublicKey,
+  endpointHttpBaseUrl: "https://environment.example.test",
+  endpointWsBaseUrl: "wss://environment.example.test",
+  endpointProviderKind: "pathway_relay" as const,
+  notificationsEnabled: true,
+  liveActivitiesEnabled: true,
+  managedTunnelsEnabled: true,
+  createdByDeviceId: input.deviceId,
+  credentialId: input.credentialId,
+  credentialHash: input.credentialHash,
+  now: input.now,
+});
+
 const activityState = (threadId: string, phase: "completed" | "failed" | "running") => ({
   environmentId: "environment-1",
   threadId,
@@ -163,6 +188,83 @@ describe("relayPersistence", () => {
         return rows.length;
       }),
     ).resolves.toBe(1);
+  });
+
+  it("moves a proven environment key to its new account and environment id", async () => {
+    const { relay } = testRelay();
+    await relay.mutation(
+      api.relayPersistence.replaceEnvironmentLinkAndCredential,
+      replaceLink({
+        userId: "user-old",
+        environmentId: "environment-old",
+        environmentPublicKey: "stable-public-key",
+        deviceId: null,
+        credentialId: "credential-old",
+        credentialHash: "hash-old",
+        now: "2026-08-14T00:00:00.000Z",
+      }),
+    );
+    await relay.mutation(
+      api.relayPersistence.replaceEnvironmentLinkAndCredential,
+      replaceLink({
+        userId: "user-new",
+        environmentId: "environment-new",
+        environmentPublicKey: "stable-public-key",
+        deviceId: "environment-new",
+        credentialId: "credential-new",
+        credentialHash: "hash-new",
+        now: "2026-08-14T00:01:00.000Z",
+      }),
+    );
+
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-old" }),
+    ).resolves.toEqual([]);
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-new" }),
+    ).resolves.toMatchObject([{ environmentId: "environment-new" }]);
+    await expect(
+      relay.query(api.relayPersistence.authenticateEnvironmentCredential, {
+        credentialHash: "hash-old",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("replaces stale links for the same account and desktop host after userdata is rebuilt", async () => {
+    const { relay } = testRelay();
+    await relay.mutation(
+      api.relayPersistence.replaceEnvironmentLinkAndCredential,
+      replaceLink({
+        userId: "user-1",
+        environmentId: "environment-old",
+        environmentPublicKey: "public-key-old",
+        deviceId: "desktop-host-1",
+        credentialId: "credential-old",
+        credentialHash: "hash-old",
+        now: "2026-08-14T00:00:00.000Z",
+      }),
+    );
+    await relay.mutation(
+      api.relayPersistence.replaceEnvironmentLinkAndCredential,
+      replaceLink({
+        userId: "user-1",
+        environmentId: "environment-new",
+        environmentPublicKey: "public-key-new",
+        deviceId: "desktop-host-1",
+        credentialId: "credential-new",
+        credentialHash: "hash-new",
+        now: "2026-08-14T00:01:00.000Z",
+      }),
+    );
+
+    await expect(
+      relay.query(api.relayPersistence.listEnvironmentLinksForUser, { userId: "user-1" }),
+    ).resolves.toMatchObject([{ environmentId: "environment-new" }]);
+    await expect(
+      relay.query(api.relayPersistence.authenticateEnvironmentCredential, {
+        credentialHash: "hash-old",
+      }),
+    ).resolves.toBeNull();
   });
 
   it("lets an account rename any linked environment without a reconnect overwriting it", async () => {

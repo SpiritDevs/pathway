@@ -123,6 +123,7 @@ describe("DesktopBackendConfiguration", () => {
     withHarness(
       Effect.gen(function* () {
         const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
 
         const first = yield* configuration.resolvePrimary;
@@ -144,6 +145,12 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.pathwayHome, environment.baseDir);
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
+        assert.match(first.bootstrap.desktopEnvironmentId ?? "", /^[0-9a-f-]{36}$/i);
+        assert.equal(second.bootstrap.desktopEnvironmentId, first.bootstrap.desktopEnvironmentId);
+        assert.equal(
+          (yield* fileSystem.readFileString(environment.hostEnvironmentIdPath)).trim(),
+          first.bootstrap.desktopEnvironmentId,
+        );
       }),
     ),
   );
@@ -157,6 +164,7 @@ describe("DesktopBackendConfiguration", () => {
         const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
+        assert.equal(wsl.bootstrap.desktopEnvironmentId, primary.bootstrap.desktopEnvironmentId);
       }),
     ),
   );
@@ -382,7 +390,12 @@ describe("DesktopBackendConfiguration", () => {
               Layer.provideMerge(serverExposureLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-              Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+              Layer.provideMerge(
+                makeEnvironmentLayer(baseDir, {
+                  isPackaged: false,
+                  devServerUrl: "http://127.0.0.1:5733",
+                }),
+              ),
               Layer.provideMerge(failingFileSystemLayer),
             ),
             Logger.layer([logger], { mergeWithExisting: false }),
@@ -417,6 +430,7 @@ describe("DesktopBackendConfiguration", () => {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.captureOutput, true);
+        assert.isUndefined(config.bootstrap.desktopEnvironmentId);
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(

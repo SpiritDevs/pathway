@@ -50,10 +50,10 @@ import {
   RELAY_URL_SECRET,
 } from "./config.ts";
 import {
+  applyCloudRelayConfig,
   type CloudHttpDependencies,
   cloudMintCredentialHandler,
   consumeCloudReplayGuards,
-  isCloudAccountTakeover,
   isSupportedLinkProviderKind,
   linkProofScopes,
   pendingServiceUpdateExists,
@@ -848,69 +848,54 @@ describe("link proof provider kinds", () => {
   });
 });
 
-describe("linked cloud account conflicts", () => {
-  const relayUrl = "https://relay.example.test";
+describe("cloud relay config replacement", () => {
+  it.effect("adopts the newly proven account without requiring the stale local link", () =>
+    Effect.gen(function* () {
+      const encoded = (value: string) => new TextEncoder().encode(value);
+      const values = new Map<string, Uint8Array>([
+        [CLOUD_LINKED_USER_ID, encoded("stale-user")],
+        [RELAY_URL_SECRET, encoded("https://relay.example.test")],
+      ]);
+      const reads: string[] = [];
+      const secrets: ServerSecretStore.ServerSecretStore["Service"] = {
+        get: (name) =>
+          Effect.sync(() => {
+            reads.push(name);
+            return Option.fromNullishOr(values.get(name));
+          }),
+        set: (name, value) =>
+          Effect.sync(() => {
+            values.set(name, value);
+          }),
+        create: unusedSecretStoreOperation,
+        getOrCreateRandom: unusedSecretStoreOperation,
+        remove: (name) =>
+          Effect.sync(() => {
+            values.delete(name);
+          }),
+      };
+      const cloudMintPublicKey = NodeCrypto.generateKeyPairSync("ed25519", {
+        publicKeyEncoding: { format: "pem", type: "spki" },
+        privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      }).publicKey;
+      const dependencies = {
+        secrets,
+        endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+          applyConfig: () => Effect.succeed({ status: "disabled" }),
+        }),
+      } as CloudHttpDependencies;
 
-  it("accepts config that keeps the environment on the same account", () => {
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: "user-1",
-        linkedRelayUrl: `${relayUrl}/`,
-        cloudUserId: "user-1",
-        relayUrl,
-      }),
-    ).toBe(false);
-  });
+      yield* applyCloudRelayConfig(dependencies, {
+        relayUrl: "https://relay.example.test",
+        relayIssuer: "https://relay.example.test",
+        cloudUserId: "current-user",
+        environmentCredential: "current-credential",
+        cloudMintPublicKey,
+        endpointRuntime: null,
+      });
 
-  it("rejects a different account on the relay the environment is linked to", () => {
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: "user-1",
-        linkedRelayUrl: relayUrl,
-        cloudUserId: "user-2",
-        relayUrl,
-      }),
-    ).toBe(true);
-  });
-
-  it("adopts config from a different relay whose account ids are unrelated", () => {
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: "dev-user-1",
-        linkedRelayUrl: "https://relay-dev.example.test",
-        cloudUserId: "prod-user-1",
-        relayUrl,
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects a mismatched account when the linked relay is unknown", () => {
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: "user-1",
-        linkedRelayUrl: null,
-        cloudUserId: "user-2",
-        relayUrl,
-      }),
-    ).toBe(true);
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: "user-1",
-        linkedRelayUrl: "not-a-url",
-        cloudUserId: "user-2",
-        relayUrl,
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts config for an environment that has never been linked", () => {
-    expect(
-      isCloudAccountTakeover({
-        linkedCloudUserId: null,
-        linkedRelayUrl: null,
-        cloudUserId: "user-1",
-        relayUrl,
-      }),
-    ).toBe(false);
-  });
+      expect(new TextDecoder().decode(values.get(CLOUD_LINKED_USER_ID))).toBe("current-user");
+      expect(reads).not.toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
 });

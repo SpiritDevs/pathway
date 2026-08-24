@@ -1,5 +1,6 @@
 import * as NodeOS from "node:os";
 
+import { EnvironmentId } from "@spiritdevs/contracts";
 import { parsePersistedServerObservabilitySettings } from "@spiritdevs/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -204,6 +205,7 @@ const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
 
 interface SharedBootstrapInput {
   readonly bootstrapToken: string;
+  readonly desktopEnvironmentId: Option.Option<EnvironmentId>;
   readonly observabilitySettings: BackendObservabilitySettings;
 }
 
@@ -381,6 +383,10 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       pathwayHome: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
+      ...Option.match(input.desktopEnvironmentId, {
+        onNone: () => ({}),
+        onSome: (desktopEnvironmentId) => ({ desktopEnvironmentId }),
+      }),
       desktopParentPid: process.pid,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
@@ -448,6 +454,10 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     // the SQLite file with the primary).
     host: wslBindHost,
     desktopBootstrapToken: input.bootstrapToken,
+    ...Option.match(input.desktopEnvironmentId, {
+      onNone: () => ({}),
+      onSome: (desktopEnvironmentId) => ({ desktopEnvironmentId }),
+    }),
     // The packaged sidecar is a Windows executable and cannot run inside the
     // Linux WSL backend. Keep the field absent instead of passing an unusable
     // `/mnt/.../*.exe` path; WSL resource telemetry is reported unavailable.
@@ -623,6 +633,40 @@ export const make = Effect.gen(function* () {
         ),
     }),
   );
+  const environmentIdRef = yield* SynchronizedRef.make(Option.none<EnvironmentId>());
+  const getOrCreateDesktopEnvironmentId = SynchronizedRef.modifyEffect(
+    environmentIdRef,
+    (current) => {
+      if (Option.isSome(current)) return Effect.succeed([Option.some(current.value), current]);
+      if (!environment.isPackaged || environment.isDevelopment) {
+        return Effect.succeed([Option.none<EnvironmentId>(), current]);
+      }
+      return Effect.gen(function* () {
+        yield* fileSystem.makeDirectory(environment.baseDir, { recursive: true });
+        const persisted = yield* fileSystem.readFileString(environment.hostEnvironmentIdPath).pipe(
+          Effect.map((value) => Option.some(value.trim())),
+          Effect.catchTags({
+            PlatformError: (cause) =>
+              cause.reason._tag === "NotFound"
+                ? Effect.succeed(Option.none<string>())
+                : Effect.fail(cause),
+          }),
+        );
+        const environmentId =
+          Option.isSome(persisted) && persisted.value.length > 0
+            ? EnvironmentId.make(persisted.value)
+            : EnvironmentId.make(yield* crypto.randomUUIDv4);
+        if (Option.isNone(persisted) || persisted.value.length === 0) {
+          yield* fileSystem.writeFileString(
+            environment.hostEnvironmentIdPath,
+            `${environmentId}\n`,
+            { mode: 0o600 },
+          );
+        }
+        return [Option.some(environmentId), Option.some(environmentId)] as const;
+      });
+    },
+  );
 
   // Both resolvers share the same bootstrap token: the renderer holds a
   // single token and uses it against whichever backend it's currently
@@ -631,11 +675,16 @@ export const make = Effect.gen(function* () {
   // restart cycle without having to bounce the desktop process.
   const sharedInputs = Effect.gen(function* () {
     const bootstrapToken = yield* getOrCreateBootstrapToken;
+    const desktopEnvironmentId = yield* getOrCreateDesktopEnvironmentId;
     const observabilitySettings = yield* readPersistedBackendObservabilitySettings.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return { bootstrapToken, observabilitySettings } satisfies SharedBootstrapInput;
+    return {
+      bootstrapToken,
+      desktopEnvironmentId,
+      observabilitySettings,
+    } satisfies SharedBootstrapInput;
   });
 
   const buildWslPrimaryConfig = Effect.gen(function* () {

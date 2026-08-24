@@ -6,6 +6,7 @@
  *
  * @module ServerConfig
  */
+import type { EnvironmentId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -76,6 +77,7 @@ export class ServerConfig extends Context.Service<
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
+    readonly desktopEnvironmentId?: EnvironmentId | undefined;
     readonly desktopParentPid?: number | undefined;
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
@@ -186,6 +188,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,
+    desktopEnvironmentId: undefined,
     desktopParentPid: undefined,
     desktopTelemetryFd: undefined,
     desktopTelemetryControlFd: undefined,

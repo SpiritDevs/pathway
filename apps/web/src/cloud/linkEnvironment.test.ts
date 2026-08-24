@@ -448,6 +448,11 @@ describe("web cloud link environment client", () => {
           wsBaseUrl: TARGET.wsBaseUrl,
         },
       });
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(bodyText(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
+        deviceId: TARGET.environmentId,
+        proof: "signed-proof",
+      });
     }),
   );
 

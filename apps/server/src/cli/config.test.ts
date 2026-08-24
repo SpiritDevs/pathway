@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import {
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
+  EnvironmentId,
 } from "@spiritdevs/contracts";
 import * as NetService from "@spiritdevs/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -277,6 +278,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           pathwayHome: baseDir,
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
+          desktopEnvironmentId: EnvironmentId.make("desktop-host-id"),
           desktopTelemetryFd: 4,
           desktopTelemetryControlFd: 5,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -330,6 +332,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        desktopEnvironmentId: EnvironmentId.make("desktop-host-id"),
         desktopTelemetryFd: 4,
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
