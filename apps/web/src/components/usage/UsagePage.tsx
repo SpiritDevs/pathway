@@ -614,9 +614,9 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
           {PROVIDER_ORDER.map((provider) => (
             <div key={provider} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2 text-sm text-foreground">
-                  <ProviderMark provider={provider} className="size-4" />
-                  {PROVIDER_LABEL[provider]}
+                <span className="flex items-center gap-2">
+                  <span className="size-4 shrink-0 rounded-full bg-muted" />
+                  <span className="h-3.5 w-20 rounded-sm bg-muted" />
                 </span>
                 <div className="h-3.5 w-14 rounded-sm bg-muted" />
               </div>
@@ -649,11 +649,19 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
           (label) => (
             <div key={label} className="flex flex-col gap-0.5 bg-background px-4 py-3">
               <span className="text-xs text-muted-foreground">{label}</span>
-              <div className="my-1 h-5 w-16 rounded-sm bg-muted" />
+              <div className="h-6 w-16 rounded-sm bg-muted" />
               <div className="h-3 w-24 rounded-sm bg-muted" />
             </div>
           ),
         )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium text-foreground">Breakdown</h2>
+          <div className="h-7 w-28 rounded-lg bg-input/40" />
+        </div>
+        <div className="h-44 rounded-sm bg-muted/35" />
       </section>
     </>
   );
