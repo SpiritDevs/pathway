@@ -19,6 +19,7 @@ import {
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
+  removePersistedRelayConnections,
 } from "./storageDocument.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -72,7 +73,7 @@ describe("ConnectionCatalogDocument", () => {
     ]);
   });
 
-  it("replaces obsolete connection metadata without discarding a reusable DPoP token", () => {
+  it("does not persist relay registrations or discard a reusable DPoP token", () => {
     const bearer = registerConnectionInCatalog(
       {
         ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
@@ -93,10 +94,27 @@ describe("ConnectionCatalogDocument", () => {
       new RelayConnectionRegistration({ target: relayTarget }),
     );
 
-    expect(relay.targets).toEqual([relayTarget]);
+    expect(relay.targets).toEqual([]);
     expect(relay.profiles).toEqual([]);
     expect(relay.credentials).toEqual([]);
     expect(relay.remoteDpopTokens).toEqual([REMOTE_TOKEN]);
+  });
+
+  it("removes relay targets from legacy catalogs", () => {
+    const relayTarget = new RelayConnectionTarget({
+      environmentId: ENVIRONMENT_ID,
+      label: "Remote",
+    });
+    const legacy = {
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [relayTarget],
+      remoteDpopTokens: [REMOTE_TOKEN],
+    };
+
+    expect(removePersistedRelayConnections(legacy)).toEqual({
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      remoteDpopTokens: [REMOTE_TOKEN],
+    });
   });
 
   it("removes every catalog record owned by an explicit disconnect", () => {
