@@ -65,7 +65,7 @@ packageExtensionsChecksum: sha256-FV3+2NW/9MFbunJaPsMxvO0LAzyfccoPtPiKoIXAwUU=
 patchedDependencies:
   '@effect/vitest@4.0.0-beta.103': a16b1e870d8c29e4a98b17cc4c638a4ff471753d8ca3487f78a22b759caf951b
   '@ff-labs/fff-node@0.9.4': 2b16019ce7ab61aec6478dd02f79ef468cc1d5c51e9d00764f7d2ab8167210c8
-  '@legendapp/list@3.3.5': 3362284f1fca70407e7c594cb8db04086bfebff5de10568f85c08661d405deee
+  '@legendapp/list@3.3.5': 064530db83875fa671559a81ae42dc159726dc2dd6ec4c982da44ff7c7a74706
   '@pierre/diffs@1.3.0-beta.10': 7ef7cb0cbabb17c15cdb137554068b36f15f6f5265e73fb51452aa3380db91aa
   alchemy@2.0.0-beta.65: 5165d435bf7fe06b507c18249063ac681e75dba62e3e674f2b66b175c935c1fc
   effect@4.0.0-beta.103: af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6
@@ -294,7 +294,7 @@ importers:
         version: 0.9.0
       '@legendapp/list':
         specifier: 'catalog:'
-        version: 3.3.5(patch_hash=3362284f1fca70407e7c594cb8db04086bfebff5de10568f85c08661d405deee)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+        version: 3.3.5(patch_hash=064530db83875fa671559a81ae42dc159726dc2dd6ec4c982da44ff7c7a74706)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@lexical/code':
         specifier: ^0.41.0
         version: 0.41.0
@@ -11116,7 +11116,7 @@ snapshots:
       jsbi: 4.3.2
     optional: true
 
-  '@legendapp/list@3.3.5(patch_hash=3362284f1fca70407e7c594cb8db04086bfebff5de10568f85c08661d405deee)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
+  '@legendapp/list@3.3.5(patch_hash=064530db83875fa671559a81ae42dc159726dc2dd6ec4c982da44ff7c7a74706)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
     dependencies:
       react: 19.2.6
       use-sync-external-store: 1.6.0(react@19.2.6)
