@@ -53,6 +53,22 @@ describe("makeCatalogStore", () => {
       expect(yield* Effect.flip(store.read)).toBe(failure);
     }),
   );
+
+  it.effect("removes legacy relay targets when loading a saved catalog", () =>
+    Effect.gen(function* () {
+      const writes: string[] = [];
+      const store = yield* makeCatalogStore({
+        read: Effect.succeed(
+          '{"schemaVersion":1,"targets":[{"_tag":"RelayConnectionTarget","environmentId":"legacy-environment","label":"Old Pathway Connect environment"}],"profiles":[],"credentials":[],"remoteDpopTokens":[]}',
+        ),
+        write: (raw) => Effect.sync(() => writes.push(raw)),
+      });
+
+      expect(yield* store.read).toEqual(emptyCatalog);
+      expect(writes).toHaveLength(1);
+      expect(decodeCatalog(writes[0]!)).toEqual(emptyCatalog);
+    }),
+  );
 });
 
 describe("makeCatalogBackend", () => {

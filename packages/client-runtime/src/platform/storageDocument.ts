@@ -100,14 +100,20 @@ export function registerConnectionInCatalog(
   );
   const cleaned =
     previous === undefined ? document : removeConnectionMetadata(document, previous, false);
+
+  // Pathway Connect environments belong to the Convex-backed company registry. A relay
+  // registration is only a request to connect during this client session; persisting it would
+  // leak the previous account's environment list into a later account or clean installation.
+  if (registration._tag === "RelayConnectionRegistration") {
+    return cleaned;
+  }
+
   const next: ConnectionCatalogDocument = {
     ...cleaned,
     targets: replaceCatalogValue(cleaned.targets, (value) => value.environmentId, target),
   };
 
   switch (registration._tag) {
-    case "RelayConnectionRegistration":
-      return next;
     case "BearerConnectionRegistration":
       return {
         ...next,
@@ -131,6 +137,18 @@ export function registerConnectionInCatalog(
         ),
       };
   }
+}
+
+/** Drops legacy device-local relay targets now owned by the company environment registry. */
+export function removePersistedRelayConnections(
+  document: ConnectionCatalogDocument,
+): ConnectionCatalogDocument {
+  const relayTargets = document.targets.filter((target) => target._tag === "RelayConnectionTarget");
+  if (relayTargets.length === 0) return document;
+  return relayTargets.reduce(
+    (current, target) => removeConnectionMetadata(current, target, false),
+    document,
+  );
 }
 
 export function removeConnectionFromCatalog(

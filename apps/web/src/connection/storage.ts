@@ -13,6 +13,7 @@ import {
   registerConnectionInCatalog,
   removeCatalogValue,
   removeConnectionFromCatalog,
+  removePersistedRelayConnections,
   replaceCatalogValue,
 } from "@spiritdevs/client-runtime/platform";
 import { TokenStore } from "@spiritdevs/client-runtime/authorization";
@@ -322,6 +323,18 @@ export const makeCatalogStore = Effect.fn("web.connectionStorage.makeCatalogStor
           }),
         ),
       );
+    }
+    const migrated = removePersistedRelayConnections(catalog);
+    if (migrated !== catalog) {
+      const encoded = yield* encodeCatalog(migrated);
+      yield* backend.write(encoded).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not remove legacy relay targets from the connection catalog.", {
+            error: cause.message,
+          }),
+        ),
+      );
+      catalog = migrated;
     }
     yield* Ref.set(state, Option.some(catalog));
     return catalog;
