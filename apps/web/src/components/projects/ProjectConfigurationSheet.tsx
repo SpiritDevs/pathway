@@ -17,6 +17,7 @@ import { CompanySettingsSheet } from "../settings/company/CompanySettingsSheet";
 import { ProjectDetail } from "../settings/ProjectSettingsPanel";
 import { SettingsSection } from "../settings/settingsLayout";
 import { MoveProjectWizard } from "./MoveProjectWizard";
+import { PendingProjectSetup } from "./PendingProjectSetup";
 import type { WorkspaceProject } from "./workspaceProjects.logic";
 
 export function ProjectConfigurationSheet({
@@ -44,14 +45,8 @@ export function ProjectConfigurationSheet({
         footer={<SheetClose render={<Button variant="outline" />}>Done</SheetClose>}
       >
         {project.group === null ? (
-          // Everything `ProjectDetail` edits — the icon, the checkouts, the thread defaults — belongs
-          // to a checkout. A project that has none has nothing here to configure yet, and saying so
-          // beats rendering an editor whose every control is disabled.
-          <SettingsSection id="project-checkout" title="Checkout">
-            <p className="text-sm text-muted-foreground">
-              No machine has a checkout of this project. Attach a directory on any machine to set
-              its icon, scripts, and new-thread defaults, and to run agents in it.
-            </p>
+          <SettingsSection id="project-checkout" title="Pending setup">
+            <PendingProjectSetup key={project.projectKey} project={project} />
           </SettingsSection>
         ) : (
           <ProjectDetail group={project.group} />

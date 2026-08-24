@@ -5,6 +5,7 @@ import {
   buildWorkspaceProjects,
   cloudProjectKey,
   unassignedWorkspaceProjects,
+  workspaceThreadStartAvailability,
   type WorkspaceProjectCandidate,
 } from "./workspaceProjects.logic";
 
@@ -169,5 +170,18 @@ describe("workspace project list", () => {
     expect(unassignedWorkspaceProjects(projects).map((project) => project.displayName)).toEqual([
       "Scratch",
     ]);
+  });
+});
+
+describe("workspaceThreadStartAvailability", () => {
+  it("distinguishes an empty catalog from checkoutless and runnable projects", () => {
+    expect(workspaceThreadStartAvailability([])).toBe("unavailable");
+    expect(workspaceThreadStartAvailability([{ group: null }])).toBe("needs-checkout");
+    expect(
+      workspaceThreadStartAvailability([
+        { group: null },
+        { group: group({ id: "local", projectKey: "local" }) },
+      ]),
+    ).toBe("available");
   });
 });

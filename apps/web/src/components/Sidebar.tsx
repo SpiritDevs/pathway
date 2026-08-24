@@ -167,6 +167,7 @@ import {
 } from "./Sidebar.snooze";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useWorkspaceProjects } from "./projects/useWorkspaceProjects";
+import { workspaceThreadStartAvailability } from "./projects/workspaceProjects.logic";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
@@ -205,6 +206,24 @@ const SNOOZED_SHELF_EXPANDED_KEY = "pathway:sidebar:snoozed-expanded";
 const ACTIVE_ORDER_KEY = "pathway:sidebar:active-order";
 const ActiveOrderSchema = Schema.Array(Schema.String);
 const EMPTY_ACTIVE_ORDER: readonly string[] = [];
+
+// #region DEBUG
+function debugSidebarProjects(
+  projectCount: number,
+  workspaceProjectCount: number,
+  threadStartAvailability: string,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      hypothesis: "H2",
+      event: "sidebar-projects-observed",
+      fields: { projectCount, workspaceProjectCount, threadStartAvailability },
+    }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 function compactSidebarTimeLabel(label: string): string {
   if (label === "just now") return "now";
@@ -1886,6 +1905,14 @@ export default function Sidebar() {
     [agentThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const workspaceProjects = useWorkspaceProjects();
+  const threadStartAvailability = workspaceThreadStartAvailability(workspaceProjects);
+
+  useEffect(() => {
+    // #region DEBUG
+    debugSidebarProjects(projects.length, workspaceProjects.length, threadStartAvailability);
+    // #endregion DEBUG
+  }, [projects.length, threadStartAvailability, workspaceProjects.length]);
+
   const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -3442,8 +3469,12 @@ export default function Sidebar() {
       activeThread: newThreadContext.activeThread ?? undefined,
       defaultProjectRef: newThreadContext.defaultProjectRef,
       handleNewThread: newThreadContext.handleNewThread,
+    }).then((didStart) => {
+      if (!didStart && threadStartAvailability !== "unavailable") {
+        openCommandPalette({ open: "new-thread-in" });
+      }
     });
-  }, [isMobile, newThreadContext, setOpenMobile]);
+  }, [isMobile, newThreadContext, setOpenMobile, threadStartAvailability]);
 
   // chat.newLocal is retained as a fallback for custom keybinding setups.
   const newThreadShortcutLabel =
@@ -3514,7 +3545,7 @@ export default function Sidebar() {
                         type="button"
                         className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
+                        disabled={threadStartAvailability === "unavailable"}
                         aria-label="New thread"
                       />
                     }

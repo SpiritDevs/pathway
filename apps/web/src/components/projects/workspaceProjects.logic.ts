@@ -34,6 +34,22 @@ export interface WorkspaceProject {
   readonly cloudProjectId: string | null;
 }
 
+export type WorkspaceThreadStartAvailability = "unavailable" | "needs-checkout" | "available";
+
+/**
+ * Whether Agent Threads can start from the workspace project catalog.
+ *
+ * Company projects without a checkout are still actionable: the new-thread picker materialises a
+ * checkout when the user selects one. Treating only environment-local groups as available is what
+ * made the sidebar list projects while disabling every way to start work in them.
+ */
+export function workspaceThreadStartAvailability(
+  projects: ReadonlyArray<Pick<WorkspaceProject, "group">>,
+): WorkspaceThreadStartAvailability {
+  if (projects.length === 0) return "unavailable";
+  return projects.some((project) => project.group !== null) ? "available" : "needs-checkout";
+}
+
 /** Company projects with no checkout need a route key that cannot collide with a grouping key. */
 export function cloudProjectKey(cloudProjectId: string): string {
   return `cloud:${cloudProjectId}`;

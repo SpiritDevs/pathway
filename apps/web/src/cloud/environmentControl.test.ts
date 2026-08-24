@@ -275,6 +275,7 @@ describe("environment control function references", () => {
 
     await control.ensureEnvironmentProject({
       companyId: COMPANY_ID,
+      cloudProjectId: "cloud-project-a",
       // A full project shell still satisfies the narrowed parameter; the mutation reads four
       // fields and the rest are along for the ride.
       project: {
@@ -290,6 +291,7 @@ describe("environment control function references", () => {
       name: "cloudProjects:ensureEnvironmentProject",
       args: {
         companyId: COMPANY_ID,
+        cloudProjectId: "cloud-project-a",
         environmentId: ENVIRONMENT_ID,
         localProjectId: "project-a",
         localWorkspaceRoot: "/workspace/pathway",

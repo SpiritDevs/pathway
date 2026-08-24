@@ -1581,7 +1581,9 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+  }
 
+  if (projectThreadItems.length > 0) {
     actionItems.push({
       kind: "submenu",
       value: "action:new-thread-in",

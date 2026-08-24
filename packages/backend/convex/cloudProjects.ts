@@ -100,6 +100,7 @@ export const createCompanyProject = mutation({
 export const ensureEnvironmentProject = mutation({
   args: {
     companyId: domainIdArg,
+    cloudProjectId: v.optional(domainIdArg),
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.union(v.string(), v.null()),
@@ -120,6 +121,7 @@ export const ensureEnvironmentProject = mutation({
         : trimmed(args.localWorkspaceRoot, "A local workspace root");
     const repositoryIdentity = args.repositoryIdentity;
     const repositoryKey = repositoryIdentity?.canonicalKey ?? null;
+    const explicitCloudProjectId = args.cloudProjectId;
 
     const registration = await ctx.db
       .query("environmentRegistrations")
@@ -131,6 +133,27 @@ export const ensureEnvironmentProject = mutation({
     // Only an environment the company has admitted may make that claim, so an unregistered one
     // takes the project and leaves the binding for later.
     const environmentRegistered = registration !== null && registration.state === "active";
+
+    const explicitProject =
+      explicitCloudProjectId === undefined
+        ? null
+        : await ctx.db
+            .query("cloudProjects")
+            .withIndex("by_company_and_domain_id", (q) =>
+              q.eq("companyId", actor.company._id).eq("id", explicitCloudProjectId),
+            )
+            .unique();
+    if (explicitCloudProjectId !== undefined) {
+      if (explicitProject === null || explicitProject.deletedAt !== null) {
+        throw backendError("entity-not-found", "The company project is no longer available.");
+      }
+      if (!environmentRegistered) {
+        throw backendError(
+          "environment-not-registered",
+          "Register this environment with the company before attaching its checkout.",
+        );
+      }
+    }
 
     let binding: Doc<"environmentBindings"> | null = !environmentRegistered
       ? null
@@ -161,6 +184,15 @@ export const ensureEnvironmentProject = mutation({
           break;
         }
       }
+    }
+    if (explicitProject !== null) {
+      if (project !== null && project._id !== explicitProject._id) {
+        throw backendError(
+          "foreign-id-conflict",
+          "This checkout is already bound to another company project.",
+        );
+      }
+      project = explicitProject;
     }
     project ??= await ctx.db
       .query("cloudProjects")

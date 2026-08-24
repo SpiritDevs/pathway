@@ -22,6 +22,7 @@ const BINDING_ID = "0198c0de-aaaa-7aaa-8aaa-000000000004";
 const MILESTONE_ID = "0198c0de-aaaa-7aaa-8aaa-000000000005";
 const ENVIRONMENT_ID = "environment-macbook";
 const LOCAL_PROJECT_ID = "local-pathway";
+const PENDING_PROJECT_ID = "0198c0de-aaaa-7aaa-8aaa-000000000006";
 const NOW = 1_700_000_000_000;
 
 function harness() {
@@ -137,6 +138,77 @@ async function seed(t: Harness) {
     return { companyId, projectId, bindingId, threadId, milestoneId };
   });
 }
+
+async function registerEnvironment(
+  t: Harness,
+  companyId: Awaited<ReturnType<typeof seed>>["companyId"],
+) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("environmentRegistrations", {
+      id: "0198c0de-cccc-7ccc-8ccc-000000000001",
+      companyId,
+      environmentId: ENVIRONMENT_ID,
+      publicKeyThumbprint: "thumbprint",
+      descriptor: { platform: { os: "darwin" } },
+      relayLinkState: "linked",
+      managedEndpointAvailable: false,
+      lastSeenAt: NOW,
+      serviceRoleIds: [],
+      teamIds: [],
+      state: "active",
+      registeredByMembershipId: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+  });
+}
+
+describe("checkoutless project setup", () => {
+  it("binds a new local checkout to the explicitly selected company project", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await registerEnvironment(t, ids.companyId);
+    const pendingProjectDocId = await t.run(async (ctx) =>
+      ctx.db.insert("cloudProjects", {
+        id: PENDING_PROJECT_ID,
+        companyId: ids.companyId,
+        name: "Pending setup",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      }),
+    );
+
+    const result = await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PENDING_PROJECT_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "local-pending",
+      localWorkspaceRoot: "/work/pending",
+      name: "Pending setup",
+    });
+
+    expect(result).toBe(PENDING_PROJECT_ID);
+    const state = await t.run(async (ctx) => ({
+      project: await ctx.db.get(pendingProjectDocId),
+      binding: (await ctx.db.query("environmentBindings").collect()).find(
+        (binding) => binding.localProjectId === "local-pending",
+      ),
+      duplicate: (await ctx.db.query("cloudProjects").collect()).find(
+        (project) => project.id === "local-pending",
+      ),
+    }));
+    expect(state.binding?.cloudProjectId).toBe(pendingProjectDocId);
+    expect(state.project?.preferredBindingId).toBe(state.binding?.id);
+    expect(state.duplicate).toBeUndefined();
+  });
+});
 
 describe("company project deletion", () => {
   it("tombstones the shared project and leaves durable revocations for offline checkouts", async () => {

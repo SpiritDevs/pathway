@@ -79,6 +79,7 @@ export function useMaterializeWorkspaceProject() {
         try {
           await control.ensureEnvironmentProject({
             companyId: companyId as CompanyId,
+            ...(project.cloudProjectId === null ? {} : { cloudProjectId: project.cloudProjectId }),
             project: {
               environmentId: created.value.environmentId,
               id: created.value.projectId,

@@ -164,6 +164,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
   ensureEnvironmentProject: mutationReference<
     {
       readonly companyId: CompanyId;
+      readonly cloudProjectId?: string;
       readonly environmentId: EnvironmentId;
       readonly localProjectId: string;
       readonly localWorkspaceRoot: string | null;
@@ -312,6 +313,8 @@ export interface EnvironmentControlClient {
   }) => Promise<void>;
   readonly ensureEnvironmentProject: (args: {
     readonly companyId: CompanyId;
+    /** Existing company project to attach this checkout to instead of creating or inferring one. */
+    readonly cloudProjectId?: string;
     /**
      * Only the fields the mutation sends. Repository identity remains optional because a caller
      * that has just created a project has not received its asynchronous enrichment yet.
@@ -451,9 +454,10 @@ export function makeEnvironmentControlClient(options: {
       ).then((summary) => summary.id),
     createCompanyProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
-    ensureEnvironmentProject: ({ companyId, project }) =>
+    ensureEnvironmentProject: ({ companyId, cloudProjectId, project }) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject, {
         companyId,
+        ...(cloudProjectId === undefined ? {} : { cloudProjectId }),
         environmentId: project.environmentId,
         localProjectId: project.id,
         localWorkspaceRoot: project.workspaceRoot,

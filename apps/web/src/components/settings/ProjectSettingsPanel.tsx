@@ -81,6 +81,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { AddProjectConnectionDialog } from "../projects/AddProjectConnectionDialog";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import { MoveProjectWizard } from "../projects/MoveProjectWizard";
+import { PendingProjectSetup } from "../projects/PendingProjectSetup";
 import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
@@ -339,11 +340,8 @@ export function CheckoutlessProjectSettings({
 
   return (
     <SettingsPageContainer className="max-w-3xl">
-      <SettingsSection title="Project">
-        <SettingsRow
-          title={project.displayName}
-          description="No machine has a checkout of this project yet. Attach a directory to configure its icon, scripts, and new-thread defaults."
-        />
+      <SettingsSection title="Pending setup">
+        <PendingProjectSetup key={project.projectKey} project={project} />
       </SettingsSection>
       <SettingsSection title="Danger">
         <SettingsRow

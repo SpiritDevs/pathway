@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
+import { useWorkspaceProjects } from "../components/projects/useWorkspaceProjects";
+import { workspaceThreadStartAvailability } from "../components/projects/workspaceProjects.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -20,6 +22,20 @@ import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+
+// #region DEBUG
+function debugThreadsLanding(
+  hypothesis: string,
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -39,6 +55,7 @@ function ChatIndexRouteView() {
  */
 function IndexDraftLanding() {
   const projects = useProjects();
+  const workspaceProjects = useWorkspaceProjects();
   const threads = useThreadShells();
   const agentThreads = useMemo(
     () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
@@ -58,16 +75,59 @@ function IndexDraftLanding() {
   );
 
   useEffect(() => {
+    // #region DEBUG
+    debugThreadsLanding("H1/H2", "landing-state-observed", {
+      bootstrapped,
+      projectCount: projects.length,
+      workspaceProjectCount: workspaceProjects.length,
+      threadStartAvailability: workspaceThreadStartAvailability(workspaceProjects),
+      threadCount: threads.length,
+      agentThreadCount: agentThreads.length,
+      hasMostRecentProject: mostRecentProject !== null,
+      starting: startingRef.current,
+      failed: startState.failed,
+    });
+    // #endregion DEBUG
+  }, [
+    agentThreads.length,
+    bootstrapped,
+    mostRecentProject,
+    projects.length,
+    startState.failed,
+    threads.length,
+    workspaceProjects,
+  ]);
+
+  useEffect(() => {
     if (mostRecentProject === null || startingRef.current) {
       return;
     }
     startingRef.current = true;
+    // #region DEBUG
+    debugThreadsLanding("H3", "draft-start-requested", {
+      projectCount: projects.length,
+      bootstrapped,
+    });
+    // #endregion DEBUG
     void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
       replace: true,
-    }).catch(() => {
-      startingRef.current = false;
-      setStartState((state) => ({ ...state, failed: true }));
-    });
+    })
+      .then(() => {
+        // #region DEBUG
+        debugThreadsLanding("H3", "draft-start-resolved", {
+          projectCount: projects.length,
+        });
+        // #endregion DEBUG
+      })
+      .catch(() => {
+        // #region DEBUG
+        debugThreadsLanding("H3", "draft-start-rejected", {
+          projectCount: projects.length,
+        });
+        // #endregion DEBUG
+        startingRef.current = false;
+        setStartState((state) => ({ ...state, failed: true }));
+      });
   }, [handleNewThread, mostRecentProject, startState.retryRequest]);
 
   if (!bootstrapped) {
@@ -85,7 +145,7 @@ function IndexDraftLanding() {
       />
     ) : null;
   }
-  return <NoProjectsHero />;
+  return <NoProjectsHero availability={workspaceThreadStartAvailability(workspaceProjects)} />;
 }
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
@@ -109,8 +169,14 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
   );
 }
 
-function NoProjectsHero() {
+function NoProjectsHero({
+  availability,
+}: {
+  readonly availability: ReturnType<typeof workspaceThreadStartAvailability>;
+}) {
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
+  const openNewThread = useCallback(() => openCommandPalette({ open: "new-thread-in" }), []);
+  const hasWorkspaceProjects = availability !== "unavailable";
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
@@ -122,12 +188,16 @@ function NoProjectsHero() {
                 What should we work on?
               </EmptyTitle>
               <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-                Add a project to start your first thread.
+                {availability === "needs-checkout"
+                  ? "Choose a project to create its checkout and start your first thread."
+                  : hasWorkspaceProjects
+                    ? "Choose a project to start your first thread."
+                    : "Add a project to start your first thread."}
               </EmptyDescription>
               <div className="mt-6 flex justify-center">
-                <Button size="sm" onClick={openAddProject}>
+                <Button size="sm" onClick={hasWorkspaceProjects ? openNewThread : openAddProject}>
                   <PlusIcon className="size-4" />
-                  Add project
+                  {hasWorkspaceProjects ? "New thread" : "Add project"}
                 </Button>
               </div>
             </EmptyHeader>
