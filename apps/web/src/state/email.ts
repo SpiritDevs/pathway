@@ -352,14 +352,32 @@ const summaryOfSyncedMessage = (
 const bindingKey = (environmentId: EnvironmentId, projectId: ProjectId) =>
   `${environmentId}\0${projectId}`;
 
+export interface EmailProjectScopeConnection {
+  readonly environmentId: EnvironmentId;
+  readonly id: ProjectId;
+}
+
+const EMPTY_EMAIL_PROJECT_CONNECTIONS: ReadonlyArray<EmailProjectScopeConnection> = Object.freeze(
+  [],
+);
+
 function syncedMessageMatchesScope(
   item: CapturedEmailListItem,
   scope: EmailInboxScope,
   primaryEnvironmentId: EnvironmentId | null,
   bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>,
+  projectConnections: ReadonlyArray<EmailProjectScopeConnection>,
 ): boolean {
   if (scope.type === "all") return true;
-  if (scope.type === "unassigned") return item.cloudProjectId === null;
+  if (scope.type === "unassigned") return item.attribution.projectId === null;
+  if (
+    projectConnections.some(
+      (connection) =>
+        connection.environmentId === item.environmentId &&
+        connection.id === item.attribution.projectId,
+    )
+  )
+    return true;
   if (primaryEnvironmentId === null) return false;
   const binding = bindings
     .get(bindingKey(primaryEnvironmentId, scope.projectId))
@@ -383,6 +401,7 @@ export function mergeSyncedMessages(input: {
   readonly environmentId: EnvironmentId | null;
   readonly bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>;
   readonly selectedCompanyId: CompanyId | null;
+  readonly projectConnections?: ReadonlyArray<EmailProjectScopeConnection>;
 }): ReadonlyArray<CapturedEmailListItem> {
   const rows = new Map<string, CapturedEmailListItem>();
   const scopedSynced =
@@ -432,7 +451,15 @@ export function mergeSyncedMessages(input: {
       entity.message,
       entity.tagIds ?? [],
     );
-    if (!syncedMessageMatchesScope(item, input.scope, input.primaryEnvironmentId, input.bindings)) {
+    if (
+      !syncedMessageMatchesScope(
+        item,
+        input.scope,
+        input.primaryEnvironmentId,
+        input.bindings,
+        input.projectConnections ?? [],
+      )
+    ) {
       continue;
     }
     const key = `${entity.companyId}\0${entity.environmentId}\0${entity.message.id}`;
@@ -524,8 +551,6 @@ export function mergeSyncedInboxSummaries(input: {
 export function emailInboxSummariesFromMessages(input: {
   readonly messages: ReadonlyArray<CapturedEmailListItem>;
   readonly local: ReadonlyArray<EmailInboxSummary>;
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly bindings: ReadonlyMap<string, ReadonlyArray<CompanyProjectBinding>>;
 }): ReadonlyArray<EmailInboxSummary> {
   const summaries = new Map(
     input.local.map((inbox) => [
@@ -562,29 +587,11 @@ export function emailInboxSummariesFromMessages(input: {
       }
     };
     incrementWithReadState(ALL_EMAIL_SCOPE);
-    if (message.cloudProjectId === null) {
+    if (message.attribution.projectId === null) {
       incrementWithReadState(UNASSIGNED_EMAIL_SCOPE);
       continue;
     }
-    let projectId =
-      message.environmentId === input.primaryEnvironmentId ? message.attribution.projectId : null;
-    if (projectId === null && input.primaryEnvironmentId !== null && message.companyId !== null) {
-      const prefix = `${input.primaryEnvironmentId}\0`;
-      for (const [key, bindings] of input.bindings) {
-        if (
-          key.startsWith(prefix) &&
-          bindings.some(
-            (binding) =>
-              binding.companyId === message.companyId &&
-              binding.cloudProjectId === message.cloudProjectId,
-          )
-        ) {
-          projectId = key.slice(prefix.length) as ProjectId;
-          break;
-        }
-      }
-    }
-    if (projectId !== null) incrementWithReadState({ type: "project", projectId });
+    incrementWithReadState({ type: "project", projectId: message.attribution.projectId });
   }
   return [...summaries.values()];
 }
@@ -599,6 +606,7 @@ export function emailInboxSummariesFromMessages(input: {
 export function useEmailInbox(
   scope: EmailInboxScope,
   environmentFilter: EnvironmentId | null = null,
+  projectConnections: ReadonlyArray<EmailProjectScopeConnection> = EMPTY_EMAIL_PROJECT_CONNECTIONS,
 ): EmailInboxView {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const selectedCompanyId = useAtomValue(activeCompanyIdAtom);
@@ -631,6 +639,7 @@ export function useEmailInbox(
         environmentId: environmentFilter,
         bindings,
         selectedCompanyId,
+        projectConnections,
       }),
     [
       bindings,
@@ -640,6 +649,7 @@ export function useEmailInbox(
       scope,
       selectedCompanyId,
       synced,
+      projectConnections,
     ],
   );
   const inboxes = useMemo(
@@ -647,10 +657,8 @@ export function useEmailInbox(
       emailInboxSummariesFromMessages({
         messages,
         local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
-        primaryEnvironmentId: environmentId,
-        bindings,
       }),
-    [bindings, environmentId, messages, query.data?.inboxes, streamView.state.inboxes],
+    [messages, query.data?.inboxes, streamView.state.inboxes],
   );
 
   return {
@@ -675,6 +683,7 @@ export function useEmailInbox(
 export function useEmailInboxSummaries(
   scope: EmailInboxScope,
   environmentFilter: EnvironmentId | null = null,
+  projectConnections: ReadonlyArray<EmailProjectScopeConnection> = EMPTY_EMAIL_PROJECT_CONNECTIONS,
 ): ReadonlyArray<EmailInboxSummary> {
   const environmentId = useAtomValue(primaryEnvironmentIdAtom);
   const selectedCompanyId = useAtomValue(activeCompanyIdAtom);
@@ -697,6 +706,7 @@ export function useEmailInboxSummaries(
         environmentId: environmentFilter,
         bindings,
         selectedCompanyId,
+        projectConnections,
       }),
     [
       bindings,
@@ -706,6 +716,7 @@ export function useEmailInboxSummaries(
       scope,
       selectedCompanyId,
       synced,
+      projectConnections,
     ],
   );
   return useMemo(
@@ -713,10 +724,8 @@ export function useEmailInboxSummaries(
       emailInboxSummariesFromMessages({
         messages,
         local: streamView.state.inboxes ?? query.data?.inboxes ?? EMPTY_EMAIL_INBOXES,
-        primaryEnvironmentId: environmentId,
-        bindings,
       }),
-    [bindings, environmentId, messages, query.data?.inboxes, streamView.state.inboxes],
+    [messages, query.data?.inboxes, streamView.state.inboxes],
   );
 }
 

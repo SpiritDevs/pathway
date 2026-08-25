@@ -53,7 +53,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
-import { buildEmailSidebarProjects } from "./emailSidebar.logic";
+import { buildEmailSidebarProjects, findEmailSidebarProject } from "./emailSidebar.logic";
 import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
@@ -259,9 +259,12 @@ function LocalSmtpInboxes() {
 
   // The same atom the list pane reads, so the badges never disagree with the rows beside them.
   const scope = useMemo(() => emailScopeFromParam(search.inbox), [search.inbox]);
+  const selectedProject =
+    scope.type === "project" ? findEmailSidebarProject(projects, scope.projectId) : null;
   const inboxes = useEmailInboxSummaries(
     scope,
     (search.environment ?? null) as EnvironmentId | null,
+    selectedProject?.connections,
   );
   const activeKey = onEmail && search.analytics !== true ? emailScopeKey(scope) : null;
 
@@ -349,7 +352,9 @@ function LocalSmtpInboxes() {
                 type: "project",
                 projectId: project.inboxProjectId,
               };
-              const unread = unreadFor(projectScope);
+              const unread = [...new Set(project.connections.map((connection) => connection.id))]
+                .map((projectId) => unreadFor({ type: "project", projectId }))
+                .reduce((total, count) => total + count, 0);
               const projectSettings = findEmailProjectSettings(settings, project.inboxProjectId);
               // The settings document is the authority on a mute — it is what the toast host reads
               // — with the inbox summary answering until the first settings read lands.

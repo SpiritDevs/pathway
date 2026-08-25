@@ -42,6 +42,7 @@ describe("buildEmailSidebarProjects", () => {
     expect(projects[0]?.id).toBe("quotecloud");
     expect(projects[0]?.title).toBe("quotecloud-v2");
     expect(projects[0]?.inboxProjectId).toBe("quotecloud-local");
+    expect(projects[0]?.connections).toHaveLength(3);
     expect(projects[0]?.projectIds.has(ProjectId.make("quotecloud-remote-2"))).toBe(true);
   });
 

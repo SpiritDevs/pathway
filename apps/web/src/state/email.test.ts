@@ -350,6 +350,50 @@ describe("cross-environment captured mail", () => {
     expect(rows.map((row) => row.companyId)).toEqual([COMPANY_ID, COMPANY_ID]);
   });
 
+  it("groups every explicit project connection without requiring a cloud binding", () => {
+    const rows = mergeSyncedMessages({
+      local: [],
+      synced,
+      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+      scope: { type: "project", projectId: PROJECT_ID },
+      environmentId: null,
+      bindings: new Map(),
+      selectedCompanyId: null,
+      projectConnections: [
+        { environmentId: PRIMARY_ENVIRONMENT_ID, id: PROJECT_ID },
+        { environmentId: REMOTE_ENVIRONMENT_ID, id: REMOTE_PROJECT_ID },
+      ],
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["local-one", "remote-one"]);
+    const summaries = emailInboxSummariesFromMessages({
+      messages: rows,
+      local: [],
+    });
+    expect(findEmailInbox(summaries, { type: "project", projectId: PROJECT_ID })).toMatchObject({
+      messageCount: 1,
+      unreadCount: 1,
+    });
+    expect(
+      findEmailInbox(summaries, { type: "project", projectId: REMOTE_PROJECT_ID }),
+    ).toMatchObject({
+      messageCount: 1,
+      unreadCount: 1,
+    });
+
+    expect(
+      mergeSyncedMessages({
+        local: [],
+        synced,
+        primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
+        scope: UNASSIGNED_EMAIL_SCOPE,
+        environmentId: null,
+        bindings: new Map(),
+        selectedCompanyId: null,
+      }),
+    ).toEqual([]);
+  });
+
   it("does not leak a local row whose company cannot be proven into a company selection", () => {
     const rows = mergeSyncedMessages({
       local: [summary("not-yet-synced")],
@@ -400,8 +444,6 @@ describe("cross-environment captured mail", () => {
     const summaries = emailInboxSummariesFromMessages({
       messages: rows,
       local: [inbox(99, { messageCount: 99 })],
-      primaryEnvironmentId: PRIMARY_ENVIRONMENT_ID,
-      bindings,
     });
     expect(findEmailInbox(summaries, ALL_EMAIL_SCOPE)).toMatchObject({
       messageCount: 2,

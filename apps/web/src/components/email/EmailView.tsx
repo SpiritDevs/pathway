@@ -32,7 +32,6 @@ import { cn } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import {
-  findEmailInbox,
   useEmailInbox,
   useEmailMessage,
   useEmailTags,
@@ -75,6 +74,8 @@ import { EmailAnalyticsPanel } from "./EmailAnalyticsPanel";
 import { EmailMessageList } from "./EmailMessageList";
 import { EmailReadingPane } from "./EmailReadingPane";
 import { EmailTagDialog } from "./EmailTagDialog";
+import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
+import { buildEmailSidebarProjects, findEmailSidebarProject } from "./emailSidebar.logic";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
   EMPTY_EMAIL_SELECTION,
@@ -144,9 +145,16 @@ export function EmailView({
 }) {
   const scope = useMemo(() => emailScopeFromParam(search.inbox), [search.inbox]);
   const environmentFilter = (search.environment ?? null) as EnvironmentId | null;
-  const inbox = useEmailInbox(scope, environmentFilter);
   const projects = useProjects();
+  const projectOptions = useIssueProjectOptions();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const emailProjects = useMemo(
+    () => buildEmailSidebarProjects(projectOptions, primaryEnvironmentId),
+    [primaryEnvironmentId, projectOptions],
+  );
+  const selectedProject =
+    scope.type === "project" ? findEmailSidebarProject(emailProjects, scope.projectId) : null;
+  const inbox = useEmailInbox(scope, environmentFilter, selectedProject?.connections);
   const { environments } = useEnvironments();
   const markRead = useMarkEmailRead();
   const markUnread = useMarkEmailUnread();
@@ -243,7 +251,7 @@ export function EmailView({
       ? "All mail"
       : scope.type === "unassigned"
         ? "Unassigned"
-        : (projectTitles.get(scope.projectId) ?? "Project");
+        : (selectedProject?.title ?? projectTitles.get(scope.projectId) ?? "Project");
 
   // Opening is what marks a message read, so the write follows the URL rather than the click: a
   // deep link into a message counts as having opened it.
@@ -261,8 +269,7 @@ export function EmailView({
   const selectMessage = (message: CapturedEmailListItem) =>
     onSearch({ message: emailMessageSelectionId(message) });
 
-  const inboxSummary = findEmailInbox(inbox.inboxes, scope);
-  const unreadCount = inboxSummary?.unreadCount ?? 0;
+  const unreadCount = inbox.messages.filter((message) => !message.isRead).length;
 
   const visibleMessages = useMemo(() => {
     const filtered = filterEmailMessages(inbox.messages, { query, filter });

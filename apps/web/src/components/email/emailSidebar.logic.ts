@@ -1,6 +1,6 @@
 import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 
-interface EmailProjectConnection {
+export interface EmailProjectConnection {
   readonly id: ProjectId;
   readonly environmentId: EnvironmentId;
 }
@@ -19,6 +19,8 @@ export interface EmailSidebarProject {
   readonly inboxProjectId: ProjectId;
   /** Every local and company id that should make this logical row active. */
   readonly projectIds: ReadonlySet<ProjectId>;
+  /** Every environment-local inbox represented by this project. */
+  readonly connections: ReadonlyArray<EmailProjectConnection>;
   readonly title: string;
 }
 
@@ -43,8 +45,16 @@ export function buildEmailSidebarProjects(
         id: project.id,
         inboxProjectId: inboxConnection.id,
         projectIds: new Set([...project.projectIds, inboxConnection.id]),
+        connections: project.environmentProjects,
         title: project.title,
       },
     ];
   });
+}
+
+export function findEmailSidebarProject(
+  projects: ReadonlyArray<EmailSidebarProject>,
+  projectId: ProjectId,
+): EmailSidebarProject | null {
+  return projects.find((project) => project.projectIds.has(projectId)) ?? null;
 }
