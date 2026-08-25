@@ -93,7 +93,7 @@ describe("threadLastActivityAt", () => {
 
 describe("effectiveSettled", () => {
   const overrideCases = [null, "settled", "active"] as const;
-  const changeRequestStates = [undefined, "open", "merged"] as const;
+  const changeRequestStates = [undefined, "open", "closed", "merged"] as const;
   const inactivityCases = [
     ["fresh", FRESH],
     ["stale", STALE],
@@ -123,7 +123,7 @@ describe("effectiveSettled", () => {
               (settledOverride === "settled" ||
                 (settledOverride === null &&
                   (changeRequestState === "merged" ||
-                    (changeRequestState !== "open" && inactivity === "stale")))),
+                    (changeRequestState === undefined && inactivity === "stale")))),
           })),
         ),
       ),
@@ -154,7 +154,7 @@ describe("effectiveSettled", () => {
     },
   );
 
-  it("treats closed change requests like merged ones", () => {
+  it("keeps closed change requests active until the user settles them", () => {
     const shell = makeShell({ activityAt: null });
     expect(
       effectiveSettled(shell, {
@@ -162,20 +162,26 @@ describe("effectiveSettled", () => {
         autoSettleAfterDays: null,
         changeRequestState: "closed",
       }),
+    ).toBe(false);
+
+    expect(
+      effectiveSettled(makeShell({ settledOverride: "settled", activityAt: null }), {
+        now: NOW,
+        autoSettleAfterDays: null,
+        changeRequestState: "closed",
+      }),
     ).toBe(true);
   });
 
-  it("settles immediately when a change request merges or closes", () => {
+  it("settles immediately when a change request merges", () => {
     const recentlyActive = makeShell({ activityAt: "2026-04-09T23:59:59.999Z" });
-    for (const changeRequestState of ["merged", "closed"] as const) {
-      expect(
-        effectiveSettled(recentlyActive, {
-          now: NOW,
-          autoSettleAfterDays: null,
-          changeRequestState,
-        }),
-      ).toBe(true);
-    }
+    expect(
+      effectiveSettled(recentlyActive, {
+        now: NOW,
+        autoSettleAfterDays: null,
+        changeRequestState: "merged",
+      }),
+    ).toBe(true);
   });
 
   it("never auto-settles a stale thread with an open change request", () => {

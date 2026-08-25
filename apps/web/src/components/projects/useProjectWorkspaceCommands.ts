@@ -131,9 +131,10 @@ export function useQuickCreateProject() {
         ok: true,
         value: {
           environmentId,
-          projectId,
-          title: plan.title,
-          workspaceRoot: plan.workspaceRoot,
+          projectId: createResult.value.id,
+          title: createResult.value.title,
+          workspaceRoot: createResult.value.workspaceRoot,
+          repositoryIdentity: createResult.value.repositoryIdentity ?? null,
         },
       };
     },

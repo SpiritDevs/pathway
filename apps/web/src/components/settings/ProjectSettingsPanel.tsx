@@ -1288,12 +1288,15 @@ export function ProjectDetail({
               );
             })}
           </div>
-          <AddProjectConnectionDialog
-            connectedEnvironmentIds={connectedEnvironmentIds}
-            onOpenChange={setAddingConnection}
-            open={addingConnection}
-            projectTitle={group.displayName}
-          />
+          {addingConnection ? (
+            <AddProjectConnectionDialog
+              connectedEnvironmentIds={connectedEnvironmentIds}
+              onOpenChange={setAddingConnection}
+              open
+              projectId={representative.id}
+              projectTitle={group.displayName}
+            />
+          ) : null}
         </SettingsSection>
 
         <SettingsSection title="New threads">

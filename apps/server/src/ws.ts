@@ -58,6 +58,7 @@ import {
   ChatAttachmentId,
   PersistChatAttachmentsError,
   RpcClientId,
+  shouldStartPushAutoSettlement,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -1898,26 +1899,34 @@ const makeWsRpcLayer = (
                               })
                               .pipe(Effect.ignoreCause({ log: true }), Effect.asVoid)
                           : Effect.void;
+                      const settlementThreadId = input.threadId;
                       const scheduleSettlement =
-                        input.threadId !== undefined && result.push.status === "pushed"
-                          ? runPushAutoSettlementCountdown(
-                              {
-                                readThread: (threadId) =>
-                                  threadManagement.getThreadShell(threadId).pipe(Effect.orDie),
-                                settleThread: ({ threadId, commandId }) =>
-                                  threadManagement
-                                    .dispatch({
-                                      type: "thread.settle",
-                                      commandId,
-                                      threadId,
-                                    })
-                                    .pipe(Effect.orDie),
-                              },
-                              {
-                                threadId: input.threadId,
-                                commandId: CommandId.make(`${input.actionId}:auto-settle`),
-                              },
-                            ).pipe(
+                        settlementThreadId !== undefined && result.push.status === "pushed"
+                          ? gitWorkflow.localStatus({ cwd: input.cwd }).pipe(
+                              Effect.flatMap((status) =>
+                                shouldStartPushAutoSettlement(result, status.isDefaultRef)
+                                  ? runPushAutoSettlementCountdown(
+                                      {
+                                        readThread: (threadId) =>
+                                          threadManagement
+                                            .getThreadShell(threadId)
+                                            .pipe(Effect.orDie),
+                                        settleThread: ({ threadId, commandId }) =>
+                                          threadManagement
+                                            .dispatch({
+                                              type: "thread.settle",
+                                              commandId,
+                                              threadId,
+                                            })
+                                            .pipe(Effect.orDie),
+                                      },
+                                      {
+                                        threadId: settlementThreadId,
+                                        commandId: CommandId.make(`${input.actionId}:auto-settle`),
+                                      },
+                                    )
+                                  : Effect.void,
+                              ),
                               Effect.ignoreCause({ log: true }),
                               Effect.forkDetach,
                               Effect.asVoid,

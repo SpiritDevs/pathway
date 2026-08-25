@@ -1532,7 +1532,7 @@ export default function GitActionsControl({
       const startsAutoSettlement = Boolean(
         activeServerThread &&
         serverConfig?.environment.capabilities.pushAutoSettlement === true &&
-        shouldStartPushAutoSettlement(actionResult),
+        shouldStartPushAutoSettlement(actionResult, actionIsDefaultBranch),
       );
       const autoSettleAtMs = startsAutoSettlement ? Date.now() + PUSH_AUTO_SETTLE_DELAY_MS : null;
       const autoSettleActivityKey =

@@ -14,7 +14,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { useEnvironments } from "~/state/environments";
-import { useProjects } from "~/state/entities";
+import { useUnscopedProjects } from "~/state/entities";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -51,7 +51,7 @@ export function useOccupiedWorkspaceRoots(
   environmentId: EnvironmentId | null,
   exceptProjectId?: string,
 ): ReadonlyArray<string> {
-  const projects = useProjects();
+  const projects = useUnscopedProjects();
   return useMemo(
     () =>
       environmentId === null

@@ -24,7 +24,7 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "@spiritdevs/client-runtime/state/projects";
-import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import type { EnvironmentId, ProjectId, RepositoryIdentity } from "@spiritdevs/contracts";
 
 // ── Ensuring a workspace root ──────────────────────────────────────────
 
@@ -343,6 +343,7 @@ export interface QuickCreateProjectResult {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string | null;
+  readonly repositoryIdentity?: RepositoryIdentity | null;
 }
 
 /**

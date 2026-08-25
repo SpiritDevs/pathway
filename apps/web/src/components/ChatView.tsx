@@ -8299,11 +8299,12 @@ function ChatViewContent(props: ChatViewProps) {
               />
             ) : null}
 
-            {activeProject ? (
+            {activeProject && linkEnvironmentOpen ? (
               <AddProjectConnectionDialog
                 connectedEnvironmentIds={connectedEnvironmentIds}
                 onOpenChange={setLinkEnvironmentOpen}
-                open={linkEnvironmentOpen}
+                open
+                projectId={activeProject.id}
                 projectTitle={activeProject.title}
               />
             ) : null}

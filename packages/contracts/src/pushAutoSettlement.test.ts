@@ -46,10 +46,11 @@ function result(pushStatus: "pushed" | "skipped_not_requested" | "skipped_up_to_
 }
 
 describe("push auto-settlement", () => {
-  it("starts only when the action actually pushed commits", () => {
-    expect(shouldStartPushAutoSettlement(result("pushed"))).toBe(true);
-    expect(shouldStartPushAutoSettlement(result("skipped_up_to_date"))).toBe(false);
-    expect(shouldStartPushAutoSettlement(result("skipped_not_requested"))).toBe(false);
+  it("starts only when the action pushed commits to the default branch", () => {
+    expect(shouldStartPushAutoSettlement(result("pushed"), true)).toBe(true);
+    expect(shouldStartPushAutoSettlement(result("pushed"), false)).toBe(false);
+    expect(shouldStartPushAutoSettlement(result("skipped_up_to_date"), true)).toBe(false);
+    expect(shouldStartPushAutoSettlement(result("skipped_not_requested"), true)).toBe(false);
   });
 
   it("keeps metadata-only changes out of the activity fence", () => {

@@ -86,8 +86,11 @@ export function canStartPushAutoSettlement(thread: PushAutoSettlementThread): bo
   );
 }
 
-export function shouldStartPushAutoSettlement(result: GitRunStackedActionResult): boolean {
-  return result.push.status === "pushed";
+export function shouldStartPushAutoSettlement(
+  result: GitRunStackedActionResult,
+  isDefaultRef: boolean,
+): boolean {
+  return result.push.status === "pushed" && isDefaultRef;
 }
 
 export function pushAutoSettlementStillEligible(

@@ -6,16 +6,18 @@
  * environments this account is connected to, browse *its* filesystem, and point the project at the
  * copy already sitting there.
  *
- * Grouping is by repository identity, so a directory holding the same git repository folds into
- * this project by itself; one that holds something else becomes its own project instead, which is
- * what the description tells you before you commit to a path.
+ * The local checkout and its company-project binding are completed as one UI operation. Repository
+ * identity remains a recovery path for a checkout left behind by an interrupted cloud write.
  *
  * @module components/projects/AddProjectConnectionDialog
  */
-import type { EnvironmentId } from "@spiritdevs/contracts";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState } from "react";
 
+import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { useEnvironments } from "~/state/environments";
+import { useUnscopedProjects } from "~/state/entities";
+import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -27,10 +29,12 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { useEnvironmentBrowsePlatform } from "./AttachProjectDirectoryDialog";
 import {
-  useEnvironmentBrowsePlatform,
-  useOccupiedWorkspaceRoots,
-} from "./AttachProjectDirectoryDialog";
+  addProjectConnection,
+  findReusableProjectConnection,
+  type ProjectConnectionCheckout,
+} from "./addProjectConnection.logic";
 import { ProjectDirectorySection } from "./ProjectDirectorySection";
 import {
   EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
@@ -41,11 +45,14 @@ import { useQuickCreateProject } from "./useProjectWorkspaceCommands";
 
 export function AddProjectConnectionDialog({
   open,
+  projectId,
   projectTitle,
   connectedEnvironmentIds,
   onOpenChange,
 }: {
   open: boolean;
+  /** Any local id represented by the company project being connected. */
+  readonly projectId: ProjectId;
   /** The name the new entry takes, so both checkouts present as one project. */
   readonly projectTitle: string;
   /** Environments this project already has a checkout on; they are not offered again. */
@@ -53,6 +60,9 @@ export function AddProjectConnectionDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { environments } = useEnvironments();
+  const environmentControl = useEnvironmentControl();
+  const issueProjects = useIssueProjectOptions();
+  const unscopedProjects = useUnscopedProjects();
   const quickCreateProject = useQuickCreateProject();
   const [environmentId, setEnvironmentId] = useState<EnvironmentId | null>(null);
   const [directory, setDirectory] = useState<AttachProjectDirectoryDraft>(
@@ -60,6 +70,16 @@ export function AddProjectConnectionDialog({
   );
   const [submitting, setSubmitting] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
+  const [pendingCheckout, setPendingCheckout] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly requestedWorkspaceRoot: string;
+    readonly checkout: ProjectConnectionCheckout;
+  } | null>(null);
+
+  const companyProject = useMemo(
+    () => issueProjects.find((project) => project.projectIds.includes(projectId)) ?? null,
+    [issueProjects, projectId],
+  );
 
   // Only connected environments: browsing is a live call against the environment's own
   // filesystem, so an offline machine could offer nothing but a text field and a failure.
@@ -85,33 +105,85 @@ export function AddProjectConnectionDialog({
   }, [open]);
 
   const platform = useEnvironmentBrowsePlatform(selectedEnvironmentId);
-  const occupiedWorkspaceRoots = useOccupiedWorkspaceRoots(selectedEnvironmentId);
   const plan = useMemo(
     () =>
       planQuickCreateProject({
         draft: { name: projectTitle, directory },
         platform,
         currentProjectCwd: null,
-        occupiedWorkspaceRoots,
       }),
-    [directory, occupiedWorkspaceRoots, platform, projectTitle],
+    [directory, platform, projectTitle],
   );
   // A name with no directory is a valid quick-create but not a valid connection: the whole point
   // here is the checkout on the other machine.
   const ready =
-    plan.kind === "create" && plan.workspaceRoot !== null && selectedEnvironmentId !== null;
+    plan.kind === "create" &&
+    plan.workspaceRoot !== null &&
+    selectedEnvironmentId !== null &&
+    environmentControl !== null &&
+    companyProject?.companyId != null &&
+    companyProject.companyProject !== null;
 
   const submit = () => {
-    if (!ready || submitting || plan.kind !== "create" || selectedEnvironmentId === null) return;
+    if (
+      !ready ||
+      submitting ||
+      plan.kind !== "create" ||
+      plan.workspaceRoot === null ||
+      selectedEnvironmentId === null ||
+      environmentControl === null ||
+      companyProject?.companyId == null ||
+      companyProject.companyProject === null
+    ) {
+      return;
+    }
+    const requestedWorkspaceRoot = plan.workspaceRoot;
+    const companyId = companyProject.companyId;
+    const cloudProjectId = companyProject.companyProject.id;
     setSubmitting(true);
     setWriteError(null);
     void (async () => {
-      const outcome = await quickCreateProject({ environmentId: selectedEnvironmentId, plan });
+      const remembered =
+        pendingCheckout?.environmentId === selectedEnvironmentId &&
+        pendingCheckout.requestedWorkspaceRoot === requestedWorkspaceRoot
+          ? pendingCheckout.checkout
+          : null;
+      const existingCheckout =
+        remembered ??
+        findReusableProjectConnection({
+          projects: unscopedProjects,
+          environmentId: selectedEnvironmentId,
+          workspaceRoot: requestedWorkspaceRoot,
+          repositoryKey:
+            companyProject.localProject?.repositoryIdentity?.canonicalKey ??
+            companyProject.environmentProjects.find(
+              (project) => project.repositoryIdentity?.canonicalKey !== undefined,
+            )?.repositoryIdentity?.canonicalKey ??
+            null,
+        });
+      const outcome = await addProjectConnection({
+        existingCheckout,
+        createCheckout: () => quickCreateProject({ environmentId: selectedEnvironmentId, plan }),
+        bindCheckout: (checkout) =>
+          environmentControl.ensureEnvironmentProject({
+            companyId,
+            cloudProjectId,
+            project: checkout,
+          }),
+      });
       setSubmitting(false);
       if (!outcome.ok) {
+        if (outcome.checkout !== null) {
+          setPendingCheckout({
+            environmentId: selectedEnvironmentId,
+            requestedWorkspaceRoot,
+            checkout: outcome.checkout,
+          });
+        }
         setWriteError(outcome.message);
         return;
       }
+      setPendingCheckout(null);
       onOpenChange(false);
     })();
   };
@@ -127,8 +199,8 @@ export function AddProjectConnectionDialog({
         <DialogHeader>
           <DialogTitle>Add a connection</DialogTitle>
           <DialogDescription>
-            Point “{projectTitle}” at the copy on another environment. A directory holding the same
-            repository joins this project automatically.
+            Point “{projectTitle}” at the copy on another environment. The directory is connected to
+            this project as soon as it is added.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
@@ -175,6 +247,11 @@ export function AddProjectConnectionDialog({
             </>
           )}
           {writeError === null ? null : <p className="text-xs text-destructive">{writeError}</p>}
+          {companyProject?.companyId == null || companyProject.companyProject === null ? (
+            <p className="text-xs text-muted-foreground">
+              This project's company connection is still syncing.
+            </p>
+          ) : null}
         </DialogPanel>
         <DialogFooter>
           <Button disabled={submitting} onClick={() => onOpenChange(false)} variant="outline">
