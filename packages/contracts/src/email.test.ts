@@ -241,12 +241,14 @@ describe("Email waits and WebSocket payloads", () => {
   it("decodes list filters and exposes every requested WS method", () => {
     expect(
       decodeEmailListInput({
-        scope: { type: "unassigned" },
+        scope: { type: "project", projectId: "project-1" },
+        projectIds: ["project-1", "project-2"],
         limit: 50,
         filters: { isRead: false, subject: "verification" },
       }),
     ).toEqual({
-      scope: { type: "unassigned" },
+      scope: { type: "project", projectId: "project-1" },
+      projectIds: ["project-1", "project-2"],
       limit: 50,
       filters: { isRead: false, subject: "verification" },
     });

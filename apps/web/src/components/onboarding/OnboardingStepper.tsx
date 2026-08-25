@@ -12,7 +12,7 @@ import {
 } from "@spiritdevs/client-runtime/profile";
 import { useAuth, useUser } from "@clerk/react";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { clerkErrorMessage } from "~/components/auth/clerkErrorMessage";
 import { resolveCloudSyncConvexUrl, resolveConvexClerkTokenOptions } from "~/cloud/publicConfig";
@@ -34,6 +34,19 @@ import {
   toggleProfileChip,
   toggleSingleChoice,
 } from "./onboardingStepper.logic";
+
+// #region DEBUG
+function debugOnboardingStepper(
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis: "H4", event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 /**
  * The signed-in Clerk user, taken from the hook's own union so this file does
@@ -95,6 +108,21 @@ export function OnboardingStepper({ user }: { readonly user: SignedInClerkUser }
   const [referralDetail, setReferralDetail] = useState(
     () => metadata?.individual?.referralDetail ?? "",
   );
+
+  // #region DEBUG
+  const initialDebugStep = useRef(step);
+
+  useEffect(() => {
+    debugOnboardingStepper("stepper-mounted", { initialStep: initialDebugStep.current });
+    return () => {
+      debugOnboardingStepper("stepper-unmounted", {});
+    };
+  }, []);
+
+  useEffect(() => {
+    debugOnboardingStepper("step-state-committed", { pending, step });
+  }, [pending, step]);
+  // #endregion DEBUG
 
   useEffect(() => {
     if (avatarFile === null) {

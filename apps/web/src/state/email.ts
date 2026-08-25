@@ -40,6 +40,7 @@ import {
   type EmailInboxScope,
   type EmailInboxSummary,
   type EmailListenerStatus,
+  type EmailListInput,
   type EmailMessageId,
   type EmailTagId,
   type EmailReadTarget,
@@ -361,6 +362,22 @@ const EMPTY_EMAIL_PROJECT_CONNECTIONS: ReadonlyArray<EmailProjectScopeConnection
   [],
 );
 
+export function emailListInputForProjectConnections(
+  scope: EmailInboxScope,
+  environmentId: EnvironmentId | null,
+  projectConnections: ReadonlyArray<EmailProjectScopeConnection>,
+): EmailListInput {
+  if (scope.type !== "project" || environmentId === null) return { scope };
+  const projectIds = [
+    ...new Set(
+      projectConnections
+        .filter((connection) => connection.environmentId === environmentId)
+        .map((connection) => connection.id),
+    ),
+  ];
+  return projectIds.length === 0 ? { scope } : { scope, projectIds };
+}
+
 function syncedMessageMatchesScope(
   item: CapturedEmailListItem,
   scope: EmailInboxScope,
@@ -619,7 +636,10 @@ export function useEmailInbox(
   const query = useEnvironmentQuery(
     environmentId === null || !readsPrimary
       ? null
-      : emailListQuery({ environmentId, input: { scope } }),
+      : emailListQuery({
+          environmentId,
+          input: emailListInputForProjectConnections(scope, environmentId, projectConnections),
+        }),
   );
 
   const revision = streamView.state.revision;
@@ -694,7 +714,10 @@ export function useEmailInboxSummaries(
   const query = useEnvironmentQuery(
     environmentId === null || !readsPrimary
       ? null
-      : emailListQuery({ environmentId, input: { scope } }),
+      : emailListQuery({
+          environmentId,
+          input: emailListInputForProjectConnections(scope, environmentId, projectConnections),
+        }),
   );
   const messages = useMemo(
     () =>

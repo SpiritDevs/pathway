@@ -1,10 +1,40 @@
 import { derivePhysicalProjectKeyFromPath } from "~/logicalProject";
 import type { ClientSettings } from "@spiritdevs/contracts/settings";
 import type { EnvironmentId, RepositoryIdentity } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 
 export type ProjectRepositoryChoice =
   | { readonly kind: "existing"; readonly projectKey: string }
   | { readonly kind: "new" };
+
+export interface ProjectBindingTarget {
+  readonly companyId: CompanyId;
+  readonly cloudProjectId: string | null;
+}
+
+/**
+ * Resolve ownership before opening a newly-created project.
+ *
+ * Repository choices are authoritative. Without one, a sole available workspace is the only
+ * possible answer and can be applied immediately; multiple workspaces deliberately return null so
+ * the global ownership dialog asks the user instead of guessing.
+ */
+export function resolveCreatedProjectBindingTarget(input: {
+  readonly choice: ProjectRepositoryChoice | null;
+  readonly existingTarget: ProjectBindingTarget | null;
+  readonly activeCompanyId: CompanyId | null;
+  readonly availableCompanyIds: ReadonlyArray<CompanyId>;
+}): ProjectBindingTarget | null {
+  if (input.choice?.kind === "existing") return input.existingTarget;
+  if (input.choice?.kind === "new") {
+    return input.activeCompanyId === null
+      ? null
+      : { companyId: input.activeCompanyId, cloudProjectId: null };
+  }
+  return input.availableCompanyIds.length === 1
+    ? { companyId: input.availableCompanyIds[0]!, cloudProjectId: null }
+    : null;
+}
 
 export function findProjectsForRepository<
   TGroup extends {

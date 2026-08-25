@@ -16,6 +16,7 @@ import {
   type EmailMessageId,
   type EmailProjectSettings,
   type EmailRetentionPolicy,
+  type ProjectId,
 } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -69,6 +70,7 @@ export interface EmailStoreShape {
   ) => Effect.Effect<CapturedEmailMessage | null, EmailCaptureError>;
   readonly list: (input: {
     readonly scope: EmailInboxScope;
+    readonly projectIds?: ReadonlyArray<ProjectId>;
     readonly cursor?: string;
     readonly limit: number;
     readonly filters?: EmailListFilters;
@@ -246,9 +248,17 @@ const summaryOf = (message: CapturedEmailMessage): CapturedEmailSummary => ({
   detectedCode: message.detectedCode,
 });
 
-const matchesScope = (row: MessagePayloadRow, scope: EmailInboxScope): boolean =>
+const matchesScope = (
+  row: MessagePayloadRow,
+  scope: EmailInboxScope,
+  projectIds?: ReadonlySet<string>,
+): boolean =>
   scope.type === "all" ||
-  (scope.type === "unassigned" ? row.project_id === null : row.project_id === scope.projectId);
+  (scope.type === "unassigned"
+    ? row.project_id === null
+    : projectIds !== undefined && projectIds.size > 0
+      ? row.project_id !== null && projectIds.has(row.project_id)
+      : row.project_id === scope.projectId);
 
 const includesText = (value: string | null, needle: string | undefined): boolean =>
   needle === undefined || (value ?? "").toLowerCase().includes(needle.toLowerCase());
@@ -507,13 +517,17 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
   const list: EmailStoreShape["list"] = Effect.fn("EmailStore.list")(function* (input) {
     return yield* Effect.try({
       try: () => {
+        const projectIds =
+          input.projectIds === undefined
+            ? undefined
+            : new Set(input.projectIds.map((projectId) => String(projectId)));
         const rows = database
           .prepare(
             "SELECT id, project_id, mail_slug, stored_at, is_read, raw_relative_path, payload_json FROM email_messages ORDER BY received_at DESC, id DESC",
           )
           .all() as unknown as ReadonlyArray<MessagePayloadRow>;
         const filtered = rows
-          .filter((row) => matchesScope(row, input.scope))
+          .filter((row) => matchesScope(row, input.scope, projectIds))
           .filter(
             (row) => input.cursor === undefined || `${row.stored_at}|${row.id}` < input.cursor,
           )

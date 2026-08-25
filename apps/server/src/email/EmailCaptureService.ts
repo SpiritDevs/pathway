@@ -600,6 +600,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
     function* (input) {
       const stored = yield* store.list({
         scope: input.scope,
+        ...(input.projectIds === undefined ? {} : { projectIds: input.projectIds }),
         limit: Math.min(input.limit ?? 50, MAX_LIST_LIMIT),
         ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
         ...(input.filters === undefined ? {} : { filters: input.filters }),

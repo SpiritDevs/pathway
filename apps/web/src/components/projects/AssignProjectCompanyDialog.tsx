@@ -10,6 +10,7 @@
  * @module components/projects/AssignProjectCompanyDialog
  */
 import { useAtomValue } from "@effect/atom-react";
+import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
   mapAtomCommandResult,
   settlePromise,
@@ -17,7 +18,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { FolderKanbanIcon, Trash2Icon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { companyListAtom } from "~/cloud/activeCompany";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
@@ -37,7 +38,16 @@ import {
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { useUnscopedWorkspaceProjects } from "./useWorkspaceProjects";
-import { unassignedWorkspaceProjects, type WorkspaceProject } from "./workspaceProjects.logic";
+import { usePendingProjectAutomaticAssignments } from "./projectAutomaticAssignmentState";
+import {
+  settleMissingWorkspaceProjectRemovals,
+  usePendingWorkspaceProjectRemovals,
+} from "./projectRemovalState";
+import {
+  unassignedWorkspaceProjects,
+  workspaceProjectAssignmentKey,
+  type WorkspaceProject,
+} from "./workspaceProjects.logic";
 
 /**
  * The answer for a row that belongs to nobody but the person answering.
@@ -47,6 +57,20 @@ import { unassignedWorkspaceProjects, type WorkspaceProject } from "./workspaceP
  * end up filed against an employer.
  */
 const PERSONAL_WORKSPACE = "personal-workspace";
+
+// #region DEBUG
+function debugProjectAssignment(
+  hypothesis: "H6" | "H7" | "H8" | "H9",
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 /** A destination a row can be assigned to: a company, or the personal workspace. */
 interface AssignmentTarget {
@@ -129,14 +153,36 @@ export function AssignProjectCompanyDialog() {
   const projectGroupAssignments = useClientSettings(
     (settings) => settings.sidebarProjectGroupAssignments,
   );
+  const pendingRemovalKeys = usePendingWorkspaceProjectRemovals();
+  const pendingAutomaticAssignmentKeys = usePendingProjectAutomaticAssignments();
   const [assignments, setAssignments] = useState<Assignments>(new Map());
   const [saving, setSaving] = useState(false);
   const [dismissedFor, setDismissedFor] = useState<ReadonlyArray<string>>([]);
 
-  const unassigned = useMemo(() => {
-    const pending = unassignedWorkspaceProjects(projects);
-    return pending.filter((project) => !dismissedFor.includes(project.projectKey));
-  }, [dismissedFor, projects]);
+  const pending = useMemo(() => unassignedWorkspaceProjects(projects), [projects]);
+  const unassigned = useMemo(
+    () =>
+      pending.filter((project) => {
+        const checkouts = project.group?.memberProjects ?? [];
+        const automaticAssignmentPending =
+          checkouts.length > 0 &&
+          checkouts.every((checkout) =>
+            pendingAutomaticAssignmentKeys.has(
+              scopedProjectKey(scopeProjectRef(checkout.environmentId, checkout.id)),
+            ),
+          );
+        return (
+          !automaticAssignmentPending &&
+          !dismissedFor.includes(workspaceProjectAssignmentKey(project)) &&
+          !pendingRemovalKeys.has(project.projectKey)
+        );
+      }),
+    [dismissedFor, pending, pendingAutomaticAssignmentKeys, pendingRemovalKeys],
+  );
+
+  useEffect(() => {
+    settleMissingWorkspaceProjectRemovals(new Set(projects.map((project) => project.projectKey)));
+  }, [projects]);
 
   // Nothing to ask about until the company list has loaded, and nothing to ask *with* if the user
   // has no company at all — that is onboarding's job, not this dialog's.
@@ -152,8 +198,8 @@ export function AssignProjectCompanyDialog() {
     [companies],
   );
 
-  const setAssignment = useCallback((projectKey: string, targetId: string) => {
-    setAssignments((current) => new Map(current).set(projectKey, targetId));
+  const setAssignment = useCallback((assignmentKey: string, targetId: string) => {
+    setAssignments((current) => new Map(current).set(assignmentKey, targetId));
   }, []);
 
   const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
@@ -165,9 +211,10 @@ export function AssignProjectCompanyDialog() {
   // because being unassigned is exactly what this dialog is about.
   const removeProject = async (project: WorkspaceProject) => {
     if (deletingKey !== null || saving) return;
+    const assignmentKey = workspaceProjectAssignmentKey(project);
     const checkouts = project.group?.memberProjects ?? [];
     if (checkouts.length === 0) {
-      setDismissedFor((current) => [...current, project.projectKey]);
+      setDismissedFor((current) => [...current, assignmentKey]);
       return;
     }
     const api = readLocalApi();
@@ -204,36 +251,93 @@ export function AssignProjectCompanyDialog() {
           return;
         }
       }
-      setDismissedFor((current) => [...current, project.projectKey]);
+      setDismissedFor((current) => [...current, assignmentKey]);
     } finally {
       setDeletingKey(null);
     }
   };
 
-  const complete = unassigned.every((project) => assignments.has(project.projectKey));
+  const complete = unassigned.every((project) =>
+    assignments.has(workspaceProjectAssignmentKey(project)),
+  );
+
+  // #region DEBUG
+  const pendingUnassignedCount = pending.length;
+  useEffect(() => {
+    debugProjectAssignment("H8", "dialog-state", {
+      pendingUnassignedCount,
+      unassignedCount: unassigned.length,
+      dismissedCount: dismissedFor.length,
+      automaticAssignmentCount: pendingAutomaticAssignmentKeys.size,
+      assignmentCount: assignments.size,
+      saving,
+      complete,
+      controlAvailable: control !== null,
+    });
+  }, [
+    assignments.size,
+    complete,
+    control,
+    dismissedFor.length,
+    pendingUnassignedCount,
+    pendingAutomaticAssignmentKeys.size,
+    saving,
+    unassigned.length,
+  ]);
+  // #endregion DEBUG
 
   const save = async () => {
     if (control === null || !complete || saving) return;
     setSaving(true);
+    // #region DEBUG
+    const saveStartedAt = performance.now();
+    debugProjectAssignment("H6", "save-started", {
+      projectCount: unassigned.length,
+      assignmentCount: assignments.size,
+    });
+    // #endregion DEBUG
     const assigned: string[] = [];
     // Resolved once per save: the first row that picks the personal workspace provisions it, and
     // every later row lands in that same workspace rather than racing a second one into existence.
     let personalWorkspaceId: CompanyId | null = null;
     const resolveTarget = async (targetId: string): Promise<CompanyId> => {
       if (targetId !== PERSONAL_WORKSPACE) return targetId as CompanyId;
-      personalWorkspaceId ??= await control.provisionPersonalWorkspace();
+      if (personalWorkspaceId === null) {
+        // #region DEBUG
+        const provisionStartedAt = performance.now();
+        debugProjectAssignment("H6", "personal-workspace-started", {});
+        // #endregion DEBUG
+        personalWorkspaceId = await control.provisionPersonalWorkspace();
+        // #region DEBUG
+        debugProjectAssignment("H6", "personal-workspace-finished", {
+          durationMs: Math.round(performance.now() - provisionStartedAt),
+        });
+        // #endregion DEBUG
+      }
       return personalWorkspaceId;
     };
     try {
-      for (const project of unassigned) {
-        const targetId = assignments.get(project.projectKey);
+      for (const [projectIndex, project] of unassigned.entries()) {
+        const assignmentKey = workspaceProjectAssignmentKey(project);
+        const targetId = assignments.get(assignmentKey);
         if (targetId === undefined) continue;
         const checkouts = project.group?.memberProjects ?? [];
         if (checkouts.length === 0) continue;
         const companyId = await resolveTarget(targetId);
         // Register every checkout, not just the first: the same project on a second machine is the
         // same project, and binding only one would leave the others unassigned on next launch.
-        for (const checkout of checkouts) {
+        for (const [checkoutIndex, checkout] of checkouts.entries()) {
+          // #region DEBUG
+          const ensureStartedAt = performance.now();
+          debugProjectAssignment("H7", "ensure-project-started", {
+            projectIndex,
+            checkoutIndex,
+            checkoutCount: checkouts.length,
+            hasRepositoryIdentity: checkout.repositoryIdentity !== undefined,
+            matchRepository:
+              projectGroupAssignments[checkout.physicalProjectKey] !== checkout.physicalProjectKey,
+          });
+          // #endregion DEBUG
           await control.ensureEnvironmentProject({
             companyId,
             ...(projectGroupAssignments[checkout.physicalProjectKey] === checkout.physicalProjectKey
@@ -241,10 +345,27 @@ export function AssignProjectCompanyDialog() {
               : {}),
             project: checkout,
           });
+          // #region DEBUG
+          debugProjectAssignment("H7", "ensure-project-finished", {
+            projectIndex,
+            checkoutIndex,
+            durationMs: Math.round(performance.now() - ensureStartedAt),
+          });
+          // #endregion DEBUG
         }
-        assigned.push(project.projectKey);
+        assigned.push(assignmentKey);
       }
     } catch (cause) {
+      // #region DEBUG
+      debugProjectAssignment("H9", "save-failed", {
+        durationMs: Math.round(performance.now() - saveStartedAt),
+        errorName: cause instanceof Error ? cause.name : typeof cause,
+        errorCode:
+          typeof cause === "object" && cause !== null && "code" in cause
+            ? String(cause.code).slice(0, 80)
+            : null,
+      });
+      // #endregion DEBUG
       toastManager.add({
         type: "error",
         title: "Could not assign every project",
@@ -255,6 +376,12 @@ export function AssignProjectCompanyDialog() {
       setSaving(false);
       return;
     }
+    // #region DEBUG
+    debugProjectAssignment("H8", "save-finished", {
+      durationMs: Math.round(performance.now() - saveStartedAt),
+      assignedCount: assigned.length,
+    });
+    // #endregion DEBUG
     setDismissedFor((current) => [...current, ...assigned]);
     setSaving(false);
   };
@@ -276,8 +403,10 @@ export function AssignProjectCompanyDialog() {
                 key={project.projectKey}
                 project={project}
                 targets={targets}
-                value={assignments.get(project.projectKey) ?? null}
-                onChange={(targetId) => setAssignment(project.projectKey, targetId)}
+                value={assignments.get(workspaceProjectAssignmentKey(project)) ?? null}
+                onChange={(targetId) =>
+                  setAssignment(workspaceProjectAssignmentKey(project), targetId)
+                }
                 onDelete={() => void removeProject(project)}
                 deleting={deletingKey === project.projectKey}
               />

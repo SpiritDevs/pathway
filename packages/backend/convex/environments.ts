@@ -70,6 +70,7 @@ const executionEnvironmentDescriptor = v.object({
   serverVersion: v.string(),
   capabilities: v.object({
     repositoryIdentity: v.boolean(),
+    projectDirectoryInspection: v.optional(v.boolean()),
     connectionProbe: v.optional(v.boolean()),
     pullRequests: v.optional(v.boolean()),
     pushAutoSettlement: v.optional(v.boolean()),
@@ -159,6 +160,7 @@ function descriptorKey(value: Descriptor): string {
     value.runtime?.mode,
     value.serverVersion,
     capabilities["repositoryIdentity"],
+    capabilities["projectDirectoryInspection"],
     capabilities["connectionProbe"],
     capabilities["pullRequests"],
     capabilities["pushAutoSettlement"],

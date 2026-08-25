@@ -56,6 +56,14 @@ const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
   yield* desktopWindow.zoomMain(direction);
 });
 
+const reloadMainWindow = Effect.fn("desktop.menu.reloadMainWindow")(function* () {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const window = yield* desktopWindow.ensureMain;
+  if (!window.isDestroyed()) {
+    window.webContents.reload();
+  }
+});
+
 const checkForUpdatesFromMenu = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
@@ -134,6 +142,9 @@ export const make = Effect.gen(function* () {
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
     };
+    const reloadClick = () => {
+      runMenuEffect("reload-app", reloadMainWindow());
+    };
     const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
       runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
     };
@@ -180,6 +191,15 @@ export const make = Effect.gen(function* () {
                 },
                 { type: "separator" as const },
               ]),
+          ...(environment.isDevelopment
+            ? [
+                {
+                  label: "Reload App",
+                  click: reloadClick,
+                },
+                { type: "separator" as const },
+              ]
+            : []),
           { role: environment.platform === "darwin" ? "close" : "quit" },
         ],
       },

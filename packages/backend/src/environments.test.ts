@@ -55,7 +55,11 @@ const REPOSITORY_IDENTITY = {
   name: "pathway",
 };
 
-const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") => ({
+const descriptor = (
+  environmentId = ENVIRONMENT_ID,
+  label = "Registry machine",
+  projectDirectoryInspection = true,
+) => ({
   environmentId,
   applicationId: "pathway" as const,
   label,
@@ -63,6 +67,7 @@ const descriptor = (environmentId = ENVIRONMENT_ID, label = "Registry machine") 
   serverVersion: "1.2.3",
   capabilities: {
     repositoryIdentity: true,
+    projectDirectoryInspection,
     connectionProbe: true,
     pushAutoSettlement: true,
   },
@@ -193,11 +198,11 @@ async function seedRegistration(t: Harness, state: "active" | "revoked" = "activ
   return seeded;
 }
 
-async function publish(t: Harness, label = "Registry machine") {
+async function publish(t: Harness, label = "Registry machine", projectDirectoryInspection = true) {
   await asEnvironment(t).mutation(api.environments.register, {
     companyId: COMPANY_ID,
     environmentId: ENVIRONMENT_ID,
-    descriptor: descriptor(ENVIRONMENT_ID, label),
+    descriptor: descriptor(ENVIRONMENT_ID, label, projectDirectoryInspection),
     relayLinkState: "linked",
     managedEndpointAvailable: true,
   });
@@ -801,6 +806,17 @@ describe("environment registry", () => {
       entityKind: "environmentRegistration",
       changeKind: "upsert",
       payload: { descriptor: { label: "Registry machine renamed" } },
+    });
+
+    await publish(t, "Registry machine renamed", false);
+    const capabilityRows = await feedRows(t);
+    expect(capabilityRows).toHaveLength(3);
+    expect(capabilityRows[2]).toMatchObject({
+      entityKind: "environmentRegistration",
+      changeKind: "upsert",
+      payload: {
+        descriptor: { capabilities: { projectDirectoryInspection: false } },
+      },
     });
   });
 

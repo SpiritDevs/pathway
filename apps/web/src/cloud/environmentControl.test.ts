@@ -303,6 +303,54 @@ describe("environment control function references", () => {
     });
   });
 
+  it("assigns an environment-local project with one authenticated HTTP request", async () => {
+    const fake = fakeClient();
+    const calls: Array<{ readonly name: string; readonly args: unknown }> = [];
+    const httpClient: EnvironmentControlHttpClient = {
+      setAuth: vi.fn(),
+      mutation: async (reference, args) => {
+        calls.push({ name: getFunctionName(reference), args });
+        return null;
+      },
+    };
+    const fetchToken = vi.fn(async () => "token");
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken,
+      client: fake.client,
+      httpClient,
+    });
+
+    await control.ensureEnvironmentProject({
+      companyId: COMPANY_ID,
+      cloudProjectId: "cloud-project-a",
+      project: {
+        id: ProjectId.make("project-a"),
+        environmentId: ENVIRONMENT_ID,
+        title: "Pathway",
+        workspaceRoot: "/workspace/pathway",
+      },
+    });
+
+    expect(fetchToken).toHaveBeenCalledWith({ forceRefreshToken: false });
+    expect(httpClient.setAuth).toHaveBeenCalledWith("token");
+    expect(calls).toEqual([
+      {
+        name: "cloudProjects:ensureEnvironmentProject",
+        args: {
+          companyId: COMPANY_ID,
+          cloudProjectId: "cloud-project-a",
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: "project-a",
+          localWorkspaceRoot: "/workspace/pathway",
+          repositoryIdentity: null,
+          name: "Pathway",
+        },
+      },
+    ]);
+    expect(fake.calls).toEqual([]);
+  });
+
   it("releases a stale environment project binding without contacting that environment", async () => {
     const fake = fakeClient();
     const control = makeEnvironmentControlClient({

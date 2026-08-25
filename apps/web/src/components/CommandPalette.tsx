@@ -1,6 +1,10 @@
 "use client";
 
-import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@spiritdevs/client-runtime/environment";
 import { canCreateProjectInEnvironment } from "@spiritdevs/client-runtime/operations/projects";
 import {
   connectionStatusText,
@@ -73,7 +77,12 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells, waitForUnscopedProject } from "../state/entities";
+import {
+  useProjects,
+  useThreadShells,
+  waitForProject,
+  waitForUnscopedProject,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -128,6 +137,10 @@ import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useWorkspaceProjectPicker } from "./projects/useWorkspaceProjectPicker";
+import {
+  clearProjectAutomaticAssignmentPending,
+  markProjectAutomaticAssignmentPending,
+} from "./projects/projectAutomaticAssignmentState";
 import { QuickCreateProjectDialog } from "./projects/QuickCreateProjectDialog";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
@@ -156,12 +169,28 @@ import { useWorkspaceProjects } from "./projects/useWorkspaceProjects";
 import {
   findProjectsForRepository,
   projectRepositoryChoiceSettings,
+  resolveCreatedProjectBindingTarget,
   type ProjectRepositoryChoice,
 } from "./projects/projectRepositoryChoice.logic";
-import { activeCompanyIdAtom } from "../cloud/activeCompany";
+import { activeCompanyIdAtom, companyListAtom } from "../cloud/activeCompany";
 import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
+
+// #region DEBUG
+function debugAgentThreadProjectCreate(
+  hypothesis: "H12" | "H13" | "H14",
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+// #endregion DEBUG
 
 function getLocalFileManagerName(platform: string): string {
   if (isMacPlatform(platform)) {
@@ -206,6 +235,12 @@ interface AddProjectRepositoryChoiceRequest {
   readonly candidates: ReadonlyArray<AddProjectRepositoryChoiceCandidate>;
   /** Present when this path already has a server project left over from legacy auto-linking. */
   readonly existingProject: Project | null;
+}
+
+interface ProjectRepositoryChoiceOverlay {
+  readonly candidates: ReadonlyArray<SidebarProjectSnapshot>;
+  readonly projectName: string;
+  readonly confirm: (choice: ProjectRepositoryChoice) => Promise<boolean>;
 }
 
 type AddProjectRemoteProviderKind = Extract<
@@ -428,10 +463,23 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const [quickCreateProjectEnvironmentId, setQuickCreateProjectEnvironmentId] =
     useState<EnvironmentId | null>(null);
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  // Like quick-create, this must outlive the command popup. A nested dialog makes the parent close
+  // on focus transfer, which immediately unmounts the repository decision.
+  const [repositoryChoiceOverlay, setRepositoryChoiceOverlay] =
+    useState<ProjectRepositoryChoiceOverlay | null>(null);
+  const [repositoryChoiceSubmitting, setRepositoryChoiceSubmitting] = useState(false);
   const openQuickCreateProject = useCallback(
     (environmentId: EnvironmentId) => {
       setQuickCreateProjectEnvironmentId(environmentId);
       setQuickCreateProjectOpen(true);
+      setOpen(false);
+    },
+    [setOpen],
+  );
+  const openRepositoryChoice = useCallback(
+    (overlay: ProjectRepositoryChoiceOverlay) => {
+      setRepositoryChoiceSubmitting(false);
+      setRepositoryChoiceOverlay(overlay);
       setOpen(false);
     },
     [setOpen],
@@ -532,6 +580,23 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           onOpenChange={setQuickCreateProjectOpen}
           open={quickCreateProjectOpen}
         />
+        <ProjectRepositoryChoiceDialog
+          candidates={repositoryChoiceOverlay?.candidates ?? EMPTY_REPOSITORY_CHOICE_CANDIDATES}
+          onConfirm={(choice) => {
+            if (repositoryChoiceOverlay === null || repositoryChoiceSubmitting) return;
+            setRepositoryChoiceSubmitting(true);
+            void repositoryChoiceOverlay.confirm(choice).then((completed) => {
+              setRepositoryChoiceSubmitting(false);
+              if (completed) setRepositoryChoiceOverlay(null);
+            });
+          }}
+          onOpenChange={(next) => {
+            if (!next && !repositoryChoiceSubmitting) setRepositoryChoiceOverlay(null);
+          }}
+          open={repositoryChoiceOverlay !== null}
+          projectName={repositoryChoiceOverlay?.projectName ?? "this directory"}
+          submitting={repositoryChoiceSubmitting}
+        />
         <CommandPaletteDialog
           open={state.open}
           mode={state.mode}
@@ -540,6 +605,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           openOverlayMode={toggleMode}
           clearOpenIntent={clearOpenIntent}
           onQuickCreateProject={openQuickCreateProject}
+          onRepositoryChoice={openRepositoryChoice}
         />
       </CommandDialog>
     </ComposerHandleContext>
@@ -554,6 +620,7 @@ function CommandPaletteDialog(props: {
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
   readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
 
@@ -593,6 +660,7 @@ function CommandPaletteDialog(props: {
           openOverlayMode={props.openOverlayMode}
           clearOpenIntent={props.clearOpenIntent}
           onQuickCreateProject={props.onQuickCreateProject}
+          onRepositoryChoice={props.onRepositoryChoice}
         />
       )}
     </CommandDialogPopup>
@@ -605,9 +673,17 @@ function OpenCommandPaletteDialog(props: {
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
   readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, onQuickCreateProject, openIntent, openOverlayMode, setOpen } = props;
+  const {
+    clearOpenIntent,
+    onQuickCreateProject,
+    onRepositoryChoice,
+    openIntent,
+    openOverlayMode,
+    setOpen,
+  } = props;
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
@@ -615,6 +691,7 @@ function OpenCommandPaletteDialog(props: {
   const clientSettings = useClientSettings();
   const updateClientSettings = useUpdateClientSettings();
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const companies = useAtomValue(companyListAtom);
   const environmentControl = useEnvironmentControl();
   const workspaceProjects = useWorkspaceProjects();
   const createProject = useAtomCommand(projectEnvironment.create, {
@@ -690,9 +767,6 @@ function OpenCommandPaletteDialog(props: {
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
-  const [repositoryChoiceRequest, setRepositoryChoiceRequest] =
-    useState<AddProjectRepositoryChoiceRequest | null>(null);
-  const [repositoryChoiceSubmitting, setRepositoryChoiceSubmitting] = useState(false);
   const projectGroupingSettings = useMemo(
     () => selectProjectGroupingSettings(clientSettings),
     [clientSettings],
@@ -1790,6 +1864,17 @@ function OpenCommandPaletteDialog(props: {
         readonly cloudProjectId: string;
       } | null;
     }) => {
+      // #region DEBUG
+      const createStartedAt = performance.now();
+      debugAgentThreadProjectCreate("H12", "agent-project-create-started", {
+        choiceKind: input.choice?.kind ?? "none",
+        hasExistingTarget: input.existingTarget != null,
+        activeCompanyAvailable: activeCompanyId !== null,
+        environmentControlAvailable: environmentControl !== null,
+        scopedProjectCount: projects.length,
+        workspaceProjectCount: workspaceProjects.length,
+      });
+      // #endregion DEBUG
       const projectId = newProjectId();
       const targetEnvironmentProviders =
         environments.find((environment) => environment.environmentId === input.environmentId)
@@ -1809,6 +1894,12 @@ function OpenCommandPaletteDialog(props: {
         },
       });
       const projectRef = scopeProjectRef(input.environmentId, projectId);
+      // #region DEBUG
+      debugAgentThreadProjectCreate("H12", "agent-project-create-finished", {
+        durationMs: Math.round(performance.now() - createStartedAt),
+        resultTag: createResult._tag,
+      });
+      // #endregion DEBUG
       if (createResult._tag === "Failure") {
         if (isAtomCommandInterrupted(createResult)) {
           return false;
@@ -1837,40 +1928,86 @@ function OpenCommandPaletteDialog(props: {
             choice: input.choice,
           }),
         );
+      }
 
-        const bindingTarget =
-          input.choice.kind === "existing"
-            ? (input.existingTarget ?? null)
-            : activeCompanyId === null
-              ? null
-              : { companyId: activeCompanyId, cloudProjectId: null };
-        if (environmentControl !== null && bindingTarget !== null) {
-          try {
-            await environmentControl.ensureEnvironmentProject({
-              companyId: bindingTarget.companyId,
-              ...(bindingTarget.cloudProjectId === null
+      const bindingTarget = resolveCreatedProjectBindingTarget({
+        choice: input.choice,
+        existingTarget: input.existingTarget ?? null,
+        activeCompanyId,
+        availableCompanyIds: companies.map((company) => company.id),
+      });
+      // #region DEBUG
+      debugAgentThreadProjectCreate("H13", "agent-project-binding-decision", {
+        choiceKind: input.choice?.kind ?? "none",
+        availableCompanyCount: companies.length,
+        bindingTargetAvailable: bindingTarget !== null,
+        environmentControlAvailable: environmentControl !== null,
+        hasExistingCloudProject: bindingTarget?.cloudProjectId != null,
+      });
+      // #endregion DEBUG
+      if (environmentControl !== null && bindingTarget !== null) {
+        const automaticAssignmentProjectKey = scopedProjectKey(projectRef);
+        markProjectAutomaticAssignmentPending(automaticAssignmentProjectKey);
+        try {
+          await environmentControl.ensureEnvironmentProject({
+            companyId: bindingTarget.companyId,
+            ...(bindingTarget.cloudProjectId !== null
+              ? { cloudProjectId: bindingTarget.cloudProjectId }
+              : input.choice?.kind === "new"
                 ? { matchRepository: false }
-                : { cloudProjectId: bindingTarget.cloudProjectId }),
-              project: {
-                environmentId: input.environmentId,
-                id: projectId,
-                title: inferProjectTitleFromPath(input.cwd),
-                workspaceRoot: input.cwd,
-              },
-            });
-          } catch (cause) {
+                : {}),
+            project: {
+              environmentId: input.environmentId,
+              id: projectId,
+              title: inferProjectTitleFromPath(input.cwd),
+              workspaceRoot: input.cwd,
+            },
+          });
+
+          const projectVisible = await waitForProject(projectRef);
+          // #region DEBUG
+          debugAgentThreadProjectCreate("H13", "agent-project-binding-projected", {
+            projectVisible,
+            elapsedSinceCreateMs: Math.round(performance.now() - createStartedAt),
+          });
+          // #endregion DEBUG
+          if (!projectVisible) {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Project added, but its connection could not be saved",
-                description: cause instanceof Error ? cause.message : "An error occurred.",
+                title: "Project added, but it is still syncing",
+                description: "Wait a moment and open the project from Agent Threads.",
               }),
             );
+            return false;
           }
+        } catch (cause) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Project added, but its connection could not be saved",
+              description: cause instanceof Error ? cause.message : "An error occurred.",
+            }),
+          );
+          return false;
+        } finally {
+          clearProjectAutomaticAssignmentPending(automaticAssignmentProjectKey);
         }
       }
 
+      // #region DEBUG
+      const navigationStartedAt = performance.now();
+      debugAgentThreadProjectCreate("H14", "agent-project-navigation-started", {
+        elapsedSinceCreateMs: Math.round(performance.now() - createStartedAt),
+      });
+      // #endregion DEBUG
       const navigationResult = await settlePromise(() => handleNewThread(projectRef));
+      // #region DEBUG
+      debugAgentThreadProjectCreate("H14", "agent-project-navigation-finished", {
+        durationMs: Math.round(performance.now() - navigationStartedAt),
+        resultTag: navigationResult._tag,
+      });
+      // #endregion DEBUG
       if (navigationResult._tag === "Failure") {
         const error = squashAtomCommandFailure(navigationResult);
         toastManager.add(
@@ -1889,13 +2026,16 @@ function OpenCommandPaletteDialog(props: {
       clientSettings,
       createProject,
       activeCompanyId,
+      companies,
       environmentControl,
       environments,
       handleNewThread,
       primaryEnvironmentId,
       providers,
+      projects.length,
       setOpen,
       updateClientSettings,
+      workspaceProjects.length,
     ],
   );
 
@@ -2045,6 +2185,39 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
+  const presentRepositoryChoice = useCallback(
+    (request: AddProjectRepositoryChoiceRequest) => {
+      onRepositoryChoice({
+        candidates: request.candidates.map((candidate) => candidate.group),
+        projectName: inferProjectTitleFromPath(request.cwd),
+        confirm: (choice) => {
+          if (request.existingProject !== null) {
+            return applyChoiceToExistingProject(request, choice);
+          }
+          const selectedTarget =
+            choice.kind === "existing"
+              ? request.candidates.find(
+                  (candidate) => candidate.group.projectKey === choice.projectKey,
+                )
+              : null;
+          return createAndOpenProject({
+            environmentId: request.environmentId,
+            cwd: request.cwd,
+            choice,
+            existingTarget:
+              selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
+                ? {
+                    companyId: selectedTarget.companyId,
+                    cloudProjectId: selectedTarget.cloudProjectId,
+                  }
+                : null,
+          });
+        },
+      });
+    },
+    [applyChoiceToExistingProject, createAndOpenProject, onRepositoryChoice],
+  );
+
   const handleAddProjectForEnvironment = useCallback(
     async (input: {
       readonly environmentId: EnvironmentId;
@@ -2102,7 +2275,7 @@ function OpenCommandPaletteDialog(props: {
           existing.repositoryIdentity ?? null,
         );
         if (candidates.length > 0) {
-          setRepositoryChoiceRequest({
+          presentRepositoryChoice({
             environmentId: input.environmentId,
             cwd,
             candidates: buildRepositoryChoiceCandidates(candidates),
@@ -2125,7 +2298,7 @@ function OpenCommandPaletteDialog(props: {
             inspection.value.repositoryIdentity,
           );
           if (candidates.length > 0) {
-            setRepositoryChoiceRequest({
+            presentRepositoryChoice({
               environmentId: input.environmentId,
               cwd,
               candidates: buildRepositoryChoiceCandidates(candidates),
@@ -2144,6 +2317,7 @@ function OpenCommandPaletteDialog(props: {
       environments,
       inspectProjectDirectory,
       openExistingProject,
+      presentRepositoryChoice,
       projects,
       projectGroups,
       setOpen,
@@ -2825,49 +2999,6 @@ function OpenCommandPaletteDialog(props: {
                 : threadSearch.isPending
                   ? { emptyStateMessage: "Searching thread messages…" }
                   : {})}
-      />
-      <ProjectRepositoryChoiceDialog
-        candidates={repositoryChoiceRequest?.candidates.map((candidate) => candidate.group) ?? []}
-        onConfirm={(choice) => {
-          if (repositoryChoiceRequest === null || repositoryChoiceSubmitting) return;
-          const request = repositoryChoiceRequest;
-          const selectedTarget =
-            choice.kind === "existing"
-              ? request.candidates.find(
-                  (candidate) => candidate.group.projectKey === choice.projectKey,
-                )
-              : null;
-          setRepositoryChoiceSubmitting(true);
-          const action =
-            request.existingProject === null
-              ? createAndOpenProject({
-                  environmentId: request.environmentId,
-                  cwd: request.cwd,
-                  choice,
-                  existingTarget:
-                    selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
-                      ? {
-                          companyId: selectedTarget.companyId,
-                          cloudProjectId: selectedTarget.cloudProjectId,
-                        }
-                      : null,
-                })
-              : applyChoiceToExistingProject(request, choice);
-          void action.then((created) => {
-            setRepositoryChoiceSubmitting(false);
-            if (created) setRepositoryChoiceRequest(null);
-          });
-        }}
-        onOpenChange={(next) => {
-          if (!next) setRepositoryChoiceRequest(null);
-        }}
-        open={repositoryChoiceRequest !== null}
-        projectName={
-          repositoryChoiceRequest === null
-            ? "this directory"
-            : inferProjectTitleFromPath(repositoryChoiceRequest.cwd)
-        }
-        submitting={repositoryChoiceSubmitting}
       />
     </CommandPaletteContent>
   );

@@ -125,3 +125,13 @@ export function unassignedWorkspaceProjects(
 ): ReadonlyArray<WorkspaceProject> {
   return projects.filter((project) => project.companyIds.length === 0);
 }
+
+/** A dismissal belongs to these checkout records, not every future project at the same path. */
+export function workspaceProjectAssignmentKey(
+  project: Pick<WorkspaceProject, "projectKey" | "group">,
+): string {
+  const checkoutKeys = (project.group?.memberProjects ?? [])
+    .map((checkout) => `${checkout.environmentId}:${checkout.id}`)
+    .sort();
+  return JSON.stringify([project.projectKey, checkoutKeys]);
+}

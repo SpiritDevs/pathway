@@ -24,6 +24,7 @@ import {
   emailScopeKey,
   emailScopesEqual,
   emailInboxSummariesFromMessages,
+  emailListInputForProjectConnections,
   EMPTY_EMAIL_STREAM_STATE,
   findEmailInbox,
   mergeSyncedInboxSummaries,
@@ -176,6 +177,25 @@ describe("emailScopeKey", () => {
         { type: "project", projectId: "prj_2" as ProjectId },
       ),
     ).toBe(false);
+  });
+});
+
+describe("emailListInputForProjectConnections", () => {
+  it("asks the primary server for every local connection in a logical project", () => {
+    expect(
+      emailListInputForProjectConnections(
+        { type: "project", projectId: PROJECT_ID },
+        PRIMARY_ENVIRONMENT_ID,
+        [
+          { environmentId: PRIMARY_ENVIRONMENT_ID, id: PROJECT_ID },
+          { environmentId: PRIMARY_ENVIRONMENT_ID, id: "prj_2" as ProjectId },
+          { environmentId: REMOTE_ENVIRONMENT_ID, id: REMOTE_PROJECT_ID },
+        ],
+      ),
+    ).toEqual({
+      scope: { type: "project", projectId: PROJECT_ID },
+      projectIds: [PROJECT_ID, "prj_2"],
+    });
   });
 });
 

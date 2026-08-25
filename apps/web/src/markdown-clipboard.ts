@@ -23,6 +23,25 @@ export interface MarkdownClipboardPayload {
   html: string;
 }
 
+// #region DEBUG
+function debugMarkdownClipboardSelection(
+  hypothesis: "H1" | "H3",
+  event: string,
+  fields: Readonly<Record<string, string | number | boolean | null>>,
+): void {
+  void fetch("/api/__debug/cloud-sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hypothesis, event, fields }),
+  }).catch(() => undefined);
+}
+
+function closestPre(node: Node): HTMLPreElement | null {
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return element?.closest("pre") ?? null;
+}
+// #endregion DEBUG
+
 function isSkippedElement(element: Element): boolean {
   if (SKIPPED_TAGS.has(element.tagName) || element.localName === "svg") return true;
   if (element.getAttribute("aria-hidden") === "true") return true;
@@ -301,6 +320,26 @@ export function chatMarkdownClipboardPayload(
     if (range.collapsed) continue;
     const container = document.createElement("div");
     container.appendChild(range.cloneContents());
+    // #region DEBUG
+    const startPre = closestPre(range.startContainer);
+    const endPre = closestPre(range.endContainer);
+    debugMarkdownClipboardSelection("H1", "selection-range", {
+      samePre: startPre !== null && startPre === endPre,
+      startsInCodeCard: startPre?.closest(".chat-markdown-codeblock") !== null,
+      endsInCodeCard: endPre?.closest(".chat-markdown-codeblock") !== null,
+      clonedPreCount: container.querySelectorAll("pre").length,
+      clonedRootTags: [...container.children].map((child) => child.tagName).join(","),
+      rangeCount: selection.rangeCount,
+    });
+    debugMarkdownClipboardSelection("H3", "selection-shape", {
+      selectedCharacterCount: range.toString().length,
+      codeCharacterCount: startPre?.textContent?.length ?? 0,
+      selectsWholeCode:
+        startPre !== null && startPre === endPre && range.toString() === startPre.textContent,
+      startOffset: range.startOffset,
+      endOffset: range.endOffset,
+    });
+    // #endregion DEBUG
     const text = serializeRenderedMarkdownFragment(container);
     if (!text) continue;
     texts.push(text);

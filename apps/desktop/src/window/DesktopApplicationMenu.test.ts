@@ -70,7 +70,14 @@ const desktopUpdatesLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
 const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
   Layer.succeed(DesktopWindow.DesktopWindow, {
     createMain: Effect.die("unexpected createMain"),
-    ensureMain: Effect.die("unexpected ensureMain"),
+    ensureMain: Effect.succeed({
+      isDestroyed: () => false,
+      webContents: {
+        reload: () => {
+          Effect.runSync(Deferred.succeed(selectedAction, "reload-app"));
+        },
+      },
+    } as Electron.BrowserWindow),
     revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),
     activate: Effect.void,
     createMainIfBackendReady: Effect.void,
@@ -97,6 +104,7 @@ const makeElectronMenuLayer = (
 const configureMenu = (
   selectedAction: Deferred.Deferred<string>,
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
+  options: { readonly devServerUrl?: string } = {},
 ) =>
   Effect.gen(function* () {
     const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
@@ -111,7 +119,14 @@ const configureMenu = (
         Layer.provideMerge(electronAppLayer),
         Layer.provideMerge(
           DesktopEnvironment.layer(environmentInput).pipe(
-            Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+            Layer.provide(
+              Layer.mergeAll(
+                NodeServices.layer,
+                DesktopConfig.layerTest({
+                  VITE_DEV_SERVER_URL: options.devServerUrl,
+                }),
+              ),
+            ),
           ),
         ),
       ),
@@ -197,6 +212,43 @@ describe("DesktopApplicationMenu", () => {
       assert.isUndefined(
         viewMenu.submenu.find((item) => item.role === "reload" || item.role === "forceReload"),
       );
+
+      const fileMenu = template.find((item) => item.label === "File");
+      assert.isDefined(fileMenu);
+      if (!Array.isArray(fileMenu.submenu)) {
+        throw new Error("Expected File menu submenu to be an array.");
+      }
+      assert.isUndefined(fileMenu.submenu.find((item) => item.label === "Reload App"));
+    }),
+  );
+
+  it.effect("offers a click-only app reload in development", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+
+      yield* configureMenu(selectedAction, applicationMenuTemplate, {
+        devServerUrl: "http://127.0.0.1:5733",
+      });
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const fileMenu = template.find((item) => item.label === "File");
+      assert.isDefined(fileMenu);
+      if (!Array.isArray(fileMenu.submenu)) {
+        throw new Error("Expected File menu submenu to be an array.");
+      }
+
+      const reloadItem = fileMenu.submenu.find((item) => item.label === "Reload App");
+      assert.isDefined(reloadItem);
+      assert.isUndefined(reloadItem.accelerator);
+      if (typeof reloadItem.click !== "function") {
+        throw new Error("Expected Reload App menu item to have a click handler.");
+      }
+
+      reloadItem.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
+
+      assert.equal(yield* Deferred.await(selectedAction), "reload-app");
     }),
   );
 });

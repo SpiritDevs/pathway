@@ -1,10 +1,12 @@
 import { EnvironmentId } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
 import { derivePhysicalProjectKeyFromPath } from "~/logicalProject";
 import {
   findProjectsForRepository,
   projectRepositoryChoiceSettings,
+  resolveCreatedProjectBindingTarget,
 } from "./projectRepositoryChoice.logic";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -19,6 +21,50 @@ const identity = {
 };
 
 describe("project repository choices", () => {
+  it("binds a new project automatically only when one workspace is available", () => {
+    const personal = CompanyId.make("company-personal");
+    const organization = CompanyId.make("company-organization");
+
+    expect(
+      resolveCreatedProjectBindingTarget({
+        choice: null,
+        existingTarget: null,
+        activeCompanyId: personal,
+        availableCompanyIds: [personal],
+      }),
+    ).toEqual({ companyId: personal, cloudProjectId: null });
+    expect(
+      resolveCreatedProjectBindingTarget({
+        choice: null,
+        existingTarget: null,
+        activeCompanyId: personal,
+        availableCompanyIds: [personal, organization],
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps an explicit repository choice authoritative", () => {
+    const personal = CompanyId.make("company-personal");
+    const organization = CompanyId.make("company-organization");
+
+    expect(
+      resolveCreatedProjectBindingTarget({
+        choice: { kind: "new" },
+        existingTarget: null,
+        activeCompanyId: organization,
+        availableCompanyIds: [personal, organization],
+      }),
+    ).toEqual({ companyId: organization, cloudProjectId: null });
+    expect(
+      resolveCreatedProjectBindingTarget({
+        choice: { kind: "existing", projectKey: "existing" },
+        existingTarget: { companyId: personal, cloudProjectId: "cloud-project" },
+        activeCompanyId: organization,
+        availableCompanyIds: [personal, organization],
+      }),
+    ).toEqual({ companyId: personal, cloudProjectId: "cloud-project" });
+  });
+
   it("finds every logical project backed by the selected repository", () => {
     const groups = [
       {

@@ -2,7 +2,9 @@
 /** Online administration for company-owned projects and their environment-local bindings. */
 import { v } from "convex/values";
 
+import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
 import { mutation, internalMutation } from "./_generated/server.js";
 import {
   appendCompanyChanges,
@@ -18,12 +20,177 @@ import {
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
+import { encodeIssue } from "./lib/issueApply.ts";
 import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
 
 function trimmed(value: string, label: string): string {
   const result = value.trim();
   if (result.length === 0) throw backendError("invalid-arguments", `${label} is required.`);
   return result;
+}
+
+interface ProjectIssueData {
+  readonly issues: ReadonlyArray<Doc<"issues">>;
+  readonly todos: ReadonlyArray<Doc<"issueTodos">>;
+  readonly comments: ReadonlyArray<Doc<"issueComments">>;
+  readonly attachments: ReadonlyArray<Doc<"issueAttachments">>;
+  readonly auditEvents: ReadonlyArray<Doc<"issueAuditEvents">>;
+  readonly threadLinks: ReadonlyArray<Doc<"issueThreadLinks">>;
+  readonly relations: ReadonlyArray<Doc<"issueRelations">>;
+  readonly childrenToDetach: ReadonlyArray<Doc<"issues">>;
+}
+
+/** Reads every row whose lifetime follows an issue filed in one project. */
+async function collectProjectIssueData(
+  ctx: MutationCtx,
+  companyId: Id<"companies">,
+  projectId: string,
+): Promise<ProjectIssueData> {
+  const issues = await ctx.db
+    .query("issues")
+    .withIndex("by_company_and_project", (q) =>
+      q.eq("companyId", companyId).eq("projectId", projectId),
+    )
+    .collect();
+  const issueIds = new Set(issues.map((issue) => issue.id));
+  const todos: Doc<"issueTodos">[] = [];
+  const comments: Doc<"issueComments">[] = [];
+  const attachments: Doc<"issueAttachments">[] = [];
+  const auditEvents: Doc<"issueAuditEvents">[] = [];
+  const threadLinks: Doc<"issueThreadLinks">[] = [];
+  const relationsByDocId = new Map<Id<"issueRelations">, Doc<"issueRelations">>();
+
+  for (const issue of issues) {
+    const [issueTodos, issueComments, issueAttachments, issueAudits, issueLinks, from, to] =
+      await Promise.all([
+        ctx.db
+          .query("issueTodos")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueComments")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueAttachments")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueAuditEvents")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueThreadLinks")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueRelations")
+          .withIndex("by_company_and_issue", (q) =>
+            q.eq("companyId", companyId).eq("issueId", issue.id),
+          )
+          .collect(),
+        ctx.db
+          .query("issueRelations")
+          .withIndex("by_company_and_related_issue", (q) =>
+            q.eq("companyId", companyId).eq("relatedIssueId", issue.id),
+          )
+          .collect(),
+      ]);
+    todos.push(...issueTodos);
+    comments.push(...issueComments);
+    attachments.push(...issueAttachments);
+    auditEvents.push(...issueAudits);
+    threadLinks.push(...issueLinks);
+    for (const relation of [...from, ...to]) relationsByDocId.set(relation._id, relation);
+  }
+
+  const childrenToDetach = (
+    await ctx.db
+      .query("issues")
+      .withIndex("by_company_and_version", (q) => q.eq("companyId", companyId))
+      .collect()
+  ).filter(
+    (issue) =>
+      issue.deletedAt === null &&
+      issue.parentId !== null &&
+      issueIds.has(issue.parentId) &&
+      !issueIds.has(issue.id),
+  );
+
+  return {
+    issues,
+    todos,
+    comments,
+    attachments,
+    auditEvents,
+    threadLinks,
+    relations: [...relationsByDocId.values()],
+    childrenToDetach,
+  };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** Removes routes that specifically target a deleted project while preserving unrelated routes. */
+function withoutProjectReactionRoutes(
+  trigger: unknown,
+  projectId: string,
+  disableDefaultRoutes: boolean,
+): { readonly trigger: unknown; readonly changed: boolean } {
+  const value = record(trigger);
+  if (value === null || !Array.isArray(value["reactionRoutes"])) {
+    return { trigger, changed: false };
+  }
+  const reactionRoutes = value["reactionRoutes"].filter(
+    (route) => record(route)?.["cloudProjectId"] !== projectId,
+  );
+  const defaultRoutesChanged =
+    disableDefaultRoutes && (value["everyMessage"] === true || value["botMention"] === true);
+  if (reactionRoutes.length === value["reactionRoutes"].length && !defaultRoutesChanged) {
+    return { trigger, changed: false };
+  }
+  return {
+    trigger: {
+      ...value,
+      reactionRoutes,
+      ...(disableDefaultRoutes ? { everyMessage: false, botMention: false } : {}),
+    },
+    changed: true,
+  };
+}
+
+function withoutProjectRoutingRules(
+  rules: unknown,
+  projectId: string,
+): { readonly rules: unknown; readonly changed: boolean } {
+  if (!Array.isArray(rules)) return { rules, changed: false };
+  const remaining = rules.filter((rule) => record(rule)?.["cloudProjectId"] !== projectId);
+  return { rules: remaining, changed: remaining.length !== rules.length };
+}
+
+function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, rules: unknown) {
+  if (configurationVersion === 2) return Array.isArray(rules) && rules.length > 0;
+  const value = record(trigger);
+  return (
+    value !== null &&
+    (value["everyMessage"] === true ||
+      value["botMention"] === true ||
+      (Array.isArray(value["reactionRoutes"]) && value["reactionRoutes"].length > 0))
+  );
 }
 
 /**
@@ -587,7 +754,16 @@ export const deleteCompanyProject = mutation({
     if (project === null || project.deletedAt !== null) return { deleted: false };
     requireRecordPermission(actor, "projects.manage", project.teamIds);
 
-    const [bindings, agentThreads, milestones] = await Promise.all([
+    const [
+      bindings,
+      agentThreads,
+      milestones,
+      capturedEmails,
+      environmentCommands,
+      slackWatches,
+      slackIntegrations,
+      issueData,
+    ] = await Promise.all([
       ctx.db
         .query("environmentBindings")
         .withIndex("by_company_and_project", (q) =>
@@ -606,10 +782,68 @@ export const deleteCompanyProject = mutation({
           q.eq("companyId", actor.company._id).eq("cloudProjectId", project.id),
         )
         .collect(),
+      ctx.db
+        .query("capturedEmails")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", project._id),
+        )
+        .collect(),
+      ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect()
+        .then((rows) => rows.filter((row) => row.cloudProjectId === project._id)),
+      ctx.db
+        .query("slackChannelWatches")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+      ctx.db
+        .query("slackIntegrations")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+      collectProjectIssueData(ctx, actor.company._id, project.id),
     ]);
+    const issueIds = new Set(issueData.issues.map((issue) => issue.id));
+    const [automationJobs, slackAutomationIntents] = await Promise.all([
+      ctx.db
+        .query("issueAutomationJobs")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect()
+        .then((rows) =>
+          rows.filter((row) => row.cloudProjectId === project._id || issueIds.has(row.issueId)),
+        ),
+      ctx.db
+        .query("slackIssueAutomationIntents")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect()
+        .then((rows) =>
+          rows.filter((row) => row.cloudProjectId === project._id || issueIds.has(row.issueId)),
+        ),
+    ]);
+    const slackProcessedMessages: Doc<"slackProcessedMessages">[] = [];
+    for (const issueId of issueIds) {
+      slackProcessedMessages.push(
+        ...(await ctx.db
+          .query("slackProcessedMessages")
+          .withIndex("by_issue", (q) => q.eq("companyId", actor.company._id).eq("issueId", issueId))
+          .collect()),
+      );
+    }
+    const slackOutboundDeliveries: Doc<"slackOutboundDeliveries">[] = [];
+    for (const integration of slackIntegrations) {
+      slackOutboundDeliveries.push(
+        ...(await ctx.db
+          .query("slackOutboundDeliveries")
+          .withIndex("by_integration", (q) => q.eq("integrationId", integration._id))
+          .collect()
+          .then((rows) =>
+            rows.filter((row) => row.issueId !== undefined && issueIds.has(row.issueId)),
+          )),
+      );
+    }
 
     const now = Date.now();
-    const changes = [];
+    const changes: CompanyChange[] = [];
     for (const binding of bindings) {
       if (binding.status === "revoked") continue;
       await ctx.db.patch(binding._id, {
@@ -628,6 +862,48 @@ export const deleteCompanyProject = mutation({
       });
     }
 
+    // A project command has no useful target once the project is gone. Its tombstone also fences
+    // any in-flight claimant when it tries to report completion.
+    for (const command of environmentCommands) {
+      await ctx.db.delete(command._id);
+      changes.push({
+        entityKind: "environmentCommand",
+        entityId: command.id,
+        changeKind: "tombstone",
+        versionDocId: null,
+        payload: null,
+      });
+    }
+
+    // Captured mail is environment-owned at the byte level. The durable deletion marker is what
+    // tells an offline source to remove its raw message and attachments instead of republishing it.
+    for (const email of capturedEmails) {
+      const deletion = await ctx.db
+        .query("capturedEmailDeletions")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", actor.company._id).eq("id", email.id),
+        )
+        .unique();
+      if (deletion === null) {
+        await ctx.db.insert("capturedEmailDeletions", {
+          id: email.id,
+          companyId: actor.company._id,
+          environmentId: email.environmentId,
+          messageId: email.messageId,
+          deletedAt: now,
+        });
+      }
+      await ctx.db.delete(email._id);
+      changes.push({
+        entityKind: "capturedEmail",
+        entityId: email.id,
+        changeKind: "tombstone",
+        teamIds: project.teamIds,
+        versionDocId: null,
+        payload: null,
+      });
+    }
+
     // Thread shells are shared discovery metadata only. Their owning environment will delete the
     // full local threads when it consumes the revoked binding.
     for (const thread of agentThreads) {
@@ -639,6 +915,156 @@ export const deleteCompanyProject = mutation({
         teamIds: project.teamIds,
         versionDocId: null,
         payload: null,
+      });
+    }
+
+    const issueById = new Map(issueData.issues.map((issue) => [issue.id, issue] as const));
+    const issueTeams = (issueId: string): readonly string[] =>
+      issueById.get(issueId)?.teamIds ?? [];
+    const removeIssueRow = async (
+      entityKind:
+        | "issueTodo"
+        | "issueComment"
+        | "issueAttachment"
+        | "issueAuditEvent"
+        | "issueThreadLink"
+        | "issueRelation",
+      row: {
+        readonly _id: Id<
+          | "issueTodos"
+          | "issueComments"
+          | "issueAttachments"
+          | "issueAuditEvents"
+          | "issueThreadLinks"
+          | "issueRelations"
+        >;
+        readonly id: string;
+        readonly issueId: string;
+      },
+      teamIds: readonly string[] = issueTeams(row.issueId),
+    ) => {
+      await ctx.db.delete(row._id);
+      changes.push({
+        entityKind,
+        entityId: row.id,
+        changeKind: "tombstone",
+        teamIds,
+        versionDocId: null,
+        payload: null,
+      });
+    };
+
+    for (const child of issueData.childrenToDetach) {
+      await ctx.db.patch(child._id, { parentId: null, updatedAt: now });
+      const updated = await ctx.db.get(child._id);
+      if (updated === null) throw backendError("entity-not-found", "A child issue vanished.");
+      changes.push({
+        entityKind: "issue",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: updated.teamIds,
+        versionDocId: updated._id,
+        payload: encodeIssue(actor.company, updated),
+      });
+    }
+
+    for (const row of issueData.todos) await removeIssueRow("issueTodo", row);
+    for (const row of issueData.comments) await removeIssueRow("issueComment", row);
+    const attachmentTargets: Array<{
+      docId: Id<"issueAttachments">;
+      key: string | null;
+    }> = [];
+    for (const row of issueData.attachments) {
+      if (row.storageId !== null) await ctx.storage.delete(row.storageId);
+      attachmentTargets.push({ docId: row._id, key: row.uploadthingFileKey ?? null });
+      await removeIssueRow("issueAttachment", row);
+    }
+    for (const row of issueData.auditEvents) await removeIssueRow("issueAuditEvent", row);
+    for (const row of issueData.threadLinks) await removeIssueRow("issueThreadLink", row);
+    for (const row of issueData.relations) {
+      const relatedTeams = issueTeams(row.relatedIssueId);
+      await removeIssueRow("issueRelation", row, [
+        ...new Set([...issueTeams(row.issueId), ...relatedTeams]),
+      ]);
+    }
+    for (const issue of issueData.issues) {
+      await ctx.db.delete(issue._id);
+      changes.push({
+        entityKind: "issue",
+        entityId: issue.id,
+        changeKind: "tombstone",
+        teamIds: issue.teamIds,
+        versionDocId: null,
+        payload: null,
+      });
+    }
+    if (attachmentTargets.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.issueAttachments.deleteUploadThingFiles, {
+        targets: attachmentTargets,
+      });
+    }
+
+    // Automation and Slack delivery rows are execution state, not history worth retaining after
+    // their target issue is gone. The processed-message ledger remains only as a dedupe marker.
+    for (const job of automationJobs) await ctx.db.delete(job._id);
+    for (const intent of slackAutomationIntents) await ctx.db.delete(intent._id);
+    for (const delivery of slackOutboundDeliveries) await ctx.db.delete(delivery._id);
+    for (const processed of slackProcessedMessages) {
+      await ctx.db.patch(processed._id, {
+        disposition: "ignored",
+        issueId: null,
+        commentId: null,
+        reason: "Project deleted.",
+        processedAt: now,
+      });
+    }
+
+    // A watch may contain several independent routes. Sever only the routes for this project,
+    // invalidate pending decisions made from the old revision, and leave unrelated routes intact.
+    const changedIntegrations = new Map<Id<"slackIntegrations">, number>();
+    for (const watch of slackWatches) {
+      const direct = watch.cloudProjectId === project._id;
+      const trigger = withoutProjectReactionRoutes(watch.trigger, project.id, direct);
+      const rules = withoutProjectRoutingRules(watch.rules, project.id);
+      if (!direct && !trigger.changed && !rules.changed) continue;
+      const deleteWatch = !hasSlackRoutes(watch.configurationVersion, trigger.trigger, rules.rules);
+      changedIntegrations.set(
+        watch.integrationId,
+        (changedIntegrations.get(watch.integrationId) ?? 0) + (deleteWatch ? 1 : 0),
+      );
+      const pending = await ctx.db
+        .query("slackPendingIntake")
+        .withIndex("by_integration_channel_and_message", (q) =>
+          q.eq("integrationId", watch.integrationId).eq("channelId", watch.channelId),
+        )
+        .collect();
+      for (const row of pending) await ctx.db.delete(row._id);
+      if (deleteWatch) {
+        await ctx.db.delete(watch._id);
+        const cursor = await ctx.db
+          .query("slackChannelCursors")
+          .withIndex("by_integration_and_channel", (q) =>
+            q.eq("integrationId", watch.integrationId).eq("channelId", watch.channelId),
+          )
+          .unique();
+        if (cursor !== null) await ctx.db.delete(cursor._id);
+      } else {
+        await ctx.db.patch(watch._id, {
+          ...(direct ? { cloudProjectId: null, cycleId: null } : {}),
+          ...(trigger.changed ? { trigger: trigger.trigger } : {}),
+          ...(rules.changed ? { rules: rules.rules } : {}),
+          revision: watch.revision + 1,
+          updatedAt: now,
+        });
+      }
+    }
+    for (const [integrationId, removedWatches] of changedIntegrations) {
+      const integration = await ctx.db.get(integrationId);
+      if (integration === null) continue;
+      await ctx.db.patch(integration._id, {
+        watchCount: Math.max(0, integration.watchCount - removedWatches),
+        configurationRevision: integration.configurationRevision + 1,
+        updatedAt: now,
       });
     }
 

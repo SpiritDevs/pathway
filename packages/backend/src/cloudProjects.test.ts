@@ -135,7 +135,7 @@ async function seed(t: Harness) {
       deletedAt: null,
       version: 0,
     });
-    return { companyId, projectId, bindingId, threadId, milestoneId };
+    return { companyId, membershipId, projectId, bindingId, threadId, milestoneId };
   });
 }
 
@@ -345,6 +345,445 @@ describe("company project deletion", () => {
       ["issueMilestone", "tombstone", MILESTONE_ID],
       ["cloudProject", "tombstone", PROJECT_ID],
     ]);
+  });
+
+  it("removes project-owned issues, email, automation, commands, and Slack routes", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const issueId = "0198c0de-dddd-7ddd-8ddd-000000000001";
+    const childIssueId = "0198c0de-dddd-7ddd-8ddd-000000000002";
+    const commentId = "0198c0de-dddd-7ddd-8ddd-000000000003";
+    const integrationId = "0198c0de-dddd-7ddd-8ddd-000000000004";
+    const v1WatchId = "0198c0de-dddd-7ddd-8ddd-000000000005";
+    const v2WatchId = "0198c0de-dddd-7ddd-8ddd-000000000006";
+    const deletedWatchId = "0198c0de-dddd-7ddd-8ddd-000000000017";
+    const matchingRuleId = "0198c0de-dddd-7ddd-8ddd-000000000007";
+    const remainingRuleId = "0198c0de-dddd-7ddd-8ddd-000000000008";
+    const commandId = "0198c0de-dddd-7ddd-8ddd-000000000009";
+    const emailId = `${ENVIRONMENT_ID}:message-1`;
+
+    await t.run(async (ctx) => {
+      const issue = async (id: string, projectId: string | null, parentId: string | null) =>
+        await ctx.db.insert("issues", {
+          id,
+          companyId: ids.companyId,
+          key: id === issueId ? "PTC-1" : "PTC-2",
+          keyNumber: id === issueId ? 1 : 2,
+          title: id === issueId ? "Delete me" : "Keep me",
+          description: "",
+          statusId: "status-todo",
+          priority: "none",
+          assignee: null,
+          projectId,
+          milestoneId: projectId === null ? null : MILESTONE_ID,
+          cycleId: null,
+          parentId,
+          sortOrder: id,
+          labelIds: [],
+          dueDate: null,
+          triage: false,
+          slackSource: null,
+          teamIds: [],
+          workflowOwner: { kind: "company" },
+          workModelSelection: null,
+          automationAssignment: null,
+          createdAt: NOW,
+          updatedAt: NOW,
+          deletedAt: null,
+          version: 0,
+        });
+      await issue(issueId, PROJECT_ID, null);
+      await issue(childIssueId, null, issueId);
+      await ctx.db.insert("issueTodos", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000010",
+        companyId: ids.companyId,
+        issueId,
+        text: "Delete this",
+        done: false,
+        sortOrder: "a",
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      await ctx.db.insert("issueComments", {
+        id: commentId,
+        companyId: ids.companyId,
+        issueId,
+        body: "Delete this",
+        author: { kind: "member", membershipId: MEMBERSHIP_ID },
+        attachmentIds: ["0198c0de-dddd-7ddd-8ddd-000000000011"],
+        mentions: [],
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      await ctx.db.insert("issueAttachments", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000011",
+        companyId: ids.companyId,
+        issueId,
+        commentId,
+        storageId: null,
+        fileName: "evidence.txt",
+        mimeType: "text/plain",
+        byteSize: 8,
+        checksum: "checksum",
+        uploadedByMembershipId: ids.membershipId,
+        state: "ready",
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      await ctx.db.insert("issueAuditEvents", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000012",
+        companyId: ids.companyId,
+        issueId,
+        kind: "created",
+        actor: { kind: "member", membershipId: MEMBERSHIP_ID },
+        payload: {},
+        operationId: null,
+        createdAt: NOW,
+        version: 0,
+      });
+      await ctx.db.insert("issueThreadLinks", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000013",
+        companyId: ids.companyId,
+        issueId,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-1",
+        origin: "start-work",
+        createdByMembershipId: ids.membershipId,
+        createdAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      await ctx.db.insert("issueRelations", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000014",
+        companyId: ids.companyId,
+        issueId,
+        relatedIssueId: childIssueId,
+        kind: "relates",
+        createdAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      await ctx.db.insert("capturedEmails", {
+        id: emailId,
+        companyId: ids.companyId,
+        environmentId: ENVIRONMENT_ID,
+        cloudProjectId: ids.projectId,
+        localProjectId: LOCAL_PROJECT_ID,
+        messageId: "message-1",
+        message: { subject: "Delete this" },
+        updatedAt: NOW,
+        version: 0,
+      });
+      await ctx.db.insert("environmentCommands", {
+        id: commandId,
+        companyId: ids.companyId,
+        targetEnvironmentId: ENVIRONMENT_ID,
+        cloudProjectId: ids.projectId,
+        bindingId: BINDING_ID,
+        kind: "startThread",
+        args: { projectId: LOCAL_PROJECT_ID },
+        issuedByMembershipId: ids.membershipId,
+        onBehalfOfActor: { kind: "member", membershipId: MEMBERSHIP_ID },
+        state: "claimed",
+        claimedByEnvironmentId: ENVIRONMENT_ID,
+        claimGeneration: 1,
+        claimExpiresAt: NOW + 60_000,
+        expiresAt: NOW + 120_000,
+        result: null,
+        error: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      const integrationDocId = await ctx.db.insert("slackIntegrations", {
+        id: integrationId,
+        companyId: ids.companyId,
+        workspaceId: "workspace-1",
+        workspaceName: "Test Slack",
+        workspaceDomain: null,
+        botUserId: null,
+        botId: null,
+        state: "active",
+        activatedAt: NOW,
+        credentialPresent: true,
+        preferredEnvironmentId: ENVIRONMENT_ID,
+        backupEnvironmentIds: [],
+        configurationRevision: 1,
+        lastPollAt: NOW,
+        currentError: null,
+        blockedReason: null,
+        watchCount: 3,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackChannelWatches", {
+        id: v1WatchId,
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        channelId: "channel-v1",
+        channelName: "v1",
+        cloudProjectId: ids.projectId,
+        cycleId: "cycle-1",
+        autoInvestigate: true,
+        autoAssign: true,
+        trigger: {
+          everyMessage: true,
+          botMention: false,
+          reactionRoutes: [
+            { emoji: "ticket", cloudProjectId: PROJECT_ID, autoInvestigate: null },
+            { emoji: "triage", cloudProjectId: null, autoInvestigate: null },
+          ],
+        },
+        revision: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackChannelWatches", {
+        id: v2WatchId,
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        channelId: "channel-v2",
+        channelName: "v2",
+        cloudProjectId: null,
+        cycleId: null,
+        autoInvestigate: false,
+        autoAssign: false,
+        trigger: { everyMessage: false, botMention: false, reactionRoutes: [] },
+        configurationVersion: 2,
+        rules: [
+          { id: matchingRuleId, cloudProjectId: PROJECT_ID },
+          { id: remainingRuleId, cloudProjectId: null },
+        ],
+        revision: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackChannelWatches", {
+        id: deletedWatchId,
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        channelId: "channel-project-only",
+        channelName: "project-only",
+        cloudProjectId: ids.projectId,
+        cycleId: null,
+        autoInvestigate: false,
+        autoAssign: false,
+        trigger: { everyMessage: true, botMention: false, reactionRoutes: [] },
+        revision: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackChannelCursors", {
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        channelId: "channel-project-only",
+        messageCursor: null,
+        reactionCursor: null,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackPendingIntake", {
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        channelId: "channel-v2",
+        messageTs: "1.000001",
+        watchRevision: 1,
+        candidateRuleId: matchingRuleId,
+        eligibleAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackIssueAutomationIntents", {
+        companyId: ids.companyId,
+        issueId,
+        integrationId: integrationDocId,
+        watchId: v2WatchId,
+        watchRevision: 1,
+        ruleId: matchingRuleId,
+        ruleSnapshot: "{}",
+        cloudProjectId: ids.projectId,
+        investigationTiming: "off",
+        investigationTriggerStatusId: null,
+        investigationSuccessStatusId: null,
+        investigationState: "off",
+        assignmentTiming: "off",
+        assignmentState: "off",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("slackProcessedMessages", {
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        workspaceId: "workspace-1",
+        channelId: "channel-v2",
+        messageTs: "1.000001",
+        rootMessageTs: "1.000001",
+        disposition: "created",
+        issueId,
+        commentId,
+        reason: null,
+        processedAt: NOW,
+      });
+      await ctx.db.insert("slackOutboundDeliveries", {
+        companyId: ids.companyId,
+        integrationId: integrationDocId,
+        deliveryId: "0198c0de-dddd-7ddd-8ddd-000000000015",
+        channelId: "channel-v2",
+        threadTs: "1.000001",
+        kind: "status",
+        issueId,
+        state: "pending",
+        claimedByEnvironmentId: null,
+        claimGeneration: 0,
+        claimExpiresAt: null,
+        slackMessageTs: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("issueAutomationJobs", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000016",
+        companyId: ids.companyId,
+        issueId,
+        kind: "automatic-assignment",
+        triggerKey: "delete-test",
+        settingsRevision: 1,
+        modelSelection: null,
+        ruleId: matchingRuleId,
+        ruleSnapshot: "{}",
+        targetKind: "project",
+        cloudProjectId: ids.projectId,
+        threadId: null,
+        targetEnvironmentId: ENVIRONMENT_ID,
+        requiredProviderInstanceId: null,
+        requiredModel: null,
+        state: "pending",
+        blockCode: null,
+        diagnostic: null,
+        claimHolderEnvironmentId: null,
+        claimGeneration: 0,
+        claimExpiresAt: null,
+        attempts: 0,
+        nextRetryAt: null,
+        result: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        completedAt: null,
+      });
+    });
+
+    await asOwner(t).mutation(api.cloudProjects.deleteCompanyProject, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+    });
+
+    const state = await t.run(async (ctx) => ({
+      issues: await ctx.db.query("issues").collect(),
+      todos: await ctx.db.query("issueTodos").collect(),
+      comments: await ctx.db.query("issueComments").collect(),
+      attachments: await ctx.db.query("issueAttachments").collect(),
+      audits: await ctx.db.query("issueAuditEvents").collect(),
+      links: await ctx.db.query("issueThreadLinks").collect(),
+      relations: await ctx.db.query("issueRelations").collect(),
+      emails: await ctx.db.query("capturedEmails").collect(),
+      emailDeletions: await ctx.db.query("capturedEmailDeletions").collect(),
+      commands: await ctx.db.query("environmentCommands").collect(),
+      watches: await ctx.db.query("slackChannelWatches").collect(),
+      cursors: await ctx.db.query("slackChannelCursors").collect(),
+      pendingIntake: await ctx.db.query("slackPendingIntake").collect(),
+      intents: await ctx.db.query("slackIssueAutomationIntents").collect(),
+      processed: await ctx.db.query("slackProcessedMessages").collect(),
+      deliveries: await ctx.db.query("slackOutboundDeliveries").collect(),
+      automationJobs: await ctx.db.query("issueAutomationJobs").collect(),
+      integration: await ctx.db.query("slackIntegrations").first(),
+      changes: await ctx.db.query("syncChanges").collect(),
+    }));
+
+    expect(state.issues).toEqual([
+      expect.objectContaining({ id: childIssueId, parentId: null, deletedAt: null }),
+    ]);
+    expect([
+      state.todos,
+      state.comments,
+      state.attachments,
+      state.audits,
+      state.links,
+      state.relations,
+      state.emails,
+      state.commands,
+      state.pendingIntake,
+      state.intents,
+      state.deliveries,
+      state.automationJobs,
+    ]).toEqual([[], [], [], [], [], [], [], [], [], [], [], []]);
+    expect(state.emailDeletions).toEqual([
+      expect.objectContaining({
+        id: emailId,
+        environmentId: ENVIRONMENT_ID,
+        messageId: "message-1",
+      }),
+    ]);
+    expect(state.processed).toEqual([
+      expect.objectContaining({
+        disposition: "ignored",
+        issueId: null,
+        commentId: null,
+        reason: "Project deleted.",
+      }),
+    ]);
+    expect(state.integration).toMatchObject({ configurationRevision: 2, watchCount: 2 });
+    expect(state.watches).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: deletedWatchId })]),
+    );
+    expect(state.cursors).toEqual([]);
+    expect(state.watches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: v1WatchId,
+          cloudProjectId: null,
+          cycleId: null,
+          revision: 2,
+          trigger: expect.objectContaining({
+            everyMessage: false,
+            botMention: false,
+            reactionRoutes: [expect.objectContaining({ emoji: "triage", cloudProjectId: null })],
+          }),
+        }),
+        expect.objectContaining({
+          id: v2WatchId,
+          revision: 2,
+          rules: [expect.objectContaining({ id: remainingRuleId, cloudProjectId: null })],
+        }),
+      ]),
+    );
+    expect(state.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityKind: "issue",
+          entityId: issueId,
+          changeKind: "tombstone",
+        }),
+        expect.objectContaining({
+          entityKind: "issue",
+          entityId: childIssueId,
+          changeKind: "upsert",
+        }),
+        expect.objectContaining({
+          entityKind: "capturedEmail",
+          entityId: emailId,
+          changeKind: "tombstone",
+        }),
+        expect.objectContaining({
+          entityKind: "environmentCommand",
+          entityId: commandId,
+          changeKind: "tombstone",
+        }),
+      ]),
+    );
   });
 
   it("reports whether the call actually removed a project", async () => {

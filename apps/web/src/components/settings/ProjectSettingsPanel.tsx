@@ -85,6 +85,10 @@ import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectory
 import { MoveProjectWizard } from "../projects/MoveProjectWizard";
 import { PendingProjectSetup } from "../projects/PendingProjectSetup";
 import {
+  clearWorkspaceProjectRemovalPending,
+  markWorkspaceProjectRemovalPending,
+} from "../projects/projectRemovalState";
+import {
   buildProjectConnectionCatalog,
   deriveProjectConnectionMetadata,
   type ProjectConnectionMetadata,
@@ -295,7 +299,7 @@ export function CheckoutlessProjectSettings({
       api.dialogs.confirm(
         [
           `Remove project "${project.displayName}"?`,
-          "This removes the company project from every Pathway app. Files on disk are not touched.",
+          "This removes the company project, its issues, captured emails, and connected automation from every Pathway app. Files on disk are not touched.",
           "This action cannot be undone.",
         ].join("\n"),
         { variant: "destructive" },
@@ -853,7 +857,7 @@ export function ProjectDetail({
               ? ["This permanently clears conversation history for those threads."]
               : []),
             isWholeGroup && workspaceProject?.cloudProjectId != null
-              ? "This removes the company project and every checkout. Offline checkouts are removed when they reconnect; files on disk are not touched."
+              ? "This removes the company project, its issues, captured emails, connected automation, and every checkout. Offline checkouts are removed when they reconnect; files on disk are not touched."
               : isWholeGroup
                 ? "This removes only the project entries, not the files on disk."
                 : "Other entries in this grouped project are unaffected.",
@@ -893,6 +897,7 @@ export function ProjectDetail({
           return;
         }
         if (isWholeGroup) {
+          markWorkspaceProjectRemovalPending(workspaceProject.projectKey);
           const removal = await removeCompanyProjectFromOwners({
             environmentControl,
             companyIds,
@@ -900,6 +905,7 @@ export function ProjectDetail({
           });
           const failure = companyProjectRemovalFailure(removal);
           if (failure !== null) {
+            clearWorkspaceProjectRemovalPending(workspaceProject.projectKey);
             toastManager.add(
               stackedThreadToast({
                 type: "error",

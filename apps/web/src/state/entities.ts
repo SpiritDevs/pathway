@@ -195,6 +195,16 @@ export function waitForUnscopedProject(ref: ScopedProjectRef, timeoutMs = 1_000)
   });
 }
 
+/** Wait until a project is visible through the active company scope. */
+export function waitForProject(ref: ScopedProjectRef, timeoutMs = 5_000): Promise<boolean> {
+  return waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentProjects.projectAtom(ref),
+    predicate: (project) => project !== null,
+    timeoutMs,
+  });
+}
+
 export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | null {
   return appAtomRegistry.get(environmentThreadShells.threadShellAtom(ref));
 }

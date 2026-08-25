@@ -111,6 +111,51 @@ it.effect("computes deliverability before capture and reads the stored result ba
   ),
 );
 
+it.effect("lists one logical project across its physical connection ids", () =>
+  withStore((store) =>
+    Effect.gen(function* () {
+      yield* Effect.forEach(
+        [
+          capturedMessage({
+            id: "message-1",
+            attribution: projectAttribution("one"),
+            receivedAt: "2026-08-12T10:05:00.000Z",
+            latencyMs: 100,
+            sender: "one@example.com",
+            recipients: ["dev@project-one.test"],
+          }),
+          capturedMessage({
+            id: "message-2",
+            attribution: projectAttribution("two"),
+            receivedAt: "2026-08-12T10:10:00.000Z",
+            latencyMs: 100,
+            sender: "two@example.com",
+            recipients: ["dev@project-two.test"],
+          }),
+          capturedMessage({
+            id: "message-unassigned",
+            attribution: unassignedAttribution,
+            receivedAt: "2026-08-12T10:15:00.000Z",
+            latencyMs: 100,
+            sender: "other@example.com",
+            recipients: ["dev@example.com"],
+          }),
+        ],
+        store.capture,
+        { concurrency: 1 },
+      );
+
+      const result = yield* store.list({
+        scope: { type: "project", projectId: ProjectId.make("project-one") },
+        projectIds: [ProjectId.make("project-one"), ProjectId.make("project-two")],
+        limit: 50,
+      });
+
+      expect(result.messages.map((message) => message.id)).toEqual(["message-2", "message-1"]);
+    }),
+  ),
+);
+
 it.effect("aggregates volume, projects, addresses, and capture latency within an inbox scope", () =>
   withStore((store) =>
     Effect.gen(function* () {

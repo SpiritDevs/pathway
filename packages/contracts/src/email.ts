@@ -463,6 +463,8 @@ export type EmailListFilters = typeof EmailListFilters.Type;
 
 export const EmailListInput = Schema.Struct({
   scope: EmailInboxScope,
+  /** Physical connection ids to combine when `scope` identifies one logical project. */
+  projectIds: Schema.optional(Schema.Array(ProjectId)),
   cursor: Schema.optional(TrimmedNonEmptyString),
   limit: Schema.optional(PositiveInt),
   filters: Schema.optional(EmailListFilters),

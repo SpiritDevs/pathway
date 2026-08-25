@@ -88,6 +88,7 @@ function awaitThreadState(
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationV2ThreadProjection;
   readonly httpSnapshot?: Option.Option<OrchestrationV2ThreadDetailSnapshot>;
+  readonly httpNotFound?: boolean;
   readonly completionMarker?: boolean;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
@@ -135,9 +136,19 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     load: (_prepared, threadId) =>
       Ref.update(loaderCalls, (count) => count + 1).pipe(
         Effect.as(
-          threadId === THREAD_ID
-            ? (options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>())
-            : Option.none<OrchestrationV2ThreadDetailSnapshot>(),
+          options?.httpNotFound === true
+            ? ({ _tag: "NotFound" } as const)
+            : threadId === THREAD_ID &&
+                Option.isSome(
+                  options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
+                )
+              ? ({
+                  _tag: "Snapshot",
+                  snapshot: Option.getOrThrow(
+                    options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
+                  ),
+                } as const)
+              : ({ _tag: "Unavailable" } as const),
         ),
       ),
   });
@@ -335,6 +346,24 @@ describe("EnvironmentThreads", () => {
       // resumed from that snapshot's sequence.
       expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
+    }),
+  );
+
+  it.effect("treats an HTTP 404 as a terminally deleted thread", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpNotFound: true });
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted",
+      );
+      yield* TestClock.adjust("1 second");
+      yield* Effect.yieldNow;
+
+      expect(Option.isNone(state.data)).toBe(true);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(0);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
     }),
   );
 

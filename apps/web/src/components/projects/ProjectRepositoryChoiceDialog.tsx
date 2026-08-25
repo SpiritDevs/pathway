@@ -31,22 +31,28 @@ export function ProjectRepositoryChoiceDialog({
   readonly onOpenChange: (open: boolean) => void;
   readonly onConfirm: (choice: ProjectRepositoryChoice) => void;
 }) {
-  const [choice, setChoice] = useState<ProjectRepositoryChoice>({
-    kind: "existing",
-    projectKey: candidates[0]?.projectKey ?? "",
-  });
+  const [choice, setChoice] = useState<ProjectRepositoryChoice | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
-    setChoice({ kind: "existing", projectKey: candidates[0]?.projectKey ?? "" });
+    if (!open) {
+      setReady(false);
+      return;
+    }
+    setChoice(null);
+    // The picker is commonly opened by Enter. Arm confirmation on the next frame so that key
+    // cannot carry through focus transfer and accept the default Existing project choice.
+    setReady(false);
+    const frame = window.requestAnimationFrame(() => setReady(true));
+    return () => window.cancelAnimationFrame(frame);
   }, [candidates, open]);
 
   const selectedProject =
-    choice.kind === "existing"
+    choice?.kind === "existing"
       ? (candidates.find((candidate) => candidate.projectKey === choice.projectKey) ??
         candidates[0] ??
         null)
-      : null;
+      : (candidates[0] ?? null);
 
   return (
     <Dialog
@@ -70,10 +76,10 @@ export function ProjectRepositoryChoiceDialog({
             aria-label="Project destination"
           >
             <button
-              aria-checked={choice.kind === "existing"}
+              aria-checked={choice?.kind === "existing"}
               className={cn(
                 "flex aspect-square min-h-36 flex-col items-start justify-between rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                choice.kind === "existing"
+                choice?.kind === "existing"
                   ? "border-primary bg-primary/[0.06]"
                   : "border-border bg-muted/15 hover:bg-muted/30",
               )}
@@ -98,10 +104,10 @@ export function ProjectRepositoryChoiceDialog({
               </span>
             </button>
             <button
-              aria-checked={choice.kind === "new"}
+              aria-checked={choice?.kind === "new"}
               className={cn(
                 "flex aspect-square min-h-36 flex-col items-start justify-between rounded-xl border p-4 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                choice.kind === "new"
+                choice?.kind === "new"
                   ? "border-primary bg-primary/[0.06]"
                   : "border-border bg-muted/15 hover:bg-muted/30",
               )}
@@ -119,7 +125,7 @@ export function ProjectRepositoryChoiceDialog({
               </span>
             </button>
           </div>
-          {candidates.length > 1 && choice.kind === "existing" ? (
+          {candidates.length > 1 && choice?.kind === "existing" ? (
             <Select
               aria-label="Existing project"
               disabled={submitting}
@@ -148,13 +154,20 @@ export function ProjectRepositoryChoiceDialog({
             Cancel
           </Button>
           <Button
-            disabled={submitting || (choice.kind === "existing" && selectedProject === null)}
+            disabled={
+              !ready ||
+              submitting ||
+              choice === null ||
+              (choice.kind === "existing" && selectedProject === null)
+            }
             onClick={() =>
-              onConfirm(
-                choice.kind === "existing" && selectedProject !== null
-                  ? { kind: "existing", projectKey: selectedProject.projectKey }
-                  : choice,
-              )
+              ready && choice !== null
+                ? onConfirm(
+                    choice.kind === "existing" && selectedProject !== null
+                      ? { kind: "existing", projectKey: selectedProject.projectKey }
+                      : choice,
+                  )
+                : undefined
             }
           >
             {submitting ? "Adding…" : "Continue"}

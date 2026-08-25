@@ -60,6 +60,14 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
 
+export type ThreadSnapshotLoadResult =
+  | {
+      readonly _tag: "Snapshot";
+      readonly snapshot: OrchestrationV2ThreadDetailSnapshot;
+    }
+  | { readonly _tag: "NotFound" }
+  | { readonly _tag: "Unavailable" };
+
 /**
  * Loads a thread's detail snapshot over HTTP, returning `Option.none()` when it
  * cannot be loaded (so the caller falls back to the socket-embedded snapshot).
@@ -72,7 +80,7 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
-    ) => Effect.Effect<Option.Option<OrchestrationV2ThreadDetailSnapshot>>;
+    ) => Effect.Effect<ThreadSnapshotLoadResult>;
   }
 >()("@spiritdevs/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
 
@@ -91,19 +99,18 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
     return ThreadSnapshotLoader.of({
       load: (prepared: PreparedConnection, threadId: ThreadId) =>
         fetchEnvironmentThreadSnapshot({ prepared, threadId, signer }).pipe(
-          Effect.map(Option.some<OrchestrationV2ThreadDetailSnapshot>),
+          Effect.map((snapshot): ThreadSnapshotLoadResult => ({ _tag: "Snapshot", snapshot })),
           Effect.provideService(HttpClient.HttpClient, httpClient),
-          // A genuinely missing thread (404) is expected — the socket
-          // subscription is the source of truth for thread existence and will
-          // surface the deletion — so don't treat it as an error worth warning
-          // about; just defer to the socket path.
+          // A genuinely missing thread is terminal. A new subscription cannot receive the
+          // deletion event that happened before it existed, so collapsing this into the generic
+          // fallback result would make the socket path retry the missing thread forever.
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
-                "Thread snapshot not found over HTTP; deferring to the socket subscription.",
+                "Thread snapshot not found over HTTP; treating the thread as deleted.",
               ).pipe(
                 Effect.annotateLogs({ threadId }),
-                Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
+                Effect.as<ThreadSnapshotLoadResult>({ _tag: "NotFound" }),
               ),
           }),
           Effect.catchCause((cause) =>
@@ -111,7 +118,7 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
               "Could not load the thread snapshot over HTTP; using the socket snapshot instead.",
             ).pipe(
               Effect.annotateLogs({ threadId, cause: Cause.pretty(cause) }),
-              Effect.as(Option.none<OrchestrationV2ThreadDetailSnapshot>()),
+              Effect.as<ThreadSnapshotLoadResult>({ _tag: "Unavailable" }),
             ),
           ),
         ),

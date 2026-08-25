@@ -5,6 +5,7 @@ import {
   buildWorkspaceProjects,
   cloudProjectKey,
   unassignedWorkspaceProjects,
+  workspaceProjectAssignmentKey,
   workspaceThreadStartAvailability,
   type WorkspaceProjectCandidate,
 } from "./workspaceProjects.logic";
@@ -170,6 +171,25 @@ describe("workspace project list", () => {
     expect(unassignedWorkspaceProjects(projects).map((project) => project.displayName)).toEqual([
       "Scratch",
     ]);
+  });
+
+  it("does not reuse assignment state when the same project path is re-created", () => {
+    const assignmentKey = (checkoutId: string) =>
+      workspaceProjectAssignmentKey({
+        projectKey: "repository:pathway",
+        group: group({
+          id: checkoutId,
+          projectKey: "repository:pathway",
+          memberProjects: [
+            {
+              environmentId: "environment-1",
+              id: checkoutId,
+            } as never,
+          ],
+        }),
+      });
+
+    expect(assignmentKey("checkout-old")).not.toBe(assignmentKey("checkout-new"));
   });
 });
 
