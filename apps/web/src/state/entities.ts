@@ -13,7 +13,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { environmentProjects } from "./projects";
+import { environmentProjects, unscopedEnvironmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
 import { allEnvironmentShellsBootstrappedAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
@@ -113,6 +113,11 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
 
+/** Local project checkouts regardless of the selected company. */
+export function useUnscopedProjects(): ReadonlyArray<EnvironmentProject> {
+  return useAtomValue(unscopedEnvironmentProjects.projectsAtom);
+}
+
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
   return useAtomValue(environmentServerConfigsAtom);
 }
@@ -179,6 +184,15 @@ export function useThreadVisibleTurnItems(
 
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
   return appAtomRegistry.get(environmentProjects.projectAtom(ref));
+}
+
+export function waitForUnscopedProject(ref: ScopedProjectRef, timeoutMs = 1_000): Promise<boolean> {
+  return waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: unscopedEnvironmentProjects.projectAtom(ref),
+    predicate: (project) => project !== null,
+    timeoutMs,
+  });
 }
 
 export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | null {

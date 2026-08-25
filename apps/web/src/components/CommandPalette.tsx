@@ -72,7 +72,7 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useThreadShells, waitForUnscopedProject } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -1847,8 +1847,14 @@ function OpenCommandPaletteDialog(props: {
           ),
         },
       });
+      const projectRef = scopeProjectRef(input.environmentId, projectId);
       if (createResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(createResult)) {
+        if (isAtomCommandInterrupted(createResult)) {
+          return;
+        }
+
+        const projectWasCommitted = await waitForUnscopedProject(projectRef);
+        if (!projectWasCommitted) {
           const error = squashAtomCommandFailure(createResult);
           toastManager.add(
             stackedThreadToast({
@@ -1857,13 +1863,11 @@ function OpenCommandPaletteDialog(props: {
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
+          return;
         }
-        return;
       }
 
-      const navigationResult = await settlePromise(() =>
-        handleNewThread(scopeProjectRef(input.environmentId, projectId)),
-      );
+      const navigationResult = await settlePromise(() => handleNewThread(projectRef));
       if (navigationResult._tag === "Failure") {
         const error = squashAtomCommandFailure(navigationResult);
         toastManager.add(

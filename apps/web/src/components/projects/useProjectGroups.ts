@@ -4,11 +4,9 @@ import { selectProjectGroupingSettings } from "~/logicalProject";
 import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { useProjects } from "~/state/entities";
+import { useProjects, useUnscopedProjects } from "~/state/entities";
 
-/** Logical project groups shared by the Projects workspace and project settings. */
-export function useProjectGroups() {
-  const projects = useProjects();
+function useGroupedProjects(projects: ReturnType<typeof useProjects>) {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
@@ -30,4 +28,14 @@ export function useProjectGroups() {
       }).sort((left, right) => left.displayName.localeCompare(right.displayName)),
     [environmentLabelById, primaryEnvironmentId, projectGroupingSettings, projects],
   );
+}
+
+/** Logical project groups shared by the Projects workspace and project settings. */
+export function useProjectGroups() {
+  return useGroupedProjects(useProjects());
+}
+
+/** Logical project groups used only while assigning unowned local checkouts. */
+export function useUnscopedProjectGroups() {
+  return useGroupedProjects(useUnscopedProjects());
 }

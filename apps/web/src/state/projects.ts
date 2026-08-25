@@ -44,3 +44,15 @@ export const environmentProjects = createEnvironmentProjectAtoms({
   snapshotAtom: companyScopedProjectSnapshotAtom,
   fallbackProjectsAtom: cloudEnvironmentProjectsAtom,
 });
+
+/**
+ * Local projects before the active-company filter is applied.
+ *
+ * The ownership gate needs this view so a newly-created checkout can be assigned to a company.
+ * Feeding that gate from `environmentProjects` creates a deadlock: an unbound project is filtered
+ * out before the gate can see it and create the missing binding.
+ */
+export const unscopedEnvironmentProjects = createEnvironmentProjectAtoms({
+  catalogValueAtom: environmentCatalog.catalogValueAtom,
+  snapshotAtom: environmentSnapshotAtom,
+});

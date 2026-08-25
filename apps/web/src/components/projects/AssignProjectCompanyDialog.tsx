@@ -35,7 +35,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { useWorkspaceProjects } from "./useWorkspaceProjects";
+import { useUnscopedWorkspaceProjects } from "./useWorkspaceProjects";
 import { unassignedWorkspaceProjects, type WorkspaceProject } from "./workspaceProjects.logic";
 
 /**
@@ -122,7 +122,7 @@ function ProjectRow({
 }
 
 export function AssignProjectCompanyDialog() {
-  const projects = useWorkspaceProjects();
+  const projects = useUnscopedWorkspaceProjects();
   const companies = useAtomValue(companyListAtom);
   const control = useEnvironmentControl();
   const [assignments, setAssignments] = useState<Assignments>(new Map());

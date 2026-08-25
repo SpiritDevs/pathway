@@ -2,17 +2,9 @@ import { useMemo } from "react";
 
 import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
 import { buildWorkspaceProjects, type WorkspaceProject } from "./workspaceProjects.logic";
-import { useProjectGroups } from "./useProjectGroups";
+import { useProjectGroups, useUnscopedProjectGroups } from "./useProjectGroups";
 
-/**
- * Every project in this workspace, checked out or not.
- *
- * `useIssueProjectOptions` already merges company projects with their local checkouts for the
- * issue rail, so this reuses that merge rather than growing a second one that could disagree with
- * it about which ids are the same project.
- */
-export function useWorkspaceProjects(): ReadonlyArray<WorkspaceProject> {
-  const groups = useProjectGroups();
+function useMergedWorkspaceProjects(groups: ReturnType<typeof useProjectGroups>) {
   const options = useIssueProjectOptions();
   return useMemo(
     () =>
@@ -28,4 +20,20 @@ export function useWorkspaceProjects(): ReadonlyArray<WorkspaceProject> {
       }),
     [groups, options],
   );
+}
+
+/**
+ * Every project in this workspace, checked out or not.
+ *
+ * `useIssueProjectOptions` already merges company projects with their local checkouts for the
+ * issue rail, so this reuses that merge rather than growing a second one that could disagree with
+ * it about which ids are the same project.
+ */
+export function useWorkspaceProjects(): ReadonlyArray<WorkspaceProject> {
+  return useMergedWorkspaceProjects(useProjectGroups());
+}
+
+/** Includes local checkouts that still need a company owner. */
+export function useUnscopedWorkspaceProjects(): ReadonlyArray<WorkspaceProject> {
+  return useMergedWorkspaceProjects(useUnscopedProjectGroups());
 }
