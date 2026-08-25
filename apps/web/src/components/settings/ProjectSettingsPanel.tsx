@@ -1191,7 +1191,7 @@ export function ProjectDetail({
                   }}
                 >
                   <SelectTrigger aria-label="Project company" className="w-full sm:w-64">
-                    <SelectValue placeholder="No company" />
+                    <SelectValue placeholder="No company">{owningCompany?.name}</SelectValue>
                   </SelectTrigger>
                   <SelectPopup align="end" alignItemWithTrigger={false}>
                     {companies.map((company) => (

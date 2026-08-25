@@ -160,7 +160,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { MoveProjectWizard } from "../projects/MoveProjectWizard";
 import { Button } from "../ui/button";
 import { MenuItem } from "../ui/menu";
-import { Select } from "../ui/select";
+import { Select, SelectValue } from "../ui/select";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
 
@@ -677,6 +677,11 @@ describe("Project settings favicon selection", () => {
       (element) => element.type === Select && element.props.value === companyA,
     );
     expect(companySelect).not.toBeNull();
+    const companySelectValue = visitElements(
+      renderCompanyProject(),
+      (element) => element.type === SelectValue && element.props.placeholder === "No company",
+    );
+    expect(companySelectValue?.props.children).toBe("Source Co");
     (companySelect?.props.onValueChange as ((value: CompanyId) => void) | undefined)?.(companyB);
 
     const wizard = visitElements(
