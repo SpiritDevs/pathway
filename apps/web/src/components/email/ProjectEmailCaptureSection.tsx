@@ -5,12 +5,11 @@
  * routes to this inbox, the retention caps it overrides, the 2FA pattern it prefers, whether its
  * captures toast, and the rules its mail may start threads from.
  *
- * Capture runs on the primary environment's host, so this renders for the checkout that lives
- * there and nothing else — a remote checkout of the same project has no inbox of its own.
+ * Capture runs per environment, so callers pass the physical connection that owns this inbox.
  *
  * @module components/email/ProjectEmailCaptureSection
  */
-import type { EmailCaptureSettings, ProjectId } from "@spiritdevs/contracts";
+import type { EmailCaptureSettings, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { BellIcon, CopyIcon, MailIcon } from "lucide-react";
 
 import { useEmailSettings, useUpdateEmailSettings } from "~/state/email";
@@ -53,12 +52,14 @@ function regexError(pattern: string): string | null {
 export function ProjectEmailCaptureSection({
   projectId,
   projectName,
+  environmentId,
 }: {
   projectId: ProjectId;
   projectName: string;
+  environmentId?: EnvironmentId;
 }) {
-  const { settings } = useEmailSettings();
-  const updateSettings = useUpdateEmailSettings();
+  const { settings } = useEmailSettings(environmentId);
+  const updateSettings = useUpdateEmailSettings(environmentId);
   const copyCaptureAddress = useCaptureValueCopy("Capture address");
 
   const project = findEmailProjectSettings(settings, projectId);
@@ -269,6 +270,7 @@ export function ProjectEmailCaptureSection({
         <SettingsRow
           control={
             <ClearInboxButton
+              {...(environmentId === undefined ? {} : { environmentId })}
               inboxName={`${projectName} inbox`}
               scope={{ type: "project", projectId }}
             />
@@ -278,7 +280,11 @@ export function ProjectEmailCaptureSection({
         />
       </SettingsSection>
 
-      <EmailTriggerRulesSection projectId={projectId} title="Mail trigger rules" />
+      <EmailTriggerRulesSection
+        {...(environmentId === undefined ? {} : { environmentId })}
+        projectId={projectId}
+        title="Mail trigger rules"
+      />
     </>
   );
 }

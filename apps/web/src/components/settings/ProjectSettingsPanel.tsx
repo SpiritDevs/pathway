@@ -33,6 +33,7 @@ import {
   CopyIcon,
   EllipsisIcon,
   MonitorIcon,
+  PencilIcon,
   PlusIcon,
   SettingsIcon,
   StarIcon,
@@ -71,7 +72,7 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
-import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironments } from "../../state/environments";
 import { useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
@@ -117,12 +118,21 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Sheet,
+  SheetDescription,
+  SheetHeader,
+  SheetPanel,
+  SheetPopup,
+  SheetTitle,
+} from "../ui/sheet";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
+  SettingsSurfaceProvider,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { useCompanySettings, type CompanySettings } from "./company/useCompanySettings";
@@ -383,9 +393,6 @@ export function ProjectDetail({
   const navigate = useNavigate();
   const settings = usePrimarySettings();
   const { presentationById } = useEnvironments();
-  // Captured mail belongs to the machine the listener runs on, so the capture section follows this
-  // group's checkout on the primary environment and hides for a group that has none.
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
@@ -417,9 +424,6 @@ export function ProjectDetail({
     group.memberProjects.find(
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
-  const captureProjectId =
-    group.memberProjects.find((member) => member.environmentId === primaryEnvironmentId)?.id ??
-    null;
   const faviconPath = representative.faviconPath ?? null;
   const companies = useAtomValue(companyListAtom) ?? [];
   const owningCompany =
@@ -611,6 +615,7 @@ export function ProjectDetail({
 
   // ----- connection selection and scripts -----
   const [selectedCheckoutKey, setSelectedCheckoutKey] = useState(representative.physicalProjectKey);
+  const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(false);
   const selectedCheckout =
     group.memberProjects.find((member) => member.physicalProjectKey === selectedCheckoutKey) ??
     representative;
@@ -1242,7 +1247,6 @@ export function ProjectDetail({
               const environment = presentationById.get(connection.environmentId);
               const platformLabel = projectConnectionPlatformLabel(connection.platform);
               const threadCount = threadCountByMember.get(connectionKey) ?? 0;
-              const isSelected = member?.physicalProjectKey === selectedCheckout.physicalProjectKey;
               const canRemoveConnection =
                 projectConnections.length > 1 &&
                 (workspaceProject?.cloudProjectId != null || member !== null);
@@ -1254,22 +1258,9 @@ export function ProjectDetail({
               return (
                 <div
                   key={connectionKey}
-                  className={
-                    isSelected
-                      ? "flex items-start rounded-xl border border-primary/45 bg-primary/[0.04]"
-                      : "flex items-start rounded-xl border border-border/70 bg-muted/15"
-                  }
+                  className="flex items-start rounded-xl border border-border/70 bg-muted/15"
                 >
-                  <button
-                    aria-label={`Configure ${connection.environmentLabel}`}
-                    aria-pressed={isSelected}
-                    className="flex min-w-0 flex-1 items-start gap-3 rounded-xl px-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
-                    disabled={member === null}
-                    type="button"
-                    onClick={() => {
-                      if (member) setSelectedCheckoutKey(member.physicalProjectKey);
-                    }}
-                  >
+                  <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3">
                     <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                       <MonitorIcon className="size-3.5" />
                     </span>
@@ -1302,7 +1293,7 @@ export function ProjectDetail({
                         ) : null}
                       </div>
                     </div>
-                  </button>
+                  </div>
                   <Menu>
                     <MenuTrigger
                       render={
@@ -1318,6 +1309,24 @@ export function ProjectDetail({
                       <EllipsisIcon className="size-4" />
                     </MenuTrigger>
                     <MenuPopup align="end" className="min-w-48">
+                      <MenuItem
+                        onClick={() => {
+                          if (member === null) {
+                            toastManager.add({
+                              type: "warning",
+                              title: "Connection settings are unavailable",
+                              description: "Reconnect this environment before editing it.",
+                            });
+                            return;
+                          }
+                          setSelectedCheckoutKey(member.physicalProjectKey);
+                          setConnectionSettingsOpen(true);
+                        }}
+                      >
+                        <PencilIcon className="size-3.5" />
+                        Edit
+                      </MenuItem>
+                      <MenuSeparator />
                       {workspaceProject?.cloudProjectId != null && connection.bindingId !== null ? (
                         <>
                           <MenuItem
@@ -1486,191 +1495,221 @@ export function ProjectDetail({
           />
         </SettingsSection>
 
-        <SettingsSection title="Connection settings">
-          <SettingsRow
-            title="Project grouping"
-            description={`How the connection on ${selectedCheckoutLabel} joins project groups in the sidebar. Changing it can move you to a different project group.`}
-            control={
-              <Select
-                value={selectedCheckoutGrouping}
-                onValueChange={(value) => {
-                  if (
-                    value === "inherit" ||
-                    value === "repository" ||
-                    value === "repository_path" ||
-                    value === "separate"
-                  ) {
-                    updateGroupingPreference(selectedCheckout, value);
-                  }
-                }}
-              >
-                <SelectTrigger aria-label={`Grouping rule for ${selectedCheckoutLabel}`}>
-                  <SelectValue>
-                    {selectedCheckoutGrouping === "independent"
-                      ? "Independent project"
-                      : selectedCheckoutGrouping === "linked"
-                        ? `Linked to ${group.displayName}`
-                        : selectedCheckoutGrouping === "inherit"
-                          ? `Default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
-                          : PROJECT_GROUPING_MODE_LABELS[selectedCheckoutGrouping]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {selectedCheckoutGrouping === "independent" ? (
-                    <SelectItem disabled hideIndicator value="independent">
-                      Independent project
-                    </SelectItem>
-                  ) : selectedCheckoutGrouping === "linked" ? (
-                    <SelectItem disabled hideIndicator value="linked">
-                      Linked to {group.displayName}
-                    </SelectItem>
-                  ) : null}
-                  <SelectItem hideIndicator value="inherit">
-                    Use global default
-                  </SelectItem>
-                  <SelectItem hideIndicator value="repository">
-                    {PROJECT_GROUPING_MODE_LABELS.repository}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="repository_path">
-                    {PROJECT_GROUPING_MODE_LABELS.repository_path}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="separate">
-                    {PROJECT_GROUPING_MODE_LABELS.separate}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
-            }
-          />
-          <div className="flex min-h-8 flex-col items-start gap-3 px-3 pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4">
-            <div className="min-w-0">
-              <h3 className="text-base font-semibold text-foreground">Actions</h3>
-              <p className="text-pretty text-sm text-muted-foreground">
-                Saved and run only through {selectedCheckoutLabel}.
-              </p>
-            </div>
-            <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
-              {importableScripts.length > 0 ? (
-                <Menu>
-                  <MenuTrigger
-                    render={
-                      <Button size="xs" variant="ghost" disabled={isSavingScripts} type="button" />
-                    }
-                  >
-                    Import scripts
-                    <ChevronDownIcon className="size-3.5" />
-                  </MenuTrigger>
-                  <MenuPopup align="end" className="w-72">
-                    <MenuGroup>
-                      <MenuGroupLabel>Import from pathway.json</MenuGroupLabel>
-                      <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
-                        Add actions declared by this connection without editing them first.
-                      </p>
-                    </MenuGroup>
-                    <MenuSeparator />
-                    {importableScripts.map((fileScript) => (
-                      <MenuItem
-                        key={`${fileScript.name} ${fileScript.command}`}
-                        onClick={() => void importFileScript(fileScript)}
+        <Sheet open={connectionSettingsOpen} onOpenChange={setConnectionSettingsOpen}>
+          <SheetPopup className="max-w-xl">
+            <SheetHeader className="border-b border-border/60">
+              <div className="flex min-w-0 items-center gap-3 pe-8">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                  <MonitorIcon className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <SheetTitle className="truncate text-lg">{selectedCheckoutLabel}</SheetTitle>
+                  <SheetDescription className="mt-1 truncate">
+                    {selectedCheckout.workspaceRoot ?? "No directory attached"}
+                  </SheetDescription>
+                </div>
+              </div>
+            </SheetHeader>
+            <SheetPanel className="@container/settings space-y-6 p-5">
+              <SettingsSurfaceProvider surface="sheet">
+                <SettingsSection title="Connection settings">
+                  <SettingsRow
+                    title="Project grouping"
+                    description={`How the connection on ${selectedCheckoutLabel} joins project groups in the sidebar. Changing it can move you to a different project group.`}
+                    control={
+                      <Select
+                        value={selectedCheckoutGrouping}
+                        onValueChange={(value) => {
+                          if (
+                            value === "inherit" ||
+                            value === "repository" ||
+                            value === "repository_path" ||
+                            value === "separate"
+                          ) {
+                            updateGroupingPreference(selectedCheckout, value);
+                          }
+                        }}
                       >
-                        <ScriptIcon icon={fileScript.icon ?? "play"} className="size-4 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium">{fileScript.name}</div>
-                          <div className="truncate font-mono text-muted-foreground">
-                            {fileScript.command}
-                          </div>
-                        </div>
-                      </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
-              ) : null}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={isSavingScripts}
-                onClick={() =>
-                  setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })
-                }
-              >
-                <PlusIcon className="size-3.5" />
-                Add action
-              </Button>
-            </div>
-          </div>
-          {scripts.length === 0 ? (
-            <p className="px-3 py-2 text-base text-muted-foreground sm:px-4 sm:text-sm">
-              No actions configured for this connection.
-            </p>
-          ) : (
-            scripts.map((script) => {
-              const shortcutLabel = shortcutLabelForCommand(
-                keybindings,
-                commandForProjectScript(script.id),
-              );
-              return (
-                <SettingsRow
-                  key={script.id}
-                  className="group py-2"
-                  title={
-                    <span className="flex min-w-0 items-center gap-2">
-                      <ScriptIcon
-                        icon={script.icon}
-                        className="size-4 shrink-0 text-muted-foreground"
-                      />
-                      <span className="max-w-40 shrink-0 truncate">{script.name}</span>
-                      <code className="min-w-0 flex-1 truncate font-mono font-normal text-muted-foreground">
-                        {script.command}
-                      </code>
-                      {script.runOnWorktreeCreate ? (
-                        <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] font-normal text-muted-foreground">
-                          setup
-                        </span>
-                      ) : null}
-                      {script.previewUrl ? (
-                        <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] font-normal text-muted-foreground max-sm:hidden">
-                          preview · desktop only
-                        </span>
-                      ) : null}
-                    </span>
-                  }
-                  control={
-                    <>
-                      {shortcutLabel ? (
-                        <span className="text-xs text-muted-foreground">{shortcutLabel}</span>
+                        <SelectTrigger aria-label={`Grouping rule for ${selectedCheckoutLabel}`}>
+                          <SelectValue>
+                            {selectedCheckoutGrouping === "independent"
+                              ? "Independent project"
+                              : selectedCheckoutGrouping === "linked"
+                                ? `Linked to ${group.displayName}`
+                                : selectedCheckoutGrouping === "inherit"
+                                  ? `Default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
+                                  : PROJECT_GROUPING_MODE_LABELS[selectedCheckoutGrouping]}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectPopup align="end" alignItemWithTrigger={false}>
+                          {selectedCheckoutGrouping === "independent" ? (
+                            <SelectItem disabled hideIndicator value="independent">
+                              Independent project
+                            </SelectItem>
+                          ) : selectedCheckoutGrouping === "linked" ? (
+                            <SelectItem disabled hideIndicator value="linked">
+                              Linked to {group.displayName}
+                            </SelectItem>
+                          ) : null}
+                          <SelectItem hideIndicator value="inherit">
+                            Use global default
+                          </SelectItem>
+                          <SelectItem hideIndicator value="repository">
+                            {PROJECT_GROUPING_MODE_LABELS.repository}
+                          </SelectItem>
+                          <SelectItem hideIndicator value="repository_path">
+                            {PROJECT_GROUPING_MODE_LABELS.repository_path}
+                          </SelectItem>
+                          <SelectItem hideIndicator value="separate">
+                            {PROJECT_GROUPING_MODE_LABELS.separate}
+                          </SelectItem>
+                        </SelectPopup>
+                      </Select>
+                    }
+                  />
+                  <div className="flex min-h-8 flex-col items-start gap-3 px-3 pt-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-foreground">Actions</h3>
+                      <p className="text-pretty text-sm text-muted-foreground">
+                        Saved and run only through {selectedCheckoutLabel}.
+                      </p>
+                    </div>
+                    <div className="flex w-full flex-wrap gap-1.5 sm:w-auto sm:shrink-0 sm:justify-end">
+                      {importableScripts.length > 0 ? (
+                        <Menu>
+                          <MenuTrigger
+                            render={
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                disabled={isSavingScripts}
+                                type="button"
+                              />
+                            }
+                          >
+                            Import scripts
+                            <ChevronDownIcon className="size-3.5" />
+                          </MenuTrigger>
+                          <MenuPopup align="end" className="w-72">
+                            <MenuGroup>
+                              <MenuGroupLabel>Import from pathway.json</MenuGroupLabel>
+                              <p className="px-2 pb-2 text-pretty text-sm text-muted-foreground">
+                                Add actions declared by this connection without editing them first.
+                              </p>
+                            </MenuGroup>
+                            <MenuSeparator />
+                            {importableScripts.map((fileScript) => (
+                              <MenuItem
+                                key={`${fileScript.name} ${fileScript.command}`}
+                                onClick={() => void importFileScript(fileScript)}
+                              >
+                                <ScriptIcon
+                                  icon={fileScript.icon ?? "play"}
+                                  className="size-4 shrink-0"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate font-medium">{fileScript.name}</div>
+                                  <div className="truncate font-mono text-muted-foreground">
+                                    {fileScript.command}
+                                  </div>
+                                </div>
+                              </MenuItem>
+                            ))}
+                          </MenuPopup>
+                        </Menu>
                       ) : null}
                       <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="shrink-0 text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-                        aria-label={`Edit ${script.name}`}
+                        size="xs"
+                        variant="outline"
                         disabled={isSavingScripts}
                         onClick={() =>
-                          setEditorRequest(editorRequestForScript(script, keybindings))
+                          setEditorRequest({ scriptId: null, initial: EMPTY_PROJECT_SCRIPT_INPUT })
                         }
                       >
-                        <SettingsIcon className="size-3.5" />
+                        <PlusIcon className="size-3.5" />
+                        Add action
                       </Button>
-                    </>
-                  }
-                />
-              );
-            })
-          )}
-          {pathwayFile.status === "invalid" ? (
-            <SettingsRow
-              title="pathway.json is invalid"
-              description="A pathway.json exists for this connection but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
-              className="text-warning"
-            />
-          ) : null}
-        </SettingsSection>
+                    </div>
+                  </div>
+                  {scripts.length === 0 ? (
+                    <p className="px-3 py-2 text-base text-muted-foreground sm:px-4 sm:text-sm">
+                      No actions configured for this connection.
+                    </p>
+                  ) : (
+                    scripts.map((script) => {
+                      const shortcutLabel = shortcutLabelForCommand(
+                        keybindings,
+                        commandForProjectScript(script.id),
+                      );
+                      return (
+                        <SettingsRow
+                          key={script.id}
+                          className="group py-2"
+                          title={
+                            <span className="flex min-w-0 items-center gap-2">
+                              <ScriptIcon
+                                icon={script.icon}
+                                className="size-4 shrink-0 text-muted-foreground"
+                              />
+                              <span className="max-w-40 shrink-0 truncate">{script.name}</span>
+                              <code className="min-w-0 flex-1 truncate font-mono font-normal text-muted-foreground">
+                                {script.command}
+                              </code>
+                              {script.runOnWorktreeCreate ? (
+                                <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] font-normal text-muted-foreground">
+                                  setup
+                                </span>
+                              ) : null}
+                              {script.previewUrl ? (
+                                <span className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px text-[11px] font-normal text-muted-foreground max-sm:hidden">
+                                  preview · desktop only
+                                </span>
+                              ) : null}
+                            </span>
+                          }
+                          control={
+                            <>
+                              {shortcutLabel ? (
+                                <span className="text-xs text-muted-foreground">
+                                  {shortcutLabel}
+                                </span>
+                              ) : null}
+                              <Button
+                                size="icon-xs"
+                                variant="ghost"
+                                className="shrink-0 text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                                aria-label={`Edit ${script.name}`}
+                                disabled={isSavingScripts}
+                                onClick={() =>
+                                  setEditorRequest(editorRequestForScript(script, keybindings))
+                                }
+                              >
+                                <SettingsIcon className="size-3.5" />
+                              </Button>
+                            </>
+                          }
+                        />
+                      );
+                    })
+                  )}
+                  {pathwayFile.status === "invalid" ? (
+                    <SettingsRow
+                      title="pathway.json is invalid"
+                      description="A pathway.json exists for this connection but fails to parse, so every action and icon it declares is ignored. Check the JSON syntax and icon values."
+                      className="text-warning"
+                    />
+                  ) : null}
+                </SettingsSection>
 
-        {captureProjectId === null ? null : (
-          <ProjectEmailCaptureSection
-            projectId={captureProjectId}
-            projectName={group.displayName}
-          />
-        )}
+                <ProjectEmailCaptureSection
+                  environmentId={selectedCheckout.environmentId}
+                  projectId={selectedCheckout.id}
+                  projectName={group.displayName}
+                />
+              </SettingsSurfaceProvider>
+            </SheetPanel>
+          </SheetPopup>
+        </Sheet>
 
         <SettingsSection title="Danger">
           <SettingsRow

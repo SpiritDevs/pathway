@@ -162,6 +162,7 @@ import { MoveProjectWizard } from "../projects/MoveProjectWizard";
 import { Button } from "../ui/button";
 import { MenuItem } from "../ui/menu";
 import { Select, SelectValue } from "../ui/select";
+import { Sheet } from "../ui/sheet";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
 import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
 
@@ -379,6 +380,26 @@ describe("Project settings favicon selection", () => {
     const grouped = renderDetail(null);
     expect(
       visitElements(grouped, (element) => element.props.children === "2 threads"),
+    ).not.toBeNull();
+    const editConnection = visitElements(
+      grouped,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Edit"),
+    );
+    expect(editConnection).not.toBeNull();
+    expect(
+      visitElements(grouped, (element) =>
+        String(element.props["aria-label"] ?? "").startsWith("Configure "),
+      ),
+    ).toBeNull();
+    (editConnection?.props.onClick as (() => void) | undefined)?.();
+    expect(
+      visitElements(
+        renderDetail(null),
+        (element) => element.type === Sheet && element.props.open === true,
+      ),
     ).not.toBeNull();
     const removable = visitElements(
       grouped,
