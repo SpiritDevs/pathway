@@ -28,12 +28,14 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import {
   ArrowLeftIcon,
+  CheckIcon,
   ChevronDownIcon,
   CopyIcon,
   EllipsisIcon,
   MonitorIcon,
   PlusIcon,
   SettingsIcon,
+  StarIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -201,6 +203,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
         workspaceProjects.find((project) => project.projectKey === selected.projectKey) ?? null
       }
       companyContext={{
+        companyId: companySettings.companyId,
         replica: companySettings.replica,
         environmentControl,
       }}
@@ -209,6 +212,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 }
 
 interface ProjectCompanyContext {
+  readonly companyId: CompanySettings["companyId"];
   readonly replica: CompanySettings["replica"];
   readonly environmentControl: EnvironmentControlClient | null;
 }
@@ -454,6 +458,53 @@ export function ProjectDetail({
       }),
     );
   }, []);
+  const [savingDefaultBindingId, setSavingDefaultBindingId] = useState<string | null>(null);
+  const setDefaultConnection = useCallback(
+    async (connection: ProjectConnectionMetadata) => {
+      if (connection.isPreferred || savingDefaultBindingId !== null) return;
+
+      const companyId = companyContext?.companyId ?? null;
+      const cloudProjectId = workspaceProject?.cloudProjectId ?? null;
+      const bindingId = connection.bindingId;
+      const environmentControl = companyContext?.environmentControl ?? null;
+      if (
+        companyId === null ||
+        cloudProjectId === null ||
+        bindingId === null ||
+        environmentControl === null
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the default environment",
+          description:
+            bindingId === null
+              ? "This project is not connected to that environment."
+              : "Company project controls are not available.",
+        });
+        return;
+      }
+
+      setSavingDefaultBindingId(bindingId);
+      try {
+        await environmentControl.setPreferredEnvironmentBinding({
+          companyId,
+          cloudProjectId,
+          bindingId,
+        });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not save the default environment",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setSavingDefaultBindingId(null);
+      }
+    },
+    [companyContext, savingDefaultBindingId, workspaceProject?.cloudProjectId],
+  );
 
   // Group-shared fields live on each physical project record, so a
   // group-level edit fans out to every member.
@@ -1249,6 +1300,26 @@ export function ProjectDetail({
                       <EllipsisIcon className="size-4" />
                     </MenuTrigger>
                     <MenuPopup align="end" className="min-w-48">
+                      {workspaceProject?.cloudProjectId != null && connection.bindingId !== null ? (
+                        <>
+                          <MenuItem
+                            disabled={connection.isPreferred || savingDefaultBindingId !== null}
+                            onClick={() => void setDefaultConnection(connection)}
+                          >
+                            {connection.isPreferred ? (
+                              <CheckIcon className="size-3.5" />
+                            ) : (
+                              <StarIcon className="size-3.5" />
+                            )}
+                            {savingDefaultBindingId === connection.bindingId
+                              ? "Saving default…"
+                              : connection.isPreferred
+                                ? "New-thread default"
+                                : "Set as new-thread default"}
+                          </MenuItem>
+                          <MenuSeparator />
+                        </>
+                      ) : null}
                       <MenuItem
                         disabled={connection.directory === null}
                         onClick={() => {

@@ -112,6 +112,7 @@ describe("project connection metadata", () => {
     });
 
     expect(connection).toEqual({
+      bindingId: "binding-pathway-mac",
       environmentId,
       localProjectId: "project-pathway",
       environmentLabel: "Build Mac",
@@ -146,6 +147,7 @@ describe("project connection metadata", () => {
       }),
     ).toEqual([
       expect.objectContaining({
+        bindingId: null,
         environmentLabel: "This machine",
         directory: "/work/local",
         bindingStatus: null,

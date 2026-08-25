@@ -15,6 +15,7 @@ const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
 const isEnvironmentRegistration = Schema.is(EnvironmentRegistrationEntity);
 
 export interface ProjectConnectionMetadata {
+  readonly bindingId: string | null;
   readonly environmentId: EnvironmentId;
   readonly localProjectId: ProjectId;
   readonly environmentLabel: string;
@@ -81,6 +82,7 @@ export function deriveProjectConnectionMetadata(input: {
     const member = memberByLocalRef.get(`${binding.environmentId}:${binding.localProjectId}`);
     const registration = input.catalog.registrations.get(binding.environmentId) ?? null;
     return {
+      bindingId: binding.id,
       environmentId: binding.environmentId,
       localProjectId: binding.localProjectId,
       environmentLabel:
@@ -98,6 +100,7 @@ export function deriveProjectConnectionMetadata(input: {
     .map((member): ProjectConnectionMetadata => {
       const registration = input.catalog.registrations.get(member.environmentId) ?? null;
       return {
+        bindingId: null,
         environmentId: member.environmentId,
         localProjectId: member.id,
         environmentLabel:

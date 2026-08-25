@@ -5,8 +5,10 @@ import {
   ProjectId,
   type ProjectEntry,
 } from "@spiritdevs/contracts";
+import { companyEntityCodec } from "@spiritdevs/client-runtime/sync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
@@ -43,7 +45,10 @@ const threadState = vi.hoisted(() => ({
   threads: [] as Array<{ environmentId: EnvironmentId; projectId: ProjectId }>,
 }));
 const dialogState = vi.hoisted(() => ({ confirm: vi.fn() }));
-const cloudState = vi.hoisted(() => ({ deleteCompanyProject: vi.fn() }));
+const cloudState = vi.hoisted(() => ({
+  deleteCompanyProject: vi.fn(),
+  setPreferredEnvironmentBinding: vi.fn(),
+}));
 const companyState = vi.hoisted(() => ({
   companies: [] as Array<{
     id: CompanyId;
@@ -212,6 +217,15 @@ function makeGroup(faviconPath: string | null, includeRemote = true) {
   })[0]!;
 }
 
+function companyEntity(
+  kind: "cloudProject" | "environmentBinding" | "environmentRegistration",
+  value: unknown,
+) {
+  const codec = companyEntityCodec(kind);
+  if (codec === null) throw new Error(`Missing ${kind} codec`);
+  return Option.getOrThrow(codec.decode(value));
+}
+
 function renderDetail(
   faviconPath: string | null,
   includeRemote = true,
@@ -247,6 +261,7 @@ describe("Project settings favicon selection", () => {
     ];
     dialogState.confirm.mockReset().mockResolvedValue(true);
     cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
+    cloudState.setPreferredEnvironmentBinding.mockReset().mockResolvedValue(undefined);
     companyState.companies = [];
   });
 
@@ -400,6 +415,7 @@ describe("Project settings favicon selection", () => {
         cloudProjectId: "cloud-pathway",
       },
       companyContext: {
+        companyId: companyA,
         replica: null,
         environmentControl: {
           deleteCompanyProject: cloudState.deleteCompanyProject,
@@ -422,6 +438,92 @@ describe("Project settings favicon selection", () => {
       [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
       [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
     ]);
+  });
+
+  it("offers each connected environment as the new-thread default", async () => {
+    const companyId = CompanyId.make("company-a");
+    const group = makeGroup(null);
+    const replicaValues = [
+      companyEntity("cloudProject", {
+        id: "cloud-pathway",
+        name: "Pathway",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: "binding-local",
+        archivedAt: null,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+      companyEntity("environmentBinding", {
+        id: "binding-local",
+        cloudProjectId: "cloud-pathway",
+        environmentId: localEnvironmentId,
+        localProjectId: "project-local",
+        localWorkspaceRoot: "/workspace/pathway",
+        status: "active",
+        lastSeenAt: 2_000,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+      companyEntity("environmentBinding", {
+        id: "binding-remote",
+        cloudProjectId: "cloud-pathway",
+        environmentId: remoteEnvironmentId,
+        localProjectId: "project-remote",
+        localWorkspaceRoot: "/remote/pathway",
+        status: "active",
+        lastSeenAt: 2_000,
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      }),
+    ];
+
+    hooks.beginRender();
+    const detail = ProjectDetail({
+      group,
+      workspaceProject: {
+        projectKey: group.projectKey,
+        displayName: group.displayName,
+        companyIds: [companyId],
+        group,
+        checkoutCount: group.memberProjects.length,
+        cloudProjectId: "cloud-pathway",
+      },
+      companyContext: {
+        companyId,
+        replica: { view: { values: () => replicaValues } } as never,
+        environmentControl: {
+          setPreferredEnvironmentBinding: cloudState.setPreferredEnvironmentBinding,
+        } as never,
+      },
+    }) as ReactElement<Record<string, unknown>>;
+
+    const currentDefault = visitElements(
+      detail,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("New-thread default"),
+    );
+    expect(currentDefault?.props.disabled).toBe(true);
+
+    const chooseRemote = visitElements(
+      detail,
+      (element) =>
+        element.type === MenuItem &&
+        Array.isArray(element.props.children) &&
+        element.props.children.includes("Set as new-thread default"),
+    );
+    expect(chooseRemote?.props.disabled).toBe(false);
+    (chooseRemote?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+
+    expect(cloudState.setPreferredEnvironmentBinding).toHaveBeenCalledWith({
+      companyId,
+      cloudProjectId: "cloud-pathway",
+      bindingId: "binding-remote",
+    });
   });
 
   it("lets a project with no checkout be removed manually", async () => {
@@ -566,7 +668,7 @@ describe("Project settings favicon selection", () => {
           checkoutCount: group.memberProjects.length,
           cloudProjectId: "cloud-pathway",
         },
-        companyContext: { replica: null, environmentControl: {} as never },
+        companyContext: { companyId: companyA, replica: null, environmentControl: {} as never },
       }) as ReactElement<Record<string, unknown>>;
     };
 
