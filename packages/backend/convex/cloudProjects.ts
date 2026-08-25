@@ -165,7 +165,7 @@ export const ensureEnvironmentProject = mutation({
               q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
             )
             .collect()
-        ).find((row) => row.localProjectId === localProjectId) ?? null);
+        ).find((row) => row.localProjectId === localProjectId && row.status !== "revoked") ?? null);
     let project = binding === null ? null : await ctx.db.get(binding.cloudProjectId);
     if (project === null && repositoryKey !== null && args.matchRepository !== false) {
       const repositoryBindings = await ctx.db
@@ -424,7 +424,7 @@ export const releaseEnvironmentProject = mutation({
           q.eq("companyId", actor.company._id).eq("environmentId", environmentId),
         )
         .collect()
-    ).find((row) => row.localProjectId === localProjectId);
+    ).find((row) => row.localProjectId === localProjectId && row.status !== "revoked");
     if (binding === undefined || binding.status === "revoked") return null;
 
     const now = Date.now();

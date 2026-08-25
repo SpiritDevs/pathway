@@ -185,7 +185,7 @@ export function QuickCreateProjectDialog({
     const environment = environments.find((candidate) => candidate.environmentId === environmentId);
     if (
       workspaceRoot === null ||
-      environment?.serverConfig?.environment.capabilities.projectDirectoryInspection !== true
+      environment?.descriptor?.capabilities.projectDirectoryInspection !== true
     ) {
       create(null);
       return;

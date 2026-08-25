@@ -194,14 +194,18 @@ interface AddProjectEnvironmentOption {
   readonly status: string;
 }
 
+interface AddProjectRepositoryChoiceCandidate {
+  readonly group: SidebarProjectSnapshot;
+  readonly companyId: CompanyId | null;
+  readonly cloudProjectId: string | null;
+}
+
 interface AddProjectRepositoryChoiceRequest {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
-  readonly candidates: ReadonlyArray<{
-    readonly group: SidebarProjectSnapshot;
-    readonly companyId: CompanyId | null;
-    readonly cloudProjectId: string | null;
-  }>;
+  readonly candidates: ReadonlyArray<AddProjectRepositoryChoiceCandidate>;
+  /** Present when this path already has a server project left over from legacy auto-linking. */
+  readonly existingProject: Project | null;
 }
 
 type AddProjectRemoteProviderKind = Extract<
@@ -1895,6 +1899,152 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
+  const buildRepositoryChoiceCandidates = useCallback(
+    (groups: ReadonlyArray<SidebarProjectSnapshot>) =>
+      groups.map((group): AddProjectRepositoryChoiceCandidate => {
+        const workspaceProject = workspaceProjects.find(
+          (project) => project.group?.projectKey === group.projectKey,
+        );
+        return {
+          group,
+          companyId:
+            workspaceProject?.companyIds[0] === undefined
+              ? null
+              : CompanyId.make(workspaceProject.companyIds[0]),
+          cloudProjectId: workspaceProject?.cloudProjectId ?? null,
+        };
+      }),
+    [workspaceProjects],
+  );
+
+  const openExistingProject = useCallback(
+    async (existing: Project) => {
+      const latestThread = getLatestThreadForProject(
+        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        existing.id,
+        clientSettings.sidebarThreadSortOrder,
+      );
+      if (latestThread) {
+        await navigate({
+          to: "/threads/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(latestThread.environmentId, latestThread.id),
+          ),
+        });
+      } else {
+        const navigationResult = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
+        );
+        if (navigationResult._tag === "Failure") {
+          const error = squashAtomCommandFailure(navigationResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to open project",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return false;
+        }
+      }
+      setOpen(false);
+      return true;
+    },
+    [clientSettings.sidebarThreadSortOrder, handleNewThread, navigate, setOpen, threads],
+  );
+
+  const applyChoiceToExistingProject = useCallback(
+    async (
+      request: AddProjectRepositoryChoiceRequest,
+      choice: ProjectRepositoryChoice,
+    ): Promise<boolean> => {
+      const existing = request.existingProject;
+      if (existing === null || existing.workspaceRoot === null) return false;
+
+      updateClientSettings(
+        projectRepositoryChoiceSettings({
+          settings: clientSettings,
+          environmentId: existing.environmentId,
+          workspaceRoot: existing.workspaceRoot,
+          choice,
+        }),
+      );
+
+      const currentWorkspaceProject = workspaceProjects.find((project) =>
+        project.group?.memberProjects.some(
+          (member) => member.environmentId === existing.environmentId && member.id === existing.id,
+        ),
+      );
+      const currentCompanyId =
+        currentWorkspaceProject?.companyIds[0] === undefined
+          ? null
+          : CompanyId.make(currentWorkspaceProject.companyIds[0]);
+      const newProjectCompanyId = currentCompanyId ?? activeCompanyId;
+      const selectedTarget =
+        choice.kind === "existing"
+          ? request.candidates.find((candidate) => candidate.group.projectKey === choice.projectKey)
+          : null;
+      const bindingTarget =
+        choice.kind === "new"
+          ? newProjectCompanyId === null
+            ? null
+            : {
+                companyId: newProjectCompanyId,
+                cloudProjectId: null,
+              }
+          : selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
+            ? {
+                companyId: selectedTarget.companyId,
+                cloudProjectId: selectedTarget.cloudProjectId,
+              }
+            : null;
+
+      if (environmentControl !== null && bindingTarget !== null) {
+        try {
+          const currentCloudProjectId = currentWorkspaceProject?.cloudProjectId ?? null;
+          if (
+            currentCompanyId !== null &&
+            currentCloudProjectId !== null &&
+            (bindingTarget.cloudProjectId === null ||
+              bindingTarget.cloudProjectId !== currentCloudProjectId)
+          ) {
+            await environmentControl.releaseEnvironmentProject({
+              companyId: currentCompanyId,
+              environmentId: existing.environmentId,
+              localProjectId: existing.id,
+            });
+          }
+          await environmentControl.ensureEnvironmentProject({
+            companyId: bindingTarget.companyId,
+            ...(bindingTarget.cloudProjectId === null
+              ? { matchRepository: false }
+              : { cloudProjectId: bindingTarget.cloudProjectId }),
+            project: existing,
+          });
+        } catch (cause) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "The project connection could not be updated",
+              description: cause instanceof Error ? cause.message : "An error occurred.",
+            }),
+          );
+          return false;
+        }
+      }
+
+      return openExistingProject(existing);
+    },
+    [
+      activeCompanyId,
+      clientSettings,
+      environmentControl,
+      openExistingProject,
+      updateClientSettings,
+      workspaceProjects,
+    ],
+  );
+
   const handleAddProjectForEnvironment = useCallback(
     async (input: {
       readonly environmentId: EnvironmentId;
@@ -1947,39 +2097,24 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
-        const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
-          clientSettings.sidebarThreadSortOrder,
+        const candidates = findProjectsForRepository(
+          projectGroups,
+          existing.repositoryIdentity ?? null,
         );
-        if (latestThread) {
-          await navigate({
-            to: "/threads/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(latestThread.environmentId, latestThread.id),
-            ),
+        if (candidates.length > 0) {
+          setRepositoryChoiceRequest({
+            environmentId: input.environmentId,
+            cwd,
+            candidates: buildRepositoryChoiceCandidates(candidates),
+            existingProject: existing,
           });
-        } else {
-          const navigationResult = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
-          );
-          if (navigationResult._tag === "Failure") {
-            const error = squashAtomCommandFailure(navigationResult);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to open project",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-            return;
-          }
+          return;
         }
-        setOpen(false);
+        await openExistingProject(existing);
         return;
       }
 
-      if (environment?.serverConfig?.environment.capabilities.projectDirectoryInspection === true) {
+      if (environment?.descriptor?.capabilities.projectDirectoryInspection === true) {
         const inspection = await inspectProjectDirectory({
           environmentId: input.environmentId,
           input: { cwd },
@@ -1993,19 +2128,8 @@ function OpenCommandPaletteDialog(props: {
             setRepositoryChoiceRequest({
               environmentId: input.environmentId,
               cwd,
-              candidates: candidates.map((group) => {
-                const workspaceProject = workspaceProjects.find(
-                  (project) => project.group?.projectKey === group.projectKey,
-                );
-                return {
-                  group,
-                  companyId:
-                    workspaceProject?.companyIds[0] === undefined
-                      ? null
-                      : CompanyId.make(workspaceProject.companyIds[0]),
-                  cloudProjectId: workspaceProject?.cloudProjectId ?? null,
-                };
-              }),
+              candidates: buildRepositoryChoiceCandidates(candidates),
+              existingProject: null,
             });
             return;
           }
@@ -2015,17 +2139,14 @@ function OpenCommandPaletteDialog(props: {
       await createAndOpenProject({ environmentId: input.environmentId, cwd, choice: null });
     },
     [
-      clientSettings.sidebarThreadSortOrder,
+      buildRepositoryChoiceCandidates,
       createAndOpenProject,
       environments,
-      handleNewThread,
       inspectProjectDirectory,
-      navigate,
+      openExistingProject,
       projects,
       projectGroups,
-      workspaceProjects,
       setOpen,
-      threads,
     ],
   );
 
@@ -2709,25 +2830,30 @@ function OpenCommandPaletteDialog(props: {
         candidates={repositoryChoiceRequest?.candidates.map((candidate) => candidate.group) ?? []}
         onConfirm={(choice) => {
           if (repositoryChoiceRequest === null || repositoryChoiceSubmitting) return;
+          const request = repositoryChoiceRequest;
           const selectedTarget =
             choice.kind === "existing"
-              ? repositoryChoiceRequest.candidates.find(
+              ? request.candidates.find(
                   (candidate) => candidate.group.projectKey === choice.projectKey,
                 )
               : null;
           setRepositoryChoiceSubmitting(true);
-          void createAndOpenProject({
-            environmentId: repositoryChoiceRequest.environmentId,
-            cwd: repositoryChoiceRequest.cwd,
-            choice,
-            existingTarget:
-              selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
-                ? {
-                    companyId: selectedTarget.companyId,
-                    cloudProjectId: selectedTarget.cloudProjectId,
-                  }
-                : null,
-          }).then((created) => {
+          const action =
+            request.existingProject === null
+              ? createAndOpenProject({
+                  environmentId: request.environmentId,
+                  cwd: request.cwd,
+                  choice,
+                  existingTarget:
+                    selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
+                      ? {
+                          companyId: selectedTarget.companyId,
+                          cloudProjectId: selectedTarget.cloudProjectId,
+                        }
+                      : null,
+                })
+              : applyChoiceToExistingProject(request, choice);
+          void action.then((created) => {
             setRepositoryChoiceSubmitting(false);
             if (created) setRepositoryChoiceRequest(null);
           });
