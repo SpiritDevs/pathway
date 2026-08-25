@@ -1,8 +1,66 @@
-import { EnvironmentId } from "@spiritdevs/contracts";
+import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EmailEnvironmentSelect, EmailSourceToggle } from "./EmailSidebar";
+import { buildEmailSidebarProjects } from "./emailSidebar.logic";
+
+describe("buildEmailSidebarProjects", () => {
+  it("shows one project for connections on several environments", () => {
+    const primaryEnvironmentId = EnvironmentId.make("env-primary");
+    const projects = buildEmailSidebarProjects(
+      [
+        {
+          id: ProjectId.make("quotecloud"),
+          title: "quotecloud-v2",
+          projectIds: [
+            ProjectId.make("quotecloud"),
+            ProjectId.make("quotecloud-local"),
+            ProjectId.make("quotecloud-remote-1"),
+            ProjectId.make("quotecloud-remote-2"),
+          ],
+          environmentProjects: [
+            {
+              id: ProjectId.make("quotecloud-remote-1"),
+              environmentId: EnvironmentId.make("env-remote-1"),
+            },
+            {
+              id: ProjectId.make("quotecloud-local"),
+              environmentId: primaryEnvironmentId,
+            },
+            {
+              id: ProjectId.make("quotecloud-remote-2"),
+              environmentId: EnvironmentId.make("env-remote-2"),
+            },
+          ],
+        },
+      ],
+      primaryEnvironmentId,
+    );
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0]?.id).toBe("quotecloud");
+    expect(projects[0]?.title).toBe("quotecloud-v2");
+    expect(projects[0]?.inboxProjectId).toBe("quotecloud-local");
+    expect(projects[0]?.projectIds.has(ProjectId.make("quotecloud-remote-2"))).toBe(true);
+  });
+
+  it("omits projects without a connected capture inbox", () => {
+    expect(
+      buildEmailSidebarProjects(
+        [
+          {
+            id: ProjectId.make("planned"),
+            title: "Planned",
+            projectIds: [ProjectId.make("planned")],
+            environmentProjects: [],
+          },
+        ],
+        EnvironmentId.make("env-primary"),
+      ),
+    ).toEqual([]);
+  });
+});
 
 describe("EmailEnvironmentSelect", () => {
   const primaryEnvironmentId = EnvironmentId.make("env-primary");

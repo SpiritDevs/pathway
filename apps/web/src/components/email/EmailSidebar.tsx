@@ -26,8 +26,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { cn } from "../../lib/utils";
-import { useProjects } from "../../state/entities";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   ALL_EMAIL_SCOPE,
   emailScopeKey,
@@ -53,6 +52,8 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
+import { buildEmailSidebarProjects } from "./emailSidebar.logic";
 import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
@@ -245,7 +246,12 @@ function LocalSmtpInboxes() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const search = parseEmailSearch(rawSearch as Record<string, unknown>);
   const onEmail = pathname === "/email";
-  const projects = useProjects();
+  const projectOptions = useIssueProjectOptions();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const projects = useMemo(
+    () => buildEmailSidebarProjects(projectOptions, primaryEnvironmentId),
+    [primaryEnvironmentId, projectOptions],
+  );
   const { environments } = useEnvironments();
   const { settings } = useEmailSettings();
   const updateSettings = useUpdateEmailSettings();
@@ -339,9 +345,12 @@ function LocalSmtpInboxes() {
             <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">No projects yet.</p>
           ) : (
             projects.map((project) => {
-              const projectScope: EmailInboxScope = { type: "project", projectId: project.id };
+              const projectScope: EmailInboxScope = {
+                type: "project",
+                projectId: project.inboxProjectId,
+              };
               const unread = unreadFor(projectScope);
-              const projectSettings = findEmailProjectSettings(settings, project.id);
+              const projectSettings = findEmailProjectSettings(settings, project.inboxProjectId);
               // The settings document is the authority on a mute — it is what the toast host reads
               // — with the inbox summary answering until the first settings read lands.
               const muted =
@@ -351,7 +360,7 @@ function LocalSmtpInboxes() {
               return (
                 <SidebarMenuItem key={project.id}>
                   <SidebarMenuButton
-                    isActive={activeKey === emailScopeKey(projectScope)}
+                    isActive={scope.type === "project" && project.projectIds.has(scope.projectId)}
                     onClick={() => selectInbox(projectScope)}
                   >
                     <FolderIcon />
@@ -363,7 +372,7 @@ function LocalSmtpInboxes() {
                   </SidebarMenuButton>
                   <ProjectMuteAction
                     muted={muted}
-                    onToggle={() => void toggleProjectMute(project.id)}
+                    onToggle={() => void toggleProjectMute(project.inboxProjectId)}
                     projectTitle={project.title}
                     // A mute is a write to this project's entry, so there is nothing to write until
                     // the server has derived one. Saying so beats swallowing the click.
