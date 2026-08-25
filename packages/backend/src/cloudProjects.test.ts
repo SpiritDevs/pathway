@@ -208,6 +208,50 @@ describe("checkoutless project setup", () => {
     expect(state.project?.preferredBindingId).toBe(state.binding?.id);
     expect(state.duplicate).toBeUndefined();
   });
+
+  it("creates a distinct company project when repository matching is disabled", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await registerEnvironment(t, ids.companyId);
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "git@github.com:spiritdevs/pathway.git",
+      },
+      rootPath: "/work/pathway",
+    };
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.bindingId, {
+        repositoryIdentity,
+        repositoryKey: repositoryIdentity.canonicalKey,
+      });
+    });
+
+    const result = await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "local-independent",
+      localWorkspaceRoot: "/work/pathway-v2",
+      repositoryIdentity: { ...repositoryIdentity, rootPath: "/work/pathway-v2" },
+      matchRepository: false,
+      name: "Pathway v2",
+    });
+
+    expect(result).toBe("local-independent");
+    const state = await t.run(async (ctx) => ({
+      project: (await ctx.db.query("cloudProjects").collect()).find(
+        (project) => project.id === "local-independent",
+      ),
+      binding: (await ctx.db.query("environmentBindings").collect()).find(
+        (binding) => binding.localProjectId === "local-independent",
+      ),
+    }));
+    expect(state.project?.name).toBe("Pathway v2");
+    expect(state.binding?.cloudProjectId).toBe(state.project?._id);
+    expect(state.binding?.cloudProjectId).not.toBe(ids.projectId);
+  });
 });
 
 describe("company project deletion", () => {

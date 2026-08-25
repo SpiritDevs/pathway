@@ -67,12 +67,9 @@ export function environmentBindingMatchesProject(
     );
   }
   if (binding.localProjectId === project.id) return true;
-  if (
-    binding.repositoryIdentity?.canonicalKey !== undefined &&
-    binding.repositoryIdentity.canonicalKey === project.repositoryIdentity?.canonicalKey
-  ) {
-    return true;
-  }
+  // One environment can intentionally host several directories for the same Git remote. Within
+  // that environment, only the persisted id or exact path identifies a connection; repository
+  // identity remains the cross-environment fallback above.
   return (
     project.workspaceRoot !== null &&
     comparisonPath(binding.localWorkspaceRoot, caseInsensitivePath) ===

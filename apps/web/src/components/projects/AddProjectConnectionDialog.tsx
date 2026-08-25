@@ -15,8 +15,9 @@ import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { useEffect, useMemo, useState } from "react";
 
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
+import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useEnvironments } from "~/state/environments";
-import { useUnscopedProjects } from "~/state/entities";
+import { useProjects } from "~/state/entities";
 import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
 import { Button } from "../ui/button";
 import {
@@ -42,27 +43,30 @@ import {
   type AttachProjectDirectoryDraft,
 } from "./projectWorkspace.logic";
 import { useQuickCreateProject } from "./useProjectWorkspaceCommands";
+import { projectRepositoryChoiceSettings } from "./projectRepositoryChoice.logic";
 
 export function AddProjectConnectionDialog({
   open,
   projectId,
+  projectKey,
   projectTitle,
-  connectedEnvironmentIds,
   onOpenChange,
 }: {
   open: boolean;
   /** Any local id represented by the company project being connected. */
   readonly projectId: ProjectId;
+  /** The exact logical project this new physical checkout joins. */
+  readonly projectKey: string;
   /** The name the new entry takes, so both checkouts present as one project. */
   readonly projectTitle: string;
-  /** Environments this project already has a checkout on; they are not offered again. */
-  readonly connectedEnvironmentIds: ReadonlyArray<EnvironmentId>;
   onOpenChange: (open: boolean) => void;
 }) {
   const { environments } = useEnvironments();
   const environmentControl = useEnvironmentControl();
   const issueProjects = useIssueProjectOptions();
-  const unscopedProjects = useUnscopedProjects();
+  const projects = useProjects();
+  const clientSettings = useClientSettings();
+  const updateClientSettings = useUpdateClientSettings();
   const quickCreateProject = useQuickCreateProject();
   const [environmentId, setEnvironmentId] = useState<EnvironmentId | null>(null);
   const [directory, setDirectory] = useState<AttachProjectDirectoryDraft>(
@@ -84,13 +88,8 @@ export function AddProjectConnectionDialog({
   // Only connected environments: browsing is a live call against the environment's own
   // filesystem, so an offline machine could offer nothing but a text field and a failure.
   const candidates = useMemo(
-    () =>
-      environments.filter(
-        (environment) =>
-          environment.connection.phase === "connected" &&
-          !connectedEnvironmentIds.includes(environment.environmentId),
-      ),
-    [connectedEnvironmentIds, environments],
+    () => environments.filter((environment) => environment.connection.phase === "connected"),
+    [environments],
   );
   // Derived rather than stored, so an environment list that settles a moment after the dialog
   // opens still gets a default without an effect that could wipe a half-typed path.
@@ -151,15 +150,9 @@ export function AddProjectConnectionDialog({
       const existingCheckout =
         remembered ??
         findReusableProjectConnection({
-          projects: unscopedProjects,
+          projects,
           environmentId: selectedEnvironmentId,
           workspaceRoot: requestedWorkspaceRoot,
-          repositoryKey:
-            companyProject.localProject?.repositoryIdentity?.canonicalKey ??
-            companyProject.environmentProjects.find(
-              (project) => project.repositoryIdentity?.canonicalKey !== undefined,
-            )?.repositoryIdentity?.canonicalKey ??
-            null,
         });
       const outcome = await addProjectConnection({
         existingCheckout,
@@ -183,6 +176,14 @@ export function AddProjectConnectionDialog({
         setWriteError(outcome.message);
         return;
       }
+      updateClientSettings(
+        projectRepositoryChoiceSettings({
+          settings: clientSettings,
+          environmentId: outcome.checkout.environmentId,
+          workspaceRoot: outcome.checkout.workspaceRoot ?? requestedWorkspaceRoot,
+          choice: { kind: "existing", projectKey },
+        }),
+      );
       setPendingCheckout(null);
       onOpenChange(false);
     })();
@@ -199,15 +200,15 @@ export function AddProjectConnectionDialog({
         <DialogHeader>
           <DialogTitle>Add a connection</DialogTitle>
           <DialogDescription>
-            Point “{projectTitle}” at the copy on another environment. The directory is connected to
-            this project as soon as it is added.
+            Choose any connected environment and directory for “{projectTitle}”. Multiple
+            directories on the same environment can run work concurrently.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
           {candidates.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              No other connected environment is available. Connect one, or wait for it to come
-              online, and its directories become browsable here.
+              No connected environment is available. Connect one, or wait for it to come online, and
+              its directories become browsable here.
             </p>
           ) : (
             <>

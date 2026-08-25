@@ -332,7 +332,13 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  Project,
+  ProjectInspectDirectoryInput,
+  ProjectInspectDirectoryResult,
+  ProjectMutation,
+  ProjectMutationError,
+} from "./project.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -344,6 +350,7 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsInspectDirectory: "projects.inspectDirectory",
   projectsMutate: "projects.mutate",
 
   // Shell methods
@@ -792,6 +799,12 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsInspectDirectoryRpc = Rpc.make(WS_METHODS.projectsInspectDirectory, {
+  payload: ProjectInspectDirectoryInput,
+  success: ProjectInspectDirectoryResult,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
@@ -1812,6 +1825,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsInspectDirectoryRpc,
   WsProjectsMutateRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,

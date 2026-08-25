@@ -12,6 +12,7 @@ import { normalizeProjectPathForComparison } from "./projects.ts";
 export interface ProjectGroupingSettings {
   readonly sidebarProjectGroupingMode: SidebarProjectGroupingMode;
   readonly sidebarProjectGroupingOverrides: Record<string, SidebarProjectGroupingMode>;
+  readonly sidebarProjectGroupAssignments: Record<string, string>;
 }
 
 export type ProjectGroupingMode = SidebarProjectGroupingMode;
@@ -20,6 +21,7 @@ export function selectProjectGroupingSettings(settings: ClientSettings): Project
   return {
     sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
     sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
+    sidebarProjectGroupAssignments: settings.sidebarProjectGroupAssignments,
   };
 }
 
@@ -159,6 +161,11 @@ export function deriveLogicalProjectKeyFromSettings(
   >,
   settings: ProjectGroupingSettings,
 ): string {
+  const assignedGroupKey =
+    settings.sidebarProjectGroupAssignments?.[deriveProjectGroupingOverrideKey(project)];
+  if (assignedGroupKey) {
+    return assignedGroupKey;
+  }
   return deriveLogicalProjectKey(project, {
     groupingMode: resolveProjectGroupingMode(project, settings),
   });
@@ -297,9 +304,10 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
       shouldReplacePhysicalProjectWinner(current, candidate) ? candidate : current,
     );
     const identitySource = selectProjectIdentitySource(physicalProjects, winner);
-    const logicalKey = deriveLogicalProjectKey(identitySource, {
-      groupingMode: resolveProjectGroupingMode(winner, input.settings),
-    });
+    const logicalKey = deriveLogicalProjectKeyFromSettings(
+      { ...winner, repositoryIdentity: identitySource.repositoryIdentity },
+      input.settings,
+    );
     logicalKeyByPhysicalKey.set(physicalProjectKey, logicalKey);
     const member = { physicalProjectKey, project: winner };
     const existing = groupedMembers.get(logicalKey);

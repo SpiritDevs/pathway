@@ -28,6 +28,7 @@ import {
   type SourceControlRepositoryInfo,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
@@ -61,7 +62,7 @@ import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { environmentCatalog } from "../connection/catalog";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
@@ -147,8 +148,18 @@ import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
+  type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
+import { ProjectRepositoryChoiceDialog } from "./projects/ProjectRepositoryChoiceDialog";
+import { useWorkspaceProjects } from "./projects/useWorkspaceProjects";
+import {
+  findProjectsForRepository,
+  projectRepositoryChoiceSettings,
+  type ProjectRepositoryChoice,
+} from "./projects/projectRepositoryChoice.logic";
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
+import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
@@ -181,6 +192,16 @@ interface AddProjectEnvironmentOption {
   readonly isPrimary: boolean;
   readonly isConnected: boolean;
   readonly status: string;
+}
+
+interface AddProjectRepositoryChoiceRequest {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string;
+  readonly candidates: ReadonlyArray<{
+    readonly group: SidebarProjectSnapshot;
+    readonly companyId: CompanyId | null;
+    readonly cloudProjectId: string | null;
+  }>;
 }
 
 type AddProjectRemoteProviderKind = Extract<
@@ -588,7 +609,14 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const updateClientSettings = useUpdateClientSettings();
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const environmentControl = useEnvironmentControl();
+  const workspaceProjects = useWorkspaceProjects();
   const createProject = useAtomCommand(projectEnvironment.create, {
+    reportFailure: false,
+  });
+  const inspectProjectDirectory = useAtomCommand(projectEnvironment.inspectDirectory, {
     reportFailure: false,
   });
   const lookupRepository = useAtomQueryRunner(sourceControlEnvironment.repository, {
@@ -658,6 +686,9 @@ function OpenCommandPaletteDialog(props: {
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
+  const [repositoryChoiceRequest, setRepositoryChoiceRequest] =
+    useState<AddProjectRepositoryChoiceRequest | null>(null);
+  const [repositoryChoiceSubmitting, setRepositoryChoiceSubmitting] = useState(false);
   const projectGroupingSettings = useMemo(
     () => selectProjectGroupingSettings(clientSettings),
     [clientSettings],
@@ -1745,6 +1776,125 @@ function OpenCommandPaletteDialog(props: {
     threadSearchItems: allThreadItems,
   });
 
+  const createAndOpenProject = useCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly cwd: string;
+      readonly choice: ProjectRepositoryChoice | null;
+      readonly existingTarget?: {
+        readonly companyId: CompanyId;
+        readonly cloudProjectId: string;
+      } | null;
+    }) => {
+      const projectId = newProjectId();
+      const targetEnvironmentProviders =
+        environments.find((environment) => environment.environmentId === input.environmentId)
+          ?.serverConfig?.providers ??
+        (input.environmentId === primaryEnvironmentId ? providers : []);
+      const createResult = await createProject({
+        environmentId: input.environmentId,
+        input: {
+          projectId,
+          title: inferProjectTitleFromPath(input.cwd),
+          workspaceRoot: input.cwd,
+          createWorkspaceRootIfMissing: true,
+          defaultModelSelection: resolveDefaultProviderModelSelection(
+            targetEnvironmentProviders,
+            null,
+          ),
+        },
+      });
+      const projectRef = scopeProjectRef(input.environmentId, projectId);
+      if (createResult._tag === "Failure") {
+        if (isAtomCommandInterrupted(createResult)) {
+          return false;
+        }
+
+        const projectWasCommitted = await waitForUnscopedProject(projectRef);
+        if (!projectWasCommitted) {
+          const error = squashAtomCommandFailure(createResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to add project",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return false;
+        }
+      }
+
+      if (input.choice !== null) {
+        updateClientSettings(
+          projectRepositoryChoiceSettings({
+            settings: clientSettings,
+            environmentId: input.environmentId,
+            workspaceRoot: input.cwd,
+            choice: input.choice,
+          }),
+        );
+
+        const bindingTarget =
+          input.choice.kind === "existing"
+            ? (input.existingTarget ?? null)
+            : activeCompanyId === null
+              ? null
+              : { companyId: activeCompanyId, cloudProjectId: null };
+        if (environmentControl !== null && bindingTarget !== null) {
+          try {
+            await environmentControl.ensureEnvironmentProject({
+              companyId: bindingTarget.companyId,
+              ...(bindingTarget.cloudProjectId === null
+                ? { matchRepository: false }
+                : { cloudProjectId: bindingTarget.cloudProjectId }),
+              project: {
+                environmentId: input.environmentId,
+                id: projectId,
+                title: inferProjectTitleFromPath(input.cwd),
+                workspaceRoot: input.cwd,
+              },
+            });
+          } catch (cause) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Project added, but its connection could not be saved",
+                description: cause instanceof Error ? cause.message : "An error occurred.",
+              }),
+            );
+          }
+        }
+      }
+
+      const navigationResult = await settlePromise(() => handleNewThread(projectRef));
+      if (navigationResult._tag === "Failure") {
+        const error = squashAtomCommandFailure(navigationResult);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to add project",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+        return false;
+      }
+      setOpen(false);
+      return true;
+    },
+    [
+      clientSettings,
+      createProject,
+      activeCompanyId,
+      environmentControl,
+      environments,
+      handleNewThread,
+      primaryEnvironmentId,
+      providers,
+      setOpen,
+      updateClientSettings,
+    ],
+  );
+
   const handleAddProjectForEnvironment = useCallback(
     async (input: {
       readonly environmentId: EnvironmentId;
@@ -1829,68 +1979,52 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
-      const projectId = newProjectId();
-      const targetEnvironmentProviders =
-        environments.find((environment) => environment.environmentId === input.environmentId)
-          ?.serverConfig?.providers ??
-        (input.environmentId === primaryEnvironmentId ? providers : []);
-      const createResult = await createProject({
-        environmentId: input.environmentId,
-        input: {
-          projectId,
-          title: inferProjectTitleFromPath(cwd),
-          workspaceRoot: cwd,
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection: resolveDefaultProviderModelSelection(
-            targetEnvironmentProviders,
-            null,
-          ),
-        },
-      });
-      const projectRef = scopeProjectRef(input.environmentId, projectId);
-      if (createResult._tag === "Failure") {
-        if (isAtomCommandInterrupted(createResult)) {
-          return;
-        }
-
-        const projectWasCommitted = await waitForUnscopedProject(projectRef);
-        if (!projectWasCommitted) {
-          const error = squashAtomCommandFailure(createResult);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Failed to add project",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
+      if (environment?.serverConfig?.environment.capabilities.projectDirectoryInspection === true) {
+        const inspection = await inspectProjectDirectory({
+          environmentId: input.environmentId,
+          input: { cwd },
+        });
+        if (inspection._tag === "Success") {
+          const candidates = findProjectsForRepository(
+            projectGroups,
+            inspection.value.repositoryIdentity,
           );
-          return;
+          if (candidates.length > 0) {
+            setRepositoryChoiceRequest({
+              environmentId: input.environmentId,
+              cwd,
+              candidates: candidates.map((group) => {
+                const workspaceProject = workspaceProjects.find(
+                  (project) => project.group?.projectKey === group.projectKey,
+                );
+                return {
+                  group,
+                  companyId:
+                    workspaceProject?.companyIds[0] === undefined
+                      ? null
+                      : CompanyId.make(workspaceProject.companyIds[0]),
+                  cloudProjectId: workspaceProject?.cloudProjectId ?? null,
+                };
+              }),
+            });
+            return;
+          }
         }
       }
 
-      const navigationResult = await settlePromise(() => handleNewThread(projectRef));
-      if (navigationResult._tag === "Failure") {
-        const error = squashAtomCommandFailure(navigationResult);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to add project",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-        return;
-      }
-      setOpen(false);
+      await createAndOpenProject({ environmentId: input.environmentId, cwd, choice: null });
     },
     [
-      handleNewThread,
-      createProject,
-      environments,
-      navigate,
-      primaryEnvironmentId,
-      projects,
-      providers,
-      setOpen,
       clientSettings.sidebarThreadSortOrder,
+      createAndOpenProject,
+      environments,
+      handleNewThread,
+      inspectProjectDirectory,
+      navigate,
+      projects,
+      projectGroups,
+      workspaceProjects,
+      setOpen,
       threads,
     ],
   );
@@ -2570,6 +2704,44 @@ function OpenCommandPaletteDialog(props: {
                 : threadSearch.isPending
                   ? { emptyStateMessage: "Searching thread messages…" }
                   : {})}
+      />
+      <ProjectRepositoryChoiceDialog
+        candidates={repositoryChoiceRequest?.candidates.map((candidate) => candidate.group) ?? []}
+        onConfirm={(choice) => {
+          if (repositoryChoiceRequest === null || repositoryChoiceSubmitting) return;
+          const selectedTarget =
+            choice.kind === "existing"
+              ? repositoryChoiceRequest.candidates.find(
+                  (candidate) => candidate.group.projectKey === choice.projectKey,
+                )
+              : null;
+          setRepositoryChoiceSubmitting(true);
+          void createAndOpenProject({
+            environmentId: repositoryChoiceRequest.environmentId,
+            cwd: repositoryChoiceRequest.cwd,
+            choice,
+            existingTarget:
+              selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
+                ? {
+                    companyId: selectedTarget.companyId,
+                    cloudProjectId: selectedTarget.cloudProjectId,
+                  }
+                : null,
+          }).then((created) => {
+            setRepositoryChoiceSubmitting(false);
+            if (created) setRepositoryChoiceRequest(null);
+          });
+        }}
+        onOpenChange={(next) => {
+          if (!next) setRepositoryChoiceRequest(null);
+        }}
+        open={repositoryChoiceRequest !== null}
+        projectName={
+          repositoryChoiceRequest === null
+            ? "this directory"
+            : inferProjectTitleFromPath(repositoryChoiceRequest.cwd)
+        }
+        submitting={repositoryChoiceSubmitting}
       />
     </CommandPaletteContent>
   );

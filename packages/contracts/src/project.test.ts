@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ProjectReadFileError,
+  ProjectInspectDirectoryInput,
   ProjectMutation,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
@@ -13,8 +14,15 @@ import {
 
 const decodeSearchEntriesInput = Schema.decodeUnknownSync(ProjectSearchEntriesInput);
 const decodeSearchContentsInput = Schema.decodeUnknownSync(ProjectSearchContentsInput);
+const decodeInspectDirectoryInput = Schema.decodeUnknownSync(ProjectInspectDirectoryInput);
 
 describe("project search inputs", () => {
+  it("accepts a concrete directory for repository inspection", () => {
+    expect(decodeInspectDirectoryInput({ cwd: " /workspace/pathway " })).toEqual({
+      cwd: "/workspace/pathway",
+    });
+  });
+
   it("allows an empty entries query for bounded frecency browsing", () => {
     const decoded = decodeSearchEntriesInput({
       cwd: "/workspace",

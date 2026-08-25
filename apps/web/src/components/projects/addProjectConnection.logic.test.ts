@@ -101,13 +101,22 @@ describe("project connection creation", () => {
     expect(bindCheckout).toHaveBeenCalledTimes(2);
   });
 
-  it("finds an existing checkout by repository when the entered path uses tilde", () => {
+  it("does not reuse a different directory just because its repository matches", () => {
     expect(
       findReusableProjectConnection({
         projects: [project()],
         environmentId: ENVIRONMENT_ID,
-        workspaceRoot: "~/GitHub/quotecloud-v2",
-        repositoryKey: "github.com/corporate-interactive/quotecloud-v2",
+        workspaceRoot: "/Users/corey/GitHub/quotecloud-main",
+      }),
+    ).toBeNull();
+  });
+
+  it("reuses the exact directory instead of trying to register it twice", () => {
+    expect(
+      findReusableProjectConnection({
+        projects: [project()],
+        environmentId: ENVIRONMENT_ID,
+        workspaceRoot: "/Users/corey/GitHub/quotecloud-v2/",
       })?.id,
     ).toBe(EXISTING_PROJECT_ID);
   });

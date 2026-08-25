@@ -96,6 +96,7 @@ vi.mock("../../hooks/useSettings", () => ({
   useClientSettings: () => ({
     sidebarProjectGroupingMode: "repository",
     sidebarProjectGroupingOverrides: {},
+    sidebarProjectGroupAssignments: {},
   }),
   usePrimarySettings: () => DEFAULT_UNIFIED_SETTINGS,
   useUpdateClientSettings: () => vi.fn(),
@@ -210,6 +211,7 @@ function makeGroup(faviconPath: string | null, includeRemote = true) {
     settings: {
       sidebarProjectGroupingMode: "repository",
       sidebarProjectGroupingOverrides: {},
+      sidebarProjectGroupAssignments: {},
     },
     primaryEnvironmentId: localEnvironmentId,
     resolveEnvironmentLabel: (environmentId) =>

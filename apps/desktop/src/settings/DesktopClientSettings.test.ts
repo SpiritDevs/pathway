@@ -50,6 +50,9 @@ const clientSettings: ClientSettings = {
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
   },
+  sidebarProjectGroupAssignments: {
+    "environment-1:/tmp/project-b": "github.com/spiritdevs/pathway",
+  },
   sidebarProjectSortOrder: "manual",
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,

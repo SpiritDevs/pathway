@@ -22,6 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import { companyListAtom } from "~/cloud/activeCompany";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { toastManager } from "~/components/ui/toast";
+import { useClientSettings } from "~/hooks/useSettings";
 import { readLocalApi } from "~/localApi";
 import { projectEnvironment } from "~/state/projects";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -125,6 +126,9 @@ export function AssignProjectCompanyDialog() {
   const projects = useUnscopedWorkspaceProjects();
   const companies = useAtomValue(companyListAtom);
   const control = useEnvironmentControl();
+  const projectGroupAssignments = useClientSettings(
+    (settings) => settings.sidebarProjectGroupAssignments,
+  );
   const [assignments, setAssignments] = useState<Assignments>(new Map());
   const [saving, setSaving] = useState(false);
   const [dismissedFor, setDismissedFor] = useState<ReadonlyArray<string>>([]);
@@ -230,7 +234,13 @@ export function AssignProjectCompanyDialog() {
         // Register every checkout, not just the first: the same project on a second machine is the
         // same project, and binding only one would leave the others unassigned on next launch.
         for (const checkout of checkouts) {
-          await control.ensureEnvironmentProject({ companyId, project: checkout });
+          await control.ensureEnvironmentProject({
+            companyId,
+            ...(projectGroupAssignments[checkout.physicalProjectKey] === checkout.physicalProjectKey
+              ? { matchRepository: false }
+              : {}),
+            project: checkout,
+          });
         }
         assigned.push(project.projectKey);
       }

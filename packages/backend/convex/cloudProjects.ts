@@ -105,6 +105,7 @@ export const ensureEnvironmentProject = mutation({
     localProjectId: v.string(),
     localWorkspaceRoot: v.union(v.string(), v.null()),
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
+    matchRepository: v.optional(v.boolean()),
     name: v.string(),
     allowCreate: v.optional(v.boolean()),
   },
@@ -166,7 +167,7 @@ export const ensureEnvironmentProject = mutation({
             .collect()
         ).find((row) => row.localProjectId === localProjectId) ?? null);
     let project = binding === null ? null : await ctx.db.get(binding.cloudProjectId);
-    if (project === null && repositoryKey !== null) {
+    if (project === null && repositoryKey !== null && args.matchRepository !== false) {
       const repositoryBindings = await ctx.db
         .query("environmentBindings")
         .withIndex("by_company_and_repository", (q) =>

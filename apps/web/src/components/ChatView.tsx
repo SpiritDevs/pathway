@@ -2162,10 +2162,6 @@ function ChatViewContent(props: ChatViewProps) {
   // opens the same "add a connection" flow as project settings, so linking a
   // second machine does not require leaving the composer.
   const [linkEnvironmentOpen, setLinkEnvironmentOpen] = useState(false);
-  const connectedEnvironmentIds = useMemo(
-    () => logicalProjectEnvironments.map((env) => env.environmentId),
-    [logicalProjectEnvironments],
-  );
   const onLinkEnvironmentRequest = useCallback(() => {
     setLinkEnvironmentOpen(true);
   }, []);
@@ -8301,10 +8297,13 @@ function ChatViewContent(props: ChatViewProps) {
 
             {activeProject && linkEnvironmentOpen ? (
               <AddProjectConnectionDialog
-                connectedEnvironmentIds={connectedEnvironmentIds}
                 onOpenChange={setLinkEnvironmentOpen}
                 open
                 projectId={activeProject.id}
+                projectKey={deriveLogicalProjectKeyFromSettings(
+                  activeProject,
+                  projectGroupingSettings,
+                )}
                 projectTitle={activeProject.title}
               />
             ) : null}

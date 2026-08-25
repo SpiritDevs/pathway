@@ -44,10 +44,12 @@ function makeProject(
 function settings(
   mode: ProjectGroupingSettings["sidebarProjectGroupingMode"],
   overrides: ProjectGroupingSettings["sidebarProjectGroupingOverrides"] = {},
+  assignments: ProjectGroupingSettings["sidebarProjectGroupAssignments"] = {},
 ): ProjectGroupingSettings {
   return {
     sidebarProjectGroupingMode: mode,
     sidebarProjectGroupingOverrides: overrides,
+    sidebarProjectGroupAssignments: assignments,
   };
 }
 
@@ -134,6 +136,20 @@ describe("buildProjectGroups", () => {
       "pathway-3",
       "pathway-2",
     ]);
+  });
+
+  it("assigns a checkout to a chosen logical project even when repository grouping is separate", () => {
+    const first = makeProject("pathway", "/work/pathway");
+    const second = makeProject("pathway-2", "/work/pathway-2");
+    const firstGroupKey = derivePhysicalProjectKey(first);
+    const groups = buildProjectGroups({
+      projects: [first, second],
+      settings: settings("separate", {}, { [derivePhysicalProjectKey(second)]: firstGroupKey }),
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.key).toBe(firstGroupKey);
+    expect(groups[0]?.members.map((member) => member.project.id)).toEqual(["pathway", "pathway-2"]);
   });
 
   it("dedupes stale registrations at one physical path using the freshest project", () => {

@@ -65,6 +65,21 @@ export const ProjectSnapshot = Schema.Struct({
 });
 export type ProjectSnapshot = typeof ProjectSnapshot.Type;
 
+/**
+ * A lightweight preflight for directory-based project creation. The repository identity is the
+ * same normalized value projected onto projects, but resolving it before the write lets clients
+ * ask whether another checkout should join an existing project or stand alone.
+ */
+export const ProjectInspectDirectoryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+});
+export type ProjectInspectDirectoryInput = typeof ProjectInspectDirectoryInput.Type;
+
+export const ProjectInspectDirectoryResult = Schema.Struct({
+  repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+});
+export type ProjectInspectDirectoryResult = typeof ProjectInspectDirectoryResult.Type;
+
 export const ProjectChange = Schema.Union([
   Schema.Struct({ type: Schema.Literal("project.upserted"), project: Project }),
   Schema.Struct({

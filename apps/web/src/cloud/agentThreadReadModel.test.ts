@@ -16,6 +16,7 @@ import {
   companyScopedEnvironmentProjects,
   companyScopedEnvironmentSnapshot,
   companyScopedEnvironmentThreads,
+  environmentBindingMatchesProject,
 } from "./agentThreadReadModel";
 
 const COMPANY_ID = CompanyId.make("company-one");
@@ -249,6 +250,42 @@ describe("cloud Agent Thread read model", () => {
         ENVIRONMENT_ID,
       ).map((project) => project.id),
     ).toEqual(["recreated-local-project"]);
+  });
+
+  it("does not treat another same-repository directory as the same local connection", () => {
+    const otherDirectory = {
+      ...cloudEnvironmentProjectsFromReplicas(
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      )[0]!,
+      id: ProjectId.make("other-local-project"),
+      workspaceRoot: "/work/pathway-v2",
+      repositoryIdentity: { ...repositoryIdentity, rootPath: "/work/pathway-v2" },
+    };
+
+    expect(
+      companyScopedEnvironmentProjects(
+        [otherDirectory],
+        COMPANY_ID,
+        new Map([[COMPANY_ID, replica(cloudProject, binding)]]),
+        ENVIRONMENT_ID,
+      ),
+    ).toEqual([]);
+  });
+
+  it("still matches the same repository across different environments", () => {
+    expect(
+      environmentBindingMatchesProject(
+        binding,
+        {
+          environmentId: EnvironmentId.make("environment-two"),
+          id: ProjectId.make("remote-local-project"),
+          workspaceRoot: "/srv/pathway",
+          repositoryIdentity: { ...repositoryIdentity, rootPath: "/srv/pathway" },
+        },
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("matches a legacy binding's path case-insensitively on macOS", () => {

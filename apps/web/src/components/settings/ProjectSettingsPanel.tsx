@@ -434,11 +434,6 @@ export function ProjectDetail({
     catalog: connectionCatalog,
   });
   const [addingConnection, setAddingConnection] = useState(false);
-  const connectedEnvironmentIds = useMemo(
-    () => group.memberProjects.map((member) => member.environmentId),
-    [group.memberProjects],
-  );
-
   const threadCountByMember = useMemo(() => {
     const counts = new Map<string, number>();
     for (const thread of threads) {
@@ -807,14 +802,25 @@ export function ProjectDetail({
     (member: SidebarProjectGroupMember, selection: SidebarProjectGroupingMode | "inherit") => {
       const overrideKey = deriveProjectGroupingOverrideKey(member);
       const nextOverrides = { ...projectGroupingSettings.sidebarProjectGroupingOverrides };
+      const nextAssignments = { ...projectGroupingSettings.sidebarProjectGroupAssignments };
+      // Any explicit grouping choice is also the way out of a connection made through the
+      // add-project decision dialog.
+      delete nextAssignments[overrideKey];
       if (selection === "inherit") {
         delete nextOverrides[overrideKey];
       } else {
         nextOverrides[overrideKey] = selection;
       }
-      updateClientSettings({ sidebarProjectGroupingOverrides: nextOverrides });
+      updateClientSettings({
+        sidebarProjectGroupAssignments: nextAssignments,
+        sidebarProjectGroupingOverrides: nextOverrides,
+      });
     },
-    [projectGroupingSettings.sidebarProjectGroupingOverrides, updateClientSettings],
+    [
+      projectGroupingSettings.sidebarProjectGroupAssignments,
+      projectGroupingSettings.sidebarProjectGroupingOverrides,
+      updateClientSettings,
+    ],
   );
 
   const removeMembers = useCallback(
@@ -1095,10 +1101,16 @@ export function ProjectDetail({
     ],
   );
 
+  const selectedCheckoutOverrideKey = deriveProjectGroupingOverrideKey(selectedCheckout);
+  const selectedCheckoutAssignment =
+    projectGroupingSettings.sidebarProjectGroupAssignments[selectedCheckoutOverrideKey];
   const selectedCheckoutGrouping =
-    projectGroupingSettings.sidebarProjectGroupingOverrides?.[
-      deriveProjectGroupingOverrideKey(selectedCheckout)
-    ] ?? "inherit";
+    selectedCheckoutAssignment !== undefined
+      ? selectedCheckoutAssignment === selectedCheckoutOverrideKey
+        ? "independent"
+        : "linked"
+      : (projectGroupingSettings.sidebarProjectGroupingOverrides?.[selectedCheckoutOverrideKey] ??
+        "inherit");
   const selectedCheckoutLabel = selectedCheckout.environmentLabel ?? "This machine";
 
   return (
@@ -1361,10 +1373,10 @@ export function ProjectDetail({
           </div>
           {addingConnection ? (
             <AddProjectConnectionDialog
-              connectedEnvironmentIds={connectedEnvironmentIds}
               onOpenChange={setAddingConnection}
               open
               projectId={representative.id}
+              projectKey={group.projectKey}
               projectTitle={group.displayName}
             />
           ) : null}
@@ -1488,12 +1500,25 @@ export function ProjectDetail({
               >
                 <SelectTrigger aria-label={`Grouping rule for ${selectedCheckoutLabel}`}>
                   <SelectValue>
-                    {selectedCheckoutGrouping === "inherit"
-                      ? `Default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
-                      : PROJECT_GROUPING_MODE_LABELS[selectedCheckoutGrouping]}
+                    {selectedCheckoutGrouping === "independent"
+                      ? "Independent project"
+                      : selectedCheckoutGrouping === "linked"
+                        ? `Linked to ${group.displayName}`
+                        : selectedCheckoutGrouping === "inherit"
+                          ? `Default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
+                          : PROJECT_GROUPING_MODE_LABELS[selectedCheckoutGrouping]}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {selectedCheckoutGrouping === "independent" ? (
+                    <SelectItem disabled hideIndicator value="independent">
+                      Independent project
+                    </SelectItem>
+                  ) : selectedCheckoutGrouping === "linked" ? (
+                    <SelectItem disabled hideIndicator value="linked">
+                      Linked to {group.displayName}
+                    </SelectItem>
+                  ) : null}
                   <SelectItem hideIndicator value="inherit">
                     Use global default
                   </SelectItem>

@@ -19,28 +19,18 @@ export type AddProjectConnectionOutcome =
       readonly checkout: ProjectConnectionCheckout | null;
     };
 
-/**
- * Reuses a checkout that already occupies the chosen directory or represents the same repository.
- * The repository fallback matters for paths entered with `~`: the server stores the expanded path,
- * but both records still carry the same canonical repository key after enrichment.
- */
+/** Reuses only the checkout already occupying this directory. Two directories for the same Git
+ * repository are valid concurrent connections and must remain distinct physical checkouts. */
 export function findReusableProjectConnection(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly environmentId: EnvironmentId;
   readonly workspaceRoot: string;
-  readonly repositoryKey: string | null;
 }): ProjectConnectionCheckout | null {
   const candidates = input.projects.filter(
     (project) => project.environmentId === input.environmentId && project.workspaceRoot !== null,
   );
   const pathMatch = findProjectByPath(candidates, input.workspaceRoot);
-  if (pathMatch !== undefined) return pathMatch;
-  if (input.repositoryKey === null) return null;
-  return (
-    candidates.find(
-      (project) => project.repositoryIdentity?.canonicalKey === input.repositoryKey,
-    ) ?? null
-  );
+  return pathMatch ?? null;
 }
 
 function checkoutFromCreateResult(result: QuickCreateProjectResult): ProjectConnectionCheckout {

@@ -165,6 +165,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     {
       readonly companyId: CompanyId;
       readonly cloudProjectId?: string;
+      readonly matchRepository?: boolean;
       readonly environmentId: EnvironmentId;
       readonly localProjectId: string;
       readonly localWorkspaceRoot: string | null;
@@ -315,6 +316,8 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     /** Existing company project to attach this checkout to instead of creating or inferring one. */
     readonly cloudProjectId?: string;
+    /** False when the user explicitly chose New project for a matching Git repository. */
+    readonly matchRepository?: boolean;
     /**
      * Only the fields the mutation sends. Repository identity remains optional because a caller
      * that has just created a project has not received its asynchronous enrichment yet.
@@ -454,10 +457,11 @@ export function makeEnvironmentControlClient(options: {
       ).then((summary) => summary.id),
     createCompanyProject: (args) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.createCompanyProject, args),
-    ensureEnvironmentProject: ({ companyId, cloudProjectId, project }) =>
+    ensureEnvironmentProject: ({ companyId, cloudProjectId, matchRepository, project }) =>
       mutation(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.ensureEnvironmentProject, {
         companyId,
         ...(cloudProjectId === undefined ? {} : { cloudProjectId }),
+        ...(matchRepository === undefined ? {} : { matchRepository }),
         environmentId: project.environmentId,
         localProjectId: project.id,
         localWorkspaceRoot: project.workspaceRoot,
