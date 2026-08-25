@@ -2,7 +2,7 @@
 /** Online administration for company-owned projects and their environment-local bindings. */
 import { v } from "convex/values";
 
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { mutation, internalMutation } from "./_generated/server.js";
 import {
   appendCompanyChanges,
@@ -494,7 +494,7 @@ export const revokeStaleEnvironmentBindings = internalMutation({
       (binding) => binding.status === "active" || binding.status === "missing",
     );
     const now = Date.now();
-    const changesByCompany = new Map<string, CompanyChange[]>();
+    const changesByCompany = new Map<Id<"companies">, CompanyChange[]>();
     for (const binding of candidates) {
       const registration = await ctx.db
         .query("environmentRegistrations")

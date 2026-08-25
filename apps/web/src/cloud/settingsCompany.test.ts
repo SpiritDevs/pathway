@@ -62,6 +62,15 @@ describe("settings company scope", () => {
     ).toBe(ACME.id);
   });
 
+  it("automatically selects the personal workspace when there is no organization", () => {
+    expect(
+      resolveSettingsCompanyId({
+        companies: [PERSONAL],
+        scope: SETTINGS_AUTO_SCOPE,
+      }),
+    ).toBe(PERSONAL.id);
+  });
+
   it("keeps Auto company-free when multiple organizations require an explicit choice", () => {
     expect(
       resolveSettingsCompanyId({

@@ -31,9 +31,7 @@ export function isExplicitSettingsCompanyScope(scope: SettingsCompanyScope): sco
   return scope !== SETTINGS_AUTO_SCOPE && scope !== SETTINGS_PROFILE_SCOPE;
 }
 
-/**
- * Auto preserves the no-picker single-company experience. Explicit Profile is always company-free.
- */
+/** Auto selects the only workspace that has company administration to show. */
 export function resolveSettingsCompanyId(input: {
   readonly companies: ReadonlyArray<ActiveCompanyRow>;
   readonly scope: SettingsCompanyScope;
@@ -41,7 +39,9 @@ export function resolveSettingsCompanyId(input: {
   if (input.scope === SETTINGS_PROFILE_SCOPE) return null;
   const companyChoices = organizationCompanies(input.companies);
   if (input.scope === SETTINGS_AUTO_SCOPE) {
-    return companyChoices.length === 1 ? companyChoices[0]!.id : null;
+    if (companyChoices.length === 1) return companyChoices[0]!.id;
+    if (companyChoices.length === 0) return personalCompany(input.companies)?.id ?? null;
+    return null;
   }
   return companyChoices.find((company) => company.id === input.scope)?.id ?? null;
 }
