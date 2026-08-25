@@ -30,6 +30,12 @@ vi.mock("../clerk/PathwayConnectSidebarSignIn", () => ({
   PathwayConnectProfileButton: () => <button data-testid="profile-button">Profile</button>,
 }));
 
+vi.mock("../ProviderUpdateLaunchNotification", () => ({
+  ProviderUpdateLaunchNotification: () => (
+    <button data-testid="provider-update-notice">Update Claude</button>
+  ),
+}));
+
 import { WorkspaceTopBar } from "./WorkspaceTopBar";
 
 describe("WorkspaceTopBar", () => {
@@ -37,6 +43,7 @@ describe("WorkspaceTopBar", () => {
     const markup = renderToStaticMarkup(<WorkspaceTopBar />);
 
     expect(markup).toContain('data-workspace-top-bar=""');
+    expect(markup).toContain('data-testid="provider-update-notice"');
     expect(markup).toContain('data-testid="profile-button"');
     // History controls sit on the left, so the bar spreads its two children and
     // the profile button lands at the right edge.

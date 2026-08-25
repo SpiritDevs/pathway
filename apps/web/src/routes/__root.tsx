@@ -33,7 +33,6 @@ import { AssignProjectCompanyDialog } from "../components/projects/AssignProject
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
-import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SplashScreen } from "../components/SplashScreen";
 import { resolveAuthGateLoadingReason } from "../components/splashScreen.logic";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
@@ -407,7 +406,6 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
-        {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {/* Captured mail toasts from any route, so a verification code finds you mid-thread. */}
         {primaryEnvironmentAuthenticated ? <EmailCaptureToastHost /> : null}
         {appShell}
