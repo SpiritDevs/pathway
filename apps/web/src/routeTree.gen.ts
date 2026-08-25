@@ -58,6 +58,7 @@ import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
+import { Route as SettingsEmailEnvironmentIdRouteImport } from './routes/settings.email_.$environmentId'
 import { Route as SettingsAppearanceActionPaletteRouteImport } from './routes/settings.appearance_.action-palette'
 import { Route as IssuesMilestonesMilestoneIdRouteImport } from './routes/issues_.milestones_.$milestoneId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -312,6 +313,12 @@ const SettingsProjectsProjectKeyRoute =
     path: '/projects/$projectKey',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsEmailEnvironmentIdRoute =
+  SettingsEmailEnvironmentIdRouteImport.update({
+    id: '/email_/$environmentId',
+    path: '/email/$environmentId',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsAppearanceActionPaletteRoute =
   SettingsAppearanceActionPaletteRouteImport.update({
     id: '/appearance_/action-palette',
@@ -399,6 +406,7 @@ export interface FileRoutesByFullPath {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -454,6 +462,7 @@ export interface FileRoutesByTo {
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/threads/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -512,6 +521,7 @@ export interface FileRoutesById {
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance_/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/email_/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
   '/_chat/threads_/draft/$draftId': typeof ChatThreadsDraftDraftIdRoute
@@ -570,6 +580,7 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/email/$environmentId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
@@ -625,6 +636,7 @@ export interface FileRouteTypes {
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/email/$environmentId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
     | '/threads/draft/$draftId'
@@ -682,6 +694,7 @@ export interface FileRouteTypes {
     | '/_chat/draft/$draftId'
     | '/issues_/milestones_/$milestoneId'
     | '/settings/appearance_/action-palette'
+    | '/settings/email_/$environmentId'
     | '/settings/projects_/$projectKey'
     | '/_chat/threads_/$environmentId/$threadId'
     | '/_chat/threads_/draft/$draftId'
@@ -1055,6 +1068,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProjectsProjectKeyRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/email_/$environmentId': {
+      id: '/settings/email_/$environmentId'
+      path: '/email/$environmentId'
+      fullPath: '/settings/email/$environmentId'
+      preLoaderRoute: typeof SettingsEmailEnvironmentIdRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/appearance_/action-palette': {
       id: '/settings/appearance_/action-palette'
       path: '/appearance/action-palette'
@@ -1161,6 +1181,7 @@ interface SettingsRouteChildren {
   SettingsSyncRoute: typeof SettingsSyncRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
+  SettingsEmailEnvironmentIdRoute: typeof SettingsEmailEnvironmentIdRoute
   SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
 }
 
@@ -1191,6 +1212,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSyncRoute: SettingsSyncRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
+  SettingsEmailEnvironmentIdRoute: SettingsEmailEnvironmentIdRoute,
   SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,
 }
 

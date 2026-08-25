@@ -12,7 +12,7 @@
  * @module components/settings/EmailSettingsPanel
  */
 import { TrustedEmailSenderEntity } from "@spiritdevs/client-runtime/sync";
-import type { EmailCaptureSettings, ProjectId } from "@spiritdevs/contracts";
+import type { EmailCaptureSettings, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { BellIcon, MailIcon, RadioIcon, ShieldCheckIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -20,7 +20,6 @@ import { useMemo, useState } from "react";
 import { useCapturedEmailAdmin } from "../../cloud/capturedEmailAdmin";
 import { cloudEnvironmentProjectsFromReplicas } from "../../cloud/agentThreadReadModel";
 import { cn } from "../../lib/utils";
-import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useEmailSettings, useUpdateEmailSettings } from "../../state/email";
 import {
   isEmailPortConflict,
@@ -46,22 +45,19 @@ const LISTENER_TONE_CLASSES = {
   error: "text-destructive",
 } as const;
 
-export function EmailSettingsPanel() {
+export function EmailSettingsPanel({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const company = useCompanySettings();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const { settings, listenerStatus, error } = useEmailSettings();
-  const updateSettings = useUpdateEmailSettings();
+  const { settings, listenerStatus, isPending, error, refresh } = useEmailSettings(environmentId);
+  const updateSettings = useUpdateEmailSettings(environmentId);
   const projects = useMemo(
     () =>
-      company.contentCompanyId === null ||
-      company.contentReplica === null ||
-      primaryEnvironmentId === null
+      company.contentCompanyId === null || company.contentReplica === null
         ? []
         : cloudEnvironmentProjectsFromReplicas(
             new Map([[company.contentCompanyId, company.contentReplica]]),
-            primaryEnvironmentId,
+            environmentId,
           ),
-    [company.contentCompanyId, company.contentReplica, primaryEnvironmentId],
+    [company.contentCompanyId, company.contentReplica, environmentId],
   );
   const [ruleProjectId, setRuleProjectId] = useState<ProjectId | null>(null);
 
@@ -70,11 +66,14 @@ export function EmailSettingsPanel() {
   const portConflict = isEmailPortConflict(listenerStatus);
 
   /** Sends the whole document; true when it landed, which is what clears a field's draft. */
-  const save = async (next: EmailCaptureSettings): Promise<boolean> =>
-    reportEmailWriteFailure(
+  const save = async (next: EmailCaptureSettings): Promise<boolean> => {
+    const saved = reportEmailWriteFailure(
       "Could not save capture settings",
       await updateSettings({ settings: next }),
     );
+    if (saved) refresh();
+    return saved;
+  };
 
   if (settings === null) {
     return (
@@ -82,7 +81,9 @@ export function EmailSettingsPanel() {
         <SettingsSection icon={<MailIcon className="size-3.5" />} title="Local SMTP capture">
           <p className="px-3 py-6 text-center text-xs text-muted-foreground sm:px-4">
             {error ??
-              "Capture settings live on the machine running the server, so there is nothing to configure until this client is connected to one."}
+              (isPending
+                ? "Loading capture settings from this environment."
+                : "Capture settings live on the machine running the server, so there is nothing to configure until this client is connected to one.")}
           </p>
         </SettingsSection>
         <TrustedEmailSendersSettingsSection />
@@ -211,6 +212,7 @@ export function EmailSettingsPanel() {
         <SettingsRow
           control={
             <ClearInboxButton
+              environmentId={environmentId}
               inboxName="all inboxes"
               label="Clear all mail"
               scope={{ type: "all" }}
@@ -241,6 +243,7 @@ export function EmailSettingsPanel() {
       <EmailProjectCaptureSettings projects={projects} save={save} settings={settings} />
 
       <EmailTriggerRulesSection
+        environmentId={environmentId}
         headerContent={
           projects.length === 0 ? null : (
             <Select

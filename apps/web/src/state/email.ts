@@ -787,13 +787,16 @@ export interface EmailSettingsView {
 }
 
 /** Capture settings, preferring the stream's pushed snapshot over the read it started from. */
-export function useEmailSettings(): EmailSettingsView {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+export function useEmailSettings(selectedEnvironmentId?: EnvironmentId): EmailSettingsView {
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId = selectedEnvironmentId ?? primaryEnvironmentId;
   const streamed = useAtomValue(emailStreamViewAtom).state.settings;
   const query = useEnvironmentQuery(
     environmentId === null ? null : emailSettingsQuery({ environmentId, input: {} }),
   );
-  const snapshot = streamed ?? query.data ?? null;
+  // The stream follows the primary environment only. A remote environment must use its own RPC
+  // snapshot or a settings push from the primary device would be rendered under the wrong name.
+  const snapshot = environmentId === primaryEnvironmentId ? (streamed ?? query.data) : query.data;
   return {
     settings: snapshot?.settings ?? null,
     listenerStatus: snapshot?.listenerStatus ?? null,
@@ -819,8 +822,12 @@ export interface EmailTriggerRulesView {
  * Rules are refetched when loop detection auto-disables one, since that write happens on the server
  * with no client command to hang a refresh off.
  */
-export function useEmailTriggerRules(projectId: ProjectId | null): EmailTriggerRulesView {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+export function useEmailTriggerRules(
+  projectId: ProjectId | null,
+  selectedEnvironmentId?: EnvironmentId,
+): EmailTriggerRulesView {
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId = selectedEnvironmentId ?? primaryEnvironmentId;
   const autoDisabled = useAtomValue(emailStreamViewAtom).state.lastAutoDisabledTrigger;
   const query = useEnvironmentQuery(
     environmentId === null || projectId === null
@@ -851,8 +858,12 @@ export interface EmailTriggerFiringsView {
 }
 
 /** The firing log for a project: which message caused which run, and whether it launched. */
-export function useEmailTriggerFirings(projectId: ProjectId | null): EmailTriggerFiringsView {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+export function useEmailTriggerFirings(
+  projectId: ProjectId | null,
+  selectedEnvironmentId?: EnvironmentId,
+): EmailTriggerFiringsView {
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId = selectedEnvironmentId ?? primaryEnvironmentId;
   const revision = useAtomValue(emailStreamViewAtom).state.revision;
   const query = useEnvironmentQuery(
     environmentId === null || projectId === null
@@ -997,8 +1008,8 @@ type EmailCommandInput<C> =
 type EmailCommandSuccess<C> = C extends AtomCommand<infer _W, infer A, infer _E> ? A : never;
 type EmailCommandFailure<C> = C extends AtomCommand<infer _W, infer _A, infer E> ? E : never;
 
-/** Binds settings and inbox-wide writes to the primary capture environment. */
-function usePrimaryEmailCommand<
+/** Binds an email write to an explicit environment, defaulting to the primary one. */
+function useEmailCommand<
   C extends AtomCommand<
     { readonly environmentId: EnvironmentId; readonly input: never },
     unknown,
@@ -1006,12 +1017,14 @@ function usePrimaryEmailCommand<
   >,
 >(
   command: C,
+  selectedEnvironmentId?: EnvironmentId,
 ): (
   input: EmailCommandInput<C>,
 ) => Promise<
   AtomCommandResult<EmailCommandSuccess<C>, EmailCommandFailure<C> | EmailCaptureUnavailableError>
 > {
-  const environmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const environmentId = selectedEnvironmentId ?? primaryEnvironmentId;
   const run = useAtomCommand(
     command as unknown as AtomCommand<
       { readonly environmentId: EnvironmentId; readonly input: EmailCommandInput<C> },
@@ -1066,11 +1079,13 @@ export const useDeleteEmailMessages = () => {
     [run],
   );
 };
-export const useClearEmailInbox = () => usePrimaryEmailCommand(emailCommands.clearInbox);
-export const useUpdateEmailSettings = () => usePrimaryEmailCommand(emailCommands.updateSettings);
-export const useUpsertEmailTriggerRule = () =>
-  usePrimaryEmailCommand(emailCommands.upsertTriggerRule);
-export const useDeleteEmailTriggerRule = () =>
-  usePrimaryEmailCommand(emailCommands.deleteTriggerRule);
+export const useClearEmailInbox = (environmentId?: EnvironmentId) =>
+  useEmailCommand(emailCommands.clearInbox, environmentId);
+export const useUpdateEmailSettings = (environmentId?: EnvironmentId) =>
+  useEmailCommand(emailCommands.updateSettings, environmentId);
+export const useUpsertEmailTriggerRule = (environmentId?: EnvironmentId) =>
+  useEmailCommand(emailCommands.upsertTriggerRule, environmentId);
+export const useDeleteEmailTriggerRule = (environmentId?: EnvironmentId) =>
+  useEmailCommand(emailCommands.deleteTriggerRule, environmentId);
 
 export const useEmailTags = (): ReadonlyArray<CompanyEmailTag> => useAtomValue(cloudEmailTagsAtom);

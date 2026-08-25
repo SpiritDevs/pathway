@@ -10,7 +10,12 @@
  *
  * @module components/email/EmailTriggerRulesSection
  */
-import type { EmailTriggerFiring, EmailTriggerRule, ProjectId } from "@spiritdevs/contracts";
+import type {
+  EmailTriggerFiring,
+  EmailTriggerRule,
+  EnvironmentId,
+  ProjectId,
+} from "@spiritdevs/contracts";
 import { PencilIcon, PlusIcon, Trash2Icon, ZapIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -97,6 +102,7 @@ export function EmailTriggerRulesSection({
   sectionId,
   title = "Trigger rules",
   headerContent,
+  environmentId,
 }: {
   /** Null while no project is chosen; the section then explains itself instead of listing. */
   projectId: ProjectId | null;
@@ -104,12 +110,14 @@ export function EmailTriggerRulesSection({
   title?: string;
   /** Rendered left of the New button — the central page puts its project picker here. */
   headerContent?: ReactNode;
+  /** Defaults to the primary environment for project-level callers. */
+  environmentId?: EnvironmentId;
 }) {
   useRelativeTimeTick(30_000);
-  const { rules, error } = useEmailTriggerRules(projectId);
-  const { firings } = useEmailTriggerFirings(projectId);
-  const upsertRule = useUpsertEmailTriggerRule();
-  const deleteRule = useDeleteEmailTriggerRule();
+  const { rules, error } = useEmailTriggerRules(projectId, environmentId);
+  const { firings } = useEmailTriggerFirings(projectId, environmentId);
+  const upsertRule = useUpsertEmailTriggerRule(environmentId);
+  const deleteRule = useDeleteEmailTriggerRule(environmentId);
 
   const [draft, setDraft] = useState<EmailTriggerRuleDraft>(EMPTY_EMAIL_TRIGGER_RULE_DRAFT);
   const [dialogOpen, setDialogOpen] = useState(false);

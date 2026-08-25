@@ -8,6 +8,7 @@ import {
   WorkspaceBreadcrumbSeparator,
 } from "../WorkspaceBreadcrumb";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
+import { useEnvironments } from "../../state/environments";
 import { SETTINGS_SECTION_LABELS } from "./settingsSearch";
 
 const SETTINGS_BREADCRUMB_LABELS: Readonly<Record<string, string>> = SETTINGS_SECTION_LABELS;
@@ -36,6 +37,19 @@ export function settingsProjectKeyFromPathname(pathname: string): string | null 
   }
 }
 
+export function settingsEmailEnvironmentIdFromPathname(pathname: string): string | null {
+  const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  const prefix = "/settings/email/";
+  if (!normalizedPathname.startsWith(prefix)) return null;
+  const encodedEnvironmentId = normalizedPathname.slice(prefix.length);
+  if (!encodedEnvironmentId) return null;
+  try {
+    return decodeURIComponent(encodedEnvironmentId);
+  } catch {
+    return encodedEnvironmentId;
+  }
+}
+
 function SettingsProjectBreadcrumbItem({ projectKey }: { readonly projectKey: string }) {
   const projects = useWorkspaceProjects();
   const project = projects.find((candidate) => candidate.projectKey === projectKey) ?? null;
@@ -59,9 +73,26 @@ function SettingsProjectBreadcrumbItem({ projectKey }: { readonly projectKey: st
   );
 }
 
+function SettingsEmailEnvironmentBreadcrumbItem({
+  environmentId,
+}: {
+  readonly environmentId: string;
+}) {
+  const { environments } = useEnvironments();
+  const environment =
+    environments.find((candidate) => candidate.environmentId === environmentId) ?? null;
+
+  return (
+    <WorkspaceBreadcrumbItem current className="truncate">
+      {environment?.label ?? "Environment"}
+    </WorkspaceBreadcrumbItem>
+  );
+}
+
 export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
   const sectionLabel = settingsBreadcrumbLabel(pathname);
   const projectKey = settingsProjectKeyFromPathname(pathname);
+  const emailEnvironmentId = settingsEmailEnvironmentIdFromPathname(pathname);
   const subpageLabel =
     pathname.replace(/\/+$/, "") === "/settings/appearance/action-palette"
       ? "Action Palette"
@@ -93,6 +124,19 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
           </WorkspaceBreadcrumbItem>
           <WorkspaceBreadcrumbSeparator />
           <SettingsProjectBreadcrumbItem projectKey={projectKey} />
+        </>
+      ) : emailEnvironmentId ? (
+        <>
+          <WorkspaceBreadcrumbItem>
+            <Link
+              to="/settings/email"
+              className="rounded-sm outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Capture
+            </Link>
+          </WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbSeparator />
+          <SettingsEmailEnvironmentBreadcrumbItem environmentId={emailEnvironmentId} />
         </>
       ) : (
         <WorkspaceBreadcrumbItem current className="truncate">

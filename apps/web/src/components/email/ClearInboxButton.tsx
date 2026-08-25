@@ -7,7 +7,7 @@
  *
  * @module components/email/ClearInboxButton
  */
-import type { EmailInboxScope } from "@spiritdevs/contracts";
+import type { EmailInboxScope, EnvironmentId } from "@spiritdevs/contracts";
 import { useState } from "react";
 
 import { useClearEmailInbox } from "~/state/email";
@@ -28,12 +28,14 @@ export function ClearInboxButton({
   scope,
   inboxName,
   label = "Clear inbox",
+  environmentId,
 }: {
   scope: EmailInboxScope;
   inboxName: string;
   label?: string;
+  environmentId?: EnvironmentId;
 }) {
-  const clearInbox = useClearEmailInbox();
+  const clearInbox = useClearEmailInbox(environmentId);
   const [open, setOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
 
