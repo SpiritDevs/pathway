@@ -12,6 +12,8 @@ import {
   formatTimestamp,
   getRelativeTimeState,
   getTimestampFormatOptions,
+  localDayStartTimestamp,
+  millisecondsUntilNextLocalDay,
 } from "./timestampFormat";
 
 describe("getTimestampFormatOptions", () => {
@@ -143,6 +145,20 @@ describe("formatDayAwareTimestamp", () => {
 
   it("returns an empty string for invalid input", () => {
     expect(formatDayAwareTimestamp("not-a-date", "12-hour", now)).toBe("");
+  });
+});
+
+describe("local day boundaries", () => {
+  it("returns the start of the current local calendar day", () => {
+    const now = new Date(2026, 7, 14, 16, 45, 30, 250);
+
+    expect(localDayStartTimestamp(now.getTime())).toBe(new Date(2026, 7, 14).getTime());
+  });
+
+  it("schedules the next refresh at the next local calendar day", () => {
+    const now = new Date(2026, 7, 14, 23, 59, 59, 500);
+
+    expect(millisecondsUntilNextLocalDay(now.getTime())).toBe(500);
   });
 });
 
