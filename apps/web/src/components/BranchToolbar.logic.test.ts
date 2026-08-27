@@ -1,4 +1,4 @@
-import { EnvironmentId, type VcsRef } from "@spiritdevs/contracts";
+import { EnvironmentId, ThreadId, type VcsRef } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -19,6 +19,7 @@ import {
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
   resolvePendingBranchSelection,
+  resolveScopedBranchSelection,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
   shouldShowComposerContextStrip,
@@ -204,6 +205,27 @@ describe("pending branch selection", () => {
         canonicalBranch: "feature/selected",
       }),
     ).toBe("feature/selected");
+  });
+
+  it("only exposes a pending branch to the thread that requested it", () => {
+    const pendingBranch = {
+      environmentId: EnvironmentId.make("env-a"),
+      threadId: ThreadId.make("thread-a"),
+      branch: "feature/selected",
+    };
+
+    expect(
+      resolveScopedBranchSelection(pendingBranch, {
+        environmentId: EnvironmentId.make("env-a"),
+        threadId: ThreadId.make("thread-a"),
+      }),
+    ).toBe("feature/selected");
+    expect(
+      resolveScopedBranchSelection(pendingBranch, {
+        environmentId: EnvironmentId.make("env-a"),
+        threadId: ThreadId.make("thread-b"),
+      }),
+    ).toBeUndefined();
   });
 });
 

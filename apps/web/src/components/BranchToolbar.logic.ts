@@ -1,4 +1,4 @@
-import type { EnvironmentId, VcsRef, ProjectId } from "@spiritdevs/contracts";
+import type { EnvironmentId, VcsRef, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { toSortableTimestamp } from "../lib/threadSort";
 export {
@@ -197,6 +197,22 @@ export function resolvePendingBranchSelection(
   canonicalBranch: string | null,
 ): string | null {
   return pendingBranch === canonicalBranch ? null : pendingBranch;
+}
+
+export interface ScopedBranchSelection {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  branch: string | null;
+}
+
+export function resolveScopedBranchSelection(
+  selection: ScopedBranchSelection | undefined,
+  scope: Pick<ScopedBranchSelection, "environmentId" | "threadId">,
+): string | null | undefined {
+  if (selection?.environmentId !== scope.environmentId || selection.threadId !== scope.threadId) {
+    return undefined;
+  }
+  return selection.branch;
 }
 
 export function resolveDisplayedBranch(input: {

@@ -37,6 +37,35 @@ it.effect("waits for local Git status before completing a ref mutation", () =>
   }),
 );
 
+it.effect("bounds the local Git status wait without cancelling the refresh", () =>
+  Effect.gen(function* () {
+    const refreshStarted = yield* Deferred.make<void>();
+    const releaseRefresh = yield* Deferred.make<void>();
+    const refreshCompleted = yield* Deferred.make<void>();
+    const mutationResult = { refName: "feature/selected" };
+
+    const mutationFiber = yield* refreshLocalGitStatusAfterMutation(
+      "/repo",
+      Effect.succeed(mutationResult),
+      () =>
+        Deferred.succeed(refreshStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRefresh)),
+          Effect.andThen(Deferred.succeed(refreshCompleted, undefined)),
+        ),
+      Duration.seconds(2),
+    ).pipe(Effect.forkChild);
+
+    yield* Deferred.await(refreshStarted);
+    yield* TestClock.adjust(Duration.seconds(2));
+
+    assert.deepStrictEqual(yield* Fiber.join(mutationFiber), mutationResult);
+    assert.isFalse(yield* Deferred.isDone(refreshCompleted));
+
+    yield* Deferred.succeed(releaseRefresh, undefined);
+    yield* Deferred.await(refreshCompleted);
+  }),
+);
+
 it.each(["worktree" as const, null])(
   "forwards the project workspace override through WebSocket RPC: %s",
   (defaultThreadEnvMode) => {

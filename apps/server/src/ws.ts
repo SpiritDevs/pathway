@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -489,9 +490,14 @@ export const refreshLocalGitStatusAfterMutation = Effect.fn(
   cwd: string,
   mutation: Effect.Effect<A, E>,
   refreshLocalStatus: (cwd: string) => Effect.Effect<B, E2>,
+  maxWait: Duration.Input = Duration.seconds(2),
 ) {
   const result = yield* mutation;
-  yield* refreshLocalStatus(cwd).pipe(Effect.ignoreCause({ log: true }));
+  const refreshFiber = yield* refreshLocalStatus(cwd).pipe(
+    Effect.ignoreCause({ log: true }),
+    Effect.forkDetach,
+  );
+  yield* Fiber.join(refreshFiber).pipe(Effect.timeoutOption(maxWait));
   return result;
 });
 
@@ -739,6 +745,11 @@ const makeWsRpcLayer = (
       const refreshGitStatus = (cwd: string) =>
         vcsStatusBroadcaster
           .refreshStatus(cwd)
+          .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+
+      const refreshRemoteGitStatusAfterLocalMutation = (cwd: string) =>
+        vcsStatusBroadcaster
+          .refreshRemoteStatusAfterLocalMutation(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       const refreshGitStatusForThread = (threadId: ThreadId, cwd: string) =>
@@ -2075,14 +2086,13 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsCreateRef]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateRef,
-            (input.switchRef
+            input.switchRef
               ? refreshLocalGitStatusAfterMutation(
                   input.cwd,
                   gitWorkflow.createRef(input),
                   vcsStatusBroadcaster.refreshLocalStatus,
-                )
-              : gitWorkflow.createRef(input)
-            ).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+                ).pipe(Effect.tap(() => refreshRemoteGitStatusAfterLocalMutation(input.cwd)))
+              : gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsSwitchRef]: (input) =>
@@ -2092,7 +2102,7 @@ const makeWsRpcLayer = (
               input.cwd,
               gitWorkflow.switchRef(input),
               vcsStatusBroadcaster.refreshLocalStatus,
-            ).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            ).pipe(Effect.tap(() => refreshRemoteGitStatusAfterLocalMutation(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsInit]: (input) =>

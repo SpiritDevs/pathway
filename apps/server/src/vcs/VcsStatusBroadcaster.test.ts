@@ -316,6 +316,47 @@ describe("VcsStatusBroadcaster", () => {
     }).pipe(Effect.provide(makeTestLayer(state)));
   });
 
+  it.effect(
+    "refreshes remote status after a local mutation without rescanning local status",
+    () => {
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+      };
+
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        state.currentLocalStatus = {
+          ...baseLocalStatus,
+          refName: "feature/selected",
+        };
+        state.currentRemoteStatus = {
+          ...baseRemoteStatus,
+          aheadCount: 2,
+        };
+
+        yield* broadcaster.refreshLocalStatus("/repo");
+        yield* broadcaster.refreshRemoteStatusAfterLocalMutation("/repo");
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        assert.deepStrictEqual(cached, {
+          ...state.currentLocalStatus,
+          ...state.currentRemoteStatus,
+        });
+        assert.equal(state.localStatusCalls, 2);
+        assert.equal(state.remoteStatusCalls, 2);
+        assert.equal(state.localInvalidationCalls, 2);
+        assert.equal(state.remoteInvalidationCalls, 1);
+      }).pipe(Effect.provide(makeTestLayer(state)));
+    },
+  );
+
   it.effect("normalizes symlinked CWDs before cache lookup and workflow calls", () => {
     const seenCwds: string[] = [];
     const state = {

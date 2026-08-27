@@ -162,6 +162,9 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshLocalStatus: (
       cwd: string,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
+    readonly refreshRemoteStatusAfterLocalMutation: (
+      cwd: string,
+    ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;
     readonly refreshStatus: (cwd: string) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
     readonly streamStatus: (
       input: VcsStatusInput,
@@ -364,6 +367,16 @@ export const make = Effect.gen(function* () {
     const remote = yield* workflow.remoteStatus({ cwd }, options);
     return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
   });
+
+  const refreshRemoteStatusAfterLocalMutation: VcsStatusBroadcaster["Service"]["refreshRemoteStatusAfterLocalMutation"] =
+    Effect.fn("VcsStatusBroadcaster.refreshRemoteStatusAfterLocalMutation")(function* (rawCwd) {
+      const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+      // A branch change also invalidates the PR lookup, but the broadcaster already
+      // holds the freshly computed local snapshot and should not scan the worktree again.
+      yield* workflow.invalidateStatus(cwd);
+      const remote = yield* workflow.remoteStatus({ cwd });
+      return yield* updateCachedRemoteStatus(cwd, remote, { publish: true });
+    });
 
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshStatus",
@@ -588,6 +601,7 @@ export const make = Effect.gen(function* () {
   return VcsStatusBroadcaster.of({
     getStatus,
     refreshLocalStatus,
+    refreshRemoteStatusAfterLocalMutation,
     refreshStatus,
     streamStatus,
   });
