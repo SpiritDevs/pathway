@@ -39,6 +39,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { cursorSdkModelSelection } from "../../provider/cursorSdkModel.ts";
@@ -2014,13 +2015,17 @@ export function makeCursorAdapterV2(
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapterV2TurnInput,
         ) {
-          const text = pathwayOrchestrationPromptForFirstRun({
-            prompt: turnInput.message.text,
-            runOrdinal: turnInput.runOrdinal,
-            hasPathwayMcp: cursorMcpServers(turnInput.threadId) !== undefined,
+          const text = appendFileAttachmentPromptText({
+            text: pathwayOrchestrationPromptForFirstRun({
+              prompt: turnInput.message.text,
+              runOrdinal: turnInput.runOrdinal,
+              hasPathwayMcp: cursorMcpServers(turnInput.threadId) !== undefined,
+            }),
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachments: turnInput.message.attachments,
           });
           const images = yield* Effect.forEach(
-            turnInput.message.attachments,
+            turnInput.message.attachments.filter((attachment) => attachment.type === "image"),
             (attachment: ChatAttachment) =>
               Effect.gen(function* () {
                 const path = resolveAttachmentPath({

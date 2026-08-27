@@ -29,6 +29,49 @@ export const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
   ".webp",
 ]);
 
+export const SAFE_FILE_EXTENSIONS = new Set([
+  ".7z",
+  ".csv",
+  ".css",
+  ".diff",
+  ".doc",
+  ".docx",
+  ".gz",
+  ".htm",
+  ".html",
+  ".ini",
+  ".java",
+  ".js",
+  ".json",
+  ".jsonl",
+  ".jsx",
+  ".log",
+  ".md",
+  ".odt",
+  ".patch",
+  ".pdf",
+  ".php",
+  ".ppt",
+  ".pptx",
+  ".py",
+  ".rb",
+  ".rtf",
+  ".sh",
+  ".sql",
+  ".tar",
+  ".toml",
+  ".ts",
+  ".tsv",
+  ".tsx",
+  ".txt",
+  ".xml",
+  ".xls",
+  ".xlsx",
+  ".yaml",
+  ".yml",
+  ".zip",
+]);
+
 // Whether `code` is a character the base64 payload may contain, aside from
 // the whitespace handled separately below.
 function isBase64Char(code: number): boolean {
@@ -134,4 +177,17 @@ export function inferImageExtension(input: { mimeType: string; fileName?: string
   }
 
   return ".bin";
+}
+
+export function inferFileExtension(input: { mimeType: string; fileName?: string }): string {
+  const fileName = input.fileName?.trim() ?? "";
+  const extensionMatch = /\.([a-z0-9]{1,8})$/i.exec(fileName);
+  const fileNameExtension = extensionMatch ? `.${extensionMatch[1]!.toLowerCase()}` : "";
+  if (SAFE_FILE_EXTENSIONS.has(fileNameExtension)) {
+    return fileNameExtension;
+  }
+
+  const fromMimeExtension = Mime.getExtension(input.mimeType);
+  const mimeExtension = fromMimeExtension ? `.${fromMimeExtension.toLowerCase()}` : "";
+  return SAFE_FILE_EXTENSIONS.has(mimeExtension) ? mimeExtension : ".bin";
 }

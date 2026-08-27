@@ -226,6 +226,7 @@ import {
 } from "../logicalProject";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
+  type ComposerAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   composerDraftHasUserContent,
@@ -357,7 +358,7 @@ import {
   openForkedThreadSideChatWhenReady,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
-  cloneComposerImageForRetry,
+  cloneComposerAttachmentForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
   loadQueuedComposerImages,
@@ -402,8 +403,8 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more files without additional text. Respond using the conversation context and the attached file(s).]";
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const EMPTY_PROVIDERS: ServerProvider[] = [];
@@ -1489,7 +1490,7 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setLogicalProjectDraftThreadId,
   );
   const promptRef = useRef("");
-  const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
+  const composerImagesRef = useRef<ComposerAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
@@ -2904,7 +2905,7 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
-      let images: ComposerImageAttachment[];
+      let images: ComposerAttachment[];
       try {
         images = await loadQueuedComposerImages(input.attachments);
       } catch (error) {
@@ -6328,19 +6329,23 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
     const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
+      composerImagesSnapshot.map(async (image) => {
+        const attachment = {
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        };
+        return image.type === "image"
+          ? { type: "image" as const, ...attachment }
+          : { type: "file" as const, ...attachment };
+      }),
     );
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
+      type: image.type,
       id: image.id,
       name: image.name,
       mimeType: image.mimeType,
@@ -6619,7 +6624,7 @@ function ChatViewContent(props: ChatViewProps) {
           });
         }
         promptRef.current = promptForSend;
-        const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
+        const retryComposerImages = composerImagesSnapshot.map(cloneComposerAttachmentForRetry);
         composerImagesRef.current = retryComposerImages;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;

@@ -1079,6 +1079,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   }
 
   for (const attachment of input.attachments) {
+    if (attachment.type !== "image") continue;
     if (!isSupportedClaudeImageMimeType(attachment.mimeType)) {
       return yield* new ProviderAdapterProtocolError({
         driver: CLAUDE_PROVIDER,

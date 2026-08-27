@@ -61,6 +61,7 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
   finalizePromotedDraftThreadByRef,
+  hydrateImagesFromPersisted,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
@@ -103,6 +104,25 @@ function makeImage(input: {
     file,
   };
 }
+
+describe("composer attachment hydration", () => {
+  it("preserves generic file attachment metadata", () => {
+    const [attachment] = hydrateImagesFromPersisted([
+      {
+        type: "file",
+        id: "file-json",
+        name: "data.json",
+        mimeType: "application/json",
+        sizeBytes: 2,
+        dataUrl: "data:application/json;base64,e30=",
+      },
+    ]);
+
+    expect(attachment?.type).toBe("file");
+    expect(attachment?.name).toBe("data.json");
+    expect(attachment?.file.type).toBe("application/json");
+  });
+});
 
 function makeTerminalContext(input: {
   id: string;

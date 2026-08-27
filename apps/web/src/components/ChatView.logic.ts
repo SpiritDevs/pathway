@@ -19,7 +19,7 @@ import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import { type ComposerAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadShells } from "../state/threads";
@@ -254,9 +254,6 @@ export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
     return;
   }
   for (const attachment of message.attachments) {
-    if (attachment.type !== "image") {
-      continue;
-    }
     revokeBlobPreviewUrl(attachment.previewUrl);
   }
 }
@@ -342,10 +339,10 @@ export function readFileAsDataUrl(file: File): Promise<string> {
         resolve(reader.result);
         return;
       }
-      reject(new Error("Could not read image data."));
+      reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
+      reject(reader.error ?? new Error("Failed to read attachment."));
     });
     reader.readAsDataURL(file);
   });
@@ -357,8 +354,8 @@ export async function loadQueuedComposerImages(
     readonly attachment: ChatAttachment;
     readonly url: string;
   }>,
-): Promise<ComposerImageAttachment[]> {
-  const images: ComposerImageAttachment[] = [];
+): Promise<ComposerAttachment[]> {
+  const images: ComposerAttachment[] = [];
   try {
     for (const { attachment, url } of attachments) {
       const response = await fetch(url);
@@ -403,9 +400,7 @@ export function shouldShowComposerContextStrip(input: {
   );
 }
 
-export function cloneComposerImageForRetry(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
+export function cloneComposerAttachmentForRetry(image: ComposerAttachment): ComposerAttachment {
   if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
     return image;
   }

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createAttachmentId,
   createIssueAttachmentId,
+  attachmentRelativePath,
   parseIssueSegmentFromAttachmentId,
   createDeterministicAttachmentId,
   parseThreadSegmentFromAttachmentId,
@@ -15,6 +16,18 @@ import {
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
+  it("preserves safe file extensions and falls back for unknown ones", () => {
+    const base = {
+      type: "file" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000001",
+      mimeType: "application/octet-stream",
+      sizeBytes: 2,
+    };
+    expect(attachmentRelativePath({ ...base, name: "data.json" })).toMatch(/\.json$/);
+    expect(attachmentRelativePath({ ...base, name: "page.html" })).toMatch(/\.html$/);
+    expect(attachmentRelativePath({ ...base, name: "payload.exe" })).toMatch(/\.bin$/);
+  });
+
   it("derives stable attachment ids for idempotent message retries", () => {
     const first = createDeterministicAttachmentId("thread-1", "message-1:0");
     const retry = createDeterministicAttachmentId("thread-1", "message-1:0");
@@ -120,6 +133,13 @@ describe("attachmentStore", () => {
       NodeFS.writeFileSync(webmPath, Buffer.from("video"));
       expect(resolveAttachmentPathById({ attachmentsDir, attachmentId: videoAttachmentId })).toBe(
         webmPath,
+      );
+
+      const fileAttachmentId = "thread-1-file-attachment";
+      const jsonPath = NodePath.join(attachmentsDir, `${fileAttachmentId}.json`);
+      NodeFS.writeFileSync(jsonPath, Buffer.from("{}"));
+      expect(resolveAttachmentPathById({ attachmentsDir, attachmentId: fileAttachmentId })).toBe(
+        jsonPath,
       );
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });

@@ -8,11 +8,17 @@ import {
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
 } from "./attachmentPaths.ts";
-import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
+import {
+  inferFileExtension,
+  inferImageExtension,
+  SAFE_FILE_EXTENSIONS,
+  SAFE_IMAGE_FILE_EXTENSIONS,
+} from "./imageMime.ts";
 
 const SAFE_VIDEO_FILE_EXTENSIONS = [".mp4", ".webm"] as const;
 const ATTACHMENT_FILENAME_EXTENSIONS = [
   ...SAFE_IMAGE_FILE_EXTENSIONS,
+  ...SAFE_FILE_EXTENSIONS,
   ...SAFE_VIDEO_FILE_EXTENSIONS,
   ".bin",
 ];
@@ -137,6 +143,13 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
       });
       return `${attachment.id}${extension}`;
     }
+    case "file": {
+      const extension = inferFileExtension({
+        mimeType: attachment.mimeType,
+        fileName: attachment.name,
+      });
+      return `${attachment.id}${extension}`;
+    }
   }
 }
 
@@ -150,7 +163,7 @@ export function resolveAttachmentPath(input: {
   });
 }
 
-/** Evidence videos belong only to issue comments, while normal chat attachments stay image-only. */
+/** Evidence videos belong only to issue comments; chat attachments use the generic resolver above. */
 export function resolveIssueEvidenceAttachmentPath(input: {
   readonly attachmentsDir: string;
   readonly attachmentId: string;

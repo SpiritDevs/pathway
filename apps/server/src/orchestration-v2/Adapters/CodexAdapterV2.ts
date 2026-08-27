@@ -53,6 +53,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -2360,6 +2361,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
         const resolveCodexAttachment = (attachment: ChatAttachment) =>
           Effect.gen(function* () {
+            if (attachment.type !== "image") return null;
             const attachmentPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment,
@@ -2385,10 +2387,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         ) =>
           Effect.gen(function* () {
             const inputItems: Array<CodexSchema.V2TurnStartParams__UserInput> = [];
-            if (turnInput.message.text.length > 0) {
+            const text = appendFileAttachmentPromptText({
+              text: turnInput.message.text,
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachments: turnInput.message.attachments,
+            });
+            if (text.length > 0) {
               inputItems.push({
                 type: "text",
-                text: turnInput.message.text,
+                text,
               });
             }
             const attachmentItems = yield* Effect.forEach(
@@ -2396,7 +2403,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               resolveCodexAttachment,
               { concurrency: 1 },
             );
-            inputItems.push(...attachmentItems);
+            inputItems.push(...attachmentItems.filter((attachment) => attachment !== null));
             if (inputItems.length === 0) {
               return yield* toProtocolError("Turn requires non-empty text or attachments.");
             }

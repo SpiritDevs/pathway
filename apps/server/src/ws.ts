@@ -191,7 +191,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
   readonly attachments: ReadonlyArray<{
-    readonly type: "image";
+    readonly type: "image" | "file";
     readonly name: string;
     readonly mimeType: string;
     readonly sizeBytes: number;
@@ -207,7 +207,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
       const parsed = parseBase64DataUrl(attachment.dataUrl);
       if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
         return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} has an invalid image payload.`,
+          message: `Attachment ${attachment.name} has an invalid payload.`,
         });
       }
       const bytes = yield* Effect.fromResult(Encoding.decodeBase64(parsed.base64)).pipe(
@@ -231,7 +231,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
         });
       }
       const persisted = {
-        type: "image" as const,
+        type: attachment.type,
         id: ChatAttachmentId.make(rawId),
         name: attachment.name,
         mimeType: attachment.mimeType,

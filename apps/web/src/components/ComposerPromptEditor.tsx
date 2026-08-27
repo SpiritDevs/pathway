@@ -868,6 +868,7 @@ export interface ComposerPromptEditorHandle {
   focus: () => void;
   focusAt: (cursor: number) => void;
   focusAtEnd: () => void;
+  readExpandedSelectionLength: () => number;
   readSnapshot: () => {
     value: string;
     cursor: number;
@@ -1676,6 +1677,15 @@ function ComposerPromptEditorInner({
     return snapshot;
   }, [editor]);
 
+  const readExpandedSelectionLength = useCallback((): number => {
+    let selectionLength = 0;
+    editor.getEditorState().read(() => {
+      const range = getSelectionRangeForExpandedComposerOffsets($getSelection());
+      selectionLength = range ? range.end - range.start : 0;
+    });
+    return selectionLength;
+  }, [editor]);
+
   useImperativeHandle(
     editorRef,
     () => ({
@@ -1691,9 +1701,10 @@ function ComposerPromptEditorInner({
           ),
         );
       },
+      readExpandedSelectionLength,
       readSnapshot,
     }),
-    [focusAt, readSnapshot],
+    [focusAt, readExpandedSelectionLength, readSnapshot],
   );
 
   const handleEditorChange = useCallback((editorState: EditorState) => {
