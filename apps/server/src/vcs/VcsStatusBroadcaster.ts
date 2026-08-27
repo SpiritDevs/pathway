@@ -129,6 +129,11 @@ interface CachedVcsStatus {
   readonly remote: CachedValue<VcsStatusRemoteResult | null> | null;
 }
 
+interface LocalStatusRefreshState {
+  readonly latestLocalRefreshIdByCwd: ReadonlyMap<string, number>;
+  readonly nextId: number;
+}
+
 interface ActiveRemotePoller {
   readonly fiber: Fiber.Fiber<void, never>;
   readonly subscriberCount: number;
@@ -195,6 +200,10 @@ export const make = Effect.gen(function* () {
     Scope.close(scope, Exit.void),
   );
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
+  const localStatusRefreshStateRef = yield* SynchronizedRef.make<LocalStatusRefreshState>({
+    latestLocalRefreshIdByCwd: new Map(),
+    nextId: 0,
+  });
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
@@ -342,19 +351,68 @@ export const make = Effect.gen(function* () {
     return yield* updateCachedStatus(cwd, local, remote);
   });
 
+  const reserveLocalStatusRefresh = Effect.fn("VcsStatusBroadcaster.reserveLocalStatusRefresh")(
+    function* (rawCwd: string) {
+      return yield* SynchronizedRef.modifyEffect(localStatusRefreshStateRef, (state) => {
+        const refreshId = state.nextId + 1;
+        const latestLocalRefreshIdByCwd = new Map(state.latestLocalRefreshIdByCwd);
+        latestLocalRefreshIdByCwd.set(rawCwd, refreshId);
+        return Effect.succeed([
+          refreshId,
+          {
+            latestLocalRefreshIdByCwd,
+            nextId: refreshId,
+          },
+        ] as const);
+      });
+    },
+  );
+
+  const associateLocalStatusRefreshCwd = Effect.fn(
+    "VcsStatusBroadcaster.associateLocalStatusRefreshCwd",
+  )(function* (cwd: string, refreshId: number) {
+    yield* SynchronizedRef.update(localStatusRefreshStateRef, (state) => {
+      if ((state.latestLocalRefreshIdByCwd.get(cwd) ?? 0) >= refreshId) {
+        return state;
+      }
+      const latestLocalRefreshIdByCwd = new Map(state.latestLocalRefreshIdByCwd);
+      latestLocalRefreshIdByCwd.set(cwd, refreshId);
+      return { ...state, latestLocalRefreshIdByCwd };
+    });
+  });
+
+  const publishLocalStatusRefresh = Effect.fn("VcsStatusBroadcaster.publishLocalStatusRefresh")(
+    function* (rawCwd: string, cwd: string, refreshId: number, local: VcsStatusLocalResult) {
+      return yield* SynchronizedRef.modifyEffect(localStatusRefreshStateRef, (state) => {
+        const latestRefreshId = Math.max(
+          state.latestLocalRefreshIdByCwd.get(cwd) ?? 0,
+          state.latestLocalRefreshIdByCwd.get(rawCwd) ?? 0,
+        );
+        if (latestRefreshId !== refreshId) {
+          return Effect.succeed([local, state] as const);
+        }
+        return updateCachedLocalStatus(cwd, local, { publish: true }).pipe(
+          Effect.map((updated) => [updated, state] as const),
+        );
+      });
+    },
+  );
+
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
-    function* (cwd: string) {
+    function* (rawCwd: string, cwd: string, refreshId: number) {
       yield* workflow.invalidateLocalStatus(cwd);
       const local = yield* workflow.localStatus({ cwd });
-      return yield* updateCachedLocalStatus(cwd, local, { publish: true });
+      return yield* publishLocalStatusRefresh(rawCwd, cwd, refreshId, local);
     },
   );
 
   const refreshLocalStatus: VcsStatusBroadcaster["Service"]["refreshLocalStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshLocalStatus",
   )(function* (rawCwd) {
+    const refreshId = yield* reserveLocalStatusRefresh(rawCwd);
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
-    return yield* refreshLocalStatusCore(cwd);
+    yield* associateLocalStatusRefreshCwd(cwd, refreshId);
+    return yield* refreshLocalStatusCore(rawCwd, cwd, refreshId);
   });
 
   const refreshRemoteStatus = Effect.fn("VcsStatusBroadcaster.refreshRemoteStatus")(function* (

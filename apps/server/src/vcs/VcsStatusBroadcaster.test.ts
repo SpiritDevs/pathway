@@ -7,6 +7,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -75,6 +76,7 @@ function makeTestLayer(state: {
   localInvalidationCalls: number;
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  readLocalStatus?: () => Effect.Effect<VcsStatusLocalResult>;
 }) {
   return VcsStatusBroadcaster.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
@@ -82,9 +84,9 @@ function makeTestLayer(state: {
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
         localStatus: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             state.localStatusCalls += 1;
-            return state.currentLocalStatus;
+            return state.readLocalStatus?.() ?? Effect.succeed(state.currentLocalStatus);
           }),
         remoteStatus: (_input, options) =>
           Effect.sync(() => {
@@ -355,6 +357,51 @@ describe("VcsStatusBroadcaster", () => {
         assert.equal(state.remoteInvalidationCalls, 1);
       }).pipe(Effect.provide(makeTestLayer(state)));
     },
+  );
+
+  it.effect("does not let an older local refresh overwrite a newer result", () =>
+    Effect.gen(function* () {
+      const firstRefreshStarted = yield* Deferred.make<void>();
+      const releaseFirstRefresh = yield* Deferred.make<void>();
+      const firstStatus = { ...baseLocalStatus, refName: "feature/first" };
+      const secondStatus = { ...baseLocalStatus, refName: "feature/second" };
+      let localStatusAttempt = 0;
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        readLocalStatus: () => {
+          localStatusAttempt += 1;
+          return localStatusAttempt === 1
+            ? Deferred.succeed(firstRefreshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRefresh)),
+                Effect.as(firstStatus),
+              )
+            : Effect.succeed(secondStatus);
+        },
+      };
+
+      const program = Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const firstRefreshFiber = yield* broadcaster
+          .refreshLocalStatus("/repo")
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstRefreshStarted);
+        yield* broadcaster.refreshLocalStatus("/repo");
+        yield* Deferred.succeed(releaseFirstRefresh, undefined);
+        yield* Fiber.join(firstRefreshFiber);
+
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+        assert.equal(cached.refName, secondStatus.refName);
+        assert.equal(state.localStatusCalls, 2);
+      });
+
+      yield* program.pipe(Effect.provide(makeTestLayer(state)));
+    }),
   );
 
   it.effect("normalizes symlinked CWDs before cache lookup and workflow calls", () => {

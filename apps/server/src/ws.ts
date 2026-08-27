@@ -495,7 +495,7 @@ export const refreshLocalGitStatusAfterMutation = Effect.fn(
   const result = yield* mutation;
   const refreshFiber = yield* refreshLocalStatus(cwd).pipe(
     Effect.ignoreCause({ log: true }),
-    Effect.forkDetach,
+    Effect.forkDetach({ startImmediately: true }),
   );
   yield* Fiber.join(refreshFiber).pipe(Effect.timeoutOption(maxWait));
   return result;
