@@ -10,6 +10,7 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { subagentChildModelSelection } from "../SubagentProjection.ts";
 import {
   CursorProviderCapabilitiesV2,
+  cursorUserMessageIsEmpty,
   cursorMcpServers,
   cursorRuntimeAgentPolicy,
   cursorSdkModelSelection,
@@ -19,6 +20,16 @@ import {
 import { isCursorCancellationError, loggedCursorAgentOptions } from "./CursorAgentSdk.ts";
 
 describe("CursorAdapterV2", () => {
+  it("accepts a resolved file-path prompt without native images", () => {
+    assert.isFalse(
+      cursorUserMessageIsEmpty({
+        resolvedText: "[Attached file is saved at /tmp/report.pdf]",
+        imageCount: 0,
+      }),
+    );
+    assert.isTrue(cursorUserMessageIsEmpty({ resolvedText: "", imageCount: 0 }));
+  });
+
   it("maps Cursor auto and model parameters to SDK selections", () => {
     assert.deepEqual(
       cursorSdkModelSelection({

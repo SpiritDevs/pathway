@@ -94,6 +94,14 @@ export { cursorSdkModelSelection } from "../../provider/cursorSdkModel.ts";
 
 export const CURSOR_DRIVER_KIND = CURSOR_PROVIDER;
 export const CURSOR_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CURSOR_DRIVER_KIND);
+
+export function cursorUserMessageIsEmpty(input: {
+  readonly resolvedText: string;
+  readonly imageCount: number;
+}): boolean {
+  return input.resolvedText.length === 0 && input.imageCount === 0;
+}
+
 const DEFAULT_CURSOR_SETTINGS = Schema.decodeSync(CursorSettings)({});
 
 export const CursorProviderCapabilitiesV2 = {
@@ -2055,7 +2063,7 @@ export function makeCursorAdapterV2(
               }),
             { concurrency: 1 },
           );
-          if (turnInput.message.text.length === 0 && images.length === 0) {
+          if (cursorUserMessageIsEmpty({ resolvedText: text, imageCount: images.length })) {
             return yield* new ProviderAdapterProtocolError({
               driver: CURSOR_PROVIDER,
               detail: "Cursor turn requires non-empty text or attachments.",

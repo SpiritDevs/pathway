@@ -772,9 +772,15 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
 }
 
 function composerImageDedupKey(image: ComposerAttachment): string {
+  if (image.type === "file") {
+    // Same-named files from different directories can share size and MIME type
+    // while containing different data. Their attachment identity is the only
+    // safe synchronous discriminator available in the browser.
+    return `file\u0000${image.id}`;
+  }
   // Keep this independent from File.lastModified so dedupe is stable for hydrated
   // images reconstructed from localStorage (which get a fresh lastModified value).
-  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
+  return `image\u0000${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
 }
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {

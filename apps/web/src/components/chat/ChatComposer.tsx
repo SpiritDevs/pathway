@@ -55,6 +55,7 @@ import {
 } from "./composerMentionDrag";
 import {
   createPastedTextAttachmentFile,
+  normalizeComposerAttachmentName,
   shouldConvertPastedTextToAttachment,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
@@ -70,8 +71,9 @@ import {
   useEffectiveComposerModelState,
 } from "../../composerDraftStore";
 import {
+  MAX_STASH_ENTRY_ATTACHMENT_CHARS,
   MAX_STASH_ENTRIES,
-  partitionStashAttachments,
+  estimateAttachmentDataUrlChars,
   usePromptStashStore,
   type PromptStashEntry,
 } from "../../promptStashStore";
@@ -2279,7 +2281,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       }
 
-      // Only the prompt and images are cleared — terminal/element contexts,
+      // Only the prompt and attachments are cleared — terminal/element contexts,
       // preview annotations, and review comments are not stashable, so
       // destroying them here would be unrecoverable.
       promptRef.current = "";
@@ -2302,20 +2304,40 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const candidateAttachments: PersistedComposerImageAttachment[] = [];
       const oversizedImageNames: string[] = [];
       const unreadableImageNames: string[] = [];
+      let usedAttachmentChars = 0;
       for (const image of images) {
         if (image.type === "file") {
+          const estimatedChars = estimateAttachmentDataUrlChars({
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+          });
+          if (usedAttachmentChars + estimatedChars > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
+            oversizedImageNames.push(image.name);
+            continue;
+          }
           try {
-            candidateAttachments.push({
+            const dataUrl = await readFileAsDataUrl(image.file);
+            if (usedAttachmentChars + dataUrl.length > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
+              oversizedImageNames.push(image.name);
+              continue;
+            }
+            const attachment = {
               type: "file",
               id: image.id,
               name: image.name,
               mimeType: image.mimeType,
               sizeBytes: image.sizeBytes,
-              dataUrl: await readFileAsDataUrl(image.file),
-            });
+              dataUrl,
+            } satisfies PersistedComposerImageAttachment;
+            candidateAttachments.push(attachment);
+            usedAttachmentChars += attachment.dataUrl.length;
           } catch {
             unreadableImageNames.push(image.name);
           }
+          continue;
+        }
+        if (usedAttachmentChars >= MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
+          oversizedImageNames.push(image.name);
           continue;
         }
         const result = await compressImageForStash(image.file);
@@ -2327,20 +2349,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           );
           continue;
         }
-        candidateAttachments.push({
+        if (usedAttachmentChars + result.image.dataUrl.length > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
+          oversizedImageNames.push(image.name);
+          continue;
+        }
+        const attachment = {
           type: "image",
           id: image.id,
           name: image.name,
           mimeType: result.image.mimeType,
           sizeBytes: result.image.sizeBytes,
           dataUrl: result.image.dataUrl,
-        });
+        } satisfies PersistedComposerImageAttachment;
+        candidateAttachments.push(attachment);
+        usedAttachmentChars += attachment.dataUrl.length;
       }
-      const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
 
       const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, {
-        attachments: kept,
-        droppedImageNames: [...oversizedImageNames, ...droppedNames],
+        attachments: candidateAttachments,
+        droppedImageNames: oversizedImageNames,
         unreadableImageNames,
       });
       if (attached) {
@@ -2359,14 +2386,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             data: { hideCopyButton: true },
           });
         }
-      } else if (kept.length > 0) {
+      } else if (candidateAttachments.length > 0) {
         // The entry was restored or deleted before its images finished
         // encoding, so they have nowhere to land. Say so rather than letting
         // them evaporate.
         toastManager.add({
           type: "warning",
           title: "Stashed attachments did not attach",
-          description: `That prompt was restored or deleted before ${kept.length} attachment${kept.length === 1 ? "" : "s"} finished saving. Re-attach ${kept.length === 1 ? "it" : "them"} if you still need ${kept.length === 1 ? "it" : "them"}.`,
+          description: `That prompt was restored or deleted before ${candidateAttachments.length} attachment${candidateAttachments.length === 1 ? "" : "s"} finished saving. Re-attach ${candidateAttachments.length === 1 ? "it" : "them"} if you still need ${candidateAttachments.length === 1 ? "it" : "them"}.`,
           data: { hideCopyButton: true },
         });
       }
@@ -2496,10 +2523,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           nextImages.push({
             type: "file",
             id: randomUUID(),
-            name: attachmentFile.name || "file",
+            name: normalizeComposerAttachmentName(attachmentFile.name, "file"),
             mimeType: attachmentFile.type,
             sizeBytes: attachmentFile.size,
-            previewUrl: URL.createObjectURL(attachmentFile),
+            previewUrl: "",
             file: attachmentFile,
           });
           continue;
@@ -2519,7 +2546,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         nextImages.push({
           type: "image",
           id: randomUUID(),
-          name: attachmentFile.name || "image",
+          name: normalizeComposerAttachmentName(attachmentFile.name, "image"),
           mimeType: attachmentFile.type,
           sizeBytes: attachmentFile.size,
           previewUrl,
@@ -2566,30 +2593,39 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const files = Array.from(event.clipboardData.files);
     const plainText = event.clipboardData.getData("text/plain");
     const hasImageFile = files.some((file) => file.type.toLowerCase().startsWith("image/"));
+    const pendingCount = activeThreadId
+      ? (pendingImageCompressionsRef.current.get(activeThreadId) ?? 0)
+      : 0;
+    const remainingAttachmentSlots =
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS - composerImagesRef.current.length - pendingCount;
+    const selectionRange = composerEditorRef.current?.readExpandedSelectionRange() ?? null;
     if (
       pendingUserInputs.length === 0 &&
       !hasImageFile &&
       shouldConvertPastedTextToAttachment({
         currentPromptLength: promptRef.current.length,
-        selectedTextLength: composerEditorRef.current?.readExpandedSelectionLength() ?? 0,
+        selectedTextLength: selectionRange ? selectionRange.end - selectionRange.start : 0,
         pastedTextLength: plainText.length,
         maxInputChars: PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+        remainingAttachmentSlots,
       })
     ) {
-      event.preventDefault();
-      void addComposerImages([createPastedTextAttachmentFile(plainText, randomUUID())]);
-      return;
+      const pastedTextFile = createPastedTextAttachmentFile(plainText, randomUUID());
+      if (pastedTextFile.size <= PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+        event.preventDefault();
+        if (selectionRange && selectionRange.start < selectionRange.end) {
+          applyPromptReplacement(selectionRange.start, selectionRange.end, "", {
+            focusEditorAfterReplace: false,
+          });
+        }
+        void addComposerImages([pastedTextFile]);
+        return;
+      }
     }
-    const pendingCount = activeThreadId
-      ? (pendingImageCompressionsRef.current.get(activeThreadId) ?? 0)
-      : 0;
     if (
       !shouldHandleComposerAttachmentPaste({
         files,
         plainText,
-        maxFileBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
-        remainingAttachmentSlots:
-          PROVIDER_SEND_TURN_MAX_ATTACHMENTS - composerImagesRef.current.length - pendingCount,
       })
     ) {
       return;

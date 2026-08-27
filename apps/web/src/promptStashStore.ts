@@ -26,9 +26,17 @@ export const MAX_STASH_ENTRIES = 20;
  */
 export const MAX_STASH_ENTRY_ATTACHMENT_CHARS = 2_700_000;
 
+export function estimateAttachmentDataUrlChars(input: {
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+}): number {
+  const mimeType = input.mimeType || "application/octet-stream";
+  return `data:${mimeType};base64,`.length + 4 * Math.ceil(Math.max(0, input.sizeBytes) / 3);
+}
+
 /**
  * A stashed prompt carries only what every provider can accept: text and
- * image attachments. Deliberately no provider instance or model selection —
+ * attachments. Deliberately no provider instance or model selection —
  * the point of stashing is to move a prompt into a different thread or
  * provider, so restoring must never drag the old model choice along.
  */
@@ -37,7 +45,7 @@ const StashEntrySchema = Schema.Struct({
   createdAt: Schema.String,
   prompt: Schema.String,
   attachments: Schema.Array(PersistedComposerImageAttachment),
-  /** Names of images that exceeded the attachment budget and were not saved. */
+  /** Names of attachments that exceeded the attachment budget and were not saved. */
   droppedImageNames: Schema.Array(Schema.String),
   /**
    * Names of images that could not be decoded or re-encoded at all — a

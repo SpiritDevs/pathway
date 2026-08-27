@@ -368,7 +368,7 @@ export async function loadQueuedComposerImages(
       images.push({
         ...attachment,
         file,
-        previewUrl: URL.createObjectURL(file),
+        previewUrl: attachment.type === "image" ? URL.createObjectURL(file) : "",
       });
     }
     return images;

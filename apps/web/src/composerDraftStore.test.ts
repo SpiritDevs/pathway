@@ -67,6 +67,7 @@ import {
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
   type ComposerImageAttachment,
+  type ComposerFileAttachment,
   useComposerDraftStore,
   DraftId,
 } from "./composerDraftStore";
@@ -101,6 +102,26 @@ function makeImage(input: {
     mimeType,
     sizeBytes: file.size,
     previewUrl: input.previewUrl,
+    file,
+  };
+}
+
+function makeFileAttachment(input: {
+  id: string;
+  name?: string;
+  mimeType?: string;
+  contents?: string;
+}): ComposerFileAttachment {
+  const name = input.name ?? "README.md";
+  const mimeType = input.mimeType ?? "text/markdown";
+  const file = new File([input.contents ?? "contents"], name, { type: mimeType });
+  return {
+    type: "file",
+    id: input.id,
+    name,
+    mimeType,
+    sizeBytes: file.size,
+    previewUrl: "",
     file,
   };
 }
@@ -257,6 +278,17 @@ describe("composerDraftStore addImages", () => {
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft?.images.map((image) => image.id)).toEqual(["img-a"]);
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
+  });
+
+  it("keeps distinct same-named files with matching metadata", () => {
+    const first = makeFileAttachment({ id: "file-a", contents: "first000" });
+    const second = makeFileAttachment({ id: "file-b", contents: "second00" });
+
+    useComposerDraftStore.getState().addImages(threadRef, [first, second]);
+
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.images.map((attachment) => attachment.id),
+    ).toEqual(["file-a", "file-b"]);
   });
 
   it("does not revoke blob URLs that are still used by an accepted duplicate image", () => {

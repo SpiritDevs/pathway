@@ -114,6 +114,34 @@ describe("loadQueuedComposerImages", () => {
       previewSpy.mockRestore();
     }
   });
+
+  it("does not allocate blob preview URLs for queued generic files", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["{}"], { type: "application/json" })));
+    const previewSpy = vi.spyOn(URL, "createObjectURL");
+
+    try {
+      const [attachment] = await loadQueuedComposerImages([
+        {
+          attachment: {
+            type: "file",
+            id: "queued-file",
+            name: "data.json",
+            mimeType: "application/json",
+            sizeBytes: 2,
+          },
+          url: "https://example.test/data.json",
+        },
+      ]);
+
+      expect(attachment?.previewUrl).toBe("");
+      expect(previewSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      previewSpy.mockRestore();
+    }
+  });
 });
 
 describe("openForkedThreadSideChatWhenReady", () => {

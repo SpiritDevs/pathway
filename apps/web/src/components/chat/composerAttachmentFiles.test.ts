@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createPastedTextAttachmentFile,
+  normalizeComposerAttachmentName,
   shouldConvertPastedTextToAttachment,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
@@ -16,6 +17,7 @@ describe("composer attachment files", () => {
         selectedTextLength: 0,
         pastedTextLength: 20_001,
         maxInputChars,
+        remainingAttachmentSlots: 1,
       }),
     ).toBe(true);
     expect(
@@ -24,6 +26,7 @@ describe("composer attachment files", () => {
         selectedTextLength: 10_000,
         pastedTextLength: 20_001,
         maxInputChars,
+        remainingAttachmentSlots: 1,
       }),
     ).toBe(false);
     expect(
@@ -32,8 +35,24 @@ describe("composer attachment files", () => {
         selectedTextLength: 0,
         pastedTextLength: 20_000,
         maxInputChars,
+        remainingAttachmentSlots: 1,
       }),
     ).toBe(false);
+    expect(
+      shouldConvertPastedTextToAttachment({
+        currentPromptLength: 100_000,
+        selectedTextLength: 0,
+        pastedTextLength: 20_001,
+        maxInputChars,
+        remainingAttachmentSlots: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("normalizes attachment names before they enter the contract payload", () => {
+    expect(normalizeComposerAttachmentName(" report.txt ", "file")).toBe("report.txt");
+    expect(normalizeComposerAttachmentName("   ", "file")).toBe("file");
+    expect(normalizeComposerAttachmentName("   ", "image")).toBe("image");
   });
 
   it("creates a uniquely named plain-text file without changing its contents", async () => {
@@ -54,8 +73,6 @@ describe("composer attachment files", () => {
         shouldHandleComposerAttachmentPaste({
           files: [file],
           plainText: "",
-          maxFileBytes: 10 * 1024 * 1024,
-          remainingAttachmentSlots: 1,
         }),
       ).toBe(true);
     }
@@ -68,8 +85,6 @@ describe("composer attachment files", () => {
       shouldHandleComposerAttachmentPaste({
         files: [file],
         plainText: "Copied text",
-        maxFileBytes: 10 * 1024 * 1024,
-        remainingAttachmentSlots: 1,
       }),
     ).toBe(false);
   });
@@ -81,25 +96,12 @@ describe("composer attachment files", () => {
       shouldHandleComposerAttachmentPaste({
         files: [file],
         plainText: "Image caption",
-        maxFileBytes: 10 * 1024 * 1024,
-        remainingAttachmentSlots: 1,
       }),
     ).toBe(true);
   });
 
-  it("does not claim oversized files or a full composer", () => {
+  it("claims explicit file pastes so the composer can report validation errors", () => {
     const file = new File(["report"], "report.pdf", { type: "application/pdf" });
-    const input = {
-      files: [file],
-      plainText: "",
-      maxFileBytes: 1,
-    };
-
-    expect(shouldHandleComposerAttachmentPaste({ ...input, remainingAttachmentSlots: 1 })).toBe(
-      false,
-    );
-    expect(shouldHandleComposerAttachmentPaste({ ...input, remainingAttachmentSlots: 0 })).toBe(
-      false,
-    );
+    expect(shouldHandleComposerAttachmentPaste({ files: [file], plainText: "" })).toBe(true);
   });
 });

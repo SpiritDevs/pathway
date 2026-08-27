@@ -402,6 +402,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { normalizeComposerAttachmentName } from "./chat/composerAttachmentFiles";
 
 const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more files without additional text. Respond using the conversation context and the attached file(s).]";
@@ -6334,7 +6335,7 @@ function ChatViewContent(props: ChatViewProps) {
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => {
         const attachment = {
-          name: image.name,
+          name: normalizeComposerAttachmentName(image.name, image.type),
           mimeType: image.mimeType,
           sizeBytes: image.sizeBytes,
           dataUrl: await readFileAsDataUrl(image.file),
@@ -6347,7 +6348,7 @@ function ChatViewContent(props: ChatViewProps) {
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: image.type,
       id: image.id,
-      name: image.name,
+      name: normalizeComposerAttachmentName(image.name, image.type),
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
