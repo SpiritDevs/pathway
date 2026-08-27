@@ -2798,6 +2798,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         pastedTextLength: plainText.length,
         maxInputChars: PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
         remainingAttachmentSlots,
+        pastedFileCount: files.length,
       })
     ) {
       const pastedTextFile = createPastedTextAttachmentFile(plainText, randomUUID());
@@ -2823,7 +2824,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             setComposerDraftTerminalContexts(composerDraftTarget, nextContexts);
           }
         }
-        void addComposerImages([pastedTextFile]);
+        void addComposerImages([...files, pastedTextFile]);
         return;
       }
     }

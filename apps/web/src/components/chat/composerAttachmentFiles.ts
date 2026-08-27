@@ -4,8 +4,14 @@ export function shouldConvertPastedTextToAttachment(input: {
   readonly pastedTextLength: number;
   readonly maxInputChars: number;
   readonly remainingAttachmentSlots: number;
+  readonly pastedFileCount: number;
 }): boolean {
-  if (input.pastedTextLength === 0 || input.remainingAttachmentSlots <= 0) return false;
+  if (
+    input.pastedTextLength === 0 ||
+    input.remainingAttachmentSlots <= Math.max(0, input.pastedFileCount)
+  ) {
+    return false;
+  }
   const selectedTextLength = Math.max(
     0,
     Math.min(input.currentPromptLength, input.selectedTextLength),

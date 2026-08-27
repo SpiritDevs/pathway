@@ -18,6 +18,7 @@ describe("composer attachment files", () => {
         pastedTextLength: 20_001,
         maxInputChars,
         remainingAttachmentSlots: 1,
+        pastedFileCount: 0,
       }),
     ).toBe(true);
     expect(
@@ -27,6 +28,7 @@ describe("composer attachment files", () => {
         pastedTextLength: 20_001,
         maxInputChars,
         remainingAttachmentSlots: 1,
+        pastedFileCount: 0,
       }),
     ).toBe(false);
     expect(
@@ -36,6 +38,7 @@ describe("composer attachment files", () => {
         pastedTextLength: 20_000,
         maxInputChars,
         remainingAttachmentSlots: 1,
+        pastedFileCount: 0,
       }),
     ).toBe(false);
     expect(
@@ -45,8 +48,26 @@ describe("composer attachment files", () => {
         pastedTextLength: 20_001,
         maxInputChars,
         remainingAttachmentSlots: 0,
+        pastedFileCount: 0,
       }),
     ).toBe(false);
+  });
+
+  it("reserves attachment slots for files accompanying oversized pasted text", () => {
+    const input = {
+      currentPromptLength: 120_000,
+      selectedTextLength: 0,
+      pastedTextLength: 1,
+      maxInputChars: 120_000,
+      pastedFileCount: 1,
+    };
+
+    expect(shouldConvertPastedTextToAttachment({ ...input, remainingAttachmentSlots: 2 })).toBe(
+      true,
+    );
+    expect(shouldConvertPastedTextToAttachment({ ...input, remainingAttachmentSlots: 1 })).toBe(
+      false,
+    );
   });
 
   it("normalizes attachment names before they enter the contract payload", () => {
