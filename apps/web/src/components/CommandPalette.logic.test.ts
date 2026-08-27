@@ -3,6 +3,7 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@spiritd
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildCheckoutlessProjectActionItems,
   buildThreadActionItems,
@@ -11,6 +12,35 @@ import {
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("browseInputEndPaddingClass", () => {
+  it("reserves the widest space for the create action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: true,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-38");
+  });
+
+  it("reserves space for the wider highlighted-item shortcut", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: true,
+      }),
+    ).toContain("pe-30");
+  });
+
+  it("keeps the compact reserve for the normal add action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-24");
+  });
+});
 
 describe("reduceCommandPaletteUiState", () => {
   const closedState = { open: false, mode: "command", openIntent: null } as const;
@@ -30,7 +60,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(
       reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
-    ).toEqual({ open: false, mode: "command", openIntent: null });
+    ).toEqual({ open: false, mode: "content", openIntent: null });
   });
 
   it("switches between open modes without closing", () => {
@@ -64,7 +94,7 @@ describe("reduceCommandPaletteUiState", () => {
     });
   });
 
-  it("resets to command mode for dialog-driven opens and closes", () => {
+  it("preserves the mode on close and resets it on open", () => {
     const filesOpen = reduceCommandPaletteUiState(closedState, {
       _tag: "ToggleMode",
       mode: "files",
@@ -72,7 +102,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
       open: false,
-      mode: "command",
+      mode: "files",
       openIntent: null,
     });
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({

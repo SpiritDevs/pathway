@@ -15,6 +15,19 @@ export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
+export function browseInputEndPaddingClass(input: {
+  readonly willCreateProjectPath: boolean;
+  readonly hasHighlightedBrowseItem: boolean;
+}): string {
+  if (input.willCreateProjectPath) {
+    return "*:data-[slot=autocomplete-input]:pe-38!";
+  }
+  if (input.hasHighlightedBrowseItem) {
+    return "*:data-[slot=autocomplete-input]:pe-30!";
+  }
+  return "*:data-[slot=autocomplete-input]:pe-24!";
+}
+
 /**
  * The global search overlay hosts three mutually exclusive surfaces: the
  * command palette (⌘K), the project file picker (⌘P), and project content
@@ -46,14 +59,12 @@ export function reduceCommandPaletteUiState(
 ): CommandPaletteUiState {
   switch (action._tag) {
     case "SetOpen":
-      return {
-        open: action.open,
-        mode: "command",
-        openIntent: action.open ? state.openIntent : null,
-      };
+      return action.open
+        ? { open: true, mode: "command", openIntent: state.openIntent }
+        : { ...state, open: false, openIntent: null };
     case "ToggleMode":
       return state.open && state.mode === action.mode
-        ? { open: false, mode: "command", openIntent: null }
+        ? { ...state, open: false, openIntent: null }
         : { open: true, mode: action.mode, openIntent: null };
     case "OpenAddProject":
       return { open: true, mode: "command", openIntent: { kind: "add-project" } };

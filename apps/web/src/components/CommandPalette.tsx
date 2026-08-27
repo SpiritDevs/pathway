@@ -112,6 +112,7 @@ import {
 } from "../wslPaths";
 import {
   ADDON_ICON_CLASS,
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildCheckoutlessProjectActionItems,
   buildProjectActionItems,
@@ -624,10 +625,6 @@ function CommandPaletteDialog(props: {
 }) {
   const composerHandleRef = useComposerHandleContext();
 
-  if (!props.open) {
-    return null;
-  }
-
   return (
     <CommandDialogPopup
       aria-label={
@@ -655,6 +652,9 @@ function CommandPaletteDialog(props: {
         <ProjectContentSearchDialog onOpenChange={props.setOpen} />
       ) : (
         <OpenCommandPaletteDialog
+          // Remount the workflow state between sessions while leaving the
+          // popup itself mounted so Base UI can finish its exit animation.
+          key={props.open ? "open" : "closed"}
           openIntent={props.openIntent}
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}
@@ -2922,13 +2922,16 @@ function OpenCommandPaletteDialog(props: {
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
+        // The submit button is absolutely positioned over the field, so the
+        // inner input must reserve enough room for the full action label.
         className:
           addProjectCloneFlow?.step === "repository"
-            ? "pe-32"
+            ? "*:data-[slot=autocomplete-input]:pe-32!"
             : isBrowsing
-              ? willCreateProjectPath
-                ? "pe-36"
-                : "pe-16"
+              ? browseInputEndPaddingClass({
+                  willCreateProjectPath,
+                  hasHighlightedBrowseItem,
+                })
               : undefined,
         placeholder: inputPlaceholder,
         wrapperClassName: isSubmenu
