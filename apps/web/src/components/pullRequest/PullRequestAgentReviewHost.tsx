@@ -128,7 +128,7 @@ function PullRequestAgentReviewPublisher({
 
     publishing.current = true;
     void (async () => {
-      let publishedCount = 0;
+      let reviewSynced = false;
       let stagedCount = 0;
       for (const { message, findings } of prepared) {
         if (findings.length === 0) continue;
@@ -155,7 +155,7 @@ function PullRequestAgentReviewPublisher({
           });
           stagedCount += findings.length;
         } else {
-          publishedCount += findings.length;
+          reviewSynced = true;
         }
       }
       publishing.current = false;
@@ -167,11 +167,11 @@ function PullRequestAgentReviewPublisher({
           description: "Its findings are still available as drafts in Code.",
         });
       }
-      if (publishedCount > 0) {
+      if (reviewSynced && stagedCount === 0) {
         toastManager.add({
           type: "success",
-          title: "Agent review published",
-          description: `${publishedCount} inline ${publishedCount === 1 ? "comment" : "comments"} posted.`,
+          title: "Agent review synced",
+          description: "Inline findings are available on the pull request.",
         });
         refreshActivity();
       }
