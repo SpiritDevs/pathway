@@ -6,11 +6,24 @@
  * hosts that have no pending review of their own. That also means a draft lives only as long
  * as the tab does, which is why this is deliberately not persisted.
  */
-import type { ProjectId, PullRequestDiffSide, PullRequestRef } from "@spiritdevs/contracts";
+import type {
+  ProjectId,
+  PullRequestDiffSide,
+  PullRequestRef,
+  PullRequestReviewCommentDraft,
+} from "@spiritdevs/contracts";
 import { create } from "zustand";
+
+import {
+  agentReviewSummary,
+  type MarkedAgentReviewFinding,
+  reviewCommentBodyWithMarker,
+} from "./pullRequestAgentReview.logic";
 
 export interface PendingReviewComment {
   readonly id: string;
+  /** Stable agent-finding identity, attached to the body only when the draft is submitted. */
+  readonly markerId?: string;
   readonly path: string;
   /** Previous name for a renamed file; needed by hosts that resolve both sides of a diff. */
   readonly oldPath?: string;
@@ -90,6 +103,45 @@ export const usePullRequestReviewStore = create<PullRequestReviewStoreState>()((
       return { summaries: rest };
     }),
 }));
+
+export function stageAgentReviewFindings(input: {
+  readonly reference: PullRequestRef;
+  readonly messageText: string;
+  readonly findings: ReadonlyArray<MarkedAgentReviewFinding>;
+}): void {
+  const store = usePullRequestReviewStore.getState();
+  const reviewKey = pullRequestReviewKey(input.reference);
+  for (const { finding, markerId } of input.findings) {
+    store.addComment(reviewKey, {
+      id: markerId,
+      markerId,
+      path: finding.path,
+      ...(finding.oldPath === undefined ? {} : { oldPath: finding.oldPath }),
+      line: finding.line,
+      side: finding.side,
+      body: finding.body,
+    });
+  }
+  const summary = agentReviewSummary(input.messageText);
+  if (summary.length > 0 && (store.summaries[reviewKey] ?? "").trim().length === 0) {
+    store.setSummary(reviewKey, summary);
+  }
+}
+
+export function pendingReviewCommentsForSubmission(
+  comments: ReadonlyArray<PendingReviewComment>,
+): ReadonlyArray<PullRequestReviewCommentDraft> {
+  return comments.map((comment) => ({
+    path: comment.path,
+    ...(comment.oldPath === undefined ? {} : { oldPath: comment.oldPath }),
+    line: comment.line,
+    side: comment.side,
+    body:
+      comment.markerId === undefined
+        ? comment.body
+        : reviewCommentBodyWithMarker(comment.body, comment.markerId),
+  }));
+}
 
 /** The comments a pull request's draft holds, stable across renders while it is empty. */
 export function usePendingReviewComments(reference: {

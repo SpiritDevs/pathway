@@ -1379,20 +1379,11 @@ export function PullRequestDetailPanel({
                 className={cn("absolute inset-0", tab !== "reviewing" && "invisible")}
               >
                 <PullRequestReviewingTab
-                  activityState={
-                    activity !== null ? "ready" : activityError === null ? "pending" : "unavailable"
-                  }
-                  canPublishComments={
-                    detail.capabilities.review.inlineComment &&
-                    detail.capabilities.review.verdicts.includes("comment")
-                  }
                   codeAvailable={detail.capabilities.diff}
                   environmentId={environmentId}
                   onOpenCode={() => setTab("code")}
-                  onPublished={refreshFromHost}
                   publishComments={activeReview.publishComments}
                   reference={reference}
-                  reviewThreads={detail.reviewThreads}
                   threadId={activeReview.threadId}
                 />
               </div>

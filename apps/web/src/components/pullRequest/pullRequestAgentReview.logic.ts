@@ -14,6 +14,11 @@ export interface AgentReviewFinding extends PullRequestReviewCommentDraft {
   readonly index: number;
 }
 
+export interface MarkedAgentReviewFinding {
+  readonly finding: AgentReviewFinding;
+  readonly markerId: string;
+}
+
 function isSide(value: unknown): value is PullRequestDiffSide {
   return value === "left" || value === "right";
 }
@@ -72,6 +77,21 @@ export function agentReviewCommentMarkerId(input: {
   readonly findingIndex: number;
 }): string {
   return `pathway-agent-review:${input.threadId}:${input.messageId}:${input.findingIndex}`;
+}
+
+export function markedAgentReviewFindings(input: {
+  readonly text: string;
+  readonly threadId: string;
+  readonly messageId: string;
+}): ReadonlyArray<MarkedAgentReviewFinding> {
+  return parseAgentReviewFindings(input.text).map((finding) => ({
+    finding,
+    markerId: agentReviewCommentMarkerId({
+      threadId: input.threadId,
+      messageId: input.messageId,
+      findingIndex: finding.index,
+    }),
+  }));
 }
 
 export function reviewCommentBodyWithMarker(body: string, markerId: string): string {

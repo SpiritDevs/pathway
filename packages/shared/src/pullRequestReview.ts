@@ -5,6 +5,7 @@
  */
 const PULL_REQUEST_REVIEW_TITLE_PREFIX = "PR review · ";
 const PUBLISH_SUFFIX = " · publish";
+const AGENT_REVIEW_MARKER_PATTERN = /<!-- (pathway-agent-review:[^\s>]+) -->/gu;
 
 export interface PullRequestReviewThreadIdentity {
   readonly repository: string;
@@ -35,4 +36,13 @@ export function parsePullRequestReviewThreadTitle(
 
 export function isPullRequestReviewThreadTitle(title: string): boolean {
   return parsePullRequestReviewThreadTitle(title) !== null;
+}
+
+/** Marker ids make an agent finding idempotent across clients and host retries. */
+export function pullRequestAgentReviewMarkerIds(body: string): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const match of body.matchAll(AGENT_REVIEW_MARKER_PATTERN)) {
+    if (match[1]) ids.add(match[1]);
+  }
+  return ids;
 }

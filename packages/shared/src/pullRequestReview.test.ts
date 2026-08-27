@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   isPullRequestReviewThreadTitle,
   parsePullRequestReviewThreadTitle,
+  pullRequestAgentReviewMarkerIds,
   pullRequestReviewThreadTitle,
 } from "./pullRequestReview.ts";
 
@@ -30,5 +31,18 @@ describe("pull request review thread identity", () => {
       number: 42,
       publishComments: false,
     });
+  });
+
+  it("extracts unique agent review markers from host comment bodies", () => {
+    expect(
+      pullRequestAgentReviewMarkerIds(
+        [
+          "Finding",
+          "<!-- pathway-agent-review:thread-1:message-1:0 -->",
+          "<!-- pathway-agent-review:thread-1:message-1:0 -->",
+          "<!-- another-marker -->",
+        ].join("\n"),
+      ),
+    ).toEqual(new Set(["pathway-agent-review:thread-1:message-1:0"]));
   });
 });

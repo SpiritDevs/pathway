@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 import {
   PullRequestOperationError,
   PullRequestUnavailableError,
@@ -40,6 +41,7 @@ import {
   type SourceControlProviderKind,
 } from "@spiritdevs/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@spiritdevs/shared/sourceControl";
+import { pullRequestAgentReviewMarkerIds } from "@spiritdevs/shared/pullRequestReview";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -78,7 +80,6 @@ const REPOSITORY_CONCURRENCY = 12;
  * of searches rather than in a request per repository.
  */
 const REPOSITORY_SEARCH_CHUNK = 100;
-
 /**
  * Every read leaves the process — a CLI per repository, against hosts whose limits are low
  * (GitHub's search API allows ~30 requests a minute) — so answers are shared for a short
@@ -376,6 +377,9 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  // Review submission is rare and host-visible. Serialize the read-before-write marker check so
+  // two connected clients cannot publish the same background agent finding at once.
+  const reviewSubmissionMutex = yield* Semaphore.make(1);
 
   /**
    * Shell snapshots keep optional repository metadata non-blocking so navigation never waits on
@@ -1249,17 +1253,61 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository to comment on a line of a change request.",
               );
             }
-            return project.api
-              .submitReview({
+            const publish = (comments: PullRequestSubmitReviewInput["comments"]) =>
+              project.api.submitReview({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
                 verdict: input.verdict,
                 body: input.body,
-                comments: input.comments,
-              })
-              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+                comments,
+              });
+            const requestedMarkers = new Set(
+              input.comments.flatMap((comment) => [
+                ...pullRequestAgentReviewMarkerIds(comment.body),
+              ]),
+            );
+            if (requestedMarkers.size === 0) {
+              return publish(input.comments).pipe(
+                Effect.mapError(toPullRequestError("submitReview")),
+              );
+            }
+            return reviewSubmissionMutex.withPermit(
+              project.api
+                .getChangeRequestActivity({
+                  cwd: project.project.workspaceRoot,
+                  repository: project.repository,
+                  host: project.host,
+                  number: input.number,
+                })
+                .pipe(
+                  Effect.mapError(toPullRequestError("submitReview")),
+                  Effect.flatMap((activity) => {
+                    if (activity.commentsTruncated) {
+                      return refuse(
+                        "The pull request activity was truncated, so Pathway could not safely verify whether these agent findings were already published. Refresh and try again.",
+                      );
+                    }
+                    const publishedMarkers = new Set(
+                      activity.reviewThreads.flatMap((thread) =>
+                        thread.comments.flatMap((comment) => [
+                          ...pullRequestAgentReviewMarkerIds(comment.body),
+                        ]),
+                      ),
+                    );
+                    const comments = input.comments.filter((comment) => {
+                      const markers = pullRequestAgentReviewMarkerIds(comment.body);
+                      return (
+                        markers.size === 0 || [...markers].some((id) => !publishedMarkers.has(id))
+                      );
+                    });
+                    return comments.length === 0
+                      ? Effect.void
+                      : publish(comments).pipe(Effect.mapError(toPullRequestError("submitReview")));
+                  }),
+                ),
+            );
           }),
         );
       }),
