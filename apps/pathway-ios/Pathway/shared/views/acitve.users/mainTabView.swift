@@ -156,7 +156,8 @@ struct MainTabView: View {
             case .agentOrchestrator:
                 AgentOrchestratorView()
                     .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(36)
             }
         }
         .environment(\.locale, preferences.locale)

@@ -53,8 +53,9 @@ ported to Pathway's environment, project, thread, and settings contracts before 
 production-ready. Authentication and public configuration use only Pathway endpoints and Clerk
 sessions.
 
-The detached chat button in the main bar presents the native Agent Orchestrator sheet. Its current
-empty state mirrors the web orchestrator boundary while agent and workflow contracts are ported.
+The detached chat button in the main bar presents the native Agent Orchestrator sheet. The
+placeholder includes chat history and close controls, prompt suggestions, mentions, attachments,
+and a keyboard-focused composer while agent and workflow contracts are ported.
 
 ## Checks
 
