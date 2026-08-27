@@ -4,9 +4,31 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import { CommandId, ProjectId } from "@spiritdevs/contracts";
 import { MembershipId } from "@spiritdevs/contracts/company";
 
-import { resolveAvailableEditorsForConfig, resolveIssueConnectionActor } from "./ws.ts";
+import {
+  resolveAvailableEditorsForConfig,
+  resolveIssueConnectionActor,
+  wsProjectUpdateInputFromMutation,
+} from "./ws.ts";
+
+it.each(["worktree" as const, null])(
+  "forwards the project workspace override through WebSocket RPC: %s",
+  (defaultThreadEnvMode) => {
+    const commandId = CommandId.make("command:ws-project-workspace");
+    const projectId = ProjectId.make("project:ws-mutation");
+    assert.deepEqual(
+      wsProjectUpdateInputFromMutation({
+        type: "project.update",
+        commandId,
+        projectId,
+        defaultThreadEnvMode,
+      }),
+      { commandId, projectId, defaultThreadEnvMode },
+    );
+  },
+);
 
 it.effect("does not block server config when editor discovery never resolves", () =>
   Effect.gen(function* () {

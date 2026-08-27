@@ -2,6 +2,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  type ProjectMutation,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -13,7 +14,31 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
-import { ProjectService, type ProjectServiceError } from "./ProjectService.ts";
+import {
+  ProjectService,
+  type ProjectServiceError,
+  type ProjectUpdateInput,
+} from "./ProjectService.ts";
+
+type ProjectUpdateMutation = Extract<ProjectMutation, { readonly type: "project.update" }>;
+
+export function httpProjectUpdateInputFromMutation(
+  mutation: ProjectUpdateMutation,
+): ProjectUpdateInput {
+  return {
+    commandId: mutation.commandId,
+    projectId: mutation.projectId,
+    ...(mutation.title === undefined ? {} : { title: mutation.title }),
+    ...(mutation.workspaceRoot === undefined ? {} : { workspaceRoot: mutation.workspaceRoot }),
+    ...(mutation.defaultModelSelection === undefined
+      ? {}
+      : { defaultModelSelection: mutation.defaultModelSelection }),
+    ...(mutation.defaultThreadEnvMode === undefined
+      ? {}
+      : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
+    ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
+  };
+}
 
 export const failProjectMutation = Effect.fn("environment.projects.failMutation")(function* (
   cause: ProjectServiceError | ServerRuntimeStartup.ServerRuntimeStartupError,
@@ -61,21 +86,7 @@ export const projectHttpApiLayer = HttpApiBuilder.group(
                   ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
                 })
               : mutation.type === "project.update"
-                ? projects.update({
-                    commandId: mutation.commandId,
-                    projectId: mutation.projectId,
-                    ...(mutation.title === undefined ? {} : { title: mutation.title }),
-                    ...(mutation.workspaceRoot === undefined
-                      ? {}
-                      : { workspaceRoot: mutation.workspaceRoot }),
-                    ...(mutation.defaultModelSelection === undefined
-                      ? {}
-                      : { defaultModelSelection: mutation.defaultModelSelection }),
-                    ...(mutation.defaultThreadEnvMode === undefined
-                      ? {}
-                      : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
-                    ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
-                  })
+                ? projects.update(httpProjectUpdateInputFromMutation(mutation))
                 : projects.delete({
                     commandId: mutation.commandId,
                     projectId: mutation.projectId,

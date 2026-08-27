@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectId } from "@spiritdevs/contracts";
+import { CommandId, ProjectId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 
 import {
@@ -8,9 +8,25 @@ import {
   ProjectOperationError,
 } from "./ProjectService.ts";
 import { ServerRuntimeStartupError } from "../serverRuntimeStartup.ts";
-import { failProjectMutation } from "./http.ts";
+import { failProjectMutation, httpProjectUpdateInputFromMutation } from "./http.ts";
 
 const projectId = ProjectId.make("project:http-mutation");
+
+it.each(["worktree" as const, null])(
+  "forwards the project workspace override through HTTP: %s",
+  (defaultThreadEnvMode) => {
+    const commandId = CommandId.make("command:http-project-workspace");
+    assert.deepEqual(
+      httpProjectUpdateInputFromMutation({
+        type: "project.update",
+        commandId,
+        projectId,
+        defaultThreadEnvMode,
+      }),
+      { commandId, projectId, defaultThreadEnvMode },
+    );
+  },
+);
 
 it.effect.each([
   new ProjectNotFoundError({ projectId }),
