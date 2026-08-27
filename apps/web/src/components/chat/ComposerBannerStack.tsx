@@ -36,6 +36,7 @@ const stackCapBorderClass: Record<ComposerBannerStackItem["variant"], string> = 
 export interface ComposerBannerStackItem {
   readonly id: string;
   readonly variant: "default" | "error" | "info" | "success" | "warning";
+  readonly presentation?: "banner" | "lip";
   // Ordering hint for stack assemblers: front this banner even though its
   // variant is calm (e.g. live update progress). The stack itself ignores it.
   readonly urgent?: boolean;
@@ -80,6 +81,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
   }
   const stackedItems = items.slice(1);
   const hasStack = stackedItems.length > 0;
+  const frontItemIsLip = frontItem.presentation === "lip" && !hasStack;
   const showCollapsedStackCap = hasStack && exitingItemId !== frontItem.id;
   const firstStackedItem = stackedItems[0];
 
@@ -98,7 +100,13 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
   };
 
   return (
-    <div className={cn("group/banner-stack chat-content-lane mb-2", className)}>
+    <div
+      className={cn(
+        "group/banner-stack chat-content-lane",
+        frontItemIsLip ? "mb-0 px-4" : "mb-2",
+        className,
+      )}
+    >
       <div
         className={cn(
           "relative flex flex-col-reverse",
@@ -190,7 +198,14 @@ function ComposerBannerStackAlert({
   return (
     <Alert
       variant={item.variant}
-      className={cn("alert-glass rounded-[22px]", item.className)}
+      className={cn(
+        "alert-glass",
+        item.presentation === "lip"
+          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-3 py-1.5 text-xs shadow-none"
+          : "rounded-[22px]",
+        item.className,
+      )}
+      data-presentation={item.presentation ?? "banner"}
       data-variant={item.variant}
     >
       {item.icon}

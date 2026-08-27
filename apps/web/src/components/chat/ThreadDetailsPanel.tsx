@@ -7,7 +7,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { EnvironmentConnectionPresentation } from "@spiritdevs/client-runtime/connection";
-import { AlertTriangleIcon, XIcon } from "lucide-react";
+import { AlertTriangleIcon } from "lucide-react";
 
 import type { DraftId } from "../../composerDraftStore";
 import type { ProviderInstanceEntry } from "../../providerInstances";
@@ -42,12 +42,6 @@ import {
 } from "../usage/ProviderUsage";
 import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
-
-interface VersionMismatchIssue {
-  readonly clientVersion: string;
-  readonly serverVersion: string;
-  readonly serverLabel: string;
-}
 
 export interface ThreadDetailsPanelProps {
   mode: "inline" | "popover";
@@ -85,8 +79,6 @@ export interface ThreadDetailsPanelProps {
   onRecoverPushFailure?: (prompt: string) => Promise<boolean>;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
-  versionMismatch: VersionMismatchIssue | null;
-  onDismissVersionMismatch: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -227,27 +219,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     </div>
                   </div>
                 </div>
-              </div>
-            ) : null}
-
-            {props.versionMismatch ? (
-              <div className="mx-3 mb-2 flex gap-2 rounded-xl border border-warning/30 bg-warning/6 p-3">
-                <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium">Client and server versions differ</p>
-                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                    Client {props.versionMismatch.clientVersion} ·{" "}
-                    {props.versionMismatch.serverLabel} {props.versionMismatch.serverVersion}
-                  </p>
-                </div>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Dismiss version mismatch warning"
-                  onClick={props.onDismissVersionMismatch}
-                >
-                  <XIcon className="size-3.5" />
-                </Button>
               </div>
             ) : null}
 

@@ -55,6 +55,7 @@ export interface ProviderUpdateSidebarPillView {
 interface ProviderUpdateSidebarPillOptions {
   readonly visibleAfterIso?: string;
   readonly dismissedKeys?: ReadonlySet<string>;
+  readonly showActiveUpdates?: boolean;
 }
 
 const PROVIDER_UPDATE_SUCCESS_VISIBLE_MS = 3_000;
@@ -412,6 +413,9 @@ export function getProviderUpdateSidebarPillView(
   const dedupedProviders = dedupeProvidersByDriver(providers);
   const activeProviders = dedupedProviders.filter(isProviderUpdateActive);
   if (activeProviders.length > 0) {
+    if (options?.showActiveUpdates === false) {
+      return null;
+    }
     const activeProvider = activeProviders[0]!;
     const activeProviderName =
       PROVIDER_DISPLAY_NAMES[activeProvider.driver] ?? activeProvider.driver;

@@ -409,7 +409,6 @@ import {
   isVersionMismatchDismissed,
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
-  serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 import { normalizeComposerAttachmentName } from "./chat/composerAttachmentFiles";
@@ -2527,6 +2526,7 @@ function ChatViewContent(props: ChatViewProps) {
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
         variant: updateFailed ? "error" : updateInProgress ? "default" : "warning",
+        ...(updateInProgress || updateFailed ? {} : { presentation: "lip" as const }),
         icon: updateInProgress ? (
           <span
             className="size-1.5 animate-status-pulse rounded-full bg-foreground"
@@ -2542,15 +2542,9 @@ function ChatViewContent(props: ChatViewProps) {
         description:
           updateInProgress || updateFailed ? (
             <ServerUpdateProgress state={serverUpdateState} />
-          ) : versionMismatch ? (
-            <>
-              Client {versionMismatch.clientVersion} is connected to {versionMismatchServerLabel}{" "}
-              {versionMismatch.serverVersion}.{" "}
-              {serverUpdateGuidance(versionMismatchSelfUpdate, versionMismatchServerLabel)}
-            </>
           ) : null,
-        // The desktop-managed guidance is already the description; the action
-        // slot would only repeat it.
+        // Desktop-managed servers cannot be updated from this client, so keep
+        // their lip notification-only.
         actions:
           updateInProgress ||
           !versionMismatch ||
@@ -2567,19 +2561,16 @@ function ChatViewContent(props: ChatViewProps) {
           ? {}
           : {
               dismissLabel: "Dismiss version mismatch warning",
-              onDismiss: () => {
-                dismissVersionMismatch(versionMismatchDismissKey);
-                setDismissedVersionMismatchKey(versionMismatchDismissKey);
-              },
+              onDismiss: handleDismissVersionMismatch,
             }),
       });
     }
     return items;
   }, [
     activeEnvironmentUnavailableState,
+    handleDismissVersionMismatch,
     handleReconnectActiveEnvironment,
     navigate,
-    setDismissedVersionMismatchKey,
     showVersionMismatchBanner,
     serverUpdateState,
     versionMismatch,
@@ -7901,15 +7892,6 @@ function ChatViewContent(props: ChatViewProps) {
     ...(isServerThread ? { onRecoverPushFailure } : {}),
     onReconnectEnvironment: reconnectActiveEnvironment,
     onOpenConnectionSettings: openConnectionSettings,
-    versionMismatch:
-      showVersionMismatchBanner && versionMismatch
-        ? {
-            clientVersion: versionMismatch.clientVersion,
-            serverVersion: versionMismatch.serverVersion,
-            serverLabel: versionMismatchServerLabel,
-          }
-        : null,
-    onDismissVersionMismatch: handleDismissVersionMismatch,
     onRunProjectScript: runProjectScript,
     onAddProjectScript: saveProjectScript,
     onUpdateProjectScript: updateProjectScript,
@@ -7936,8 +7918,7 @@ function ChatViewContent(props: ChatViewProps) {
         }
       : {}),
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
-    threadPanelHasAttention:
-      activeEnvironmentUnavailableState !== null || showVersionMismatchBanner,
+    threadPanelHasAttention: activeEnvironmentUnavailableState !== null,
     rightPanelAvailable: activeProject !== null,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),

@@ -20,8 +20,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
  *
  * The provider status is already explained in Settings, so this surface only
  * exposes the two decisions that matter here: install or dismiss. It stays
- * inside the existing title-bar height and leaves update progress/results to
- * the provider state and the navigation-rail status pill.
+ * inside the existing title-bar height and owns active update progress; the
+ * navigation rail is reserved for terminal outcomes.
  */
 export function ProviderUpdatePrimaryNotification() {
   const navigate = useNavigate();

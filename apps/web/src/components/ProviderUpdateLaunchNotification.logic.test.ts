@@ -530,6 +530,26 @@ describe("provider update launch notification logic", () => {
     });
   });
 
+  it("can suppress active updates when another surface already shows progress", () => {
+    const view = getProviderUpdateSidebarPillView(
+      [
+        provider({
+          driver: driver("codex"),
+          updateState: {
+            status: "running",
+            startedAt: checkedAt,
+            finishedAt: null,
+            message: "Updating provider.",
+            output: null,
+          },
+        }),
+      ],
+      { showActiveUpdates: false },
+    );
+
+    expect(view).toBeNull();
+  });
+
   it("uses the provider name for single failed sidebar pill updates", () => {
     const view = getProviderUpdateSidebarPillView(
       [
