@@ -750,7 +750,11 @@ const makeWsRpcLayer = (
       const refreshRemoteGitStatusAfterLocalMutation = (cwd: string) =>
         vcsStatusBroadcaster
           .refreshRemoteStatusAfterLocalMutation(cwd)
-          .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
+          .pipe(
+            Effect.ignoreCause({ log: true }),
+            Effect.forkDetach({ startImmediately: true }),
+            Effect.asVoid,
+          );
 
       const refreshGitStatusForThread = (threadId: ThreadId, cwd: string) =>
         vcsStatusBroadcaster.refreshStatus(cwd).pipe(
