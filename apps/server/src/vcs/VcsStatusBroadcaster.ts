@@ -398,6 +398,27 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  const publishStatusRefresh = Effect.fn("VcsStatusBroadcaster.publishStatusRefresh")(function* (
+    rawCwd: string,
+    cwd: string,
+    refreshId: number,
+    local: VcsStatusLocalResult,
+    remote: VcsStatusRemoteResult | null,
+  ) {
+    return yield* SynchronizedRef.modifyEffect(localStatusRefreshStateRef, (state) => {
+      const latestRefreshId = Math.max(
+        state.latestLocalRefreshIdByCwd.get(cwd) ?? 0,
+        state.latestLocalRefreshIdByCwd.get(rawCwd) ?? 0,
+      );
+      if (latestRefreshId !== refreshId) {
+        return Effect.succeed([mergeGitStatusParts(local, remote), state] as const);
+      }
+      return updateCachedStatus(cwd, local, remote, { publish: true }).pipe(
+        Effect.map((updated) => [updated, state] as const),
+      );
+    });
+  });
+
   const refreshLocalStatusCore = Effect.fn("VcsStatusBroadcaster.refreshLocalStatusCore")(
     function* (rawCwd: string, cwd: string, refreshId: number) {
       yield* workflow.invalidateLocalStatus(cwd);
@@ -439,7 +460,9 @@ export const make = Effect.gen(function* () {
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshStatus",
   )(function* (rawCwd) {
+    const refreshId = yield* reserveLocalStatusRefresh(rawCwd);
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
+    yield* associateLocalStatusRefreshCwd(cwd, refreshId);
     // invalidateStatus (not the two partial invalidations) so an explicit
     // refresh also bypasses GitManager's slow PR-lookup cache.
     yield* workflow.invalidateStatus(cwd);
@@ -447,7 +470,7 @@ export const make = Effect.gen(function* () {
       [workflow.localStatus({ cwd }), workflow.remoteStatus({ cwd })],
       { concurrency: "unbounded" },
     );
-    return yield* updateCachedStatus(cwd, local, remote, { publish: true });
+    return yield* publishStatusRefresh(rawCwd, cwd, refreshId, local, remote);
   });
 
   const makeRemoteRefreshLoop = (

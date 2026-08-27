@@ -404,6 +404,51 @@ describe("VcsStatusBroadcaster", () => {
     }),
   );
 
+  it.effect("does not let an older local refresh overwrite a newer full refresh", () =>
+    Effect.gen(function* () {
+      const firstRefreshStarted = yield* Deferred.make<void>();
+      const releaseFirstRefresh = yield* Deferred.make<void>();
+      const firstStatus = { ...baseLocalStatus, refName: "feature/first" };
+      const fullRefreshStatus = { ...baseLocalStatus, refName: "feature/full-refresh" };
+      let localStatusAttempt = 0;
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        readLocalStatus: () => {
+          localStatusAttempt += 1;
+          return localStatusAttempt === 1
+            ? Deferred.succeed(firstRefreshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRefresh)),
+                Effect.as(firstStatus),
+              )
+            : Effect.succeed(fullRefreshStatus);
+        },
+      };
+
+      const program = Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const firstRefreshFiber = yield* broadcaster
+          .refreshLocalStatus("/repo")
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstRefreshStarted);
+        yield* broadcaster.refreshStatus("/repo");
+        yield* Deferred.succeed(releaseFirstRefresh, undefined);
+        yield* Fiber.join(firstRefreshFiber);
+
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+        assert.equal(cached.refName, fullRefreshStatus.refName);
+        assert.equal(state.localStatusCalls, 2);
+      });
+
+      yield* program.pipe(Effect.provide(makeTestLayer(state)));
+    }),
+  );
+
   it.effect("normalizes symlinked CWDs before cache lookup and workflow calls", () => {
     const seenCwds: string[] = [];
     const state = {
