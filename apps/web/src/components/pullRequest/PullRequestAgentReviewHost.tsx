@@ -175,7 +175,6 @@ function PullRequestAgentReviewPublisher({
         });
         refreshActivity();
       }
-      finishIfComplete();
     })();
   }, [
     activity,
