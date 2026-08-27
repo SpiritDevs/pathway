@@ -130,7 +130,7 @@ export function assetResponseHeaders(
             options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
               ? options.mimeType
               : "application/octet-stream",
-       }
+        }
       : {}),
     ...(!options?.download && (lowerPath.endsWith(".html") || lowerPath.endsWith(".htm"))
       ? { "Content-Type": "text/html; charset=utf-8" }
