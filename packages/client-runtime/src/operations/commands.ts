@@ -4,11 +4,11 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
-  type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
+  type PendingChatAttachment,
   type ProjectFaviconPath,
   type ProjectId,
   type ProjectScript,
@@ -163,7 +163,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
     readonly messageId: MessageId;
     readonly role: "user";
     readonly text: string;
-    readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
+    readonly attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>;
   };
   readonly modelSelection?: ModelSelection;
   readonly titleSeed?: string;
@@ -265,7 +265,7 @@ const getProjection = (threadId: ThreadId) =>
 const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(function* (
   threadId: ThreadId,
   messageId: MessageId,
-  attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>,
+  attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>,
 ) {
   if (attachments.length === 0) return [];
   const result = yield* request(WS_METHODS.assetsPersistChatAttachments, {

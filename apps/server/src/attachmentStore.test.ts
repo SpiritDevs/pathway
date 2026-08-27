@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  attachmentMetadataMatchesStoredPath,
   createAttachmentId,
   createIssueAttachmentId,
   attachmentRelativePath,
@@ -27,6 +28,29 @@ describe("attachmentStore", () => {
     expect(attachmentRelativePath({ ...base, name: "data.json" })).toMatch(/\.json$/);
     expect(attachmentRelativePath({ ...base, name: "page.html" })).toMatch(/\.html$/);
     expect(attachmentRelativePath({ ...base, name: "payload.exe" })).toMatch(/\.bin$/);
+  });
+
+  it("requires pending metadata to resolve to the stored extension", () => {
+    const base = {
+      type: "file" as const,
+      id: "pending-00000000-0000-4000-8000-000000000001-json",
+      name: "data.json",
+      mimeType: "application/json",
+      sizeBytes: 2,
+    };
+
+    expect(
+      attachmentMetadataMatchesStoredPath({
+        attachment: base,
+        storedPath: "/attachments/pending-upload.json",
+      }),
+    ).toBe(true);
+    expect(
+      attachmentMetadataMatchesStoredPath({
+        attachment: { ...base, name: "report.pdf", mimeType: "application/pdf" },
+        storedPath: "/attachments/pending-upload.json",
+      }),
+    ).toBe(false);
   });
 
   it("derives stable attachment ids for idempotent message retries", () => {

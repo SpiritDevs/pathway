@@ -278,9 +278,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      const shouldDownload = input.resource.mimeType
-        ? !input.resource.mimeType.toLowerCase().startsWith("image/")
-        : !isWorkspaceImagePreviewPath(attachmentPath);
+      const shouldDownload = !isWorkspaceImagePreviewPath(attachmentPath);
       claims = {
         version: 1,
         kind: "attachment",

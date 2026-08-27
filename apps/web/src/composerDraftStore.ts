@@ -1252,25 +1252,34 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
   const sizeBytes = candidate.sizeBytes;
   const dataUrl = candidate.dataUrl;
   const type = candidate.type;
+  const attachmentId = candidate.attachmentId;
+  const environmentId = candidate.environmentId;
   if (
     typeof id !== "string" ||
     typeof name !== "string" ||
     typeof mimeType !== "string" ||
     typeof sizeBytes !== "number" ||
     !Number.isFinite(sizeBytes) ||
-    typeof dataUrl !== "string" ||
-    id.length === 0 ||
-    dataUrl.length === 0
+    id.length === 0
   ) {
     return null;
   }
+  const hasDataUrl = typeof dataUrl === "string" && dataUrl.length > 0;
+  const hasUploadedFileMarker =
+    type === "file" &&
+    typeof attachmentId === "string" &&
+    attachmentId.length > 0 &&
+    typeof environmentId === "string" &&
+    environmentId.length > 0;
+  if (!hasDataUrl && !hasUploadedFileMarker) return null;
   return {
     ...(type === "image" || type === "file" ? { type } : {}),
     id,
     name,
     mimeType,
     sizeBytes,
-    dataUrl,
+    ...(hasDataUrl ? { dataUrl } : {}),
+    ...(hasUploadedFileMarker ? { attachmentId, environmentId } : {}),
   };
 }
 

@@ -116,11 +116,10 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
+  attachmentMetadataMatchesStoredPath,
   attachmentRelativePath,
   createDeterministicAttachmentId,
-  parseThreadSegmentFromAttachmentId,
   planAttachmentClaim,
-  PENDING_ATTACHMENT_THREAD_SEGMENT,
 } from "./attachmentStore.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
@@ -207,17 +206,6 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
     input.attachments.map((attachment, index) => ({ attachment, index })),
     Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
       if ("id" in attachment) {
-        if (
-          parseThreadSegmentFromAttachmentId(attachment.id) !== PENDING_ATTACHMENT_THREAD_SEGMENT
-        ) {
-          return {
-            type: attachment.type,
-            id: ChatAttachmentId.make(attachment.id),
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          };
-        }
         const claim = planAttachmentClaim({
           attachmentsDir: config.attachmentsDir,
           threadId: input.threadId,
@@ -226,6 +214,30 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
         if (!claim.ok) {
           return yield* new PersistChatAttachmentsError({
             message: `Attachment ${attachment.name} cannot be sent: ${claim.reason}.`,
+          });
+        }
+        if (
+          !attachmentMetadataMatchesStoredPath({
+            attachment,
+            storedPath: claim.currentPath,
+          })
+        ) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} metadata does not match its upload.`,
+          });
+        }
+        const info = yield* fileSystem.stat(claim.currentPath).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PersistChatAttachmentsError({
+                message: `Could not inspect attachment ${attachment.name}.`,
+                cause,
+              }),
+          ),
+        );
+        if (info.type !== "File" || Number(info.size) !== attachment.sizeBytes) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} size does not match its upload.`,
           });
         }
         yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(

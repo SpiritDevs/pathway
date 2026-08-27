@@ -481,6 +481,48 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
   });
+
+  it("rehydrates marker-only uploaded files from persisted drafts", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const threadKey = threadKeyFor(threadId, TEST_ENVIRONMENT_ID);
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadKey: {
+          [threadKey]: {
+            prompt: "",
+            attachments: [
+              {
+                type: "file",
+                id: "file-pdf",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 42,
+                attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+                environmentId: TEST_ENVIRONMENT_ID,
+              },
+            ],
+          },
+        },
+        draftThreadsByThreadKey: {},
+        logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(mergedState.draftsByThreadKey[threadKey]?.images[0]).toMatchObject({
+      type: "file",
+      file: null,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+      uploadEnvironmentId: TEST_ENVIRONMENT_ID,
+    });
+  });
 });
 
 describe("composerDraftStore terminal contexts", () => {

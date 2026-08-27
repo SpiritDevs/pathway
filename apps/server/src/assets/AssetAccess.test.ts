@@ -240,6 +240,35 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("derives attachment download policy from the stored path", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000003";
+      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.html`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(attachmentPath, "<script>alert(1)</script>");
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "attachment",
+          attachmentId,
+          fileName: "payload.html",
+          mimeType: "image/png",
+        },
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+
+      expect(yield* resolveAsset(token, "ignored.html")).toMatchObject({
+        kind: "file",
+        path: attachmentPath,
+        download: true,
+      });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues project favicon capabilities with a signed fallback", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

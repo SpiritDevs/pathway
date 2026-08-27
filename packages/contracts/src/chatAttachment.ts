@@ -86,6 +86,18 @@ export const ChatAttachment = Schema.Union([
 ]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 
+const PendingChatAttachmentId = ChatAttachmentId.check(
+  Schema.isPattern(
+    /^pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-z0-9]{1,10}$/i,
+  ),
+);
+
+export const PendingChatAttachment = Schema.Union([
+  Schema.Struct({ ...ChatImageAttachment.fields, id: PendingChatAttachmentId }),
+  Schema.Struct({ ...ChatFileAttachment.fields, id: PendingChatAttachmentId }),
+]);
+export type PendingChatAttachment = typeof PendingChatAttachment.Type;
+
 export const UploadChatAttachment = Schema.Union([
   UploadChatImageAttachment,
   UploadChatFileAttachment,
@@ -95,7 +107,7 @@ export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 export const PersistChatAttachmentsInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+  attachments: Schema.Array(Schema.Union([UploadChatAttachment, PendingChatAttachment])),
 });
 export type PersistChatAttachmentsInput = typeof PersistChatAttachmentsInput.Type;
 

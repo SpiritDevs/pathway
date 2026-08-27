@@ -191,6 +191,16 @@ export function attachmentRelativePath(attachment: ChatAttachment): string | nul
   }
 }
 
+export function attachmentMetadataMatchesStoredPath(input: {
+  readonly attachment: ChatImageAttachment | ChatFileAttachment;
+  readonly storedPath: string;
+}): boolean {
+  return (
+    NodePath.extname(attachmentRelativePath(input.attachment)).toLowerCase() ===
+    NodePath.extname(input.storedPath).toLowerCase()
+  );
+}
+
 export function resolveAttachmentPath(input: {
   readonly attachmentsDir: string;
   readonly attachment: ChatAttachment;

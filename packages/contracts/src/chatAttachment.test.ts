@@ -3,12 +3,14 @@ import * as Schema from "effect/Schema";
 
 import {
   ChatAttachment,
+  PersistChatAttachmentsInput,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   UploadChatAttachment,
 } from "./chatAttachment.ts";
 
 const decodeChatAttachment = Schema.decodeUnknownSync(ChatAttachment);
 const decodeUploadChatAttachment = Schema.decodeUnknownSync(UploadChatAttachment);
+const decodePersistChatAttachmentsInput = Schema.decodeUnknownSync(PersistChatAttachmentsInput);
 
 describe("chat file attachments", () => {
   it("decodes stored and upload file variants", () => {
@@ -63,5 +65,34 @@ describe("chat file attachments", () => {
         sizeBytes: 42,
       }),
     ).toMatchObject({ type: "archive", name: "bundle.tar" });
+  });
+
+  it("accepts pending upload ids but rejects already-owned attachment ids", () => {
+    const input = {
+      threadId: "thread-1",
+      messageId: "message-1",
+      attachments: [
+        {
+          type: "file",
+          id: "pending-00000000-0000-4000-8000-000000000001-json",
+          name: "data.json",
+          mimeType: "application/json",
+          sizeBytes: 2,
+        },
+      ],
+    };
+
+    expect(decodePersistChatAttachmentsInput(input).attachments).toHaveLength(1);
+    expect(() =>
+      decodePersistChatAttachmentsInput({
+        ...input,
+        attachments: [
+          {
+            ...input.attachments[0],
+            id: "another-thread-00000000-0000-4000-8000-000000000001-json",
+          },
+        ],
+      }),
+    ).toThrow();
   });
 });
