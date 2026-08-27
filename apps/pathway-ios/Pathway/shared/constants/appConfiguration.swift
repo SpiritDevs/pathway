@@ -6,7 +6,6 @@ enum AppConfiguration {
     static let relayURL = optionalURL(forInfoKey: "PATHWAY_RELAY_URL")
     static let pathwaySiteURL = optionalURL(forInfoKey: "PATHWAY_SITE_URL")
         ?? URL(string: "https://app.spiritdevs.com")!
-    static let apnsEnvironment = requiredAPNsEnvironment()
     static let convexJWTTemplate = "convex"
 
     static var missingRequiredKeys: [String] {
@@ -27,15 +26,5 @@ enum AppConfiguration {
 
     private static func optionalURL(forInfoKey key: String) -> URL? {
         nonemptyString(forInfoKey: key).flatMap(URL.init(string:))
-    }
-
-    private static func requiredAPNsEnvironment() -> APNsEnvironment {
-        guard
-            let value = Bundle.main.object(forInfoDictionaryKey: "APNS_ENVIRONMENT") as? String,
-            let environment = APNsEnvironment(rawValue: value)
-        else {
-            preconditionFailure("Missing or invalid APNS_ENVIRONMENT build setting")
-        }
-        return environment
     }
 }

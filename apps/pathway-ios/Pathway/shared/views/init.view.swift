@@ -28,8 +28,6 @@ struct InitView: View {
                         .accessibilityLabel("Loading Pathway")
                 case .signedIn:
                     MainView()
-                case .choosingCompany:
-                    CompanyPickerView()
                 case .signedOut, .signingIn:
                     LoginView()
                 }
@@ -37,17 +35,6 @@ struct InitView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
-        .sheet(
-            item: Binding<AdminAuthorizationRequest?>(
-                get: {
-                    guard appModel.authenticationState == .signedIn else { return nil }
-                    return appModel.pendingAdminAuthorizationRequest
-                },
-                set: { _, _ in }
-            )
-        ) { (request: AdminAuthorizationRequest) in
-            AdminAuthorizationApprovalView(request: request, appModel: appModel)
-        }
         .task(id: clerk.isLoaded) {
             if clerk.isLoaded {
                 await appModel.restoreSession()

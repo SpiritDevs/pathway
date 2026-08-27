@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		83B9C8262CFA9450002CB0B7 /* KeychainAccess in Frameworks */ = {isa = PBXBuildFile; productRef = 83B9C8252CFA9450002CB0B7 /* KeychainAccess */; };
 		C1E200000000000000000001 /* ClerkKit in Frameworks */ = {isa = PBXBuildFile; productRef = C1E200000000000000000003 /* ClerkKit */; };
 		C0DE00000000000100000001 /* ConvexMobile in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE00000000000300000003 /* ConvexMobile */; };
 /* End PBXBuildFile section */
@@ -74,7 +73,6 @@
 			files = (
 				C1E200000000000000000001 /* ClerkKit in Frameworks */,
 				C0DE00000000000100000001 /* ConvexMobile in Frameworks */,
-				83B9C8262CFA9450002CB0B7 /* KeychainAccess in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -138,7 +136,6 @@
 			packageProductDependencies = (
 				C1E200000000000000000003 /* ClerkKit */,
 				C0DE00000000000300000003 /* ConvexMobile */,
-				83B9C8252CFA9450002CB0B7 /* KeychainAccess */,
 			);
 			productName = Pathway;
 			productReference = 8387A7A42CED31D000642B24 /* Pathway.app */;
@@ -225,7 +222,6 @@
 			packageReferences = (
 				C1E200000000000000000002 /* XCRemoteSwiftPackageReference "clerk-ios" */,
 				C0DE00000000000200000002 /* XCRemoteSwiftPackageReference "convex-swift" */,
-				83B9C8242CFA9450002CB0B7 /* XCRemoteSwiftPackageReference "KeychainAccess" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8387A7A52CED31D000642B24 /* Products */;
@@ -419,7 +415,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C1E200000000000000000004 /* Pathway.xcconfig */;
 			buildSettings = {
-				APNS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Pathway/Pathway.entitlements;
@@ -466,7 +461,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C1E200000000000000000004 /* Pathway.xcconfig */;
 			buildSettings = {
-				APNS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Pathway/Pathway.entitlements;
@@ -641,14 +635,6 @@
 				version = 1.3.7;
 			};
 		};
-		83B9C8242CFA9450002CB0B7 /* XCRemoteSwiftPackageReference "KeychainAccess" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/kishikawakatsumi/KeychainAccess";
-			requirement = {
-				kind = exactVersion;
-				version = 4.2.2;
-			};
-		};
 		C0DE00000000000200000002 /* XCRemoteSwiftPackageReference "convex-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/get-convex/convex-swift";
@@ -664,11 +650,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C1E200000000000000000002 /* XCRemoteSwiftPackageReference "clerk-ios" */;
 			productName = ClerkKit;
-		};
-		83B9C8252CFA9450002CB0B7 /* KeychainAccess */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 83B9C8242CFA9450002CB0B7 /* XCRemoteSwiftPackageReference "KeychainAccess" */;
-			productName = KeychainAccess;
 		};
 		C0DE00000000000300000003 /* ConvexMobile */ = {
 			isa = XCSwiftPackageProductDependency;

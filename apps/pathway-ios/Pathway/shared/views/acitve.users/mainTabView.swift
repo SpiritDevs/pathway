@@ -1,93 +1,51 @@
-//
-//  mainTabView.swift
-//  Pathway
-//
-//  Created by Corey Baines on 3/12/2024.
-//
-
 import SwiftUI
 
 private let tabBarSpring = Animation.spring(duration: 0.48, bounce: 0.22)
 private let tabSelectionSpring = Animation.spring(duration: 0.36, bounce: 0.14)
-private let companySwitcherSpring = Animation.spring(duration: 0.42, bounce: 0.16)
 private let compactTabBarHeight: CGFloat = 58
 
 private enum AppDestination: String, CaseIterable, Identifiable, Hashable {
-    case documents
-    case leads
-    case messages
-    case contacts
-    case libraries
-    case templates
-    case users
-    case teams
-    case search
+    case agents
+    case issues
+    case threads
+    case environments
+    case settings
 
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .documents: "Documents"
-        case .leads: "Leads"
-        case .messages: "Messages"
-        case .contacts: "Contacts"
-        case .libraries: "Libraries"
-        case .templates: "Templates"
-        case .users: "Users"
-        case .teams: "Teams"
-        case .search: "Search"
+        case .agents: "Agents"
+        case .issues: "Issues"
+        case .threads: "Threads"
+        case .environments: "Environments"
+        case .settings: "Settings"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .documents: "doc"
-        case .leads: "list.bullet"
-        case .messages: "bubble.left.and.bubble.right"
-        case .contacts: "person.crop.rectangle.stack"
-        case .libraries: "folder"
-        case .templates: "doc.richtext"
-        case .users: "person.3"
-        case .teams: "person.crop.square"
-        case .search: "magnifyingglass"
+        case .agents: "cpu"
+        case .issues: "checklist"
+        case .threads: "bubble.left.and.bubble.right"
+        case .environments: "server.rack"
+        case .settings: "gearshape"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .agents: "Your active agents and delegated work will appear here."
+        case .issues: "Track work that needs attention across your environments."
+        case .threads: "Continue conversations with your Pathway agents."
+        case .environments: "Connect to the machines and workspaces running Pathway."
+        case .settings: "Manage your Pathway account and native app preferences."
         }
     }
 
     var isCompactDestination: Bool {
-        self == .documents || self == .leads || self == .messages
+        self == .agents || self == .issues || self == .threads
     }
-
-    @ViewBuilder
-    var content: some View {
-        switch self {
-        case .documents:
-            DashboardView()
-        case .leads:
-            LeadsView()
-        case .messages:
-            MessagesView()
-        case .contacts:
-            ContactsView()
-        case .libraries:
-            LibrariesView()
-        case .templates:
-            TemplatesView()
-        case .users:
-            UsersView()
-        case .teams:
-            TeamsView()
-        case .search:
-            GlobalSearchView()
-        }
-    }
-}
-
-private enum AppTab: Hashable {
-    case destination(AppDestination)
-}
-
-private enum MainTabOverlay {
-    case companySwitcher
 }
 
 private enum MainTabSheet: String, Identifiable {
@@ -97,16 +55,11 @@ private enum MainTabSheet: String, Identifiable {
 }
 
 struct MainTabView: View {
-    @Environment(PathwayAppModel.self) private var appModel
-
-    @State private var selectedTab: AppTab = .destination(.documents)
+    @State private var selectedDestination: AppDestination = .agents
     @State private var isMoreMenuPresented = false
-    @State private var presentedOverlay: MainTabOverlay?
     @State private var presentedSheet: MainTabSheet?
 
     var body: some View {
-        @Bindable var preferences = appModel.settingsDevicePreferences
-
         ZStack(alignment: .bottom) {
             selectedContent
 
@@ -118,38 +71,13 @@ struct MainTabView: View {
             }
 
             PathwayTabBar(
-                selectedTab: $selectedTab,
+                selectedDestination: $selectedDestination,
                 isMoreMenuPresented: $isMoreMenuPresented,
-                showAgentOrchestrator: presentAgentOrchestrator,
-                showCompanySwitcher: {
-                    withAnimation(companySwitcherSpring) {
-                        presentedOverlay = .companySwitcher
-                    }
-                }
+                showAgentOrchestrator: presentAgentOrchestrator
             )
             .frame(maxWidth: 520)
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
-
-            if presentedOverlay != nil {
-                Color.black.opacity(0.12)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: dismissCompanySwitcher)
-                    .transition(.opacity)
-                    .zIndex(10)
-
-                CompanySwitcherCard(onDismiss: dismissCompanySwitcher)
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, -28)
-                    .transition(
-                        .move(edge: .bottom)
-                            .combined(with: .scale(scale: 0.96, anchor: .bottom))
-                            .combined(with: .opacity)
-                    )
-                    .zIndex(11)
-            }
         }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
@@ -160,24 +88,15 @@ struct MainTabView: View {
                     .presentationCornerRadius(36)
             }
         }
-        .environment(\.locale, preferences.locale)
-        .preferredColorScheme(colorScheme(for: preferences.appearance))
-    }
-
-    private func colorScheme(for preference: SettingsAppearancePreference) -> ColorScheme? {
-        switch preference {
-        case .system: nil
-        case .light: .light
-        case .dark: .dark
-        }
     }
 
     @ViewBuilder
     private var selectedContent: some View {
-        switch selectedTab {
-        case .destination(let destination):
-            NavigationStack {
-                destination.content
+        NavigationStack {
+            if selectedDestination == .settings {
+                PathwaySettingsView()
+            } else {
+                PathwayFeaturePlaceholder(destination: selectedDestination)
             }
         }
     }
@@ -192,19 +111,12 @@ struct MainTabView: View {
             isMoreMenuPresented = false
         }
     }
-
-    private func dismissCompanySwitcher() {
-        withAnimation(companySwitcherSpring) {
-            presentedOverlay = nil
-        }
-    }
 }
 
 private struct PathwayTabBar: View {
-    @Binding var selectedTab: AppTab
+    @Binding var selectedDestination: AppDestination
     @Binding var isMoreMenuPresented: Bool
     let showAgentOrchestrator: () -> Void
-    let showCompanySwitcher: () -> Void
 
     @Namespace private var glassNamespace
     @Namespace private var selectionNamespace
@@ -235,10 +147,7 @@ private struct PathwayTabBar: View {
         if isMoreMenuPresented {
             destinationList
                 .frame(maxWidth: .infinity)
-                .glassEffect(
-                    .regular.interactive(),
-                    in: .rect(cornerRadius: 32)
-                )
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 32))
                 .glassEffectID("expanded-view-menu", in: glassNamespace)
                 .glassEffectTransition(.matchedGeometry)
                 .transition(.blurReplace)
@@ -257,54 +166,32 @@ private struct PathwayTabBar: View {
 
     private var destinationList: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button(action: showCompanySwitcher) {
-                HStack(spacing: 8) {
-                    Text("Pathway")
-                        .font(.headline)
-
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Switch company")
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 8)
+            Text("Pathway")
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 8)
 
             Divider()
                 .padding(.horizontal, 14)
 
             ForEach(AppDestination.allCases) { destination in
-                destinationButton(
-                    title: destination.title,
-                    systemImage: destination.systemImage,
-                    isSelected: selectedDestination == destination
-                ) {
-                    select(destination)
-                }
+                destinationButton(destination)
             }
         }
         .padding(.bottom, 10)
     }
 
-    private func destinationButton(
-        title: String,
-        systemImage: String,
-        isSelected: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
+    private func destinationButton(_ destination: AppDestination) -> some View {
+        Button {
+            select(destination)
+        } label: {
             HStack(spacing: 12) {
-                Image(systemName: systemImage)
+                Image(systemName: destination.systemImage)
                     .font(.body.weight(.semibold))
                     .frame(width: 24)
 
-                Text(title)
+                Text(destination.title)
                     .font(.body.weight(.medium))
 
                 Spacer()
@@ -313,7 +200,7 @@ private struct PathwayTabBar: View {
             .padding(.horizontal, 12)
             .frame(height: 44)
             .background {
-                if isSelected {
+                if selectedDestination == destination {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color.primary.opacity(0.07))
                 }
@@ -321,60 +208,35 @@ private struct PathwayTabBar: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 6)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAddTraits(selectedDestination == destination ? .isSelected : [])
     }
 
     private var tabButtons: some View {
         HStack(spacing: 0) {
-            TabBarIconButton(
-                systemImage: AppDestination.documents.systemImage,
-                accessibilityLabel: AppDestination.documents.title,
-                isSelected: selectedDestination == .documents,
-                selectionNamespace: selectionNamespace
-            ) {
-                select(.documents)
-            }
-
-            TabBarIconButton(
-                systemImage: AppDestination.leads.systemImage,
-                accessibilityLabel: AppDestination.leads.title,
-                isSelected: selectedDestination == .leads,
-                selectionNamespace: selectionNamespace
-            ) {
-                select(.leads)
-            }
-
-            TabBarIconButton(
-                systemImage: AppDestination.messages.systemImage,
-                accessibilityLabel: AppDestination.messages.title,
-                isSelected: selectedDestination == .messages,
-                selectionNamespace: selectionNamespace
-            ) {
-                select(.messages)
-            }
+            compactButton(.agents)
+            compactButton(.issues)
+            compactButton(.threads)
 
             Button(action: toggleMoreMenu) {
                 ZStack {
-                    if let selectedChooserDestination {
+                    if !selectedDestination.isCompactDestination {
                         HStack(spacing: 4) {
-                            Image(systemName: selectedChooserDestination.systemImage)
+                            Image(systemName: selectedDestination.systemImage)
 
                             Image(systemName: "chevron.up.chevron.down")
                                 .font(.system(size: 10, weight: .semibold))
                                 .opacity(0.45)
                         }
                         .font(.system(size: 22, weight: .semibold))
-                        .transition(.scale(scale: 0.82).combined(with: .opacity))
                     } else {
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 18, weight: .semibold))
-                            .transition(.scale(scale: 0.82).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .background {
-                    if selectedChooserDestination != nil {
+                    if !selectedDestination.isCompactDestination {
                         Capsule()
                             .fill(Color.primary.opacity(0.08))
                             .padding(5)
@@ -386,42 +248,38 @@ private struct PathwayTabBar: View {
                 }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(selectedChooserDestination != nil ? Color.accentColor : Color.primary)
+            .foregroundStyle(
+                selectedDestination.isCompactDestination ? Color.primary : Color.accentColor
+            )
             .accessibilityLabel(moreAccessibilityLabel)
             .accessibilityValue(isMoreMenuPresented ? "Expanded" : "Collapsed")
         }
         .frame(height: compactTabBarHeight)
     }
 
+    private func compactButton(_ destination: AppDestination) -> some View {
+        TabBarIconButton(
+            systemImage: destination.systemImage,
+            accessibilityLabel: destination.title,
+            isSelected: selectedDestination == destination,
+            selectionNamespace: selectionNamespace
+        ) {
+            select(destination)
+        }
+    }
+
     private var moreAccessibilityLabel: String {
-        if let selectedChooserDestination {
-            return "\(selectedChooserDestination.title), choose another view"
+        if !selectedDestination.isCompactDestination {
+            return "\(selectedDestination.title), choose another view"
         }
         return "Choose another view"
     }
 
-    private var selectedDestination: AppDestination? {
-        guard case .destination(let destination) = selectedTab else { return nil }
-        return destination
-    }
-
-    private var selectedChooserDestination: AppDestination? {
-        guard let selectedDestination, !selectedDestination.isCompactDestination else { return nil }
-        return selectedDestination
-    }
-
     private func select(_ destination: AppDestination) {
-        if isMoreMenuPresented {
-            selectedTab = .destination(destination)
-            withAnimation(tabBarSpring) {
-                isMoreMenuPresented = false
-            }
-            return
-        }
-
         let animation = destination.isCompactDestination ? tabSelectionSpring : tabBarSpring
         withAnimation(animation) {
-            selectedTab = .destination(destination)
+            selectedDestination = destination
+            isMoreMenuPresented = false
         }
     }
 
@@ -430,7 +288,6 @@ private struct PathwayTabBar: View {
             isMoreMenuPresented.toggle()
         }
     }
-
 }
 
 private struct TabBarIconButton: View {
@@ -465,351 +322,38 @@ private struct TabBarIconButton: View {
     }
 }
 
-private struct CompanySwitcherCard: View {
-    @Environment(PathwayAppModel.self) private var appModel
-    @Environment(\.openURL) private var openURL
-
-    let onDismiss: () -> Void
-
-    @State private var isLoading = true
-
-    private var currentCompanyID: String? {
-        appModel.dashboardBootstrap?.companyData.id
-    }
-
-    private var companies: [NativeCompanyPickerCompany] {
-        (appModel.companySwitcherContext?.companies ?? [])
-            .filter(\.isSelectable)
-            .sorted { left, right in
-                if left.companyId == currentCompanyID { return true }
-                if right.companyId == currentCompanyID { return false }
-                if left.lastSelectedAt != right.lastSelectedAt {
-                    return (left.lastSelectedAt ?? 0) > (right.lastSelectedAt ?? 0)
-                }
-                return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
-            }
-    }
-
-    private var companyListHeight: CGFloat {
-        min(CGFloat(max(companies.count, 1)) * 70, 246)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Companies")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
-                .padding(.bottom, 14)
-
-            Group {
-                if isLoading, appModel.companySwitcherContext == nil {
-                    ProgressView("Loading companies…")
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 70)
-                } else if companies.isEmpty {
-                    Label("No other active companies", systemImage: "building.2")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 70)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 6) {
-                            ForEach(companies) { company in
-                                CompanySwitcherRow(
-                                    company: company,
-                                    isCurrent: company.companyId == currentCompanyID,
-                                    isPending: company.companyId == appModel.pendingCompanyID,
-                                    selectionInProgress: appModel.pendingCompanyID != nil
-                                ) {
-                                    select(company)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
-                    }
-                    .scrollDisabled(companies.count <= 3)
-                    .frame(height: companyListHeight)
-                }
-            }
-
-            if let message = appModel.companySwitcherErrorMessage {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 6)
-            }
-
-            Divider()
-                .padding(.horizontal, 20)
-
-            Button(action: startNewCompany) {
-                Label("Start a new company", systemImage: "plus")
-                    .font(.body.weight(.medium))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 24)
-                    .frame(height: 58)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.bottom, 8)
-        .glassEffect(
-            .regular,
-            in: ConcentricRectangle(
-                uniformTopCorners: .fixed(32),
-                uniformBottomCorners: .concentric(minimum: .fixed(32))
-            )
-        )
-        .task {
-            await appModel.loadCompanySwitcherContext()
-            isLoading = false
-        }
-    }
-
-    private func select(_ company: NativeCompanyPickerCompany) {
-        guard company.companyId != currentCompanyID else { return }
-
-        Task {
-            if await appModel.switchCompany(company.companyId) {
-                onDismiss()
-            }
-        }
-    }
-
-    private func startNewCompany() {
-        openURL(createCompanyURL)
-        onDismiss()
-    }
-
-    private var createCompanyURL: URL {
-        let accountSetupURL = AppConfiguration.pathwaySiteURL
-            .appending(path: "en")
-            .appending(path: "account-setup")
-        guard var components = URLComponents(
-            url: accountSetupURL,
-            resolvingAgainstBaseURL: false
-        ) else {
-            return accountSetupURL
-        }
-        components.queryItems = [
-            URLQueryItem(name: "createCompany", value: "1"),
-            URLQueryItem(name: "postLoginPath", value: "/documents")
-        ]
-        return components.url ?? accountSetupURL
-    }
-}
-
-private struct CompanySwitcherRow: View {
-    let company: NativeCompanyPickerCompany
-    let isCurrent: Bool
-    let isPending: Bool
-    let selectionInProgress: Bool
-    let action: () -> Void
-
-    private var initials: String {
-        let value = company.name
-            .split(whereSeparator: \.isWhitespace)
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-            .uppercased()
-        return value.isEmpty ? "QC" : value
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                Text(initials)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
-                    .background(Color.orange.gradient, in: .circle)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(company.name)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    Text(company.metadata)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                if isPending {
-                    ProgressView()
-                } else if isCurrent {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 64)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(selectionInProgress)
-        .accessibilityLabel(
-            isCurrent ? "\(company.name), current company" : "Switch to \(company.name)"
-        )
-    }
-}
-
-private struct ContactsView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Contacts",
-            systemImage: "person.crop.rectangle.stack",
-            description: "Your contacts will appear here."
-        )
-    }
-}
-
-private struct LeadsView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Leads",
-            systemImage: "list.bullet",
-            description: "Your leads will appear here."
-        )
-    }
-}
-
-private struct MessagesView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Messages",
-            systemImage: "bubble.left.and.bubble.right",
-            description: "Your messages will appear here."
-        )
-    }
-}
-
-private struct LibrariesView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Libraries",
-            systemImage: "folder",
-            description: "Your reusable content libraries will appear here."
-        )
-    }
-}
-
-private struct TemplatesView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Templates",
-            systemImage: "doc.richtext",
-            description: "Your document templates will appear here."
-        )
-    }
-}
-
-private struct UsersView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Users",
-            systemImage: "person.3",
-            description: "The people with access to Pathway will appear here."
-        )
-    }
-}
-
-private struct TeamsView: View {
-    var body: some View {
-        PlaceholderFeatureView(
-            title: "Teams",
-            systemImage: "person.crop.square",
-            description: "Your teams and their members will appear here."
-        )
-    }
-}
-
-private struct GlobalSearchView: View {
-    @State private var query = ""
-
-    private var trimmedQuery: String {
-        query.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-
-                TextField("Search Pathway", text: $query)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 44)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-
-            ScrollView {
-                Group {
-                    if trimmedQuery.isEmpty {
-                        ContentUnavailableView(
-                            "Search Pathway",
-                            systemImage: "magnifyingglass",
-                            description: Text(
-                                "Search documents, leads, messages, contacts, libraries, templates, users, and teams."
-                            )
-                        )
-                    } else {
-                        ContentUnavailableView(
-                            "No Results",
-                            systemImage: "magnifyingglass",
-                            description: Text("No matches found for “\(trimmedQuery)”.")
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 120)
-            }
-            .scrollDismissesKeyboard(.interactively)
-        }
-        .navigationTitle("Search")
-        .navigationBarTitleDisplayMode(.large)
-    }
-}
-
-private struct PlaceholderFeatureView: View {
-    let title: String
-    let systemImage: String
-    let description: String
+private struct PathwayFeaturePlaceholder: View {
+    let destination: AppDestination
 
     var body: some View {
         ContentUnavailableView {
-            Label(title, systemImage: systemImage)
+            Label(destination.title, systemImage: destination.systemImage)
         } description: {
-            Text(description)
+            Text(destination.description)
         }
-        .navigationTitle(title)
+        .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
+    }
+}
+
+private struct PathwaySettingsView: View {
+    @Environment(PathwayAppModel.self) private var appModel
+
+    var body: some View {
+        Form {
+            Section("Account") {
+                Button("Sign out", role: .destructive) {
+                    Task {
+                        await appModel.signOut()
+                    }
+                }
+            }
+
+            Section {
+                Text(AppDestination.settings.description)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Settings")
     }
 }

@@ -10,7 +10,6 @@ import SwiftUI
 
 @main
 struct PathwayApp: App {
-    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appModel: PathwayAppModel?
     private let missingConfigurationKeys: [String]
 
@@ -39,15 +38,9 @@ struct PathwayApp: App {
         )
     }
 
-    private var isDocumentInteractionUITest: Bool {
-        ProcessInfo.processInfo.arguments.contains("--ui-testing-document-interactions")
-    }
-
     var body: some Scene {
         WindowGroup {
-            if isDocumentInteractionUITest {
-                DocumentInteractionUITestFixtureRoot()
-            } else if let appModel {
+            if let appModel {
                 InitView()
                     .environment(Clerk.shared)
                     .environment(appModel)
@@ -55,9 +48,6 @@ struct PathwayApp: App {
                         Task {
                             try? await Clerk.shared.handle(url)
                         }
-                    }
-                    .task {
-                        appDelegate.connect(to: appModel)
                     }
             } else {
                 MissingConfigurationView(keys: missingConfigurationKeys)

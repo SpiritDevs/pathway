@@ -6,7 +6,6 @@ enum PathwayAuthError: LocalizedError {
     case clerkNotReady
     case missingSession
     case tokenUnavailable
-    case workspaceSelectionUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -16,19 +15,19 @@ enum PathwayAuthError: LocalizedError {
             "Your session has expired. Please log in again."
         case .tokenUnavailable:
             "Pathway could not authenticate this session. Please try again."
-        case .workspaceSelectionUnavailable:
-            "Workspace selection is not available in this native preview yet."
         }
     }
 }
 
-/// Bridges Pathway's Clerk session into Convex while retaining the cloned app's auth boundary.
-/// Clerk owns credential collection, MFA, OAuth, password recovery, and persisted sessions.
+/// Bridges Pathway's Clerk session into Convex.
+/// Clerk owns credential collection, MFA, OAuth, recovery, and persisted sessions.
 @MainActor
 final class PathwayAuthProvider: AuthProvider {
     private let jwtTemplate: String
     private var onIDToken: (@Sendable (String?) -> Void)?
     private var refreshTask: Task<Void, Never>?
+
+    var onSessionEnded: (@MainActor () -> Void)?
 
     init(jwtTemplate: String = AppConfiguration.convexJWTTemplate) {
         self.jwtTemplate = jwtTemplate
@@ -64,27 +63,6 @@ final class PathwayAuthProvider: AuthProvider {
         authResult.idToken
     }
 
-    func companyPickerContext() -> NativeCompanyPickerContext? {
-        nil
-    }
-
-    func loadCompanySwitcherContext() async throws -> NativeCompanyPickerContext {
-        throw PathwayAuthError.workspaceSelectionUnavailable
-    }
-
-    func selectCompanyForCurrentSession(_: String) async throws {
-        throw PathwayAuthError.workspaceSelectionUnavailable
-    }
-
-    func chooseCompany(_: String) async throws {
-        throw PathwayAuthError.workspaceSelectionUnavailable
-    }
-
-    func requestPasswordReset(email _: String) async throws -> String {
-        try await Clerk.shared.auth.startHostedAuth()
-        return "Continue password recovery in the Pathway sign-in window."
-    }
-
     private func makeSession(
         onIdToken: @Sendable @escaping (String?) -> Void
     ) async throws -> PathwayAuthSession {
@@ -92,7 +70,7 @@ final class PathwayAuthProvider: AuthProvider {
         let token = try await fetchToken()
         onIdToken(token)
         startRefreshListener()
-        return PathwayAuthSession(idToken: token, sessionToken: token, companyIDs: [])
+        return PathwayAuthSession(idToken: token)
     }
 
     private func fetchToken() async throws -> String {
@@ -114,12 +92,22 @@ final class PathwayAuthProvider: AuthProvider {
             guard let self else { return }
             for await _ in Clerk.shared.auth.events {
                 guard !Task.isCancelled else { return }
-                guard let token = try? await fetchToken() else {
-                    onIDToken?(nil)
+                guard let session = Clerk.shared.session, session.status == .active else {
+                    endSession()
+                    return
+                }
+                guard let token = try? await session.getToken(.init(template: jwtTemplate)) else {
                     continue
                 }
                 onIDToken?(token)
             }
         }
+    }
+
+    private func endSession() {
+        refreshTask = nil
+        onIDToken?(nil)
+        onIDToken = nil
+        onSessionEnded?()
     }
 }

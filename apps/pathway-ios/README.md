@@ -47,11 +47,9 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 
 ## Current product boundary
 
-The cloned document, settings, and approval surfaces remain in the project as the native UI
-starting point. Their Convex operations still mirror the source app's feature contracts and must be
-ported to Pathway's environment, project, thread, and settings contracts before those surfaces are
-production-ready. Authentication and public configuration use only Pathway endpoints and Clerk
-sessions.
+The SwiftUI foundation now contains only Pathway-native placeholders for Agents, Issues, Threads,
+Environments, and Settings. QuoteCloud document creation, document services, sending, sharing,
+approvals, billing, and workspace-specific backend contracts are intentionally excluded.
 
 The detached chat button in the main bar presents the native Agent Orchestrator sheet. The
 placeholder includes chat history and close controls, prompt suggestions, mentions, attachments,
