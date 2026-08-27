@@ -754,6 +754,11 @@ describe("resolveShortcutCommand", () => {
         platform: "MacIntel",
       }),
     );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "é", code: "KeyD", metaKey: true }), keybindings, {
+        platform: "MacIntel",
+      }),
+    );
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "d", code: "KeyL", metaKey: true }), keybindings, {
         platform: "MacIntel",

@@ -599,6 +599,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           submitting={repositoryChoiceSubmitting}
         />
         <CommandPaletteDialog
+          open={state.open}
           mode={state.mode}
           openIntent={state.openIntent}
           setOpen={setOpen}
@@ -613,6 +614,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 }
 
 function CommandPaletteDialog(props: {
+  readonly open: boolean;
   readonly mode: SearchOverlayMode;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
@@ -650,6 +652,9 @@ function CommandPaletteDialog(props: {
         <ProjectContentSearchDialog onOpenChange={props.setOpen} />
       ) : (
         <OpenCommandPaletteDialog
+          // Remount the workflow state between sessions while leaving the
+          // popup itself mounted so Base UI can finish its exit animation.
+          key={props.open ? "open" : "closed"}
           openIntent={props.openIntent}
           setOpen={props.setOpen}
           openOverlayMode={props.openOverlayMode}

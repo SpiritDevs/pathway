@@ -560,7 +560,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
     --stage-art-line: oklch(0.940582 0.032921 299.076);
   }
 
-  :is(html[data-theme-id="t3-chat"], html[data-theme-id="ocean"], html[data-theme-id="iris"]) {
+  :is(html[data-theme-id="pathway-chat"], html[data-theme-id="ocean"], html[data-theme-id="iris"]) {
     --stage-night-top: color-mix(in oklch, var(--stage-art-top) 38%, var(--stage-night-base-top));
     --stage-night-mid: color-mix(in oklch, var(--stage-art-mid) 38%, var(--stage-night-base-mid));
     --stage-night-bottom: color-mix(
@@ -583,7 +583,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(pathway-
   }
 
   :is(
-    html[data-theme-id="t3-chat"],
+    html[data-theme-id="pathway-chat"],
     html[data-theme-id="grove"],
     html[data-theme-id="ocean"],
     html[data-theme-id="ember"],

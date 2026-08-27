@@ -80,7 +80,7 @@ function resolveEventKeys(event: ShortcutEventLike): Set<string> {
   // otherwise a remapped physical key triggers shortcuts for two different
   // letters at once and shadows system shortcuts on non-QWERTY layouts.
   const letterCode = event.code?.match(/^Key([A-Z])$/)?.[1];
-  if (letterCode && !/^[a-z]$/.test(layoutKey)) {
+  if (letterCode && !/^\p{Script=Latin}$/u.test(layoutKey)) {
     keys.add(letterCode.toLowerCase());
   }
   const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
