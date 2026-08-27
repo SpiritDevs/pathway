@@ -425,6 +425,32 @@ describe("composerDraftStore moveComposerContent", () => {
       "Destination draft",
     );
   });
+
+  it("tracks the current attachment owner across a composer move", () => {
+    const store = useComposerDraftStore.getState();
+    const file = makeFileAttachment({ id: "file-moving" });
+    store.addImage(sourceRef, file);
+
+    expect(store.findAttachmentTarget(file.id)).toEqual(sourceRef);
+    expect(store.moveComposerContent(sourceRef, destinationRef)).toBe(true);
+    expect(useComposerDraftStore.getState().findAttachmentTarget(file.id)).toEqual(destinationRef);
+
+    useComposerDraftStore
+      .getState()
+      .setFileUpload(
+        destinationRef,
+        file.id,
+        TEST_ENVIRONMENT_ID,
+        "pending-00000000-0000-4000-8000-000000000001-md",
+      );
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(destinationRef)?.images[0],
+    ).toMatchObject({
+      id: file.id,
+      uploadEnvironmentId: TEST_ENVIRONMENT_ID,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-md",
+    });
+  });
 });
 
 describe("composerDraftStore syncPersistedAttachments", () => {

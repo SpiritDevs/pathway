@@ -187,10 +187,15 @@ async function runUpload(job: UploadJob): Promise<void> {
       environmentId: job.environmentId,
       attachmentId: result.attachmentId,
     });
-    if (job.draftTarget !== undefined) {
-      useComposerDraftStore
-        .getState()
-        .setFileUpload(job.draftTarget, job.file.id, job.environmentId, result.attachmentId);
+    const composerStore = useComposerDraftStore.getState();
+    const currentDraftTarget = composerStore.findAttachmentTarget(job.file.id) ?? job.draftTarget;
+    if (currentDraftTarget !== undefined) {
+      composerStore.setFileUpload(
+        currentDraftTarget,
+        job.file.id,
+        job.environmentId,
+        result.attachmentId,
+      );
     }
     if (
       job.persistedAttachmentId !== undefined &&

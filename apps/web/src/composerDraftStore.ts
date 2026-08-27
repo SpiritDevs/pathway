@@ -400,6 +400,8 @@ interface ComposerDraftStoreState {
   stickyActiveProvider: ProviderInstanceId | null;
   /** Returns the editable composer content for a draft session or server thread. */
   getComposerDraft: (target: ComposerThreadTarget) => ComposerThreadDraftState | null;
+  /** Finds the draft that currently owns an attachment after composer moves. */
+  findAttachmentTarget: (attachmentId: string) => ComposerThreadTarget | null;
   /** Looks up the active draft session for a logical project identity. */
   getDraftThreadByLogicalProjectKey: (logicalProjectKey: string) => ProjectDraftSession | null;
   getDraftSessionByLogicalProjectKey: (logicalProjectKey: string) => ProjectDraftSession | null;
@@ -2464,6 +2466,13 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         stickyModelSelectionByProvider: {},
         stickyActiveProvider: null,
         getComposerDraft: (target) => getComposerDraftState(get(), target),
+        findAttachmentTarget: (attachmentId) => {
+          for (const [threadKey, draft] of Object.entries(get().draftsByThreadKey)) {
+            if (!draft.images.some((attachment) => attachment.id === attachmentId)) continue;
+            return parseScopedThreadKey(threadKey) ?? DraftId.make(threadKey);
+          }
+          return null;
+        },
         getDraftThreadByLogicalProjectKey: (logicalProjectKey) => {
           return get().getDraftSessionByLogicalProjectKey(logicalProjectKey);
         },
