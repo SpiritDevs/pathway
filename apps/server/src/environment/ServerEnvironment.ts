@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   PATHWAY_APPLICATION_ID,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@spiritdevs/contracts";
 import {
@@ -168,6 +169,8 @@ export const make = Effect.gen(function* () {
       repositoryIdentity: true,
       projectDirectoryInspection: true,
       connectionProbe: true,
+      attachmentUploads: true,
+      fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       threadSettlement: true,
       pushAutoSettlement: true,

@@ -30,6 +30,5 @@ export function shouldHandleComposerAttachmentPaste(input: {
 }): boolean {
   if (input.files.length === 0) return false;
   if (input.files.some((file) => file.type.toLowerCase().startsWith("image/"))) return true;
-  if (input.plainText.length > 0) return false;
   return true;
 }

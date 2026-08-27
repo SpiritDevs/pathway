@@ -5,7 +5,7 @@ import { MessageId, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./ba
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 50 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_ATTACHMENT_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 
@@ -36,6 +36,24 @@ export const ChatFileAttachment = Schema.Struct({
 });
 export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 
+/**
+ * Forward-compatible attachment metadata. A newer environment may introduce
+ * another attachment kind before every client has updated; preserving the
+ * common fields lets older clients render an inert row instead of rejecting
+ * the entire thread projection.
+ */
+export const ChatUnknownAttachment = Schema.Struct({
+  type: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(50),
+    Schema.isPattern(/^(?!(?:image|file)$)/),
+  ),
+  id: ChatAttachmentId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt,
+});
+export type ChatUnknownAttachment = typeof ChatUnknownAttachment.Type;
+
 export const UploadChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
@@ -61,7 +79,11 @@ export const UploadChatFileAttachment = Schema.Struct({
 });
 export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
 
-export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
+export const ChatAttachment = Schema.Union([
+  ChatImageAttachment,
+  ChatFileAttachment,
+  ChatUnknownAttachment,
+]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 
 export const UploadChatAttachment = Schema.Union([
@@ -73,7 +95,7 @@ export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 export const PersistChatAttachmentsInput = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
-  attachments: Schema.Array(UploadChatAttachment),
+  attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
 });
 export type PersistChatAttachmentsInput = typeof PersistChatAttachmentsInput.Type;
 

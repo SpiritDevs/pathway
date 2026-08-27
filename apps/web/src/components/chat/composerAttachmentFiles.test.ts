@@ -78,7 +78,7 @@ describe("composer attachment files", () => {
     }
   });
 
-  it("preserves text paste when an application also supplies a synthetic file", () => {
+  it("ingests generic files even when the clipboard also carries text", () => {
     const file = new File(["clipboard"], "clipboard.rtf", { type: "application/rtf" });
 
     expect(
@@ -86,7 +86,7 @@ describe("composer attachment files", () => {
         files: [file],
         plainText: "Copied text",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("still handles image pastes that include clipboard text", () => {

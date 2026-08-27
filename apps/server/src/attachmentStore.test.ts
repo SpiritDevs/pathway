@@ -11,6 +11,7 @@ import {
   attachmentRelativePath,
   parseIssueSegmentFromAttachmentId,
   createDeterministicAttachmentId,
+  planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
@@ -156,6 +157,35 @@ describe("attachmentStore", () => {
         attachmentId: "thread-1-missing",
       });
       expect(resolved).toBeNull();
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("claims pending uploads to a stable thread id across retries", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "pathway-attachment-claim-"),
+    );
+    try {
+      const pendingId = "pending-00000000-0000-4000-8000-000000000001-json";
+      NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${pendingId}.json`), Buffer.from("{}"));
+      const first = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: pendingId,
+      });
+      const retry = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: pendingId,
+      });
+      expect(first.ok).toBe(true);
+      expect(retry.ok).toBe(true);
+      if (first.ok && retry.ok) {
+        expect(first.finalId).toBe(retry.finalId);
+        expect(first.finalId).toBe("thread-1-00000000-0000-4000-8000-000000000001-json");
+        expect(first.finalPath).toBe(retry.finalPath);
+      }
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }

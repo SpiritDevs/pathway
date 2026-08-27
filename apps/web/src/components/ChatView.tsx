@@ -227,6 +227,7 @@ import {
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerAttachment,
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   composerDraftHasUserContent,
@@ -235,6 +236,12 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import {
+  awaitAttachmentUploads,
+  getUploadedFileAttachments,
+  releaseDraftAttachment,
+  releaseDraftAttachments,
+} from "../lib/attachmentUploadQueue";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -2356,6 +2363,10 @@ function ChatViewContent(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const maxFileAttachmentBytes =
+    serverConfig?.environment.capabilities.attachmentUploads === true
+      ? (serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes ?? null)
+      : null;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2753,13 +2764,28 @@ function ChatViewContent(props: ChatViewProps) {
         : EMPTY_ATTACHMENT_IDS,
     [committedServerAttachmentIds, isServerThread, queuedServerAttachmentIds],
   );
+  const serverAttachmentMetadataById = useMemo(() => {
+    const byId = new Map<string, ChatAttachment>();
+    for (const row of presentedServerVisibleTurnItems) {
+      if (row.item.type !== "user_message") continue;
+      for (const attachment of row.item.attachments) byId.set(attachment.id, attachment);
+    }
+    for (const message of serverProjection?.messages ?? []) {
+      for (const attachment of message.attachments) byId.set(attachment.id, attachment);
+    }
+    return byId;
+  }, [presentedServerVisibleTurnItems, serverProjection]);
   const serverAttachmentResources = useMemo(
     () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
+      serverAttachmentIds.map((attachmentId) => {
+        const attachment = serverAttachmentMetadataById.get(attachmentId);
+        return {
+          _tag: "attachment" as const,
+          attachmentId,
+          ...(attachment ? { fileName: attachment.name, mimeType: attachment.mimeType } : {}),
+        };
+      }),
+    [serverAttachmentIds, serverAttachmentMetadataById],
   );
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
   const serverAttachmentUrlById = useMemo(
@@ -6206,6 +6232,7 @@ function ChatViewContent(props: ChatViewProps) {
         planMarkdown: activeProposedPlan.planMarkdown,
       });
       promptRef.current = "";
+      releaseDraftAttachments(composerImages);
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
       await onSubmitPlanFollowUp({
@@ -6332,19 +6359,38 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => {
-        const attachment = {
-          name: normalizeComposerAttachmentName(image.name, image.type),
-          mimeType: image.mimeType,
-          sizeBytes: image.sizeBytes,
-          dataUrl: await readFileAsDataUrl(image.file),
-        };
-        return image.type === "image"
-          ? { type: "image" as const, ...attachment }
-          : { type: "file" as const, ...attachment };
-      }),
+    const composerFileAttachmentsSnapshot = composerImagesSnapshot.filter(
+      (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
     );
+    const turnAttachmentsPromise = (async () => {
+      await awaitAttachmentUploads(composerFileAttachmentsSnapshot.map((file) => file.id));
+      const uploadedFiles = getUploadedFileAttachments({
+        environmentId,
+        files: composerFileAttachmentsSnapshot,
+      });
+      if (uploadedFiles === null) {
+        throw new Error("Wait for file attachments to finish uploading, then try again.");
+      }
+      const uploadedByComposerId = new Map(
+        composerFileAttachmentsSnapshot.map((file, index) => [file.id, uploadedFiles[index]]),
+      );
+      return Promise.all(
+        composerImagesSnapshot.map(async (image) => {
+          if (image.type === "file") {
+            const uploaded = uploadedByComposerId.get(image.id);
+            if (!uploaded) throw new Error(`'${image.name}' is not ready to send.`);
+            return uploaded;
+          }
+          return {
+            type: "image" as const,
+            name: normalizeComposerAttachmentName(image.name, image.type),
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          };
+        }),
+      );
+    })();
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: image.type,
       id: image.id,
@@ -6599,6 +6645,10 @@ function ChatViewContent(props: ChatViewProps) {
           );
         }
       }
+    }
+
+    if (turnStartSucceeded) {
+      for (const file of composerFileAttachmentsSnapshot) releaseDraftAttachment(file);
     }
 
     if (failure !== null) {
@@ -8095,6 +8145,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            maxFileAttachmentBytes={maxFileAttachmentBytes}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

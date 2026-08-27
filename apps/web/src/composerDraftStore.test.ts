@@ -141,7 +141,28 @@ describe("composer attachment hydration", () => {
 
     expect(attachment?.type).toBe("file");
     expect(attachment?.name).toBe("data.json");
-    expect(attachment?.file.type).toBe("application/json");
+    expect(attachment?.file?.type).toBe("application/json");
+  });
+
+  it("hydrates uploaded file markers without storing file bytes", () => {
+    const [attachment] = hydrateImagesFromPersisted([
+      {
+        type: "file",
+        id: "file-pdf",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+        environmentId: "environment-1",
+      },
+    ]);
+
+    expect(attachment).toMatchObject({
+      type: "file",
+      file: null,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+      uploadEnvironmentId: "environment-1",
+    });
   });
 });
 

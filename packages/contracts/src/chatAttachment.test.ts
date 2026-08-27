@@ -52,4 +52,16 @@ describe("chat file attachments", () => {
       }),
     ).toThrow();
   });
+
+  it("preserves unknown stored attachment kinds for forward compatibility", () => {
+    expect(
+      decodeChatAttachment({
+        type: "archive",
+        id: "thread-1-00000000-0000-4000-8000-000000000001",
+        name: "bundle.tar",
+        mimeType: "application/x-tar",
+        sizeBytes: 42,
+      }),
+    ).toMatchObject({ type: "archive", name: "bundle.tar" });
+  });
 });

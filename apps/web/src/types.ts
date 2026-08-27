@@ -1,6 +1,7 @@
 import type {
   ChatFileAttachment as ContractChatFileAttachment,
   ChatImageAttachment as ContractChatImageAttachment,
+  ChatUnknownAttachment as ContractChatUnknownAttachment,
   MessageId,
   OrchestrationV2Actor,
   OrchestrationV2CreationSource,
@@ -43,7 +44,11 @@ export interface ChatFileAttachment extends ContractChatFileAttachment {
   readonly previewUrl?: string;
 }
 
-export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
+export interface ChatUnknownAttachment extends ContractChatUnknownAttachment {
+  readonly previewUrl?: string;
+}
+
+export type ChatAttachment = ChatImageAttachment | ChatFileAttachment | ChatUnknownAttachment;
 
 export interface ChatMessage {
   readonly id: MessageId;

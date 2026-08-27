@@ -116,11 +116,12 @@ export function partitionStashAttachments(
   const droppedNames: string[] = [];
   let usedChars = 0;
   for (const attachment of attachments) {
-    if (usedChars + attachment.dataUrl.length > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
+    const attachmentChars = attachment.dataUrl?.length ?? 0;
+    if (usedChars + attachmentChars > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
       droppedNames.push(attachment.name);
       continue;
     }
-    usedChars += attachment.dataUrl.length;
+    usedChars += attachmentChars;
     kept.push(attachment);
   }
   return { kept, droppedNames };

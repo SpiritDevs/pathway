@@ -79,6 +79,9 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
+    download: Schema.optionalKey(Schema.Boolean),
+    fileName: Schema.optionalKey(Schema.String),
+    mimeType: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -95,7 +98,13 @@ const AssetClaimsJson = Schema.fromJsonString(AssetClaimsSchema);
 const decodeAssetClaims = Schema.decodeUnknownOption(AssetClaimsJson);
 const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 
-export type ResolvedAsset = { readonly kind: "file"; readonly path: string };
+export type ResolvedAsset = {
+  readonly kind: "file";
+  readonly path: string;
+  readonly download?: boolean;
+  readonly fileName?: string;
+  readonly mimeType?: string;
+};
 
 function decodeClaims(encodedPayload: string): AssetClaims | null {
   try {
@@ -269,13 +278,19 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
+      const shouldDownload = input.resource.mimeType
+        ? !input.resource.mimeType.toLowerCase().startsWith("image/")
+        : !isWorkspaceImagePreviewPath(attachmentPath);
       claims = {
         version: 1,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
+        ...(shouldDownload ? { download: true } : {}),
+        ...(input.resource.fileName !== undefined ? { fileName: input.resource.fileName } : {}),
+        ...(input.resource.mimeType !== undefined ? { mimeType: input.resource.mimeType } : {}),
         expiresAt,
       };
-      fileName = path.basename(attachmentPath);
+      fileName = input.resource.fileName ?? path.basename(attachmentPath);
       break;
     }
     case "project-favicon": {
@@ -428,7 +443,13 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => Option.none()),
     );
     return Option.isSome(info) && info.value.type === "File"
-      ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+      ? ({
+          kind: "file",
+          path: attachmentPath,
+          ...(claims.download ? { download: true } : {}),
+          ...(claims.fileName !== undefined ? { fileName: claims.fileName } : {}),
+          ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
+        } satisfies ResolvedAsset)
       : null;
   }
 

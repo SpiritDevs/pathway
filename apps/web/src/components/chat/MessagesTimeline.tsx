@@ -1197,6 +1197,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       attachment.type === "image" && !attachment.name.startsWith("preview-annotation-"),
   );
   const fileAttachments = userAttachments.filter((attachment) => attachment.type === "file");
+  const unknownAttachments = userAttachments.filter(
+    (attachment) => attachment.type !== "image" && attachment.type !== "file",
+  );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const editableText = splitEditableUserMessageText(row.message.text).editableText;
   const canEditMessage =
@@ -1287,6 +1290,21 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 </span>
               );
             })}
+          </div>
+        )}
+        {unknownAttachments.length > 0 && (
+          <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
+            {unknownAttachments.map((attachment) => (
+              <span
+                key={attachment.id}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]"
+                aria-label={`Unsupported ${attachment.type} attachment ${attachment.name}`}
+              >
+                <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-48 truncate">{attachment.name}</span>
+                <span className="shrink-0 text-muted-foreground/70">Unsupported attachment</span>
+              </span>
+            ))}
           </div>
         )}
         {previewAnnotations.map((annotation, index) => (

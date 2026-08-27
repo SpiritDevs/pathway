@@ -97,7 +97,9 @@ export const PersistedComposerImageAttachment = Schema.Struct({
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  dataUrl: Schema.String,
+  dataUrl: Schema.optionalKey(Schema.String),
+  attachmentId: Schema.optionalKey(Schema.String),
+  environmentId: Schema.optionalKey(Schema.String),
 });
 export type PersistedComposerImageAttachment = typeof PersistedComposerImageAttachment.Type;
 
@@ -108,7 +110,13 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
 
 export interface ComposerFileAttachment extends Omit<ChatFileAttachment, "previewUrl"> {
   previewUrl: string;
-  file: File;
+  file: File | null;
+  uploadedAttachmentId?: string;
+  uploadEnvironmentId?: EnvironmentId;
+}
+
+export function composerFileNeedsReattach(file: ComposerFileAttachment): boolean {
+  return file.file === null && file.uploadedAttachmentId === undefined;
 }
 
 export type ComposerAttachment = ComposerImageAttachment | ComposerFileAttachment;
@@ -375,7 +383,7 @@ interface ProjectDraftSession extends DraftSessionState {
  * Raw `ThreadId` is intentionally excluded so callers cannot drop environment
  * identity for real threads.
  */
-type ComposerThreadTarget = ScopedThreadRef | DraftId;
+export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
 /**
  * Persisted store for composer content plus draft-session metadata.
@@ -509,6 +517,12 @@ interface ComposerDraftStoreState {
   addImage: (threadRef: ComposerThreadTarget, image: ComposerAttachment) => void;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerAttachment[]) => void;
   removeImage: (threadRef: ComposerThreadTarget, imageId: string) => void;
+  setFileUpload: (
+    threadRef: ComposerThreadTarget,
+    fileId: string,
+    environmentId: EnvironmentId,
+    attachmentId: string,
+  ) => void;
   insertTerminalContext: (
     threadRef: ComposerThreadTarget,
     prompt: string,
@@ -771,7 +785,9 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
   };
 }
 
-function composerImageDedupKey(image: ComposerAttachment): string {
+export function composerAttachmentDedupKey(
+  image: Pick<ComposerAttachment, "type" | "id" | "mimeType" | "sizeBytes" | "name">,
+): string {
   if (image.type === "file") {
     // Same-named files from different directories can share size and MIME type
     // while containing different data. Their attachment identity is the only
@@ -2295,6 +2311,7 @@ function verifyPersistedAttachments(
 function hydratePersistedComposerImageAttachment(
   attachment: PersistedComposerImageAttachment,
 ): File | null {
+  if (attachment.dataUrl === undefined) return null;
   const commaIndex = attachment.dataUrl.indexOf(",");
   const header = commaIndex === -1 ? attachment.dataUrl : attachment.dataUrl.slice(0, commaIndex);
   const payload = commaIndex === -1 ? "" : attachment.dataUrl.slice(commaIndex + 1);
@@ -2329,18 +2346,34 @@ export function hydrateImagesFromPersisted(
 ): ComposerAttachment[] {
   return attachments.flatMap((attachment) => {
     const file = hydratePersistedComposerImageAttachment(attachment);
-    if (!file) return [];
+    if (!file && attachment.type !== "file") return [];
 
     return [
-      {
-        type: attachment.type ?? ("image" as const),
-        id: attachment.id,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-        previewUrl: attachment.dataUrl,
-        file,
-      } satisfies ComposerAttachment,
+      attachment.type === "file"
+        ? ({
+            type: "file",
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            previewUrl: "",
+            file,
+            ...(attachment.attachmentId !== undefined && attachment.environmentId !== undefined
+              ? {
+                  uploadedAttachmentId: attachment.attachmentId,
+                  uploadEnvironmentId: attachment.environmentId as EnvironmentId,
+                }
+              : {}),
+          } satisfies ComposerFileAttachment)
+        : ({
+            type: "image",
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            previewUrl: attachment.dataUrl ?? "",
+            file: file!,
+          } satisfies ComposerImageAttachment),
     ];
   });
 }
@@ -3141,12 +3174,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
             const existingIds = new Set(existing.images.map((image) => image.id));
             const existingDedupKeys = new Set(
-              existing.images.map((image) => composerImageDedupKey(image)),
+              existing.images.map((image) => composerAttachmentDedupKey(image)),
             );
             const acceptedPreviewUrls = new Set(existing.images.map((image) => image.previewUrl));
             const dedupedIncoming: ComposerAttachment[] = [];
             for (const image of images) {
-              const dedupKey = composerImageDedupKey(image);
+              const dedupKey = composerAttachmentDedupKey(image);
               if (existingIds.has(image.id) || existingDedupKeys.has(dedupKey)) {
                 // Avoid revoking a blob URL that's still referenced by an accepted image.
                 if (!acceptedPreviewUrls.has(image.previewUrl)) {
@@ -3206,6 +3239,38 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setFileUpload: (threadRef, fileId, environmentId, attachmentId) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0) return;
+          set((state) => {
+            const current = state.draftsByThreadKey[threadKey];
+            if (!current) return state;
+            let changed = false;
+            const images = current.images.map((attachment) => {
+              if (attachment.type !== "file" || attachment.id !== fileId) return attachment;
+              if (
+                attachment.uploadEnvironmentId === environmentId &&
+                attachment.uploadedAttachmentId === attachmentId
+              ) {
+                return attachment;
+              }
+              changed = true;
+              return {
+                ...attachment,
+                uploadEnvironmentId: environmentId,
+                uploadedAttachmentId: attachmentId,
+              };
+            });
+            return changed
+              ? {
+                  draftsByThreadKey: {
+                    ...state.draftsByThreadKey,
+                    [threadKey]: { ...current, images },
+                  },
+                }
+              : state;
           });
         },
         insertTerminalContext: (threadRef, prompt, context, index) => {

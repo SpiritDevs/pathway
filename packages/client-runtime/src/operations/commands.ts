@@ -267,27 +267,13 @@ const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(f
   messageId: MessageId,
   attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>,
 ) {
-  const stored = attachments.filter(
-    (attachment): attachment is ChatAttachment => "id" in attachment,
-  );
-  const uploads = attachments.filter(
-    (attachment): attachment is UploadChatAttachment => "dataUrl" in attachment,
-  );
-  if (uploads.length === 0) return stored;
+  if (attachments.length === 0) return [];
   const result = yield* request(WS_METHODS.assetsPersistChatAttachments, {
     threadId,
     messageId,
-    attachments: uploads,
+    attachments,
   });
-  if (stored.length === 0) return result.attachments;
-  const byUpload = new Map(
-    uploads.map((attachment, index) => [attachment, result.attachments[index]]),
-  );
-  return attachments.flatMap((attachment) => {
-    if ("id" in attachment) return [attachment];
-    const persisted = byUpload.get(attachment);
-    return persisted === undefined ? [] : [persisted];
-  });
+  return result.attachments;
 });
 
 const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (

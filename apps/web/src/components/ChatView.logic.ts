@@ -358,6 +358,7 @@ export async function loadQueuedComposerImages(
   const images: ComposerAttachment[] = [];
   try {
     for (const { attachment, url } of attachments) {
+      if (attachment.type !== "image" && attachment.type !== "file") continue;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Could not load ${attachment.name}.`);
@@ -365,11 +366,27 @@ export async function loadQueuedComposerImages(
       const file = new File([await response.blob()], attachment.name, {
         type: attachment.mimeType,
       });
-      images.push({
-        ...attachment,
-        file,
-        previewUrl: attachment.type === "image" ? URL.createObjectURL(file) : "",
-      });
+      images.push(
+        attachment.type === "image"
+          ? {
+              type: "image",
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              file,
+              previewUrl: URL.createObjectURL(file),
+            }
+          : {
+              type: "file",
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+              file,
+              previewUrl: "",
+            },
+      );
     }
     return images;
   } catch (error) {
@@ -401,7 +418,7 @@ export function shouldShowComposerContextStrip(input: {
 }
 
 export function cloneComposerAttachmentForRetry(image: ComposerAttachment): ComposerAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
+  if (typeof URL === "undefined" || image.file === null || !image.previewUrl.startsWith("blob:")) {
     return image;
   }
   try {

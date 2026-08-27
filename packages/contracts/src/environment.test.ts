@@ -27,4 +27,18 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.pullRequests,
     ).toBe(true);
   });
+
+  it("preserves file upload limits while older descriptors remain unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.attachmentUploads).toBeUndefined();
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          attachmentUploads: true,
+          fileAttachments: { maxUploadBytes: 50 * 1024 * 1024 },
+        },
+      }).capabilities.fileAttachments?.maxUploadBytes,
+    ).toBe(50 * 1024 * 1024);
+  });
 });

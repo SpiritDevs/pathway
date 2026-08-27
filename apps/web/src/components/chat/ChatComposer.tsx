@@ -16,11 +16,14 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
 } from "@spiritdevs/contracts";
 import type { EnvironmentConnectionPresentation } from "@spiritdevs/client-runtime/connection";
+import {
+  clampFileAttachmentUploadBytes,
+  fileAttachmentTooLargeMessage,
+} from "@spiritdevs/client-runtime/state/attachments";
 import { serializeComposerFileLink } from "@spiritdevs/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@spiritdevs/shared/model";
 import {
@@ -61,10 +64,13 @@ import {
 } from "./composerAttachmentFiles";
 import {
   type ComposerAttachment,
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
+  composerAttachmentDedupKey,
   derivePersistableComposerModelSelection,
+  composerFileNeedsReattach,
   hydrateImagesFromPersisted,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -73,7 +79,6 @@ import {
 import {
   MAX_STASH_ENTRY_ATTACHMENT_CHARS,
   MAX_STASH_ENTRIES,
-  estimateAttachmentDataUrlChars,
   usePromptStashStore,
   type PromptStashEntry,
 } from "../../promptStashStore";
@@ -123,6 +128,20 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
+import {
+  getUploadedFileAttachments,
+  cancelAttachmentUpload,
+  readAttachmentUpload,
+  releaseDraftAttachment,
+  releasePersistedAttachmentUpload,
+  retryAttachmentUpload,
+  startAttachmentUpload,
+  useAttachmentUploadStore,
+} from "../../lib/attachmentUploadQueue";
+import {
+  attachmentUploadBlockReason,
+  formatAttachmentUploadProgress,
+} from "../../lib/attachmentUploadState";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 
@@ -293,7 +312,6 @@ const runtimeModeConfig: Record<
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
 const PROVIDER_NATIVE_SUBAGENT_CONTROLS_LOCKED_REASON =
   "Set by the parent agent — provider-native subagents can't be reconfigured";
-const FILE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_FILE_BYTES / (1024 * 1024))}MB`;
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -563,6 +581,7 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  maxFileAttachmentBytes: number | null;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -685,6 +704,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    maxFileAttachmentBytes: advertisedMaxFileAttachmentBytes,
     routeKind,
     routeThreadRef,
     draftId,
@@ -755,6 +775,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
     onOpenIssueContext,
   } = props;
+  const maxFileAttachmentBytes =
+    advertisedMaxFileAttachmentBytes === null
+      ? null
+      : clampFileAttachmentUploadBytes(advertisedMaxFileAttachmentBytes);
   const composerControlsDisabledReason = composerControlsLocked
     ? PROVIDER_NATIVE_SUBAGENT_CONTROLS_LOCKED_REASON
     : undefined;
@@ -1143,6 +1167,55 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       prompt,
     ],
   );
+  const composerFileAttachments = useMemo(
+    () =>
+      composerImages.filter(
+        (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
+      ),
+    [composerImages],
+  );
+  const uploadsByAttachmentId = useAttachmentUploadStore((state) => state.uploadsByAttachmentId);
+  const fileAttachmentBlockReason = useMemo(() => {
+    if (composerFileAttachments.length === 0) return null;
+    if (maxFileAttachmentBytes === null) {
+      return "This server does not support file attachments. Remove them before sending.";
+    }
+    const oversizedFile = composerFileAttachments.find(
+      (file) => file.sizeBytes > maxFileAttachmentBytes,
+    );
+    if (oversizedFile) {
+      return fileAttachmentTooLargeMessage(oversizedFile.name, maxFileAttachmentBytes);
+    }
+    if (
+      composerFileAttachments.some(
+        (file) =>
+          composerFileNeedsReattach(file) ||
+          (file.file === null && file.uploadEnvironmentId !== environmentId),
+      )
+    ) {
+      return "Attach the unavailable files again or remove them before sending.";
+    }
+    return attachmentUploadBlockReason({
+      fileIds: composerFileAttachments.map((file) => file.id),
+      uploadsByAttachmentId,
+      environmentId,
+    });
+  }, [composerFileAttachments, environmentId, maxFileAttachmentBytes, uploadsByAttachmentId]);
+
+  useEffect(() => {
+    if (maxFileAttachmentBytes === null) {
+      for (const file of composerFileAttachments) cancelAttachmentUpload(file.id);
+      return;
+    }
+    for (const file of composerFileAttachments) {
+      if (file.sizeBytes > maxFileAttachmentBytes || composerFileNeedsReattach(file)) continue;
+      startAttachmentUpload({
+        environmentId,
+        file,
+        draftTarget: composerDraftTarget,
+      });
+    }
+  }, [composerDraftTarget, composerFileAttachments, environmentId, maxFileAttachmentBytes]);
 
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu
@@ -1362,6 +1435,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     noProviderAvailable ||
     projectSelectionRequired ||
     environmentUnavailable !== null ||
+    fileAttachmentBlockReason !== null ||
     !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
@@ -1608,6 +1682,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         await Promise.all(
           composerImages.map(async (image) => {
             try {
+              if (image.type === "file") {
+                stagedAttachmentById.set(image.id, {
+                  type: "file",
+                  id: image.id,
+                  name: image.name,
+                  mimeType: image.mimeType,
+                  sizeBytes: image.sizeBytes,
+                  ...(image.uploadedAttachmentId !== undefined &&
+                  image.uploadEnvironmentId !== undefined
+                    ? {
+                        attachmentId: image.uploadedAttachmentId,
+                        environmentId: image.uploadEnvironmentId,
+                      }
+                    : {}),
+                });
+                return;
+              }
               const dataUrl = await readFileAsDataUrl(image.file);
               stagedAttachmentById.set(image.id, {
                 type: image.type,
@@ -1961,6 +2052,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         return;
       }
+      if (fileAttachmentBlockReason !== null) {
+        event?.preventDefault();
+        toastManager.add({
+          type: "info",
+          title: fileAttachmentBlockReason,
+          data: { hideCopyButton: true },
+        });
+        return;
+      }
       onSend(
         event,
         dispatchMode ??
@@ -1977,6 +2077,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [
       activeThreadId,
       blurMobileComposerAfterSend,
+      fileAttachmentBlockReason,
       noProviderAvailable,
       onSend,
       phase,
@@ -2126,9 +2227,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // burn a slot the store then refuses to fill, pushing a genuinely
         // unique image into the overflow list for nothing.
         const existingDedupKeys = new Set(
-          composerImagesRef.current.map(
-            (image) => `${image.mimeType} ${image.sizeBytes} ${image.name}`,
-          ),
+          composerImagesRef.current.map((image) => composerAttachmentDedupKey(image)),
         );
         const capacity = Math.max(
           0,
@@ -2138,7 +2237,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           (attachment) =>
             !existingIds.has(attachment.id) &&
             !existingDedupKeys.has(
-              `${attachment.mimeType} ${attachment.sizeBytes} ${attachment.name}`,
+              composerAttachmentDedupKey({
+                type: attachment.type ?? "image",
+                id: attachment.id,
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                sizeBytes: attachment.sizeBytes,
+              }),
             ),
         );
         // Anything past the attachment limit cannot be restored. The entry is
@@ -2148,6 +2253,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const restoredImages = hydrateImagesFromPersisted(pending.slice(0, capacity));
         if (restoredImages.length > 0) {
           addComposerDraftImages(composerDraftTarget, restoredImages);
+        }
+        const restoredIds = new Set(pending.slice(0, capacity).map((attachment) => attachment.id));
+        for (const attachment of entry.attachments) {
+          if (
+            attachment.type === "file" &&
+            !restoredIds.has(attachment.id) &&
+            attachment.attachmentId !== undefined &&
+            attachment.environmentId !== undefined
+          ) {
+            releasePersistedAttachmentUpload({
+              environmentId: attachment.environmentId as EnvironmentId,
+              attachmentId: attachment.attachmentId,
+            });
+          }
         }
       }
 
@@ -2202,7 +2321,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const deleteStashEntry = useCallback(
     (entry: PromptStashEntry) => {
-      const { durable } = takeStashEntry(entry.id);
+      const { entry: taken, durable } = takeStashEntry(entry.id);
+      for (const attachment of taken?.attachments ?? []) {
+        if (
+          attachment.type === "file" &&
+          attachment.attachmentId !== undefined &&
+          attachment.environmentId !== undefined
+        ) {
+          releasePersistedAttachmentUpload({
+            environmentId: attachment.environmentId as EnvironmentId,
+            attachmentId: attachment.attachmentId,
+          });
+        }
+      }
       if (!durable) {
         toastManager.add({
           type: "warning",
@@ -2225,6 +2356,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setIsStashMenuOpen((open) => !open);
       return;
     }
+    const files = images.filter(
+      (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
+    );
+    const uploadedFiles = getUploadedFileAttachments({ environmentId, files });
+    if (uploadedFiles === null) {
+      toastManager.add({
+        type: "info",
+        title: "Wait for file attachments to finish uploading before stashing.",
+        data: { hideCopyButton: true },
+      });
+      return;
+    }
+    const uploadedFileByComposerId = new Map(
+      files.map((file, index) => [file.id, uploadedFiles[index]]),
+    );
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
     // twice. Guard on the snapshot itself rather than a bare boolean: once
     // the composer has been cleared the user can type something genuinely
@@ -2291,6 +2437,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       pulseStashBadge();
 
       if (evicted) {
+        for (const attachment of evicted.attachments) {
+          if (
+            attachment.type === "file" &&
+            attachment.attachmentId !== undefined &&
+            attachment.environmentId !== undefined
+          ) {
+            releasePersistedAttachmentUpload({
+              environmentId: attachment.environmentId as EnvironmentId,
+              attachmentId: attachment.attachmentId,
+            });
+          }
+        }
         toastManager.add({
           type: "warning",
           title: "Oldest stashed prompt discarded",
@@ -2299,41 +2457,29 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       }
 
-      // Images are compressed for the stash; other files are encoded as-is.
-      // The shared stash budget drops anything that cannot fit in localStorage.
+      // Images are compressed into browser storage. Generic files retain only
+      // their durable pending-upload marker, so stashing never base64-encodes
+      // a large file into localStorage.
       const candidateAttachments: PersistedComposerImageAttachment[] = [];
       const oversizedImageNames: string[] = [];
       const unreadableImageNames: string[] = [];
       let usedAttachmentChars = 0;
       for (const image of images) {
         if (image.type === "file") {
-          const estimatedChars = estimateAttachmentDataUrlChars({
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-          });
-          if (usedAttachmentChars + estimatedChars > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
-            oversizedImageNames.push(image.name);
+          const uploaded = uploadedFileByComposerId.get(image.id);
+          if (!uploaded) {
+            unreadableImageNames.push(image.name);
             continue;
           }
-          try {
-            const dataUrl = await readFileAsDataUrl(image.file);
-            if (usedAttachmentChars + dataUrl.length > MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
-              oversizedImageNames.push(image.name);
-              continue;
-            }
-            const attachment = {
-              type: "file",
-              id: image.id,
-              name: image.name,
-              mimeType: image.mimeType,
-              sizeBytes: image.sizeBytes,
-              dataUrl,
-            } satisfies PersistedComposerImageAttachment;
-            candidateAttachments.push(attachment);
-            usedAttachmentChars += attachment.dataUrl.length;
-          } catch {
-            unreadableImageNames.push(image.name);
-          }
+          candidateAttachments.push({
+            type: "file",
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            attachmentId: uploaded.id,
+            environmentId,
+          });
           continue;
         }
         if (usedAttachmentChars >= MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
@@ -2387,6 +2533,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           });
         }
       } else if (candidateAttachments.length > 0) {
+        for (const attachment of candidateAttachments) {
+          if (
+            attachment.type === "file" &&
+            attachment.attachmentId !== undefined &&
+            attachment.environmentId !== undefined
+          ) {
+            releasePersistedAttachmentUpload({
+              environmentId: attachment.environmentId as EnvironmentId,
+              attachmentId: attachment.attachmentId,
+            });
+          }
+        }
         // The entry was restored or deleted before its images finished
         // encoding, so they have nowhere to land. Say so rather than letting
         // them evaporate.
@@ -2406,6 +2564,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     clearComposerDraftPromptAndImages,
     composerDraftTarget,
     composerImagesRef,
+    environmentId,
     finalizeStashEntryImages,
     promptRef,
     pulseStashBadge,
@@ -2500,9 +2659,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
         break;
       }
-      if (!file.type.startsWith("image/") && file.size > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
-        error = `'${file.name}' exceeds the ${FILE_SIZE_LIMIT_LABEL} attachment limit.`;
-        continue;
+      if (!file.type.startsWith("image/")) {
+        if (maxFileAttachmentBytes === null) {
+          error = "This server does not support file attachments.";
+          continue;
+        }
+        if (file.size > maxFileAttachmentBytes) {
+          error = fileAttachmentTooLargeMessage(file.name, maxFileAttachmentBytes);
+          continue;
+        }
       }
       acceptedFiles.push(file);
       reservedCount += 1;
@@ -2553,6 +2718,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file: attachmentFile,
         });
       }
+      for (const attachment of nextImages) {
+        if (attachment.type !== "file") continue;
+        const marker = composerImagesRef.current.find(
+          (current): current is ComposerFileAttachment =>
+            current.type === "file" &&
+            current.file === null &&
+            current.name === attachment.name &&
+            current.mimeType === attachment.mimeType &&
+            current.sizeBytes === attachment.sizeBytes,
+        );
+        if (!marker) continue;
+        releaseDraftAttachment(marker);
+        removeComposerImageFromDraft(marker.id);
+      }
       if (nextImages.length === 1 && nextImages[0]) {
         addComposerImage(nextImages[0]);
       } else if (nextImages.length > 1) {
@@ -2577,6 +2756,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const removeComposerImage = (imageId: string) => {
+    const file = composerImagesRef.current.find(
+      (attachment): attachment is ComposerFileAttachment =>
+        attachment.type === "file" && attachment.id === imageId,
+    );
+    if (file) releaseDraftAttachment(file);
     removeComposerImageFromDraft(imageId);
   };
 
@@ -2598,7 +2782,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : 0;
     const remainingAttachmentSlots =
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS - composerImagesRef.current.length - pendingCount;
-    const selectionRange = composerEditorRef.current?.readExpandedSelectionRange() ?? null;
+    const expandedSelectionRange = composerEditorRef.current?.readExpandedSelectionRange() ?? null;
+    const selectionRange = expandedSelectionRange
+      ? {
+          start: collapseExpandedComposerCursor(promptRef.current, expandedSelectionRange.start),
+          end: collapseExpandedComposerCursor(promptRef.current, expandedSelectionRange.end),
+        }
+      : null;
     if (
       pendingUserInputs.length === 0 &&
       !hasImageFile &&
@@ -2611,12 +2801,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       })
     ) {
       const pastedTextFile = createPastedTextAttachmentFile(plainText, randomUUID());
-      if (pastedTextFile.size <= PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+      if (maxFileAttachmentBytes !== null && pastedTextFile.size <= maxFileAttachmentBytes) {
         event.preventDefault();
         if (selectionRange && selectionRange.start < selectionRange.end) {
-          applyPromptReplacement(selectionRange.start, selectionRange.end, "", {
+          const contextIndexBeforeSelection = Array.from(
+            promptRef.current.slice(0, selectionRange.start),
+          ).filter((character) => character === INLINE_TERMINAL_CONTEXT_PLACEHOLDER).length;
+          const selectedContextCount = Array.from(
+            promptRef.current.slice(selectionRange.start, selectionRange.end),
+          ).filter((character) => character === INLINE_TERMINAL_CONTEXT_PLACEHOLDER).length;
+          const applied = applyPromptReplacement(selectionRange.start, selectionRange.end, "", {
             focusEditorAfterReplace: false,
           });
+          if (applied && selectedContextCount > 0) {
+            const nextContexts = composerTerminalContexts.filter(
+              (_context, index) =>
+                index < contextIndexBeforeSelection ||
+                index >= contextIndexBeforeSelection + selectedContextCount,
+            );
+            composerTerminalContextsRef.current = nextContexts;
+            setComposerDraftTerminalContexts(composerDraftTarget, nextContexts);
+          }
         }
         void addComposerImages([pastedTextFile]);
         return;
@@ -2628,6 +2833,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         plainText,
       })
     ) {
+      return;
+    }
+    if (plainText.length > 0 && !hasImageFile) {
+      void addComposerImages(files);
       return;
     }
     event.preventDefault();
@@ -2932,6 +3141,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         className="sr-only"
         tabIndex={-1}
         aria-hidden="true"
+        accept={maxFileAttachmentBytes === null ? "image/*" : undefined}
         onChange={onAttachmentInputChange}
       />
       <div
@@ -3277,9 +3487,48 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             <div className="min-w-0 pr-5">
                               <div className="truncate text-xs">{image.name}</div>
                               <div className="text-[10px] text-muted-foreground/70">
-                                {formatAttachmentSizeLabel(image.sizeBytes)}
+                                {composerFileNeedsReattach(image)
+                                  ? "Attach again"
+                                  : (() => {
+                                      const upload = readAttachmentUpload(image.id);
+                                      if (
+                                        upload?.status === "uploading" &&
+                                        upload.environmentId === environmentId
+                                      ) {
+                                        return `Uploading ${formatAttachmentUploadProgress(upload.progress)}`;
+                                      }
+                                      if (
+                                        upload?.status === "failed" &&
+                                        upload.environmentId === environmentId
+                                      ) {
+                                        return image.file === null ? "Attach again" : upload.reason;
+                                      }
+                                      if (
+                                        upload?.status === "ready" &&
+                                        upload.environmentId === environmentId
+                                      ) {
+                                        return "Ready";
+                                      }
+                                      return formatAttachmentSizeLabel(image.sizeBytes);
+                                    })()}
                               </div>
                             </div>
+                            {readAttachmentUpload(image.id)?.status === "failed" &&
+                            image.file !== null ? (
+                              <button
+                                type="button"
+                                className="absolute bottom-1 right-1 rounded px-1 text-[10px] text-primary hover:bg-accent"
+                                onClick={() =>
+                                  retryAttachmentUpload({
+                                    environmentId,
+                                    file: image,
+                                    draftTarget: composerDraftTarget,
+                                  })
+                                }
+                              >
+                                Retry
+                              </button>
+                            ) : null}
                           </>
                         ) : image.previewUrl ? (
                           <button
@@ -3559,7 +3808,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isEnvironmentUnavailable={
                     environmentUnavailable !== null ||
                     noProviderAvailable ||
-                    projectSelectionRequired
+                    projectSelectionRequired ||
+                    fileAttachmentBlockReason !== null
                   }
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
