@@ -210,7 +210,19 @@ export const ChatHeader = memo(function ChatHeader({
                   render={
                     <h2
                       aria-label={activeThreadTitle}
+                      role={onRenameThread !== undefined ? "button" : undefined}
+                      tabIndex={onRenameThread !== undefined ? 0 : undefined}
                       onDoubleClick={handleTitleDoubleClick}
+                      onKeyDown={(event) => {
+                        if (
+                          onRenameThread !== undefined &&
+                          (event.key === "Enter" || event.key === " ")
+                        ) {
+                          event.preventDefault();
+                          renameCommittedRef.current = false;
+                          setRenaming({ threadId: activeThreadId, title: activeThreadTitle });
+                        }
+                      }}
                       className={cn(
                         "min-w-0 truncate text-sm font-medium text-foreground",
                         onRenameThread !== undefined && "cursor-text",

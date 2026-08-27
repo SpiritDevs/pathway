@@ -122,10 +122,18 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
       usePreviewMiniPlayerStore.getState().resize(threadRef, tabId, nextSize);
       if (!position) {
         const nextDefaultPosition = initialPreviewMiniPlayerPosition(root, parent);
+        const clampedDefaultPosition = nextDefaultPosition
+          ? clampPreviewMiniPlayerPosition(
+              nextDefaultPosition,
+              { width: parent.clientWidth, height: parent.clientHeight },
+              nextSize,
+              bottomInset,
+            )
+          : null;
         setDefaultPosition((current) =>
-          current?.x === nextDefaultPosition?.x && current?.y === nextDefaultPosition?.y
+          current?.x === clampedDefaultPosition?.x && current?.y === clampedDefaultPosition?.y
             ? current
-            : nextDefaultPosition,
+            : clampedDefaultPosition,
         );
         setDefaultLayoutVersion(`${parent.clientWidth}:${parent.clientHeight}`);
         return;

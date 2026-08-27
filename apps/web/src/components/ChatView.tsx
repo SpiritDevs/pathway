@@ -1552,7 +1552,9 @@ function ChatViewContent(props: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>();
+  const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>(
+    "[data-app-workspace-main-row]",
+  );
   const previewPanelInlineSize = usePreviewPanelInlineSize(workspaceLayoutWidth ?? undefined);
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
