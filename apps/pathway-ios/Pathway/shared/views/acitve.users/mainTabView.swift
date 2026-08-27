@@ -90,9 +90,10 @@ private enum MainTabOverlay {
     case companySwitcher
 }
 
-private struct CreateDocumentPresentation: Identifiable {
-    let id = UUID()
-    let model: CreateDocumentFlowModel
+private enum MainTabSheet: String, Identifiable {
+    case agentOrchestrator
+
+    var id: Self { self }
 }
 
 struct MainTabView: View {
@@ -101,8 +102,7 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .destination(.documents)
     @State private var isMoreMenuPresented = false
     @State private var presentedOverlay: MainTabOverlay?
-    @State private var createDocumentPresentation: CreateDocumentPresentation?
-    @State private var isCreateDocumentUnavailableAlertPresented = false
+    @State private var presentedSheet: MainTabSheet?
 
     var body: some View {
         @Bindable var preferences = appModel.settingsDevicePreferences
@@ -120,7 +120,7 @@ struct MainTabView: View {
             PathwayTabBar(
                 selectedTab: $selectedTab,
                 isMoreMenuPresented: $isMoreMenuPresented,
-                createDocument: presentCreateDocument,
+                showAgentOrchestrator: presentAgentOrchestrator,
                 showCompanySwitcher: {
                     withAnimation(companySwitcherSpring) {
                         presentedOverlay = .companySwitcher
@@ -151,21 +151,13 @@ struct MainTabView: View {
                     .zIndex(11)
             }
         }
-        .fullScreenCover(item: $createDocumentPresentation) { presentation in
-            CreateDocumentFlowView(model: presentation.model) { _ in
-                withAnimation(tabSelectionSpring) {
-                    selectedTab = .destination(.documents)
-                }
-                createDocumentPresentation = nil
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .agentOrchestrator:
+                AgentOrchestratorView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
-        }
-        .alert(
-            "Document creation is still loading",
-            isPresented: $isCreateDocumentUnavailableAlertPresented
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Wait a moment for your Pathway workspace to finish loading, then try again.")
         }
         .environment(\.locale, preferences.locale)
         .preferredColorScheme(colorScheme(for: preferences.appearance))
@@ -189,13 +181,9 @@ struct MainTabView: View {
         }
     }
 
-    private func presentCreateDocument() {
+    private func presentAgentOrchestrator() {
         dismissMoreMenu()
-        guard let model = appModel.makeCreateDocumentFlowModel() else {
-            isCreateDocumentUnavailableAlertPresented = true
-            return
-        }
-        createDocumentPresentation = CreateDocumentPresentation(model: model)
+        presentedSheet = .agentOrchestrator
     }
 
     private func dismissMoreMenu() {
@@ -214,7 +202,7 @@ struct MainTabView: View {
 private struct PathwayTabBar: View {
     @Binding var selectedTab: AppTab
     @Binding var isMoreMenuPresented: Bool
-    let createDocument: () -> Void
+    let showAgentOrchestrator: () -> Void
     let showCompanySwitcher: () -> Void
 
     @Namespace private var glassNamespace
@@ -225,8 +213,8 @@ private struct PathwayTabBar: View {
             HStack(alignment: .bottom, spacing: 12) {
                 mainSurface
 
-                Button(action: createDocument) {
-                    Image(systemName: "plus")
+                Button(action: showAgentOrchestrator) {
+                    Image(systemName: "bubble.left.and.bubble.right")
                         .font(.system(size: 23, weight: .medium))
                         .frame(width: compactTabBarHeight, height: compactTabBarHeight)
                         .contentShape(Circle())
@@ -234,8 +222,9 @@ private struct PathwayTabBar: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.primary)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID("new-tab", in: glassNamespace)
-                .accessibilityLabel("Create document")
+                .glassEffectID("agent-orchestrator", in: glassNamespace)
+                .accessibilityLabel("Open agent orchestrator")
+                .accessibilityIdentifier("agent-orchestrator-button")
             }
         }
     }
