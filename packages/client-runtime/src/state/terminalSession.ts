@@ -117,13 +117,16 @@ export function terminalBufferStateFromSnapshot(
 /**
  * Return output appended since the previous render, even when the retained
  * buffer dropped an old prefix to stay inside its memory limit. A new epoch
- * means the terminal was cleared or replayed and must be reset instead.
+ * means the terminal was cleared or replayed, while a non-increasing version
+ * means the attach stream was recreated. Both cases require a reset instead.
  */
 export function terminalBufferAppend(
-  previous: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset">,
-  current: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset">,
+  previous: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset" | "version">,
+  current: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset" | "version">,
 ): string | null {
-  if (previous.bufferEpoch !== current.bufferEpoch) return null;
+  if (previous.bufferEpoch !== current.bufferEpoch || current.version <= previous.version) {
+    return null;
+  }
   const previousEnd = previous.bufferOffset + previous.buffer.length;
   const currentEnd = current.bufferOffset + current.buffer.length;
   if (currentEnd < previousEnd) return null;

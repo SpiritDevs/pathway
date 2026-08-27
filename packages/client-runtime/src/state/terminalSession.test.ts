@@ -254,4 +254,19 @@ describe("terminal session reducers", () => {
     expect(terminalBufferAppend(cleared, restarted)).toBeNull();
     expect([snapshot.version, cleared.version, restarted.version]).toEqual([1, 2, 3]);
   });
+
+  it("requires a replay when a recreated attach stream reuses an epoch", () => {
+    const previous = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: { ...BASE_SNAPSHOT, history: "abc" },
+    });
+    const recreated = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: { ...BASE_SNAPSHOT, history: "xyz123" },
+    });
+
+    expect(previous).toMatchObject({ bufferEpoch: 1, version: 1 });
+    expect(recreated).toMatchObject({ bufferEpoch: 1, version: 1 });
+    expect(terminalBufferAppend(previous, recreated)).toBeNull();
+  });
 });
