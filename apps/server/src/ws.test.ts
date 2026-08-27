@@ -9,9 +9,33 @@ import { MembershipId } from "@spiritdevs/contracts/company";
 
 import {
   resolveAvailableEditorsForConfig,
+  refreshLocalGitStatusAfterMutation,
   resolveIssueConnectionActor,
   wsProjectUpdateInputFromMutation,
 } from "./ws.ts";
+
+it.effect("waits for local Git status before completing a ref mutation", () =>
+  Effect.gen(function* () {
+    const refreshStarted = yield* Deferred.make<void>();
+    const releaseRefresh = yield* Deferred.make<void>();
+    const mutationResult = { refName: "feature/selected" };
+
+    const mutationFiber = yield* refreshLocalGitStatusAfterMutation(
+      "/repo",
+      Effect.succeed(mutationResult),
+      () =>
+        Deferred.succeed(refreshStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRefresh)),
+        ),
+    ).pipe(Effect.forkChild);
+
+    yield* Deferred.await(refreshStarted);
+    assert.isUndefined(mutationFiber.pollUnsafe());
+
+    yield* Deferred.succeed(releaseRefresh, undefined);
+    assert.deepStrictEqual(yield* Fiber.join(mutationFiber), mutationResult);
+  }),
+);
 
 it.each(["worktree" as const, null])(
   "forwards the project workspace override through WebSocket RPC: %s",

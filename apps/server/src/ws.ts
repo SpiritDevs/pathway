@@ -483,6 +483,18 @@ export function wsProjectUpdateInputFromMutation(
   };
 }
 
+export const refreshLocalGitStatusAfterMutation = Effect.fn(
+  "ws.refreshLocalGitStatusAfterMutation",
+)(function* <A, E, B, E2>(
+  cwd: string,
+  mutation: Effect.Effect<A, E>,
+  refreshLocalStatus: (cwd: string) => Effect.Effect<B, E2>,
+) {
+  const result = yield* mutation;
+  yield* refreshLocalStatus(cwd).pipe(Effect.ignoreCause({ log: true }));
+  return result;
+});
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
@@ -2063,13 +2075,24 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsCreateRef]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateRef,
-            gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            (input.switchRef
+              ? refreshLocalGitStatusAfterMutation(
+                  input.cwd,
+                  gitWorkflow.createRef(input),
+                  vcsStatusBroadcaster.refreshLocalStatus,
+                )
+              : gitWorkflow.createRef(input)
+            ).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsSwitchRef]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsSwitchRef,
-            gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            refreshLocalGitStatusAfterMutation(
+              input.cwd,
+              gitWorkflow.switchRef(input),
+              vcsStatusBroadcaster.refreshLocalStatus,
+            ).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             { "rpc.aggregate": "vcs" },
           ),
         [WS_METHODS.vcsInit]: (input) =>

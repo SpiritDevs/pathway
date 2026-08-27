@@ -1,5 +1,6 @@
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
+  type AtomCommandResult,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
@@ -13,7 +14,6 @@ import {
   useId,
   useLayoutEffect,
   useMemo,
-  useOptimistic,
   useRef,
   useState,
   useTransition,
@@ -44,12 +44,14 @@ import { parsePullRequestReference } from "../pullRequestReference";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import {
   deriveLocalBranchNameFromRemoteRef,
+  resolveDisplayedBranch,
   resolveBranchTriggerLabel,
   resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
+  resolvePendingBranchSelection,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
@@ -91,6 +93,20 @@ interface BranchToolbarBranchSelectorProps {
 
 function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+function reportThreadBranchUpdateFailure(
+  result: AtomCommandResult<unknown, unknown>,
+  title: string,
+): void {
+  if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+  toastManager.add(
+    stackedThreadToast({
+      type: "error",
+      title,
+      description: toBranchActionErrorMessage(squashAtomCommandFailure(result)),
+    }),
+  );
 }
 
 export function BranchToolbarBranchSelector({
@@ -167,8 +183,8 @@ export function BranchToolbarBranchSelector({
   // Thread branch mutation (colocated — only this component calls it)
   // ---------------------------------------------------------------------------
   const setThreadBranch = useCallback(
-    (branch: string | null, worktreePath: string | null) => {
-      if (!activeThreadId || !activeProject) return;
+    async (branch: string | null, worktreePath: string | null) => {
+      if (!activeThreadId || !activeProject) return null;
       if (serverSession && worktreePath !== activeWorktreePath) {
         void stopThreadSession({
           environmentId,
@@ -176,7 +192,7 @@ export function BranchToolbarBranchSelector({
         });
       }
       if (hasServerThread) {
-        void updateThreadMetadata({
+        const result = await updateThreadMetadata({
           environmentId,
           input: {
             threadId: activeThreadId,
@@ -184,10 +200,10 @@ export function BranchToolbarBranchSelector({
             worktreePath,
           },
         });
-      }
-      if (hasServerThread) {
-        onActiveThreadBranchOverrideChange?.(branch);
-        return;
+        if (result._tag === "Success") {
+          onActiveThreadBranchOverrideChange?.(branch);
+        }
+        return result;
       }
       const nextDraftEnvMode = resolveDraftEnvModeAfterBranchChange({
         nextWorktreePath: worktreePath,
@@ -200,6 +216,7 @@ export function BranchToolbarBranchSelector({
         envMode: nextDraftEnvMode,
         projectRef: scopeProjectRef(environmentId, activeProject.id),
       });
+      return null;
     },
     [
       activeThreadId,
@@ -267,6 +284,16 @@ export function BranchToolbarBranchSelector({
     activeThreadBranch,
     currentGitBranch,
   });
+  const [pendingBranchSelection, setPendingBranchSelection] = useState<string | null>(null);
+  const settledPendingBranchSelection = resolvePendingBranchSelection(
+    pendingBranchSelection,
+    canonicalActiveBranch,
+  );
+  useEffect(() => {
+    if (settledPendingBranchSelection !== pendingBranchSelection) {
+      setPendingBranchSelection(settledPendingBranchSelection);
+    }
+  }, [pendingBranchSelection, settledPendingBranchSelection]);
   const branchNames = useMemo(() => refs.map((refName) => refName.name), [refs]);
   const branchByName = useMemo(
     () => new Map(refs.map((refName) => [refName.name, refName] as const)),
@@ -314,10 +341,10 @@ export function BranchToolbarBranchSelector({
       normalizedDeferredBranchQuery,
     ],
   );
-  const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
-    canonicalActiveBranch,
-    (_currentBranch: string | null, optimisticBranch: string | null) => optimisticBranch,
-  );
+  const resolvedActiveBranch = resolveDisplayedBranch({
+    pendingBranch: settledPendingBranchSelection,
+    canonicalBranch: canonicalActiveBranch,
+  });
   const listedActiveBranch =
     resolvedActiveBranch === null ? null : (branchByName.get(resolvedActiveBranch) ?? null);
   const activeBranchRefQuery = useEnvironmentQuery(
@@ -397,7 +424,6 @@ export function BranchToolbarBranchSelector({
     startBranchActionTransition(async () => {
       await action();
       branchRefState.refresh();
-      branchStatusQuery.refresh();
     });
   };
 
@@ -405,9 +431,16 @@ export function BranchToolbarBranchSelector({
     if (!branchCwd || !activeProjectCwd || isBranchActionPending) return;
 
     if (isSelectingWorktreeBase) {
-      setThreadBranch(refName.name, null);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
+      setPendingBranchSelection(refName.name);
+      runBranchAction(async () => {
+        const result = await setThreadBranch(refName.name, null);
+        if (result?._tag === "Failure") {
+          setPendingBranchSelection(null);
+          reportThreadBranchUpdateFailure(result, "Failed to select base ref.");
+        }
+      });
       return;
     }
 
@@ -418,9 +451,16 @@ export function BranchToolbarBranchSelector({
     });
 
     if (selectionTarget.reuseExistingWorktree) {
-      setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
+      setPendingBranchSelection(refName.name);
+      runBranchAction(async () => {
+        const result = await setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
+        if (result?._tag === "Failure") {
+          setPendingBranchSelection(null);
+          reportThreadBranchUpdateFailure(result, "Failed to switch worktree.");
+        }
+      });
       return;
     }
 
@@ -430,10 +470,9 @@ export function BranchToolbarBranchSelector({
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
+    setPendingBranchSelection(selectedBranchName);
 
     runBranchAction(async () => {
-      const previousBranch = resolvedActiveBranch;
-      setOptimisticBranch(selectedBranchName);
       const checkoutResult = await switchRef({
         environmentId,
         input: {
@@ -445,11 +484,20 @@ export function BranchToolbarBranchSelector({
         const nextBranchName = refName.isRemote
           ? (checkoutResult.value.refName ?? selectedBranchName)
           : selectedBranchName;
-        setOptimisticBranch(nextBranchName);
-        setThreadBranch(nextBranchName, selectionTarget.nextWorktreePath);
+        setPendingBranchSelection(nextBranchName);
+        const threadUpdateResult = await setThreadBranch(
+          nextBranchName,
+          selectionTarget.nextWorktreePath,
+        );
+        if (threadUpdateResult?._tag === "Failure") {
+          reportThreadBranchUpdateFailure(
+            threadUpdateResult,
+            "Branch switched, but the thread could not be updated.",
+          );
+        }
         return;
       }
-      setOptimisticBranch(previousBranch);
+      setPendingBranchSelection(null);
       if (!isAtomCommandInterrupted(checkoutResult)) {
         toastManager.add(
           stackedThreadToast({
@@ -468,10 +516,9 @@ export function BranchToolbarBranchSelector({
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
+    setPendingBranchSelection(name);
 
     runBranchAction(async () => {
-      const previousBranch = resolvedActiveBranch;
-      setOptimisticBranch(name);
       const createBranchResult = await createRefMutation({
         environmentId,
         input: {
@@ -481,11 +528,20 @@ export function BranchToolbarBranchSelector({
         },
       });
       if (createBranchResult._tag === "Success") {
-        setOptimisticBranch(createBranchResult.value.refName);
-        setThreadBranch(createBranchResult.value.refName, activeWorktreePath);
+        setPendingBranchSelection(createBranchResult.value.refName);
+        const threadUpdateResult = await setThreadBranch(
+          createBranchResult.value.refName,
+          activeWorktreePath,
+        );
+        if (threadUpdateResult?._tag === "Failure") {
+          reportThreadBranchUpdateFailure(
+            threadUpdateResult,
+            "Branch created, but the thread could not be updated.",
+          );
+        }
         return;
       }
-      setOptimisticBranch(previousBranch);
+      setPendingBranchSelection(null);
       if (!isAtomCommandInterrupted(createBranchResult)) {
         toastManager.add(
           stackedThreadToast({
@@ -517,7 +573,7 @@ export function BranchToolbarBranchSelector({
     ) {
       return;
     }
-    setThreadBranch(worktreeBaseBranchCandidate, null);
+    void setThreadBranch(worktreeBaseBranchCandidate, null);
   }, [
     activeThreadBranch,
     activeWorktreePath,

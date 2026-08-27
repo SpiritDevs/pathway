@@ -192,6 +192,20 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
+export function resolvePendingBranchSelection(
+  pendingBranch: string | null,
+  canonicalBranch: string | null,
+): string | null {
+  return pendingBranch === canonicalBranch ? null : pendingBranch;
+}
+
+export function resolveDisplayedBranch(input: {
+  pendingBranch: string | null;
+  canonicalBranch: string | null;
+}): string | null {
+  return input.pendingBranch ?? input.canonicalBranch;
+}
+
 export function resolveBranchTriggerLabel(input: {
   activeWorktreePath: string | null;
   effectiveEnvMode: EnvMode;
