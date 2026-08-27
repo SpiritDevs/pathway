@@ -72,4 +72,29 @@ describe("ComposerBannerStack", () => {
     expect(markup).toContain("branch-surface");
     expect(markup).toContain("branch-actions");
   });
+
+  it("renders a lone lip as a compact surface attached to the composer", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack
+        items={[{ ...banner("version"), presentation: "lip", onDismiss: () => {} }]}
+      />,
+    );
+
+    expect(markup).toContain("mb-0 px-4");
+    expect(markup).toContain('data-presentation="lip"');
+    expect(markup).toContain("min-h-8 rounded-b-none rounded-t-[14px]");
+    expect(markup).not.toContain("rounded-[22px]");
+  });
+
+  it("renders lip items as regular banners when notices are stacked", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack
+        items={[{ ...banner("version"), presentation: "lip" }, banner("connection")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-presentation="lip"');
+    expect(markup).not.toContain("rounded-b-none");
+    expect(markup).toContain("rounded-[22px]");
+  });
 });

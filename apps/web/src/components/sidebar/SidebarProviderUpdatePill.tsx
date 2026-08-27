@@ -54,6 +54,7 @@ export function SidebarProviderUpdatePill({ expanded }: { readonly expanded: boo
       ? { visibleAfterIso: effectiveVisibleAfterIso }
       : {}),
     dismissedKeys,
+    showActiveUpdates: false,
   });
 
   useEffect(() => {

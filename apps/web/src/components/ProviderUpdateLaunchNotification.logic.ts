@@ -55,6 +55,7 @@ export interface ProviderUpdateSidebarPillView {
 interface ProviderUpdateSidebarPillOptions {
   readonly visibleAfterIso?: string;
   readonly dismissedKeys?: ReadonlySet<string>;
+  readonly showActiveUpdates?: boolean;
 }
 
 const PROVIDER_UPDATE_SUCCESS_VISIBLE_MS = 3_000;
@@ -141,6 +142,12 @@ export function isProviderUpdateCandidate(
 
 export function isProviderUpdateActive(provider: Pick<ServerProvider, "updateState">): boolean {
   return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
+}
+
+export function collectActiveProviderUpdates(
+  providers: ReadonlyArray<ServerProvider>,
+): ServerProvider[] {
+  return dedupeProvidersByDriver(providers.filter(isProviderUpdateActive));
 }
 
 export function collectProviderUpdateCandidates(
@@ -411,7 +418,7 @@ export function getProviderUpdateSidebarPillView(
 ): ProviderUpdateSidebarPillView | null {
   const dedupedProviders = dedupeProvidersByDriver(providers);
   const activeProviders = dedupedProviders.filter(isProviderUpdateActive);
-  if (activeProviders.length > 0) {
+  if (activeProviders.length > 0 && options?.showActiveUpdates !== false) {
     const activeProvider = activeProviders[0]!;
     const activeProviderName =
       PROVIDER_DISPLAY_NAMES[activeProvider.driver] ?? activeProvider.driver;
