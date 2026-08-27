@@ -1,0 +1,5 @@
+--stripunusedargs closure-only
+--header ignore
+--indent 4
+--swiftversion 6.0
+--trailing-commas never

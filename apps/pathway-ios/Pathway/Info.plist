@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>APNS_ENVIRONMENT</key>
+	<string>$(APNS_ENVIRONMENT)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Pathway Clerk callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pathway</string>
+			</array>
+		</dict>
+	</array>
+	<key>PATHWAY_CLERK_PUBLISHABLE_KEY</key>
+	<string>$(PATHWAY_CLERK_PUBLISHABLE_KEY)</string>
+	<key>PATHWAY_CONVEX_URL</key>
+	<string>$(PATHWAY_CONVEX_URL)</string>
+	<key>PATHWAY_RELAY_URL</key>
+	<string>$(PATHWAY_RELAY_URL)</string>
+	<key>PATHWAY_SITE_URL</key>
+	<string>$(PATHWAY_SITE_URL)</string>
+</dict>
+</plist>
