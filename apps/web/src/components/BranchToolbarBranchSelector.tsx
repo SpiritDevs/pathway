@@ -233,13 +233,13 @@ export function BranchToolbarBranchSelector({
           input: { cwd: branchCwd },
         }),
   );
-  const trimmedBranchQuery = branchQuery.trim();
-  const deferredTrimmedBranchQuery = deferredBranchQuery.trim();
+  const branchNameQuery = sanitizeNewRefName(branchQuery);
+  const deferredBranchNameQuery = sanitizeNewRefName(deferredBranchQuery);
   // The server filters refs by substring, so it has to be given the sanitized
   // name as well: querying the raw "new branch" drops an existing new-branch
   // from the response entirely, which would defeat the collision check below.
   // Ref names cannot contain an ASCII space, so sanitizing loses no matches.
-  const branchRefQuery = sanitizeNewRefName(deferredTrimmedBranchQuery);
+  const branchRefQuery = deferredBranchNameQuery;
   const branchRefTarget = useMemo(
     () => ({
       environmentId,
@@ -272,21 +272,19 @@ export function BranchToolbarBranchSelector({
     () => new Map(refs.map((refName) => [refName.name, refName] as const)),
     [refs],
   );
-  const normalizedDeferredBranchQuery = deferredTrimmedBranchQuery.toLowerCase();
-  const prReference = parsePullRequestReference(trimmedBranchQuery);
+  const normalizedDeferredBranchQuery = deferredBranchNameQuery.toLowerCase();
+  const prReference = parsePullRequestReference(branchQuery.trim());
   const isSelectingWorktreeBase =
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
-  const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
   // The ref is created under its sanitized name, so the collision check has to
   // use that name too. Matching on the raw query would offer to create a ref
   // that already exists whenever sanitizing changes the name.
-  const newRefName = sanitizeNewRefName(trimmedBranchQuery);
+  const newRefName = branchNameQuery;
+  const canCreateBranch = !isSelectingWorktreeBase && newRefName.length > 0;
   const hasExactBranchMatch = branchByName.has(newRefName);
-  const createBranchItemValue = canCreateBranch
-    ? `__create_new_branch__:${trimmedBranchQuery}`
-    : null;
+  const createBranchItemValue = canCreateBranch ? `__create_new_branch__:${newRefName}` : null;
   const branchPickerItems = useMemo(() => {
     const items = [...branchNames];
     if (createBranchItemValue && !hasExactBranchMatch) {
@@ -620,7 +618,7 @@ export function BranchToolbarBranchSelector({
       cancelAnimationFrame(nestedFrame);
     };
   }, [
-    deferredTrimmedBranchQuery,
+    deferredBranchNameQuery,
     filteredBranchPickerItems.length,
     isBranchMenuOpen,
     updateBranchListScrollFades,
@@ -632,7 +630,7 @@ export function BranchToolbarBranchSelector({
     }
 
     void branchListRef.current?.scrollToOffset?.({ offset: 0, animated: false });
-  }, [deferredTrimmedBranchQuery, isBranchMenuOpen]);
+  }, [deferredBranchNameQuery, isBranchMenuOpen]);
 
   const triggerLabel = resolveBranchTriggerLabel({
     activeWorktreePath,
@@ -700,7 +698,7 @@ export function BranchToolbarBranchSelector({
           index={index}
           value={itemValue}
           className="pe-1.5"
-          onClick={() => createRef(trimmedBranchQuery)}
+          onClick={() => createRef(newRefName)}
         >
           <span className="truncate">Create new ref &quot;{newRefName}&quot;</span>
         </ComboboxItem>

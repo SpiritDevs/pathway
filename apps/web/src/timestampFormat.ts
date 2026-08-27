@@ -91,6 +91,17 @@ export function formatShortTimestamp(isoDate: string, timestampFormat: Timestamp
   return getTimestampFormatter(timestampFormat, false).format(date);
 }
 
+export function localDayStartTimestamp(nowMs: number = Date.now()): number {
+  const now = new Date(nowMs);
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+export function millisecondsUntilNextLocalDay(nowMs: number = Date.now()): number {
+  const now = new Date(nowMs);
+  const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+  return Math.max(1, nextDay - nowMs);
+}
+
 const numericDateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "numeric",
   day: "numeric",
@@ -117,7 +128,7 @@ export function formatDayAwareTimestamp(
   const time = getTimestampFormatter(timestampFormat, false).format(date);
 
   const now = new Date(nowMs);
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfToday = localDayStartTimestamp(nowMs);
   const startOfMessageDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   // Round so DST-shifted 23/25 hour days still count as whole days.
   const dayDiff = Math.round((startOfToday - startOfMessageDay) / 86_400_000);

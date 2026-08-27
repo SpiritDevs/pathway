@@ -854,6 +854,8 @@ describe("sanitizeNewRefName", () => {
   it("preserves whitespace that git accepts", () => {
     expect(sanitizeNewRefName("new\u00a0branch")).toBe("new\u00a0branch");
     expect(sanitizeNewRefName("new\u2009branch")).toBe("new\u2009branch");
+    expect(sanitizeNewRefName("\u00a0feature")).toBe("\u00a0feature");
+    expect(sanitizeNewRefName("feature\u2009")).toBe("feature\u2009");
   });
 
   it("keeps slashes so nested ref names survive", () => {

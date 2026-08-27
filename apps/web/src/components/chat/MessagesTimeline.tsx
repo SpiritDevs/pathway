@@ -120,7 +120,12 @@ import {
 import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@spiritdevs/contracts/settings";
-import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
+import {
+  formatChatTimestampTooltip,
+  formatDayAwareTimestamp,
+  localDayStartTimestamp,
+  millisecondsUntilNextLocalDay,
+} from "../../timestampFormat";
 import { V2ItemInspector } from "./V2ItemInspector";
 import {
   isV2LifecycleItem,
@@ -149,11 +154,13 @@ import {
 // Context — shared state consumed by every row component via Context.
 // Propagates through LegendList's memo boundaries for shared callbacks and
 // non-row-scoped state. `nowIso` is intentionally excluded — self-ticking
-// components (WorkingTimer, LiveElapsed) handle it.
+// components (WorkingTimer, LiveElapsed) handle it. The coarse timestamp clock
+// changes only at the local day boundary so day-aware labels stay accurate.
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
   timestampFormat: TimestampFormat;
+  timestampNowMs: number;
   routeThreadKey: string;
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
@@ -306,6 +313,7 @@ interface MessagesTimelineProps {
 const DEFAULT_ASYNC_FALSE = (): Promise<boolean> => Promise.resolve(false);
 const NOOP_RECOVER_USAGE_LIMIT = () => undefined;
 const NOOP_WAIT_FOR_USAGE_RESET = () => undefined;
+const LOCAL_DAY_CLOCK_RECHECK_MS = 60_000;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
@@ -363,6 +371,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
   const [editingUserMessageDraft, setEditingUserMessageDraft] = useState("");
   const [isSubmittingUserMessageEdit, setIsSubmittingUserMessageEdit] = useState(false);
+  const [timestampNowMs, setTimestampNowMs] = useState(localDayStartTimestamp);
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
@@ -389,6 +398,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
       }
     };
+  }, []);
+
+  useEffect(() => {
+    let timeoutId: number;
+    const scheduleNextLocalDay = () => {
+      timeoutId = window.setTimeout(
+        () => {
+          const nextTimestampNowMs = localDayStartTimestamp();
+          setTimestampNowMs((current) =>
+            current === nextTimestampNowMs ? current : nextTimestampNowMs,
+          );
+          scheduleNextLocalDay();
+        },
+        Math.min(millisecondsUntilNextLocalDay(), LOCAL_DAY_CLOCK_RECHECK_MS),
+      );
+    };
+    scheduleNextLocalDay();
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   // A fold toggle inserts/removes rows around the toggled row. Suspending
@@ -663,6 +690,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
       timestampFormat,
+      timestampNowMs,
       routeThreadKey,
       threadRef: parseScopedThreadKey(routeThreadKey),
       markdownCwd,
@@ -700,6 +728,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }),
     [
       timestampFormat,
+      timestampNowMs,
       routeThreadKey,
       markdownCwd,
       resolvedTheme,
@@ -1368,7 +1397,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-              {formatDayAwareTimestamp(row.message.createdAt, ctx.timestampFormat)}
+              {formatDayAwareTimestamp(
+                row.message.createdAt,
+                ctx.timestampFormat,
+                ctx.timestampNowMs,
+              )}
             </TooltipTrigger>
             <TooltipPopup>
               {formatChatTimestampTooltip(row.message.createdAt, ctx.timestampFormat)}
@@ -1626,7 +1659,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
                 <TooltipTrigger
                   render={<p className="text-muted-foreground text-xs tabular-nums" />}
                 >
-                  {formatDayAwareTimestamp(row.message.updatedAt, ctx.timestampFormat)}
+                  {formatDayAwareTimestamp(
+                    row.message.updatedAt,
+                    ctx.timestampFormat,
+                    ctx.timestampNowMs,
+                  )}
                 </TooltipTrigger>
                 <TooltipPopup>
                   {formatChatTimestampTooltip(row.message.updatedAt, ctx.timestampFormat)}
