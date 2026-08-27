@@ -1,12 +1,14 @@
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
-import { EnvironmentId, ProjectId, ThreadId } from "@spiritdevs/contracts";
+import { EnvironmentId, ProjectId, RunId, ThreadId } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   pullRequestReviewCanFinish,
+  pullRequestReviewCompletionKey,
+  readCompletedPullRequestReviewKeys,
   reconcilePullRequestReviewPublisherTargets,
-  pullRequestReviewProcessingDisposition,
   type PullRequestReviewPublisherTarget,
+  writeCompletedPullRequestReviewKeys,
 } from "./PullRequestAgentReviewHost.logic";
 
 function thread(input: {
@@ -14,6 +16,8 @@ function thread(input: {
   readonly title: string;
   readonly runtimeStatus?: "running" | "settled";
   readonly deletedAt?: string | null;
+  readonly createdAt?: string;
+  readonly runId?: string;
   readonly updatedAt?: string;
 }): EnvironmentThreadShell {
   return {
@@ -22,25 +26,30 @@ function thread(input: {
     projectId: ProjectId.make("project-1"),
     title: input.title,
     deletedAt: input.deletedAt ?? null,
+    latestRun: {
+      runId: RunId.make(input.runId ?? `${input.id}-run`),
+    },
+    createdAt: input.createdAt ?? "2026-08-27T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-08-27T00:00:00.000Z",
     runtime: { status: input.runtimeStatus ?? "running" },
   } as unknown as EnvironmentThreadShell;
 }
 
 describe("pull request review publisher targets", () => {
-  it("waits for publishing activity but stages findings when that read fails", () => {
-    expect(
-      pullRequestReviewProcessingDisposition({
-        activityAvailable: false,
-        activityError: null,
-      }),
-    ).toBe("wait");
-    expect(
-      pullRequestReviewProcessingDisposition({
-        activityAvailable: false,
-        activityError: "Host unavailable",
-      }),
-    ).toBe("stage");
+  it("persists completed review keys and treats malformed storage as empty", () => {
+    let stored: string | null = null;
+    const storage = {
+      getItem: () => stored,
+      setItem: (_key: string, value: string) => {
+        stored = value;
+      },
+    };
+
+    writeCompletedPullRequestReviewKeys(storage, new Set(["review-1", "review-2"]));
+    expect(readCompletedPullRequestReviewKeys(storage)).toEqual(new Set(["review-1", "review-2"]));
+
+    stored = "not json";
+    expect(readCompletedPullRequestReviewKeys(storage)).toEqual(new Set());
   });
 
   it("releases a settled review that completed without an assistant message", () => {
@@ -108,31 +117,26 @@ describe("pull request review publisher targets", () => {
     ).toEqual(observed);
   });
 
-  it("restores only the latest settled publishing review for each pull request", () => {
-    expect(
-      reconcilePullRequestReviewPublisherTargets(
-        [
-          thread({
-            id: "older-publisher",
-            title: "PR review · coreybaines/pathway#40 · publish",
-            runtimeStatus: "settled",
-            updatedAt: "2026-08-26T00:00:00.000Z",
-          }),
-          thread({
-            id: "latest-publisher",
-            title: "PR review · coreybaines/pathway#40 · publish",
-            runtimeStatus: "settled",
-            updatedAt: "2026-08-27T00:00:00.000Z",
-          }),
-          thread({
-            id: "latest-draft",
-            title: "PR review · coreybaines/pathway#40",
-            runtimeStatus: "settled",
-          }),
-        ],
-        [],
-      ),
-    ).toEqual([
+  it("recovers every settled publishing review through one bounded slot", () => {
+    const older = thread({
+      id: "older-publisher",
+      title: "PR review · coreybaines/pathway#40 · publish",
+      runtimeStatus: "settled",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    });
+    const latest = thread({
+      id: "latest-publisher",
+      title: "PR review · coreybaines/pathway#40 · publish",
+      runtimeStatus: "settled",
+      createdAt: "2026-08-27T00:00:00.000Z",
+    });
+    const draft = thread({
+      id: "latest-draft",
+      title: "PR review · coreybaines/pathway#40",
+      runtimeStatus: "settled",
+    });
+
+    expect(reconcilePullRequestReviewPublisherTargets([older, latest, draft], [])).toEqual([
       {
         environmentId: "environment-1",
         threadId: "latest-publisher",
@@ -143,20 +147,110 @@ describe("pull request review publisher targets", () => {
         },
       },
     ]);
+
+    expect(
+      reconcilePullRequestReviewPublisherTargets(
+        [older, latest, draft],
+        [],
+        new Set(["environment-1\u0000latest-publisher\u0000latest-publisher-run"]),
+      ),
+    ).toEqual([
+      {
+        environmentId: "environment-1",
+        threadId: "older-publisher",
+        reference: {
+          projectId: "project-1",
+          repository: "coreybaines/pathway",
+          number: 40,
+        },
+      },
+    ]);
   });
 
-  it("releases a completed settled review but observes it again if its runtime restarts", () => {
+  it("bounds settled recovery globally rather than mounting one publisher per pull request", () => {
+    expect(
+      reconcilePullRequestReviewPublisherTargets(
+        [
+          thread({
+            id: "older-pr",
+            title: "PR review · coreybaines/pathway#40 · publish",
+            runtimeStatus: "settled",
+            createdAt: "2026-08-26T00:00:00.000Z",
+          }),
+          thread({
+            id: "newer-pr",
+            title: "PR review · coreybaines/pathway#41 · publish",
+            runtimeStatus: "settled",
+            createdAt: "2026-08-27T00:00:00.000Z",
+          }),
+        ],
+        [],
+      ),
+    ).toEqual([
+      {
+        environmentId: "environment-1",
+        threadId: "newer-pr",
+        reference: {
+          projectId: "project-1",
+          repository: "coreybaines/pathway",
+          number: 41,
+        },
+      },
+    ]);
+  });
+
+  it("does not recover another settled review while a retained review owns the recovery slot", () => {
+    const retainedThread = thread({
+      id: "retained-review",
+      title: "PR review · coreybaines/pathway#40 · publish",
+      runtimeStatus: "settled",
+      createdAt: "2026-08-26T00:00:00.000Z",
+    });
+    const waitingThread = thread({
+      id: "waiting-review",
+      title: "PR review · coreybaines/pathway#41 · publish",
+      runtimeStatus: "settled",
+      createdAt: "2026-08-27T00:00:00.000Z",
+    });
+    const retained: PullRequestReviewPublisherTarget[] = [
+      {
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId: ThreadId.make("retained-review"),
+        reference: {
+          projectId: ProjectId.make("project-1"),
+          repository: "coreybaines/pathway",
+          number: 40,
+        },
+      },
+    ];
+
+    expect(
+      reconcilePullRequestReviewPublisherTargets([retainedThread, waitingThread], retained),
+    ).toEqual(retained);
+  });
+
+  it("releases a completed run but observes a later run completed by another client", () => {
     const settled = thread({
       id: "thread-1",
       title: "PR review · coreybaines/pathway#42 · publish",
       runtimeStatus: "settled",
+      runId: "run-1",
     });
-    const key = "environment-1\u0000thread-1";
+    const target = {
+      environmentId: EnvironmentId.make("environment-1"),
+      threadId: ThreadId.make("thread-1"),
+    };
+    const key = pullRequestReviewCompletionKey(target, RunId.make("run-1"));
 
     expect(reconcilePullRequestReviewPublisherTargets([settled], [], new Set([key]))).toEqual([]);
     expect(
       reconcilePullRequestReviewPublisherTargets(
-        [{ ...settled, runtime: { status: "running" } } as unknown as EnvironmentThreadShell],
+        [
+          {
+            ...settled,
+            latestRun: { runId: RunId.make("run-2") },
+          } as unknown as EnvironmentThreadShell,
+        ],
         [],
         new Set([key]),
       ),

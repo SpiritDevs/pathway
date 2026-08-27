@@ -1,20 +1,22 @@
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { threadRuntimeIsActive } from "@spiritdevs/client-runtime/state/models";
 import { deriveLatestThreadRun } from "@spiritdevs/client-runtime/state/thread-execution";
-import { pullRequestAgentReviewMarkerIds } from "@spiritdevs/shared/pullRequestReview";
-import { useCallback, useEffect, useRef, useState } from "react";
+import type { RunId } from "@spiritdevs/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useThreadProjection, useThreadShell, useThreadShells } from "~/state/entities";
 import { pullRequestEnvironment } from "~/state/pullRequests";
-import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import {
+  addCompletedPullRequestReviewKey,
+  readCompletedPullRequestReviewKeys,
   reconcilePullRequestReviewPublisherTargets,
   pullRequestReviewCanFinish,
-  pullRequestReviewProcessingDisposition,
+  pullRequestReviewCompletionKey,
   pullRequestReviewPublisherTargetKey,
   type PullRequestReviewPublisherTarget,
+  writeCompletedPullRequestReviewKeys,
 } from "./PullRequestAgentReviewHost.logic";
 import {
   agentReviewSummary,
@@ -28,25 +30,20 @@ function PullRequestAgentReviewPublisher({
   onFinished,
 }: {
   readonly target: PullRequestReviewPublisherTarget;
-  readonly onFinished: (target: PullRequestReviewPublisherTarget) => void;
+  readonly onFinished: (
+    target: PullRequestReviewPublisherTarget,
+    runId: RunId,
+    completion: "durable" | "session",
+  ) => void;
 }) {
   const threadRef = scopeThreadRef(target.environmentId, target.threadId);
   const shell = useThreadShell(threadRef);
   const projection = useThreadProjection(threadRef);
-  const {
-    data: activity,
-    error: activityError,
-    refresh: refreshActivity,
-  } = useEnvironmentQuery(
-    pullRequestEnvironment.activity({
-      environmentId: target.environmentId,
-      input: target.reference,
-    }),
-  );
   const submitReview = useAtomCommand(pullRequestEnvironment.submitReview, {
     reportFailure: false,
   });
   const processedMessageIds = useRef(new Set<string>());
+  const requiresRetry = useRef(false);
   const publishing = useRef(false);
   const [processingVersion, setProcessingVersion] = useState(0);
 
@@ -56,13 +53,14 @@ function PullRequestAgentReviewPublisher({
     const latestRun = deriveLatestThreadRun(projection.projection);
     const finishIfComplete = () => {
       if (
+        latestRun !== null &&
         pullRequestReviewCanFinish({
           active,
           processedMessageIds: processedMessageIds.current,
           latestRun,
         })
       ) {
-        onFinished(target);
+        onFinished(target, latestRun.runId, requiresRetry.current ? "session" : "durable");
       }
     };
     const messages = projection.projection.messages.filter(
@@ -75,17 +73,6 @@ function PullRequestAgentReviewPublisher({
       finishIfComplete();
       return;
     }
-    const disposition = pullRequestReviewProcessingDisposition({
-      activityAvailable: activity !== null,
-      activityError,
-    });
-    if (disposition === "wait") return;
-
-    const alreadyPublished = new Set(
-      activity?.reviewThreads.flatMap((thread) =>
-        thread.comments.flatMap((comment) => [...pullRequestAgentReviewMarkerIds(comment.body)]),
-      ) ?? [],
-    );
     const prepared = messages.map((message) => {
       const marked = markedAgentReviewFindings({
         text: message.text,
@@ -95,31 +82,10 @@ function PullRequestAgentReviewPublisher({
       processedMessageIds.current.add(message.id);
       return {
         message,
-        findings: marked.filter(({ markerId }) => !alreadyPublished.has(markerId)),
+        findings: marked,
       };
     });
     const findingCount = prepared.reduce((count, entry) => count + entry.findings.length, 0);
-
-    if (disposition === "stage") {
-      for (const { message, findings } of prepared) {
-        if (findings.length > 0) {
-          stageAgentReviewFindings({
-            reference: target.reference,
-            messageText: message.text,
-            findings,
-          });
-        }
-      }
-      if (findingCount > 0) {
-        toastManager.add({
-          type: "error",
-          title: "The agent review could not be published",
-          description: "Its findings are still available as drafts in Code.",
-        });
-      }
-      finishIfComplete();
-      return;
-    }
 
     if (findingCount === 0) {
       finishIfComplete();
@@ -148,6 +114,7 @@ function PullRequestAgentReviewPublisher({
           },
         });
         if (result._tag === "Failure") {
+          requiresRetry.current = true;
           stageAgentReviewFindings({
             reference: target.reference,
             messageText: message.text,
@@ -173,49 +140,58 @@ function PullRequestAgentReviewPublisher({
           title: "Agent review synced",
           description: "Inline findings are available on the pull request.",
         });
-        refreshActivity();
       }
     })();
-  }, [
-    activity,
-    activityError,
-    onFinished,
-    processingVersion,
-    projection,
-    refreshActivity,
-    shell,
-    submitReview,
-    target,
-  ]);
+  }, [onFinished, processingVersion, projection, shell, submitReview, target]);
 
   return null;
+}
+
+function completionStorage(): Storage | undefined {
+  try {
+    return typeof window === "undefined" ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Keeps pull-request publishing alive independently of whichever route or tab is visible. */
 export function PullRequestAgentReviewHost() {
   const threads = useThreadShells();
   const [targets, setTargets] = useState<ReadonlyArray<PullRequestReviewPublisherTarget>>([]);
-  const [completedThreadKeys, setCompletedThreadKeys] = useState<ReadonlySet<string>>(new Set());
+  const [sessionCompletedThreadKeys, setSessionCompletedThreadKeys] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [durableCompletedThreadKeys, setDurableCompletedThreadKeys] = useState<ReadonlySet<string>>(
+    () => readCompletedPullRequestReviewKeys(completionStorage()),
+  );
+  const completedThreadKeys = useMemo(
+    () => new Set([...sessionCompletedThreadKeys, ...durableCompletedThreadKeys]),
+    [durableCompletedThreadKeys, sessionCompletedThreadKeys],
+  );
 
-  const finishTarget = useCallback((target: PullRequestReviewPublisherTarget) => {
-    const key = pullRequestReviewPublisherTargetKey(target);
-    setCompletedThreadKeys((current) => new Set(current).add(key));
-    setTargets((current) =>
-      current.filter((candidate) => pullRequestReviewPublisherTargetKey(candidate) !== key),
-    );
-  }, []);
+  const finishTarget = useCallback(
+    (target: PullRequestReviewPublisherTarget, runId: RunId, completion: "durable" | "session") => {
+      const targetKey = pullRequestReviewPublisherTargetKey(target);
+      const completionKey = pullRequestReviewCompletionKey(target, runId);
+      setSessionCompletedThreadKeys((current) =>
+        addCompletedPullRequestReviewKey(current, completionKey),
+      );
+      if (completion === "durable") {
+        setDurableCompletedThreadKeys((current) =>
+          addCompletedPullRequestReviewKey(current, completionKey),
+        );
+      }
+      setTargets((current) =>
+        current.filter((candidate) => pullRequestReviewPublisherTargetKey(candidate) !== targetKey),
+      );
+    },
+    [],
+  );
 
   useEffect(() => {
-    const activeThreadKeys = new Set(
-      threads
-        .filter((thread) => threadRuntimeIsActive(thread.runtime))
-        .map((thread) => `${thread.environmentId}\u0000${thread.id}`),
-    );
-    setCompletedThreadKeys((current) => {
-      if (![...current].some((key) => activeThreadKeys.has(key))) return current;
-      return new Set([...current].filter((key) => !activeThreadKeys.has(key)));
-    });
-  }, [threads]);
+    writeCompletedPullRequestReviewKeys(completionStorage(), durableCompletedThreadKeys);
+  }, [durableCompletedThreadKeys]);
 
   useEffect(() => {
     setTargets((current) =>
