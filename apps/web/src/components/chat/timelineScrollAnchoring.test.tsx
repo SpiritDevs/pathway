@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
-import { getAnchoredTurnMetrics, getRowBottom } from "./timelineScrollAnchoring";
+import { describe, expect, it, vi } from "vite-plus/test";
+import {
+  getAnchoredTurnMetrics,
+  getRowBottom,
+  keepTimelineEndVisibleAfterOverlayGrowth,
+  scrollTimelineToEndIfFollowing,
+} from "./timelineScrollAnchoring";
 
 function buildState({
   positions,
@@ -22,6 +27,57 @@ function buildState({
 }
 
 describe("timeline scroll anchoring", () => {
+  it("ignores a deferred end scroll after the user leaves live-follow mode", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "free-scrolling",
+      animated: true,
+    });
+
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("runs a deferred end scroll while live-follow is still active", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "following-end",
+      animated: true,
+    });
+
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  });
+
+  it("keeps the live edge visible when the composer overlay grows", () => {
+    const scrollToEnd = vi.fn();
+
+    keepTimelineEndVisibleAfterOverlayGrowth({
+      timeline: { scrollToEnd },
+      previousOverlayHeight: 120,
+      overlayHeight: 180,
+      followingEnd: true,
+    });
+
+    expect(scrollToEnd).toHaveBeenCalledOnce();
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
+  it("leaves the scroll position alone while the user reads history", () => {
+    const scrollToEnd = vi.fn();
+
+    keepTimelineEndVisibleAfterOverlayGrowth({
+      timeline: { scrollToEnd },
+      previousOverlayHeight: 120,
+      overlayHeight: 180,
+      followingEnd: false,
+    });
+
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
   it("measures row bottoms from LegendList row position and size", () => {
     const state = buildState({
       positions: [0, 120],
