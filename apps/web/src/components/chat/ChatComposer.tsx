@@ -58,6 +58,7 @@ import {
 } from "./composerMentionDrag";
 import {
   createPastedTextAttachmentFile,
+  findMatchingFileMarker,
   normalizeComposerAttachmentName,
   shouldConvertPastedTextToAttachment,
   shouldHandleComposerAttachmentPaste,
@@ -1451,20 +1452,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [composerDraftTarget, setComposerDraftPrompt],
   );
 
-  const addComposerImage = useCallback(
-    (image: ComposerAttachment) => {
-      addComposerDraftImage(composerDraftTarget, image);
-    },
-    [composerDraftTarget, addComposerDraftImage],
-  );
-
-  const addComposerImagesToDraft = useCallback(
-    (images: ComposerAttachment[]) => {
-      addComposerDraftImages(composerDraftTarget, images);
-    },
-    [composerDraftTarget, addComposerDraftImages],
-  );
-
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
       removeComposerDraftImage(composerDraftTarget, imageId);
@@ -2646,12 +2633,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // large image is being compressed, and the attachments and errors belong
     // to the thread the paste happened in.
     const threadId = activeThreadId;
+    const draftTarget = composerDraftTarget;
+    const draftAttachmentSnapshot = [...composerImagesRef.current];
 
     // Validation happens synchronously so concurrent pastes see each other:
     // accepted files reserve their attachment slots (via the pending counter)
     // before the first await, keeping the total under the limit.
     const pendingCount = pendingImageCompressionsRef.current.get(threadId) ?? 0;
-    let reservedCount = composerImagesRef.current.length + pendingCount;
+    let reservedCount = draftAttachmentSnapshot.length + pendingCount;
     const acceptedFiles: File[] = [];
     let error: string | null = null;
     for (const file of files) {
@@ -2720,22 +2709,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       for (const attachment of nextImages) {
         if (attachment.type !== "file") continue;
-        const marker = composerImagesRef.current.find(
-          (current): current is ComposerFileAttachment =>
-            current.type === "file" &&
-            current.file === null &&
-            current.name === attachment.name &&
-            current.mimeType === attachment.mimeType &&
-            current.sizeBytes === attachment.sizeBytes,
-        );
+        const marker = findMatchingFileMarker(draftAttachmentSnapshot, attachment);
         if (!marker) continue;
         releaseDraftAttachment(marker);
-        removeComposerImageFromDraft(marker.id);
+        removeComposerDraftImage(draftTarget, marker.id);
       }
       if (nextImages.length === 1 && nextImages[0]) {
-        addComposerImage(nextImages[0]);
+        addComposerDraftImage(draftTarget, nextImages[0]);
       } else if (nextImages.length > 1) {
-        addComposerImagesToDraft(nextImages);
+        addComposerDraftImages(draftTarget, nextImages);
       }
       // Only failures are reported here. Success must not pass `null`: by
       // now other work (a failed send, an overlapping paste) may have set a

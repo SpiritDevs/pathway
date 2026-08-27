@@ -2,12 +2,34 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createPastedTextAttachmentFile,
+  findMatchingFileMarker,
   normalizeComposerAttachmentName,
   shouldConvertPastedTextToAttachment,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
 
 describe("composer attachment files", () => {
+  it("finds reattach markers only within the captured draft snapshot", () => {
+    const originMarker = {
+      type: "file" as const,
+      id: "origin-marker",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 6,
+      previewUrl: "",
+      file: null,
+    };
+    const navigationMarker = { ...originMarker, id: "navigation-marker" };
+    const incoming = {
+      ...originMarker,
+      id: "incoming",
+      file: new File(["report"], "report.pdf", { type: "application/pdf" }),
+    };
+
+    expect(findMatchingFileMarker([originMarker], incoming)?.id).toBe("origin-marker");
+    expect(findMatchingFileMarker([navigationMarker], incoming)?.id).toBe("navigation-marker");
+  });
+
   it("converts text only when the resulting prompt would exceed the send limit", () => {
     const maxInputChars = 120_000;
 

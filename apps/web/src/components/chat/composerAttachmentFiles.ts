@@ -1,3 +1,19 @@
+import type { ComposerAttachment, ComposerFileAttachment } from "../../composerDraftStore";
+
+export function findMatchingFileMarker(
+  attachments: ReadonlyArray<ComposerAttachment>,
+  incoming: ComposerFileAttachment,
+): ComposerFileAttachment | undefined {
+  return attachments.find(
+    (current): current is ComposerFileAttachment =>
+      current.type === "file" &&
+      current.file === null &&
+      current.name === incoming.name &&
+      current.mimeType === incoming.mimeType &&
+      current.sizeBytes === incoming.sizeBytes,
+  );
+}
+
 export function shouldConvertPastedTextToAttachment(input: {
   readonly currentPromptLength: number;
   readonly selectedTextLength: number;
