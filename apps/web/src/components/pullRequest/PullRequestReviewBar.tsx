@@ -19,6 +19,7 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import {
+  pendingReviewCommentsForSubmission,
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
@@ -90,7 +91,7 @@ export function PullRequestReviewBar({
         ...reference,
         verdict: verdict.value,
         body: submittedBody,
-        comments: submittedComments,
+        comments: pendingReviewCommentsForSubmission(submittedComments),
       },
     });
     setPending(false);

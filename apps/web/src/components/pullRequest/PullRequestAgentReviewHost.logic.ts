@@ -113,6 +113,10 @@ export function reconcilePullRequestReviewPublisherTargets(
       targets.delete(key);
       continue;
     }
+    if (!threadRuntimeIsActive(thread.runtime) && thread.latestRun === null) {
+      targets.delete(key);
+      continue;
+    }
     const runId = thread.latestRun?.runId;
     if (
       runId !== undefined &&
@@ -139,13 +143,13 @@ export function reconcilePullRequestReviewPublisherTargets(
         const key = `${thread.environmentId}\u0000${thread.id}`;
         return (
           !threadRuntimeIsActive(thread.runtime) &&
-          (thread.latestRun === null ||
-            !completedThreadKeys.has(
-              pullRequestReviewCompletionKey(
-                { environmentId: thread.environmentId, threadId: thread.id },
-                thread.latestRun.runId,
-              ),
-            )) &&
+          thread.latestRun !== null &&
+          !completedThreadKeys.has(
+            pullRequestReviewCompletionKey(
+              { environmentId: thread.environmentId, threadId: thread.id },
+              thread.latestRun.runId,
+            ),
+          ) &&
           !targets.has(key)
         );
       })

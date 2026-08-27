@@ -2,6 +2,7 @@ import { ProjectId } from "@spiritdevs/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  pendingReviewCommentsForSubmission,
   type PendingReviewComment,
   stageAgentReviewFindings,
   usePullRequestReviewStore,
@@ -70,6 +71,7 @@ describe("pull request review drafts", () => {
         "project-1/acme/app#42": [
           {
             id: "pathway-agent-review:thread-1:message-1:0",
+            markerId: "pathway-agent-review:thread-1:message-1:0",
             path: "src/app.ts",
             line: 2,
             side: "right",
@@ -79,6 +81,24 @@ describe("pull request review drafts", () => {
       },
       summaries: { "project-1/acme/app#42": "Review summary" },
     });
+  });
+
+  it("attaches an agent marker only to the submitted comment body", () => {
+    const pending = comment("pathway-agent-review:thread-1:message-1:0", "Finding");
+
+    expect(
+      pendingReviewCommentsForSubmission([
+        { ...pending, markerId: "pathway-agent-review:thread-1:message-1:0" },
+      ]),
+    ).toEqual([
+      {
+        path: "src/app.ts",
+        line: 1,
+        side: "right",
+        body: "Finding\n\n<!-- pathway-agent-review:thread-1:message-1:0 -->",
+      },
+    ]);
+    expect(pending.body).toBe("Finding");
   });
 
   it("keeps summary bodies isolated by review key", () => {

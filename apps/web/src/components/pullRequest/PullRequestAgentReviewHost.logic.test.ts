@@ -17,7 +17,7 @@ function thread(input: {
   readonly runtimeStatus?: "running" | "settled";
   readonly deletedAt?: string | null;
   readonly createdAt?: string;
-  readonly runId?: string;
+  readonly runId?: string | null;
   readonly updatedAt?: string;
 }): EnvironmentThreadShell {
   return {
@@ -26,9 +26,12 @@ function thread(input: {
     projectId: ProjectId.make("project-1"),
     title: input.title,
     deletedAt: input.deletedAt ?? null,
-    latestRun: {
-      runId: RunId.make(input.runId ?? `${input.id}-run`),
-    },
+    latestRun:
+      input.runId === null
+        ? null
+        : {
+            runId: RunId.make(input.runId ?? `${input.id}-run`),
+          },
     createdAt: input.createdAt ?? "2026-08-27T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-08-27T00:00:00.000Z",
     runtime: { status: input.runtimeStatus ?? "running" },
@@ -227,6 +230,51 @@ describe("pull request review publisher targets", () => {
     expect(
       reconcilePullRequestReviewPublisherTargets([retainedThread, waitingThread], retained),
     ).toEqual(retained);
+  });
+
+  it("skips a settled review with no run without blocking recoverable reviews", () => {
+    const retained: PullRequestReviewPublisherTarget[] = [
+      {
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId: ThreadId.make("newer-no-run"),
+        reference: {
+          projectId: ProjectId.make("project-1"),
+          repository: "coreybaines/pathway",
+          number: 40,
+        },
+      },
+    ];
+
+    expect(
+      reconcilePullRequestReviewPublisherTargets(
+        [
+          thread({
+            id: "newer-no-run",
+            title: "PR review · coreybaines/pathway#40 · publish",
+            runtimeStatus: "settled",
+            runId: null,
+            createdAt: "2026-08-27T00:00:00.000Z",
+          }),
+          thread({
+            id: "older-with-run",
+            title: "PR review · coreybaines/pathway#41 · publish",
+            runtimeStatus: "settled",
+            createdAt: "2026-08-26T00:00:00.000Z",
+          }),
+        ],
+        retained,
+      ),
+    ).toEqual([
+      {
+        environmentId: "environment-1",
+        threadId: "older-with-run",
+        reference: {
+          projectId: "project-1",
+          repository: "coreybaines/pathway",
+          number: 41,
+        },
+      },
+    ]);
   });
 
   it("releases a completed run but observes a later run completed by another client", () => {
