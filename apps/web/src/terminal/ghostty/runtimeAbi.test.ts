@@ -210,8 +210,16 @@ describe("vendored libghostty-vt WebAssembly", () => {
     expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
     expect(Number(scrollbarView.getBigUint64(8, true))).toBe(36);
 
+    const moreInput = new TextEncoder().encode("51\r\n");
+    const moreInputPointer = alloc(moreInput.length);
+    new Uint8Array(memory.buffer, moreInputPointer, moreInput.length).set(moreInput);
+    call("ghostty_terminal_vt_write", terminal, moreInputPointer, moreInput.length);
+    expect(call("ghostty_terminal_get", terminal, 9, scrollbar)).toBe(0);
+    expect(Number(scrollbarView.getBigUint64(8, true))).toBe(36);
+
     call("ghostty_wasm_free_u8_array", scroll, 24);
     call("ghostty_wasm_free_u8_array", scrollbar, 24);
+    call("ghostty_wasm_free_u8_array", moreInputPointer, moreInput.length);
     call("ghostty_wasm_free_u8_array", inputPointer, input.length);
     call("ghostty_terminal_free", terminal);
     call("ghostty_wasm_free_opaque", terminalSlot);

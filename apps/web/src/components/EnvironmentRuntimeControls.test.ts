@@ -20,6 +20,8 @@ function terminalSession(
     state: {
       summary: null,
       buffer: "",
+      bufferEpoch: 0,
+      bufferOffset: 0,
       status,
       error: null,
       hasRunningSubprocess: status === "running",

@@ -8,6 +8,7 @@ import {
   combineTerminalSessionState,
   EMPTY_TERMINAL_BUFFER_STATE,
   selectRunningSubprocessTerminalIds,
+  terminalBufferAppend,
 } from "./terminalSession.ts";
 
 const TARGET = {
@@ -127,6 +128,8 @@ describe("terminal session reducers", () => {
 
     expect(output).toMatchObject({
       buffer: "lo world",
+      bufferEpoch: 1,
+      bufferOffset: 3,
       status: "running",
       error: null,
       version: 2,
@@ -183,5 +186,72 @@ describe("terminal session reducers", () => {
     );
 
     expect(state.buffer).toBe("🙂");
+  });
+
+  it("keeps incremental output addressable after retained history rolls over", () => {
+    const snapshot = applyTerminalAttachStreamEvent(
+      EMPTY_TERMINAL_BUFFER_STATE,
+      {
+        type: "snapshot",
+        snapshot: { ...BASE_SNAPSHOT, history: "abcdefgh" },
+      },
+      8,
+    );
+    const output = applyTerminalAttachStreamEvent(
+      snapshot,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "ijkl",
+      },
+      8,
+    );
+
+    expect(output).toMatchObject({ buffer: "efghijkl", bufferEpoch: 1, bufferOffset: 4 });
+    expect(terminalBufferAppend(snapshot, output)).toBe("ijkl");
+  });
+
+  it("streams retained new output without replaying when a whole buffer rolls over", () => {
+    const previous = {
+      ...EMPTY_TERMINAL_BUFFER_STATE,
+      buffer: "abcd",
+      bufferEpoch: 1,
+    };
+    const current = applyTerminalAttachStreamEvent(
+      previous,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "efghij",
+      },
+      4,
+    );
+
+    expect(current).toMatchObject({ buffer: "ghij", bufferEpoch: 1, bufferOffset: 6 });
+    expect(terminalBufferAppend(previous, current)).toBe("ghij");
+  });
+
+  it("requires a replay after clear or restart and keeps versions monotonic", () => {
+    const snapshot = applyTerminalAttachStreamEvent(EMPTY_TERMINAL_BUFFER_STATE, {
+      type: "snapshot",
+      snapshot: BASE_SNAPSHOT,
+    });
+    const cleared = applyTerminalAttachStreamEvent(snapshot, {
+      type: "cleared",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+    });
+    const restarted = applyTerminalAttachStreamEvent(cleared, {
+      type: "restarted",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      snapshot: BASE_SNAPSHOT,
+    });
+
+    expect(terminalBufferAppend(snapshot, cleared)).toBeNull();
+    expect(terminalBufferAppend(cleared, restarted)).toBeNull();
+    expect([snapshot.version, cleared.version, restarted.version]).toEqual([1, 2, 3]);
   });
 });

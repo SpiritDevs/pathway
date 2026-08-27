@@ -10,6 +10,8 @@ import type {
 export interface TerminalSessionState {
   readonly summary: TerminalSummary | null;
   readonly buffer: string;
+  readonly bufferEpoch: number;
+  readonly bufferOffset: number;
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly hasRunningSubprocess: boolean;
@@ -19,6 +21,8 @@ export interface TerminalSessionState {
 
 export interface TerminalBufferState {
   readonly buffer: string;
+  readonly bufferEpoch: number;
+  readonly bufferOffset: number;
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly updatedAt: string | null;
@@ -46,6 +50,8 @@ export function selectRunningSubprocessTerminalIds(
 
 export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
   buffer: "",
+  bufferEpoch: 0,
+  bufferOffset: 0,
   status: "closed",
   error: null,
   updatedAt: null,
@@ -55,6 +61,8 @@ export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
 export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>({
   summary: null,
   buffer: "",
+  bufferEpoch: 0,
+  bufferOffset: 0,
   status: "closed",
   error: null,
   hasRunningSubprocess: false,
@@ -91,14 +99,35 @@ function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
 export function terminalBufferStateFromSnapshot(
   snapshot: TerminalSessionSnapshot,
   maxBufferBytes: number,
+  bufferEpoch = 1,
+  version = 1,
 ): TerminalBufferState {
+  const buffer = trimBufferToBytes(snapshot.history, maxBufferBytes);
   return {
-    buffer: trimBufferToBytes(snapshot.history, maxBufferBytes),
+    buffer,
+    bufferEpoch,
+    bufferOffset: snapshot.history.length - buffer.length,
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
-    version: 1,
+    version,
   };
+}
+
+/**
+ * Return output appended since the previous render, even when the retained
+ * buffer dropped an old prefix to stay inside its memory limit. A new epoch
+ * means the terminal was cleared or replayed and must be reset instead.
+ */
+export function terminalBufferAppend(
+  previous: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset">,
+  current: Pick<TerminalBufferState, "buffer" | "bufferEpoch" | "bufferOffset">,
+): string | null {
+  if (previous.bufferEpoch !== current.bufferEpoch) return null;
+  const previousEnd = previous.bufferOffset + previous.buffer.length;
+  const currentEnd = current.bufferOffset + current.buffer.length;
+  if (currentEnd < previousEnd) return null;
+  return current.buffer.slice(Math.max(0, previousEnd - current.bufferOffset));
 }
 
 function latestTimestamp(left: string | null, right: string | null): string | null {
@@ -114,6 +143,8 @@ export function combineTerminalSessionState(
   return {
     summary,
     buffer: buffer.buffer,
+    bufferEpoch: buffer.bufferEpoch,
+    bufferOffset: buffer.bufferOffset,
     status: buffer.version > 0 ? buffer.status : (summary?.status ?? buffer.status),
     error: buffer.error,
     hasRunningSubprocess: summary?.hasRunningSubprocess ?? false,
@@ -130,19 +161,30 @@ export function applyTerminalAttachStreamEvent(
   switch (event.type) {
     case "snapshot":
     case "restarted":
-      return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes);
-    case "output":
+      return terminalBufferStateFromSnapshot(
+        event.snapshot,
+        maxBufferBytes,
+        current.bufferEpoch + 1,
+        current.version + 1,
+      );
+    case "output": {
+      const combined = `${current.buffer}${event.data}`;
+      const buffer = trimBufferToBytes(combined, maxBufferBytes);
       return {
         ...current,
-        buffer: trimBufferToBytes(`${current.buffer}${event.data}`, maxBufferBytes),
+        buffer,
+        bufferOffset: current.bufferOffset + combined.length - buffer.length,
         status: current.status === "closed" ? "running" : current.status,
         error: null,
         version: current.version + 1,
       };
+    }
     case "cleared":
       return {
         ...current,
         buffer: "",
+        bufferEpoch: current.bufferEpoch + 1,
+        bufferOffset: 0,
         error: null,
         version: current.version + 1,
       };
