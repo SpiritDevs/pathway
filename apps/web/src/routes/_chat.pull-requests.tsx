@@ -1336,7 +1336,7 @@ function PullRequestsRouteView() {
           >
             {renderPullRequestPanel(
               "sheet",
-              desktopRightPanelPoppedOut ? poppedOutPanelControls : null,
+              desktopRightPanelPoppedOut ? poppedOutPanelControls : panelToggleControls,
             )}
           </RightPanelSheet>
         ) : null}

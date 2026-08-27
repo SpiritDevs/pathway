@@ -29,7 +29,9 @@ import {
 function initialPreviewMiniPlayerPosition(
   root: HTMLElement,
   parent: HTMLElement,
+  inlineDetailsPanelOpen: boolean,
 ): { x: number; y: number } | null {
+  if (!inlineDetailsPanelOpen) return null;
   const fallback = { x: root.offsetLeft, y: root.offsetTop };
   const card = root
     .closest('[data-thread-details-inline-reserved="true"]')
@@ -66,9 +68,15 @@ interface Props {
   readonly threadRef: ScopedThreadRef;
   readonly tabId: string;
   readonly bottomInset: number;
+  readonly inlineDetailsPanelOpen: boolean;
 }
 
-export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props) {
+export function ThreadPreviewMiniPlayer({
+  threadRef,
+  tabId,
+  bottomInset,
+  inlineDetailsPanelOpen,
+}: Props) {
   const rootRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
@@ -121,7 +129,11 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
       );
       usePreviewMiniPlayerStore.getState().resize(threadRef, tabId, nextSize);
       if (!position) {
-        const nextDefaultPosition = initialPreviewMiniPlayerPosition(root, parent);
+        const nextDefaultPosition = initialPreviewMiniPlayerPosition(
+          root,
+          parent,
+          inlineDetailsPanelOpen,
+        );
         const clampedDefaultPosition = nextDefaultPosition
           ? clampPreviewMiniPlayerPosition(
               nextDefaultPosition,
@@ -156,7 +168,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
     observer.observe(root);
     observer.observe(parent);
     return () => observer.disconnect();
-  }, [bottomInset, position, tabId, threadRef]);
+  }, [bottomInset, inlineDetailsPanelOpen, position, tabId, threadRef]);
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
