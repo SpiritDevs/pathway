@@ -10,7 +10,9 @@ import { primaryServerProvidersAtom, serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
   canOneClickUpdateProviderCandidate,
+  collectActiveProviderUpdates,
   collectProviderUpdateCandidates,
+  formatProviderList,
   providerUpdateNotificationKey,
 } from "./ProviderUpdateLaunchNotification.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -36,6 +38,7 @@ export function ProviderUpdatePrimaryNotification() {
   const inFlightRef = useRef(false);
 
   const updateProviders = useMemo(() => collectProviderUpdateCandidates(providers), [providers]);
+  const activeProviders = useMemo(() => collectActiveProviderUpdates(providers), [providers]);
   const notificationKey = useMemo(
     () => providerUpdateNotificationKey(updateProviders),
     [updateProviders],
@@ -46,22 +49,37 @@ export function ProviderUpdatePrimaryNotification() {
     [providers, updateProviders],
   );
 
+  const updateInProgress = isUpdating || activeProviders.length > 0;
   if (
-    notificationKey === null ||
-    dismissedNotificationKeys.has(notificationKey) ||
-    updateProviders.length === 0
+    !updateInProgress &&
+    (notificationKey === null ||
+      dismissedNotificationKeys.has(notificationKey) ||
+      updateProviders.length === 0)
   ) {
     return null;
   }
 
+  const displayedProviders = activeProviders.length > 0 ? activeProviders : updateProviders;
+  const firstDisplayedProvider = displayedProviders[0];
+  if (!firstDisplayedProvider) {
+    return null;
+  }
   const providerLabel =
-    updateProviders.length === 1
-      ? (PROVIDER_DISPLAY_NAMES[updateProviders[0]!.driver] ?? updateProviders[0]!.driver)
-      : `${updateProviders.length} providers`;
-  const canUpdate = oneClickProviders.length > 0 && primaryEnvironment !== null;
-  const actionLabel = isUpdating ? `Updating ${providerLabel}` : `Update ${providerLabel}`;
-  const tooltip =
-    updateProviders.length === 1
+    displayedProviders.length === 1
+      ? (PROVIDER_DISPLAY_NAMES[firstDisplayedProvider.driver] ?? firstDisplayedProvider.driver)
+      : `${displayedProviders.length} providers`;
+  const canUpdate =
+    !updateInProgress && oneClickProviders.length > 0 && primaryEnvironment !== null;
+  const actionLabel = updateInProgress
+    ? `Updating ${providerLabel}`
+    : canUpdate
+      ? `Update ${providerLabel}`
+      : `Review ${providerLabel}`;
+  const tooltip = updateInProgress
+    ? `${formatProviderList(displayedProviders)} ${
+        displayedProviders.length === 1 ? "update is" : "updates are"
+      } in progress.`
+    : updateProviders.length === 1
       ? `${providerLabel} ${updateProviders[0]!.versionAdvisory.latestVersion} is available`
       : `${updateProviders.length} provider updates are available`;
 
@@ -101,37 +119,37 @@ export function ProviderUpdatePrimaryNotification() {
             <button
               type="button"
               className="flex h-full min-w-0 items-center gap-1.5 px-2 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none"
-              disabled={isUpdating}
+              disabled={updateInProgress}
               onClick={() => void runUpdates()}
             >
-              {isUpdating ? (
+              {updateInProgress ? (
                 <LoaderIcon aria-hidden="true" className="size-3 animate-spin" />
               ) : (
                 <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-update" />
               )}
-              <span className="truncate">
-                {canUpdate ? actionLabel : `Review ${providerLabel}`}
-              </span>
+              <span className="truncate">{actionLabel}</span>
             </button>
           }
         />
         <TooltipPopup side="bottom">{tooltip}</TooltipPopup>
       </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label="Dismiss provider update notice"
-              className="flex size-7 shrink-0 items-center justify-center border-l border-border/60 opacity-60 transition-colors hover:bg-accent hover:text-foreground hover:opacity-100"
-              onClick={() => dismissNotificationKey(notificationKey)}
-            >
-              <XIcon aria-hidden="true" className="size-3" />
-            </button>
-          }
-        />
-        <TooltipPopup side="bottom">Dismiss until the available update changes</TooltipPopup>
-      </Tooltip>
+      {!updateInProgress && notificationKey !== null ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Dismiss provider update notice"
+                className="flex size-7 shrink-0 items-center justify-center border-l border-border/60 opacity-60 transition-colors hover:bg-accent hover:text-foreground hover:opacity-100"
+                onClick={() => dismissNotificationKey(notificationKey)}
+              >
+                <XIcon aria-hidden="true" className="size-3" />
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">Dismiss until the available update changes</TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }

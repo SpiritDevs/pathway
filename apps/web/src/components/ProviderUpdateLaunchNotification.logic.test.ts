@@ -550,6 +550,40 @@ describe("provider update launch notification logic", () => {
     expect(view).toBeNull();
   });
 
+  it("still surfaces terminal outcomes while active progress is suppressed", () => {
+    const view = getProviderUpdateSidebarPillView(
+      [
+        provider({
+          driver: driver("codex"),
+          updateState: {
+            status: "running",
+            startedAt: checkedAt,
+            finishedAt: null,
+            message: "Updating provider.",
+            output: null,
+          },
+        }),
+        provider({
+          driver: driver("cursor"),
+          updateState: {
+            status: "failed",
+            startedAt: checkedAt,
+            finishedAt: checkedAt,
+            message: "Update command exited with code 1.",
+            output: null,
+          },
+        }),
+      ],
+      { showActiveUpdates: false, visibleAfterIso: sessionStartedAt },
+    );
+
+    expect(view).toMatchObject({
+      tone: "error",
+      title: "Cursor v1.1.0 update failed",
+      description: "Update command exited with code 1.",
+    });
+  });
+
   it("uses the provider name for single failed sidebar pill updates", () => {
     const view = getProviderUpdateSidebarPillView(
       [

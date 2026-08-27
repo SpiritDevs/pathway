@@ -144,6 +144,12 @@ export function isProviderUpdateActive(provider: Pick<ServerProvider, "updateSta
   return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
 }
 
+export function collectActiveProviderUpdates(
+  providers: ReadonlyArray<ServerProvider>,
+): ServerProvider[] {
+  return dedupeProvidersByDriver(providers.filter(isProviderUpdateActive));
+}
+
 export function collectProviderUpdateCandidates(
   providers: ReadonlyArray<ServerProvider>,
 ): ProviderUpdateCandidate[] {
@@ -412,10 +418,7 @@ export function getProviderUpdateSidebarPillView(
 ): ProviderUpdateSidebarPillView | null {
   const dedupedProviders = dedupeProvidersByDriver(providers);
   const activeProviders = dedupedProviders.filter(isProviderUpdateActive);
-  if (activeProviders.length > 0) {
-    if (options?.showActiveUpdates === false) {
-      return null;
-    }
+  if (activeProviders.length > 0 && options?.showActiveUpdates !== false) {
     const activeProvider = activeProviders[0]!;
     const activeProviderName =
       PROVIDER_DISPLAY_NAMES[activeProvider.driver] ?? activeProvider.driver;

@@ -138,6 +138,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
         >
           <ComposerBannerStackAlert
             item={frontItem}
+            presentation={frontItemIsLip ? "lip" : "banner"}
             exiting={exitingItemId === frontItem.id}
             onDismissRequest={() => requestDismiss(frontItem)}
           />
@@ -170,6 +171,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
                   >
                     <ComposerBannerStackAlert
                       item={item}
+                      presentation="banner"
                       exiting={exitingItemId === item.id}
                       onDismissRequest={() => requestDismiss(item)}
                     />
@@ -186,10 +188,12 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
 
 function ComposerBannerStackAlert({
   item,
+  presentation,
   exiting,
   onDismissRequest,
 }: {
   readonly item: ComposerBannerStackItem;
+  readonly presentation: "banner" | "lip";
   readonly exiting: boolean;
   readonly onDismissRequest: () => void;
 }) {
@@ -200,12 +204,12 @@ function ComposerBannerStackAlert({
       variant={item.variant}
       className={cn(
         "alert-glass",
-        item.presentation === "lip"
+        presentation === "lip"
           ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-3 py-1.5 text-xs shadow-none"
           : "rounded-[22px]",
         item.className,
       )}
-      data-presentation={item.presentation ?? "banner"}
+      data-presentation={presentation}
       data-variant={item.variant}
     >
       {item.icon}

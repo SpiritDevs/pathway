@@ -85,4 +85,16 @@ describe("ComposerBannerStack", () => {
     expect(markup).toContain("min-h-8 rounded-b-none rounded-t-[14px]");
     expect(markup).not.toContain("rounded-[22px]");
   });
+
+  it("renders lip items as regular banners when notices are stacked", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack
+        items={[{ ...banner("version"), presentation: "lip" }, banner("connection")]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-presentation="lip"');
+    expect(markup).not.toContain("rounded-b-none");
+    expect(markup).toContain("rounded-[22px]");
+  });
 });

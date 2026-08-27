@@ -2426,9 +2426,15 @@ function ChatViewContent(props: ChatViewProps) {
   const showVersionMismatchBanner =
     versionMismatch !== null && versionMismatchDismissKey !== null && !versionMismatchDismissed;
   const hasMultipleRegisteredEnvironments = environments.length > 1;
-  const versionMismatchServerLabel =
+  const versionMismatchEnvironmentLabel =
     hasMultipleRegisteredEnvironments && activeThread
-      ? `${environmentById.get(activeThread.environmentId)?.label ?? serverConfig?.environment.label ?? activeThread.environmentId} server`
+      ? (environmentById.get(activeThread.environmentId)?.label ??
+        serverConfig?.environment.label ??
+        activeThread.environmentId)
+      : null;
+  const versionMismatchServerLabel =
+    versionMismatchEnvironmentLabel !== null
+      ? `${versionMismatchEnvironmentLabel} server`
       : "server";
   const reconnectActiveEnvironment = useCallback(() => {
     if (!activeEnvironmentUnavailableState) return;
@@ -2538,7 +2544,9 @@ function ChatViewContent(props: ChatViewProps) {
         title:
           updateInProgress || updateFailed
             ? `${updateFailed ? "Could not update" : "Updating"} ${versionMismatchServerLabel}`
-            : "Client and server versions differ",
+            : versionMismatchSelfUpdate === "desktop-managed"
+              ? `Update the desktop app on ${versionMismatchEnvironmentLabel ?? "the server machine"}`
+              : "Client and server versions differ",
         description:
           updateInProgress || updateFailed ? (
             <ServerUpdateProgress state={serverUpdateState} />
@@ -2577,6 +2585,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
     versionMismatchSelfUpdate,
+    versionMismatchEnvironmentLabel,
     versionMismatchServerLabel,
   ]);
   const continuationProviderEntries = useMemo(
