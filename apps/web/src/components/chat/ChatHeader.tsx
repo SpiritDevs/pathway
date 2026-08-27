@@ -1,5 +1,13 @@
 import { type EnvironmentId, type ThreadId } from "@spiritdevs/contracts";
-import { memo } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import { cn } from "~/lib/utils";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -7,6 +15,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
+  activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
@@ -14,6 +23,7 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   onNewThreadInProject: () => void;
   onOpenThread: (threadId: ThreadId) => void;
+  onRenameThread?: (title: string) => void;
 }
 
 export interface ThreadBreadcrumbAncestor {
@@ -66,6 +76,7 @@ export function resolveThreadBreadcrumbAncestors(
 
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
+  activeThreadId,
   activeThreadTitle,
   activeProjectName,
   activeProjectCwd,
@@ -73,7 +84,51 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   onNewThreadInProject,
   onOpenThread,
+  onRenameThread,
 }: ChatHeaderProps) {
+  const [renaming, setRenaming] = useState<{ threadId: ThreadId; title: string } | null>(null);
+  const renamingTitle = renaming?.threadId === activeThreadId ? renaming.title : null;
+  const renameCommittedRef = useRef(false);
+
+  useEffect(() => setRenaming(null), [activeThreadId]);
+
+  const commitRename = useCallback(
+    (title: string) => {
+      setRenaming(null);
+      onRenameThread?.(title);
+    },
+    [onRenameThread],
+  );
+  const handleTitleDoubleClick = useCallback(
+    (event: ReactMouseEvent) => {
+      if (
+        onRenameThread === undefined ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      renameCommittedRef.current = false;
+      setRenaming({ threadId: activeThreadId, title: activeThreadTitle });
+    },
+    [activeThreadId, activeThreadTitle, onRenameThread],
+  );
+  const handleRenameKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      if (event.key === "Enter") {
+        renameCommittedRef.current = true;
+        commitRename(event.currentTarget.value);
+      } else if (event.key === "Escape") {
+        renameCommittedRef.current = true;
+        setRenaming(null);
+      }
+    },
+    [commitRename],
+  );
+
   return (
     <div
       className={cn(
@@ -136,19 +191,50 @@ export const ChatHeader = memo(function ChatHeader({
             </li>
           ))}
           <li aria-current="page" className="min-w-0 flex-1">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <h2
-                    aria-label={activeThreadTitle}
-                    className="min-w-0 truncate text-sm font-medium text-foreground"
-                  >
-                    {activeThreadTitle}
-                  </h2>
-                }
+            {renamingTitle !== null ? (
+              <input
+                autoFocus
+                aria-label="Thread title"
+                className="min-w-0 w-full rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-ring/50 focus:ring-ring"
+                defaultValue={renamingTitle}
+                onBlur={(event) => {
+                  if (renameCommittedRef.current) return;
+                  commitRename(event.currentTarget.value);
+                }}
+                onFocus={(event) => event.currentTarget.select()}
+                onKeyDown={handleRenameKeyDown}
               />
-              <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
-            </Tooltip>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <h2
+                      aria-label={activeThreadTitle}
+                      role={onRenameThread !== undefined ? "button" : undefined}
+                      tabIndex={onRenameThread !== undefined ? 0 : undefined}
+                      onDoubleClick={handleTitleDoubleClick}
+                      onKeyDown={(event) => {
+                        if (
+                          onRenameThread !== undefined &&
+                          (event.key === "Enter" || event.key === " ")
+                        ) {
+                          event.preventDefault();
+                          renameCommittedRef.current = false;
+                          setRenaming({ threadId: activeThreadId, title: activeThreadTitle });
+                        }
+                      }}
+                      className={cn(
+                        "min-w-0 truncate text-sm font-medium text-foreground",
+                        onRenameThread !== undefined && "cursor-text",
+                      )}
+                    >
+                      {activeThreadTitle}
+                    </h2>
+                  }
+                />
+                <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
+              </Tooltip>
+            )}
           </li>
         </ol>
       </nav>

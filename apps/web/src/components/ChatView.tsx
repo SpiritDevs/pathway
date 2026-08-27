@@ -108,7 +108,11 @@ import {
   isLatestRunSettled,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
-import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
+import {
+  getAnchoredTurnMetrics,
+  scrollTimelineToEndIfFollowing,
+  type TimelineScrollMode,
+} from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -1306,6 +1310,20 @@ function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
+/**
+ * Drops the send-time anchored end space. That space is what holds a sent
+ * message near the top while its turn streams, and it keeps LegendList's
+ * maintainScrollAtEnd switched off for as long as it is installed — ChatView
+ * drives the streaming scrolls itself, but only in "anchoring-new-turn" mode.
+ * So every return to the live edge has to release the anchor too, otherwise the
+ * timeline settles into "following-end" with nothing following anything.
+ */
+function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | null }>(
+  current: T,
+): T {
+  return current.messageId === null ? current : { ...current, messageId: null };
+}
+
 function ChatViewContent(props: ChatViewProps) {
   const {
     environmentId,
@@ -1538,8 +1556,10 @@ function ChatViewContent(props: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>();
-  const previewPanelInlineSize = usePreviewPanelInlineSize();
+  const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>(
+    "[data-app-workspace-main-row]",
+  );
+  const previewPanelInlineSize = usePreviewPanelInlineSize(workspaceLayoutWidth ?? undefined);
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -2046,6 +2066,33 @@ function ChatViewContent(props: ChatViewProps) {
   const handleNewThreadInActiveProject = useCallback(() => {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   }, [activeProjectRef, handleNewThread]);
+  const handleRenameActiveThread = useCallback(
+    (title: string) => {
+      if (!isServerThread || !activeThread) return;
+      const trimmed = title.trim();
+      if (trimmed.length === 0) {
+        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        return;
+      }
+      if (trimmed === activeThread.title) return;
+      void updateThreadMetadata({
+        environmentId: activeThread.environmentId,
+        input: { threadId: activeThread.id, title: trimmed },
+      }).then((result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to rename thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      });
+    },
+    [activeThread, isServerThread, updateThreadMetadata],
+  );
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -4442,7 +4489,14 @@ function ChatViewContent(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    void legendListRef.current?.scrollToEnd?.({ animated });
+    setTimelineAnchor(releaseChatTimelineAnchor);
+    requestAnimationFrame(() => {
+      scrollTimelineToEndIfFollowing({
+        timeline: legendListRef.current,
+        scrollMode: timelineScrollModeRef.current,
+        animated,
+      });
+    });
   }, []);
   useEffect(() => {
     let removeListeners: (() => void) | null = null;
@@ -4659,6 +4713,11 @@ function ChatViewContent(props: ChatViewProps) {
       timelineScrollModeRef.current = "following-end";
       liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
       setTimelineLiveFollowEnabled(true);
+      // Reachable only once manual navigation has already broken follow, so
+      // the anchored turn framing is over: the user scrolled back to the live
+      // edge and expects the stream to stick to it again, exactly like the
+      // scroll-to-bottom pill.
+      setTimelineAnchor(releaseChatTimelineAnchor);
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     } else {
@@ -7917,6 +7976,7 @@ function ChatViewContent(props: ChatViewProps) {
                 : null}
             <ChatHeader
               activeThreadEnvironmentId={activeThread.environmentId}
+              activeThreadId={activeThread.id}
               activeThreadTitle={activeThread.title}
               activeProjectName={activeProject?.title}
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
@@ -7924,6 +7984,7 @@ function ChatViewContent(props: ChatViewProps) {
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProject}
               onOpenThread={onOpenRelatedThread}
+              {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
             />
           </header>
         ) : null}
@@ -8245,6 +8306,7 @@ function ChatViewContent(props: ChatViewProps) {
                 threadRef={activeThreadRef}
                 tabId={activePreviewMiniPlayer.tabId}
                 bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
+                inlineDetailsPanelOpen={inlineThreadPanelOpen}
               />
             ) : null}
 
@@ -8399,7 +8461,15 @@ function ChatViewContent(props: ChatViewProps) {
           <RightPanelTabs
             mode="sheet"
             inlineSize={previewPanelInlineSize}
-            layoutControls={rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
+            // Same effective inset as the closed-state titlebar controls
+            // (pr-3 in the tab bar plus this pixel equals the absolute
+            // right inset plus mr-px), so the cluster does not creep when
+            // the sheet opens.
+            layoutControls={
+              <div className="mr-px flex items-center">
+                {rightPanelPoppedOut ? poppedOutRightPanelControls : panelToggleControls}
+              </div>
+            }
             surfaces={rightPanelState.surfaces}
             activeSurfaceId={activeRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}

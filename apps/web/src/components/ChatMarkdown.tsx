@@ -90,10 +90,13 @@ import {
 } from "../markdown-clipboard";
 import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
 import {
+  extractMarkdownLinkHrefs,
   normalizeMarkdownLinkDestination,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
+  shouldOpenMarkdownFileLinkInBrowserByDefault,
+  shouldOpenMarkdownFileLinkInEditor,
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
@@ -166,6 +169,27 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
   const match = firstLine.match(/^(?:\s*(?:[-+*]|\d+[.)])\s+)(\[[ xX]\])/);
   if (!match?.[1]) return null;
   return listItemStart + firstLine.indexOf(match[1]);
+}
+
+/**
+ * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits markers up to
+ * two characters wide. Once a marker reaches three characters (item 100+),
+ * `list-style-position: outside` paints it wider than that gutter and clips
+ * the leading character against the item's own overflow. Rather than widening
+ * the gutter for every list, only lists whose widest marker is 3+ characters
+ * get a wider `--list-gutter`. The width includes a negative marker's minus
+ * sign.
+ */
+export function orderedListGutterStyle(
+  itemCount: number,
+  start: unknown,
+): { "--list-gutter": string } | undefined {
+  const parsedStart = Number.parseInt(String(start ?? 1), 10);
+  const firstNumber = Number.isNaN(parsedStart) ? 1 : parsedStart;
+  const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
+  const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
+  if (markerWidth <= 2) return undefined;
+  return { "--list-gutter": `${markerWidth + 1}ch` };
 }
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
@@ -819,7 +843,6 @@ interface MarkdownFileLinkProps {
   className?: string | undefined;
 }
 
-const MARKDOWN_LINK_HREF_PATTERN = /\[[^\]]*]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 const MARKDOWN_FILE_LINK_CLASS_NAME =
   "chat-markdown-file-link cursor-pointer transition-colors hover:bg-accent/70";
 
@@ -896,16 +919,6 @@ function extractInlineCodeSpans(text: string): string[] {
     }
   }
   return spans;
-}
-
-function extractMarkdownLinkHrefs(text: string): string[] {
-  const hrefs: string[] = [];
-  for (const match of text.matchAll(MARKDOWN_LINK_HREF_PATTERN)) {
-    const href = match[1]?.trim();
-    if (!href) continue;
-    hrefs.push(href);
-  }
-  return hrefs;
 }
 
 function normalizeMarkdownLinkHrefKey(href: string): string {
@@ -1302,7 +1315,11 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (onOpenInBrowser) {
+              if (shouldOpenMarkdownFileLinkInEditor(event)) {
+                handleOpenInEditor();
+                return;
+              }
+              if (onOpenInBrowser && shouldOpenMarkdownFileLinkInBrowserByDefault(iconPath)) {
                 handleOpenInBrowser();
                 return;
               }
@@ -1318,8 +1335,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         side="top"
         className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
       >
+        {/* The full path: the chip already shows the shortened form, and a link
+            to the workspace root collapses to a bare label that repeats it. */}
         <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
-          {displayPath}
+          {targetPath}
         </div>
       </TooltipPopup>
     </Tooltip>
@@ -1448,6 +1467,15 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     p({ node: _node, children, ...props }) {
       return <p {...props}>{renderInlineChildren(children)}</p>;
     },
+    ol({ node, start, style, ...props }) {
+      const itemCount =
+        node?.children?.filter((child) => child.type === "element" && child.tagName === "li")
+          .length ?? 0;
+      const gutterStyle = orderedListGutterStyle(itemCount, start);
+      return (
+        <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
+      );
+    },
     li({ node, children, ...props }) {
       const listItemStart = node?.position?.start.offset;
       const markerOffset =
@@ -1493,7 +1521,10 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
       const mentionPill = renderIssueAgentMentionAnchor(href, children, props.className);
       if (mentionPill !== null) return mentionPill;
       const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
-      const fileLinkMeta = normalizedHref ? markdownFileLinkMetaByHref.get(normalizedHref) : null;
+      const fileLinkMeta = normalizedHref
+        ? (markdownFileLinkMetaByHref.get(normalizedHref) ??
+          resolveMarkdownFileLinkMeta(normalizedHref, cwd))
+        : null;
       if (!fileLinkMeta) {
         const faviconHost = resolveExternalWebLinkHost(href);
         const isSameDocumentLink = href?.startsWith("#") ?? false;

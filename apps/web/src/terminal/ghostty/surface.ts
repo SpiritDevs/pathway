@@ -369,6 +369,31 @@ export function shouldReportTerminalMouse(
   return tracking && !event.shiftKey && !event.ctrlKey && !event.metaKey;
 }
 
+type TerminalMouseAction = "press" | "release" | "motion";
+
+export function resolveTerminalMouseData(
+  action: TerminalMouseAction,
+  data: string,
+  previousMotionData: string,
+): { readonly send: boolean; readonly nextMotionData: string } {
+  const nextMotionData = action === "motion" ? data : "";
+  return {
+    send: data.length > 0 && (action !== "motion" || data !== previousMotionData),
+    nextMotionData,
+  };
+}
+
+export function resolveTerminalMouseTrackingState(
+  previousTracking: boolean,
+  tracking: boolean,
+  motionData: string,
+): { readonly tracking: boolean; readonly motionData: string } {
+  return {
+    tracking,
+    motionData: previousTracking === tracking ? motionData : "",
+  };
+}
+
 export function terminalWheelDeltaRows(
   event: Pick<WheelEvent, "deltaY" | "deltaMode">,
   cellHeight: number,
@@ -407,13 +432,6 @@ export function isTerminalLinkPointerGesture(
   return isMacPlatform(platform)
     ? event.metaKey && !event.ctrlKey
     : event.ctrlKey && !event.metaKey;
-}
-
-export function shouldShowTerminalLinkHover(
-  mouseTracking: boolean,
-  linkModifierActive: boolean,
-): boolean {
-  return !mouseTracking || linkModifierActive;
 }
 
 export function ghosttyMouseButton(button: number): number | null {
@@ -536,6 +554,8 @@ export class GhosttyTerminalSurface {
   private readonly suppressedKeyCodes = new Set<string>();
   private pasteShortcutToken = 0;
   private wheelRemainder = 0;
+  private lastMouseMotionData = "";
+  private mouseAnyEventTracking = false;
   private dprMedia: MediaQueryList | null = null;
   // Read live on every blink decision, and watched so that dropping the
   // preference restarts a blink cycle that has no timer left to notice it.
@@ -562,6 +582,7 @@ export class GhosttyTerminalSurface {
     this.scrollbarThumb = scrollbarThumb;
     this.context = context;
     this.core = core;
+    this.mouseAnyEventTracking = core.isMouseAnyEventTracking();
     this.metrics = metrics;
     this.options = options;
     this.theme = options.theme;
@@ -652,6 +673,7 @@ export class GhosttyTerminalSurface {
   write(data: string): void {
     if (this.disposed) return;
     this.core.write(data);
+    this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
     this.cursorOn = true;
@@ -661,7 +683,9 @@ export class GhosttyTerminalSurface {
 
   resetAndWrite(data: string): void {
     if (this.disposed) return;
+    this.lastMouseMotionData = "";
     this.core.resetAndWrite(data);
+    this.synchronizeMouseTrackingState();
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
     this.cursorOn = true;
@@ -1110,9 +1134,10 @@ export class GhosttyTerminalSurface {
     if (this.linkActivationPointerId === event.pointerId) return;
     // Hover motion is only reportable in any-event tracking (DEC 1003); normal and
     // button-event tracking never report motion without a captured pressed button.
+    const anyEventTracking = this.synchronizeMouseTrackingState();
     if (
       this.mouseReportingPointerId === event.pointerId ||
-      shouldReportTerminalMouse(this.core.isMouseAnyEventTracking(), event)
+      shouldReportTerminalMouse(anyEventTracking, event)
     ) {
       event.preventDefault();
       this.hoverPointer = { x: event.clientX, y: event.clientY };
@@ -1124,6 +1149,7 @@ export class GhosttyTerminalSurface {
       this.sendMouse("motion", this.buttonFromButtons(event.buttons), event);
       return;
     }
+    this.lastMouseMotionData = "";
     if (!this.selectionAnchorScreen || !this.canvas.hasPointerCapture(event.pointerId)) {
       this.updateHoverCursor(event);
       return;
@@ -1202,6 +1228,7 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onPointerLeave = () => {
+    this.lastMouseMotionData = "";
     this.clearHoveredLink();
   };
 
@@ -1213,10 +1240,7 @@ export class GhosttyTerminalSurface {
 
   private refreshHoveredLink(): void {
     const pointer = this.hoverPointer;
-    const link =
-      pointer && shouldShowTerminalLinkHover(this.core.isMouseTracking(), this.linkModifierActive)
-        ? this.linkAt(pointer.x, pointer.y)
-        : null;
+    const link = pointer && this.linkModifierActive ? this.linkAt(pointer.x, pointer.y) : null;
     this.setHoveredLink(link);
   }
 
@@ -1656,11 +1680,7 @@ export class GhosttyTerminalSurface {
     return terminalLinkAtPositionWithRange(this.snapshot.rowData, cell.y, cell.x);
   }
 
-  private sendMouse(
-    action: "press" | "release" | "motion",
-    button: number | null,
-    event: MouseEvent,
-  ): void {
+  private sendMouse(action: TerminalMouseAction, button: number | null, event: MouseEvent): void {
     const bounds = this.canvas.getBoundingClientRect();
     const data = this.core.encodeMouse({
       action,
@@ -1682,7 +1702,23 @@ export class GhosttyTerminalSurface {
       paddingBottom: Math.max(0, bounds.height - this.originY - this.rows * this.metrics.height),
       anyButtonPressed: event.buttons !== 0,
     });
-    if (data.length > 0) this.options.onData(data);
+    const resolution = resolveTerminalMouseData(action, data, this.lastMouseMotionData);
+    this.lastMouseMotionData = resolution.nextMotionData;
+    if (resolution.send) this.options.onData(data);
+  }
+
+  private synchronizeMouseTrackingState(): boolean {
+    // Output writes can toggle DEC 1003 without moving the pointer. Keep the
+    // previous mode so the next same-cell motion starts a fresh tracking session.
+    const tracking = this.core.isMouseAnyEventTracking();
+    const state = resolveTerminalMouseTrackingState(
+      this.mouseAnyEventTracking,
+      tracking,
+      this.lastMouseMotionData,
+    );
+    this.mouseAnyEventTracking = state.tracking;
+    this.lastMouseMotionData = state.motionData;
+    return tracking;
   }
 
   private buttonFromButtons(buttons: number): number | null {

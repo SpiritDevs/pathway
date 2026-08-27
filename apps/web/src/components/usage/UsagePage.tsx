@@ -2,7 +2,7 @@ import type { UsageProviderKind } from "@spiritdevs/contracts";
 import { CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { DailyTotals, HourlyTotals } from "@spiritdevs/shared/usageMerge";
+import type { DailyTotals, HourlyTotals, ModelTotals } from "@spiritdevs/shared/usageMerge";
 
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -33,6 +33,17 @@ const WINDOW_OPTIONS = [
   { days: 90, label: "90 days" },
 ] as const;
 
+export function sortUsageModels(
+  models: readonly ModelTotals[],
+  metric: UsageChartMetric,
+): readonly ModelTotals[] {
+  return metric === "tokens"
+    ? models.toSorted(
+        (left, right) => right.totalTokens - left.totalTokens || right.costUsd - left.costUsd,
+      )
+    : models;
+}
+
 export function UsagePage({ embedded = false }: { embedded?: boolean }) {
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
@@ -60,9 +71,18 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
         : enumerateHourStarts(window.sinceTime, window.untilTime),
     [window.sinceTime, window.untilTime],
   );
-  const recentPeriods = useMemo<readonly (DailyTotals | HourlyTotals)[]>(
-    () => (isPast24Hours ? merged.hourly : merged.daily).toReversed().slice(0, 8),
-    [isPast24Hours, merged.daily, merged.hourly],
+  // The hourly window is small enough to render every period: the table then
+  // reads chronologically like the chart, instead of jumping between the hours
+  // that happened to have activity. Daily windows can run 90 periods, so those
+  // stay newest-first with the interesting end on top.
+  const breakdownPeriods = useMemo<readonly (DailyTotals | HourlyTotals)[]>(() => {
+    if (!isPast24Hours) return merged.daily.toReversed();
+    const byHour = new Map(merged.hourly.map((entry) => [entry.hourStart, entry]));
+    return hours.map((hourStart) => byHour.get(hourStart) ?? zeroHour(hourStart));
+  }, [isPast24Hours, merged.daily, merged.hourly, hours]);
+  const breakdownModels = useMemo(
+    () => sortUsageModels(merged.models, metric),
+    [merged.models, metric],
   );
 
   // Ranked by whatever the toggle is showing, so the bars always descend.
@@ -344,14 +364,14 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {merged.models.length === 0 ? (
+                      {breakdownModels.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="py-6 text-center text-muted-foreground">
                             No activity in this window.
                           </td>
                         </tr>
                       ) : (
-                        merged.models.map((model) => (
+                        breakdownModels.map((model) => (
                           <tr
                             key={`${model.provider}:${model.model}`}
                             className="border-b border-border/50"
@@ -391,14 +411,14 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {recentPeriods.length === 0 ? (
+                      {breakdownPeriods.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="py-6 text-center text-muted-foreground">
                             No activity in this window.
                           </td>
                         </tr>
                       ) : (
-                        recentPeriods.map((period) => (
+                        breakdownPeriods.map((period) => (
                           <tr
                             key={"hourStart" in period ? period.hourStart : period.day}
                             className="border-b border-border/50"
@@ -443,6 +463,17 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
       {content}
     </SidebarInset>
   );
+}
+
+/** A zero-filled hourly period so the breakdown lists every hour in the window. */
+function zeroHour(hourStart: string): HourlyTotals {
+  return {
+    day: "",
+    hourStart,
+    costUsd: 0,
+    totalTokens: 0,
+    byProvider: new Map<UsageProviderKind, { costUsd: number; totalTokens: number }>(),
+  };
 }
 
 /** Brand mark for the harness a row belongs to. */
@@ -598,9 +629,9 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
           {PROVIDER_ORDER.map((provider) => (
             <div key={provider} className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2 text-sm text-foreground">
-                  <ProviderMark provider={provider} className="size-4" />
-                  {PROVIDER_LABEL[provider]}
+                <span className="flex items-center gap-2">
+                  <span className="size-4 shrink-0 rounded-full bg-muted" />
+                  <span className="h-3.5 w-20 rounded-sm bg-muted" />
                 </span>
                 <div className="h-3.5 w-14 rounded-sm bg-muted" />
               </div>
@@ -633,11 +664,19 @@ function UsageSkeleton({ resolution }: { readonly resolution: "day" | "hour" }) 
           (label) => (
             <div key={label} className="flex flex-col gap-0.5 bg-background px-4 py-3">
               <span className="text-xs text-muted-foreground">{label}</span>
-              <div className="my-1 h-5 w-16 rounded-sm bg-muted" />
+              <div className="h-6 w-16 rounded-sm bg-muted" />
               <div className="h-3 w-24 rounded-sm bg-muted" />
             </div>
           ),
         )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium text-foreground">Breakdown</h2>
+          <div className="h-7 w-28 rounded-lg bg-input/40" />
+        </div>
+        <div className="h-44 rounded-sm bg-muted/35" />
       </section>
     </>
   );

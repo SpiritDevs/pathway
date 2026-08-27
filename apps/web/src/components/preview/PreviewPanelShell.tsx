@@ -1,4 +1,11 @@
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { isElectron } from "~/env";
 import { type PreviewPanelInlineSize } from "~/hooks/usePreviewPanelInlineSize";
@@ -11,12 +18,17 @@ export type PreviewPanelMode = "inline" | "sheet" | "sidebar" | "embedded";
 
 export const PREVIEW_PANEL_WIDTH_STORAGE_KEY = "pathway:preview-panel-width";
 export const PREVIEW_PANEL_MIN_WIDTH = 360;
-/** Fraction of the viewport allowed, preserving the remaining space for chat. */
+/** Upper bound as a fraction of the viewport; only binds on wide screens. */
 const PREVIEW_PANEL_MAX_WIDTH_FRACTION = 0.7;
 export const PREVIEW_PANEL_DEFAULT_WIDTH = 540;
+/** Minimum usable width for the chat or list beside an inline panel. */
+const SIBLING_COLUMN_MIN_WIDTH = 360;
 
-export function getPreviewPanelMaxWidth(viewportWidth: number): number {
-  return Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
+export function getPreviewPanelMaxWidth(viewportWidth: number, containerWidth?: number): number {
+  const fractionCap = Math.floor(viewportWidth * PREVIEW_PANEL_MAX_WIDTH_FRACTION);
+  const containerCap =
+    containerWidth === undefined ? Infinity : Math.floor(containerWidth) - SIBLING_COLUMN_MIN_WIDTH;
+  return Math.max(PREVIEW_PANEL_MIN_WIDTH, Math.min(fractionCap, containerCap));
 }
 /**
  * Shell for the preview panel. In inline mode the panel is user-resizable
@@ -48,7 +60,8 @@ export function PreviewPanelShell(props: PreviewPanelShellProps) {
 }
 
 function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
-  const maxWidth = usePreviewPanelMaxWidth();
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const maxWidth = usePreviewPanelMaxWidth(hostRef);
   const inlineSize = useResizableWidth({
     storageKey: props.widthStorageKey ?? PREVIEW_PANEL_WIDTH_STORAGE_KEY,
     defaultWidth: props.defaultWidth ?? PREVIEW_PANEL_DEFAULT_WIDTH,
@@ -56,11 +69,14 @@ function ResizablePreviewPanelShell(props: PreviewPanelShellProps) {
     maxWidth,
     edge: "left",
   });
-  return <PreviewPanelShellFrame {...props} inlineSize={inlineSize} />;
+  return <PreviewPanelShellFrame {...props} inlineSize={inlineSize} hostRef={hostRef} />;
 }
 
 function PreviewPanelShellFrame(
-  props: PreviewPanelShellProps & { inlineSize: PreviewPanelInlineSize },
+  props: PreviewPanelShellProps & {
+    inlineSize: PreviewPanelInlineSize;
+    hostRef?: RefObject<HTMLDivElement | null>;
+  },
 ) {
   const useDragRegion = isElectron && props.mode !== "sheet" && props.mode !== "embedded";
   const isInline = props.mode === "inline";
@@ -68,6 +84,7 @@ function PreviewPanelShellFrame(
 
   return (
     <div
+      ref={props.hostRef}
       className={cn(
         "relative flex h-full min-h-0 min-w-0 max-w-full flex-col self-stretch bg-background",
         isInline
@@ -99,12 +116,13 @@ function PreviewPanelShellFrame(
 }
 
 /**
- * Track viewport width to derive a sensible upper bound for the panel.
- * Resize-aware so dragging the OS window narrower re-clamps the stored
- * width on the next render (the hook's clamp picks this up automatically).
+ * Track viewport and flex-row widths to derive a sensible upper bound for the
+ * panel. The row is observed because the panel competes with its sibling for
+ * that space; the viewport alone also includes the app sidebar.
  */
-export function usePreviewPanelMaxWidth(): number {
+export function usePreviewPanelMaxWidth(hostRef?: RefObject<HTMLDivElement | null>): number {
   const [vw, setVw] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
+  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (typeof window === "undefined") return;
     let frame = 0;
@@ -122,5 +140,15 @@ export function usePreviewPanelMaxWidth(): number {
       if (frame !== 0) window.cancelAnimationFrame(frame);
     };
   }, []);
-  return getPreviewPanelMaxWidth(vw);
+  useLayoutEffect(() => {
+    const container = hostRef?.current?.closest<HTMLElement>("[data-app-workspace-main-row]");
+    if (!container) return;
+    const measure = () => setContainerWidth(container.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [hostRef]);
+  return getPreviewPanelMaxWidth(vw, containerWidth);
 }

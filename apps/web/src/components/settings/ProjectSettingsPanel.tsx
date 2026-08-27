@@ -135,6 +135,7 @@ import {
   SettingsSurfaceProvider,
 } from "./settingsLayout";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useCompanySettings, type CompanySettings } from "./company/useCompanySettings";
 import { useEnvironmentControl } from "./company/useEnvironmentControl";
 
@@ -405,6 +406,7 @@ export function ProjectDetail({
   const removeKeybinding = useAtomCommand(serverEnvironment.removeKeybinding, {
     reportFailure: false,
   });
+  const projectNameEditedRef = useRef(false);
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
     onCopy: ({ path }) => {
       toastManager.add({ type: "success", title: "Path copied", description: path });
@@ -548,16 +550,24 @@ export function ProjectDetail({
   );
 
   const renameGroup = useCallback(
-    async (nextTitle: string) => {
+    async (nextTitle: string, wasEdited: boolean) => {
       const title = nextTitle.trim();
       if (!title) {
         toastManager.add({ type: "warning", title: "Project title cannot be empty" });
         return;
       }
-      if (title === group.displayName) return;
+      if (
+        !projectGroupTitleNeedsUpdate(
+          group.memberProjects.map((member) => member.title),
+          title,
+          wasEdited,
+        )
+      ) {
+        return;
+      }
       await updateAllMembers({ title, titleIsCustom: true }, "Failed to rename project");
     },
-    [group.displayName, group.memberProjects, updateAllMembers],
+    [group.memberProjects, updateAllMembers],
   );
 
   // ----- default model -----
@@ -1147,8 +1157,13 @@ export function ProjectDetail({
                   className="w-full sm:w-64"
                   aria-label="Project name"
                   defaultValue={group.displayName}
+                  onChange={() => {
+                    projectNameEditedRef.current = true;
+                  }}
                   onBlur={(event) => {
-                    void renameGroup(event.currentTarget.value);
+                    const wasEdited = projectNameEditedRef.current;
+                    projectNameEditedRef.current = false;
+                    void renameGroup(event.currentTarget.value, wasEdited);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") event.currentTarget.blur();

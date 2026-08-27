@@ -2,7 +2,7 @@
 
 import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef } from "react";
+import { type PointerEvent as ReactPointerEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -18,6 +18,7 @@ import {
   clampPreviewMiniPlayerSize,
   defaultPreviewMiniPlayerPosition,
   PREVIEW_MINI_PLAYER_DEFAULT_SIZE,
+  PREVIEW_MINI_PLAYER_EDGE_GAP,
 } from "./previewMiniPlayerLayout";
 
 /**
@@ -25,12 +26,17 @@ import {
  * card when that panel is open (it owns the top-right corner), otherwise the
  * top-right CSS placement the element already has.
  */
-function initialPreviewMiniPlayerPosition(root: HTMLElement, parent: HTMLElement) {
+function initialPreviewMiniPlayerPosition(
+  root: HTMLElement,
+  parent: HTMLElement,
+  inlineDetailsPanelOpen: boolean,
+): { x: number; y: number } | null {
+  if (!inlineDetailsPanelOpen) return null;
   const fallback = { x: root.offsetLeft, y: root.offsetTop };
   const card = root
     .closest('[data-thread-details-inline-reserved="true"]')
     ?.querySelector('[data-thread-details-panel="inline"] [data-thread-details-card]');
-  if (!(card instanceof HTMLElement)) return fallback;
+  if (!(card instanceof HTMLElement)) return null;
   const cardRect = card.getBoundingClientRect();
   return defaultPreviewMiniPlayerPosition({
     fallback,
@@ -52,6 +58,8 @@ interface ResizeState {
   readonly pointerId: number;
   readonly pointerX: number;
   readonly pointerY: number;
+  readonly playerX: number;
+  readonly playerY: number;
   readonly width: number;
   readonly height: number;
 }
@@ -60,12 +68,20 @@ interface Props {
   readonly threadRef: ScopedThreadRef;
   readonly tabId: string;
   readonly bottomInset: number;
+  readonly inlineDetailsPanelOpen: boolean;
 }
 
-export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props) {
+export function ThreadPreviewMiniPlayer({
+  threadRef,
+  tabId,
+  bottomInset,
+  inlineDetailsPanelOpen,
+}: Props) {
   const rootRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const resizeRef = useRef<ResizeState | null>(null);
+  const [defaultPosition, setDefaultPosition] = useState<{ x: number; y: number } | null>(null);
+  const [defaultLayoutVersion, setDefaultLayoutVersion] = useState("");
   const miniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, threadRef),
   );
@@ -112,8 +128,30 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
         bottomInset,
       );
       usePreviewMiniPlayerStore.getState().resize(threadRef, tabId, nextSize);
+      if (!position) {
+        const nextDefaultPosition = initialPreviewMiniPlayerPosition(
+          root,
+          parent,
+          inlineDetailsPanelOpen,
+        );
+        const clampedDefaultPosition = nextDefaultPosition
+          ? clampPreviewMiniPlayerPosition(
+              nextDefaultPosition,
+              { width: parent.clientWidth, height: parent.clientHeight },
+              nextSize,
+              bottomInset,
+            )
+          : null;
+        setDefaultPosition((current) =>
+          current?.x === clampedDefaultPosition?.x && current?.y === clampedDefaultPosition?.y
+            ? current
+            : clampedDefaultPosition,
+        );
+        setDefaultLayoutVersion(`${parent.clientWidth}:${parent.clientHeight}`);
+        return;
+      }
       const next = clampPreviewMiniPlayerPosition(
-        position ?? initialPreviewMiniPlayerPosition(root, parent),
+        position,
         { width: parent.clientWidth, height: parent.clientHeight },
         nextSize,
         bottomInset,
@@ -130,7 +168,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
     observer.observe(root);
     observer.observe(parent);
     return () => observer.disconnect();
-  }, [bottomInset, position, tabId, threadRef]);
+  }, [bottomInset, inlineDetailsPanelOpen, position, tabId, threadRef]);
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -180,11 +218,16 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
   const handleResizePointerDown = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     const root = rootRef.current;
-    if (!root) return;
+    const parent = root?.offsetParent;
+    if (!root || !(parent instanceof HTMLElement)) return;
+    const rootRect = root.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
     resizeRef.current = {
       pointerId: event.pointerId,
       pointerX: event.clientX,
       pointerY: event.clientY,
+      playerX: rootRect.left - parentRect.left,
+      playerY: rootRect.top - parentRect.top,
       width: root.offsetWidth,
       height: root.offsetHeight,
     };
@@ -215,7 +258,7 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
     );
     usePreviewMiniPlayerStore.getState().resize(threadRef, tabId, nextSize);
     const nextPosition = clampPreviewMiniPlayerPosition(
-      position ?? { x: root.offsetLeft, y: root.offsetTop },
+      { x: resize.playerX, y: resize.playerY },
       { width: parent.clientWidth, height: parent.clientHeight },
       nextSize,
       bottomInset,
@@ -241,13 +284,25 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
       className="pointer-events-none absolute select-none"
       style={
         position
-          ? { left: position.x, top: position.y, width: size.width, height: size.height }
-          : {
-              right: 16,
-              top: 16,
+          ? {
+              left: position.x,
+              top: position.y,
               width: size.width,
               height: size.height,
             }
+          : defaultPosition
+            ? {
+                left: defaultPosition.x,
+                top: defaultPosition.y,
+                width: size.width,
+                height: size.height,
+              }
+            : {
+                right: PREVIEW_MINI_PLAYER_EDGE_GAP,
+                top: PREVIEW_MINI_PLAYER_EDGE_GAP,
+                width: size.width,
+                height: size.height,
+              }
       }
     >
       <div className="group pointer-events-auto absolute right-2 top-2 z-[34] size-3">
@@ -311,7 +366,11 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
           visible={Boolean(desktopOverlay?.hasWebContents)}
           cornerRadius={12}
           fitSourceContent
-          layoutVersion={position ? `${position.x}:${position.y}` : `initial:${bottomInset}`}
+          layoutVersion={
+            position
+              ? `${position.x}:${position.y}`
+              : `initial:${bottomInset}:${defaultPosition?.x ?? "right"}:${defaultPosition?.y ?? "top"}:${defaultLayoutVersion}`
+          }
           className="absolute inset-0"
         />
         <div className="pointer-events-none absolute inset-0 z-[31] rounded-xl ring-1 ring-inset ring-border/80" />
