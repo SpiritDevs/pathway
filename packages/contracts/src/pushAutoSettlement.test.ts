@@ -34,9 +34,12 @@ function thread() {
   };
 }
 
-function result(pushStatus: "pushed" | "skipped_not_requested" | "skipped_up_to_date") {
+function result(
+  pushStatus: "pushed" | "skipped_not_requested" | "skipped_up_to_date",
+  action: "commit_push" | "create_pr" | "commit_push_pr" = "commit_push",
+) {
   return {
-    action: "commit_push" as const,
+    action,
     branch: { status: "skipped_not_requested" as const },
     commit: { status: "created" as const, commitSha: "abcdef0", subject: "Fix it" },
     push: { status: pushStatus, branch: "main" },
@@ -51,6 +54,11 @@ describe("push auto-settlement", () => {
     expect(shouldStartPushAutoSettlement(result("pushed"), false)).toBe(false);
     expect(shouldStartPushAutoSettlement(result("skipped_up_to_date"), true)).toBe(false);
     expect(shouldStartPushAutoSettlement(result("skipped_not_requested"), true)).toBe(false);
+  });
+
+  it("does not start for actions that create or submit a pull request", () => {
+    expect(shouldStartPushAutoSettlement(result("pushed", "create_pr"), true)).toBe(false);
+    expect(shouldStartPushAutoSettlement(result("pushed", "commit_push_pr"), true)).toBe(false);
   });
 
   it("keeps metadata-only changes out of the activity fence", () => {
