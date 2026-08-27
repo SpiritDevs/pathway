@@ -1582,6 +1582,80 @@ it.effect(
     }),
 );
 
+it.effect("publishes a marked agent finding once across concurrent clients", () =>
+  Effect.gen(function* () {
+    const publishedBodies: string[] = [];
+    let submissions = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "pathway", workspaceRoot: "/a", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestActivity: () =>
+            Effect.gen(function* () {
+              const comments = [...publishedBodies];
+              yield* Effect.yieldNow;
+              return {
+                comments: [],
+                commentCount: comments.length,
+                commentsTruncated: false,
+                reviewThreads:
+                  comments.length === 0
+                    ? []
+                    : [
+                        {
+                          id: "review-thread-1",
+                          path: "src/a.ts",
+                          line: 1,
+                          side: "right" as const,
+                          isResolved: false,
+                          isOutdated: false,
+                          comments: comments.map((body, index) => ({
+                            id: `comment-${index}`,
+                            author: null,
+                            body,
+                            createdAt: "2026-08-27T00:00:00.000Z",
+                            url: null,
+                          })),
+                        },
+                      ],
+                commits: [],
+              };
+            }),
+          submitReview: (input) =>
+            Effect.sync(() => {
+              submissions += 1;
+              publishedBodies.push(...input.comments.map((comment) => comment.body));
+            }),
+        }),
+      ],
+    });
+    const review = {
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      verdict: "comment" as const,
+      body: "One finding",
+      comments: [
+        {
+          path: "src/a.ts",
+          line: 1,
+          side: "right" as const,
+          body: "Problem\n\n<!-- pathway-agent-review:thread-1:message-1:0 -->",
+        },
+      ],
+    };
+
+    yield* Effect.all([service.submitReview(review), service.submitReview(review)], {
+      concurrency: 2,
+    });
+
+    assert.strictEqual(submissions, 1);
+    assert.lengthOf(publishedBodies, 1);
+  }),
+);
+
 it.effect("refuses to resolve a conversation on a host that cannot", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

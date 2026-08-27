@@ -29,6 +29,7 @@ import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { PullRequestAgentReviewHost } from "../components/pullRequest/PullRequestAgentReviewHost";
 import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
@@ -404,6 +405,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {/* Every project needs an owning company before it can carry issues. */}
         {primaryEnvironmentAuthenticated ? <AssignProjectCompanyDialog /> : null}
         <SlowRpcRequestToastCoordinator />
+        <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {/* Captured mail toasts from any route, so a verification code finds you mid-thread. */}

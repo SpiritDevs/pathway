@@ -5,6 +5,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 import {
   PullRequestOperationError,
   PullRequestUnavailableError,
@@ -78,6 +79,13 @@ const REPOSITORY_CONCURRENCY = 12;
  * of searches rather than in a request per repository.
  */
 const REPOSITORY_SEARCH_CHUNK = 100;
+const AGENT_REVIEW_MARKER_PATTERN = /<!-- (pathway-agent-review:[^\s>]+) -->/gu;
+
+function agentReviewMarkerIds(body: string): ReadonlySet<string> {
+  return new Set(
+    [...body.matchAll(AGENT_REVIEW_MARKER_PATTERN)].flatMap((match) => match[1] ?? []),
+  );
+}
 
 /**
  * Every read leaves the process — a CLI per repository, against hosts whose limits are low
@@ -376,6 +384,9 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  // Review submission is rare and host-visible. Serialize the read-before-write marker check so
+  // two connected clients cannot publish the same background agent finding at once.
+  const reviewSubmissionMutex = yield* Semaphore.make(1);
 
   /**
    * Shell snapshots keep optional repository metadata non-blocking so navigation never waits on
@@ -1249,17 +1260,54 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository to comment on a line of a change request.",
               );
             }
-            return project.api
-              .submitReview({
+            const publish = (comments: PullRequestSubmitReviewInput["comments"]) =>
+              project.api.submitReview({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
                 verdict: input.verdict,
                 body: input.body,
-                comments: input.comments,
-              })
-              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+                comments,
+              });
+            const requestedMarkers = new Set(
+              input.comments.flatMap((comment) => [...agentReviewMarkerIds(comment.body)]),
+            );
+            if (requestedMarkers.size === 0) {
+              return publish(input.comments).pipe(
+                Effect.mapError(toPullRequestError("submitReview")),
+              );
+            }
+            return reviewSubmissionMutex.withPermit(
+              project.api
+                .getChangeRequestActivity({
+                  cwd: project.project.workspaceRoot,
+                  repository: project.repository,
+                  host: project.host,
+                  number: input.number,
+                })
+                .pipe(
+                  Effect.mapError(toPullRequestError("submitReview")),
+                  Effect.flatMap((activity) => {
+                    const publishedMarkers = new Set(
+                      activity.reviewThreads.flatMap((thread) =>
+                        thread.comments.flatMap((comment) => [
+                          ...agentReviewMarkerIds(comment.body),
+                        ]),
+                      ),
+                    );
+                    const comments = input.comments.filter((comment) => {
+                      const markers = agentReviewMarkerIds(comment.body);
+                      return (
+                        markers.size === 0 || [...markers].some((id) => !publishedMarkers.has(id))
+                      );
+                    });
+                    return comments.length === 0
+                      ? Effect.void
+                      : publish(comments).pipe(Effect.mapError(toPullRequestError("submitReview")));
+                  }),
+                ),
+            );
           }),
         );
       }),
