@@ -375,7 +375,7 @@ index b3c5a306b293f797a8b338adfca3060c0f6db22b..4227ed22da8865b7493f47f199f4d8f4
 +  const releaseRevealHold = () => {
 +    if (state.insetEndRevealHold) {
 +      state.insetEndRevealHold = false;
-+      setInitialRenderState(ctx, {});
++      if (ctx.state === state) setInitialRenderState(ctx, {});
 +    }
 +  };
 +  // Revealing flips adaptive rendering to "normal", which re-renders rows and
@@ -732,7 +732,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..2d556eecb0bafe2f54084c809f82144c
 +  const releaseRevealHold = () => {
 +    if (state.insetEndRevealHold) {
 +      state.insetEndRevealHold = false;
-+      setInitialRenderState(ctx, {});
++      if (ctx.state === state) setInitialRenderState(ctx, {});
 +    }
 +  };
 +  // Revealing flips adaptive rendering to "normal", which re-renders rows and

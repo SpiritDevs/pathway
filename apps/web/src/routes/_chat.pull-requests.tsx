@@ -1030,7 +1030,7 @@ function PullRequestsRouteView() {
   );
   const openPanelControls = (
     <div className="workspace-titlebar-controls z-50 mr-px gap-1 [-webkit-app-region:no-drag]">
-      {rightPanelState.isOpen ? (
+      {rightPanelState.isOpen && !rightPanelUsesSheet ? (
         <RightPanelPopOutControl poppedOut={false} onToggle={toggleRightPanelPoppedOut} />
       ) : null}
       {panelToggleControls}

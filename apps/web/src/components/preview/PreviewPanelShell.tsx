@@ -141,13 +141,13 @@ export function usePreviewPanelMaxWidth(hostRef?: RefObject<HTMLDivElement | nul
     };
   }, []);
   useLayoutEffect(() => {
-    const parent = hostRef?.current?.parentElement;
-    if (!parent) return;
-    const measure = () => setContainerWidth(parent.clientWidth);
+    const container = hostRef?.current?.closest<HTMLElement>("[data-app-workspace-main-row]");
+    if (!container) return;
+    const measure = () => setContainerWidth(container.clientWidth);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
-    observer.observe(parent);
+    observer.observe(container);
     return () => observer.disconnect();
   }, [hostRef]);
   return getPreviewPanelMaxWidth(vw, containerWidth);
