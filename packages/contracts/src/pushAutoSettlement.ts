@@ -90,7 +90,8 @@ export function shouldStartPushAutoSettlement(
   result: GitRunStackedActionResult,
   isDefaultRef: boolean,
 ): boolean {
-  return result.push.status === "pushed" && isDefaultRef;
+  const createsPullRequest = result.action === "create_pr" || result.action === "commit_push_pr";
+  return result.push.status === "pushed" && isDefaultRef && !createsPullRequest;
 }
 
 export function pushAutoSettlementStillEligible(
