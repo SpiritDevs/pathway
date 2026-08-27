@@ -739,13 +739,13 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const pathService = yield* Path.Path;
-        const missingWorktree = pathService.join(cwd, "missing-worktree");
+        const fileSystem = yield* FileSystem.FileSystem;
+        const notAWorktree = pathService.join(cwd, "not-a-worktree");
+        yield* fileSystem.makeDirectory(notAWorktree);
         const driver = yield* GitVcsDriver.GitVcsDriver;
         yield* driver.initRepo({ cwd });
 
-        const error = yield* driver
-          .removeWorktree({ cwd, path: missingWorktree })
-          .pipe(Effect.flip);
+        const error = yield* driver.removeWorktree({ cwd, path: notAWorktree }).pipe(Effect.flip);
 
         assert.deepInclude(error, {
           _tag: "GitCommandError",
@@ -755,7 +755,20 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           cwd,
         });
         assert.notProperty(error, "cause");
+        assert.notProperty(error, "stderr");
         assert.notInclude(error.detail, "Git command failed in");
+      }),
+    );
+
+    it.effect("treats removing an already-gone worktree as a no-op", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const pathService = yield* Path.Path;
+        const missingWorktree = pathService.join(cwd, "missing-worktree");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+
+        yield* driver.removeWorktree({ cwd, path: missingWorktree });
       }),
     );
   });
@@ -1407,6 +1420,57 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.notInclude(yield* driver.listLocalBranchNames(cwd), "feature/worktree");
       }),
     );
+
+    it.effect("removes the same worktree path twice without failing", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const worktreePath = pathService.join(yield* makeTmpDir("git-worktrees-"), "shared");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/shared",
+        });
+
+        // Two threads can record the same worktree path; the second delete
+        // must be a no-op instead of exit 128.
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+        yield* driver.removeWorktree({ cwd, path: worktreePath });
+      }),
+    );
+
+    it.effect("prunes stale registrations when removing an already-gone worktree", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const worktreesRoot = yield* makeTmpDir("git-worktrees-");
+        const stalePath = pathService.join(worktreesRoot, "stale");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        yield* driver.createWorktree({
+          cwd,
+          path: stalePath,
+          refName: initialBranch,
+          newRefName: "feature/stale",
+        });
+        // Delete the directory behind git's back so the registration goes stale.
+        yield* fileSystem.remove(stalePath, { recursive: true });
+
+        yield* driver.removeWorktree({
+          cwd,
+          path: pathService.join(worktreesRoot, "never-registered"),
+        });
+
+        const registered = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.notInclude(registered, "stale");
+      }),
+    );
   });
 
   describe("remote operations", () => {
@@ -1703,6 +1767,43 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.deepInclude(skipped, {
           status: "skipped_up_to_date",
           branch: "feature/push",
+        });
+      }),
+    );
+
+    it.effect("allows pushes to run longer than the default command timeout", () =>
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const pushStarted = yield* Deferred.make<void>();
+        const delayedPushSpawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            if (ChildProcess.isStandardCommand(command) && command.args[0] === "push") {
+              yield* Deferred.succeed(pushStarted, undefined);
+              yield* Effect.sleep("31 seconds");
+            }
+            return yield* delegate.spawn(command);
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, delayedPushSpawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        const cwd = yield* makeTmpDir();
+        const remote = yield* makeTmpDir("git-remote-");
+        yield* initRepoWithCommit(cwd);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "origin", remote]);
+
+        const pushing = yield* driver
+          .pushCurrentBranch(cwd, null)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(pushStarted);
+        yield* TestClock.adjust("31 seconds");
+        const pushed = yield* Fiber.join(pushing);
+
+        assert.deepInclude(pushed, {
+          status: "pushed",
+          setUpstream: true,
         });
       }),
     );

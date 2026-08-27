@@ -8,6 +8,7 @@ import {
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   resolveTimelineToolPresentation,
+  shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
 
 describe("editable user message text", () => {
@@ -46,6 +47,17 @@ describe("editable user message text", () => {
     expect(replaceEditableUserMessageText(original, "Compare likely causes")).toBe(
       `Compare likely causes\n\n${suffix}`,
     );
+  });
+});
+
+describe("shouldPreserveAssistantLineBreaks", () => {
+  it("preserves Claude insight formatting without changing regular markdown", () => {
+    expect(
+      shouldPreserveAssistantLineBreaks(
+        "★ Insight ─────────────────\\nFirst observation\\nSecond observation\\n─────────────────",
+      ),
+    ).toBe(true);
+    expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
   });
 });
 

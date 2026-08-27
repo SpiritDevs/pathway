@@ -12,6 +12,14 @@ import type {
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 
+/** Whether the open pull-request action group contains at least one action. */
+export function pullRequestActionMenuHasGroup(
+  showsDraftToggle: boolean,
+  showsMergeMethods: boolean,
+): boolean {
+  return showsDraftToggle || showsMergeMethods;
+}
+
 /** Plain-language state, shown beside the author. Conflicts are a merge signal, not a state. */
 export function describePullRequestState(state: PullRequestState, isDraft: boolean): string {
   if (state === "merged") return "Merged";

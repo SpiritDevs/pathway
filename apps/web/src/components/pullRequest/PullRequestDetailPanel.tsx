@@ -110,6 +110,7 @@ import {
   buildResolveConflictsPrompt,
   canPerformPullRequestAction,
   isPullRequestConflicting,
+  pullRequestActionMenuHasGroup,
   pullRequestFindingKey,
   resolvePullRequestChromeCollapse,
   resolvePullRequestPrimaryAction,
@@ -135,6 +136,12 @@ const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   gitlab: "Open on GitLab",
   bitbucket: "Open on Bitbucket",
   "azure-devops": "Open on Azure DevOps",
+};
+
+const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
+  merge: "Merge",
+  squash: "Squash",
+  rebase: "Rebase",
 };
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
@@ -689,6 +696,7 @@ export function PullRequestDetailPanel({
 
   const allowedMergeMethods = allowedPullRequestMergeMethods(detail);
   const selectedMergeMethod = resolveSelectedMergeMethod(allowedMergeMethods, mergeMethod);
+  const selectedMergeMethodLabel = MERGE_METHOD_LABELS[selectedMergeMethod];
   const conflicting = isPullRequestConflicting(detail);
   // A host that cannot produce a patch has no Code tab to open. The tabs themselves stay hidden
   // until the detail arrives, so the loading ghost is the panel's only unfinished UI.
@@ -705,6 +713,18 @@ export function PullRequestDetailPanel({
   }, [tab, visibleTabs]);
   const can = (action: PullRequestAction) => canPerformPullRequestAction(detail, action);
   const primaryAction = resolvePullRequestPrimaryAction(detail);
+  // What the menu's action group holds. Named once so the separators around it are drawn from
+  // the same answer as its contents, rather than on the assumption that it has any.
+  const showsDraftToggle =
+    detail?.state === "open" &&
+    can(detail.isDraft ? "ready" : "draft") &&
+    !(detail.isDraft && primaryAction === "ready");
+  const showsMergeMethods =
+    detail?.state === "open" &&
+    can("merge") &&
+    !detail.isDraft &&
+    !conflicting &&
+    allowedMergeMethods.length > 1;
   // The pull request number carries this state in the overview and the right-panel tab mirrors
   // it. Conflicts keep their own row below: an open pull request remains green there.
   const statePresentation = detail
@@ -857,8 +877,7 @@ export function PullRequestDetailPanel({
                       {/* Only where the button row could not take it: "Ready for review" on a
                           draft is the primary header button, so offering it here as well would
                           show the same action twice. */}
-                      {can(detail.isDraft ? "ready" : "draft") &&
-                      !(detail.isDraft && primaryAction === "ready") ? (
+                      {showsDraftToggle ? (
                         <MenuItem
                           disabled={actionPending}
                           onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
@@ -876,12 +895,12 @@ export function PullRequestDetailPanel({
                           Hidden while conflicting: every method would fail. */}
                       {/* Only where merging is on offer at all: a strategy to merge with is not
                           a choice for someone who may not merge. */}
-                      {can("merge") &&
-                      !detail.isDraft &&
-                      !conflicting &&
-                      allowedMergeMethods.length > 1 ? (
+                      {showsMergeMethods ? (
                         <>
-                          <MenuSeparator />
+                          {/* Only below the draft control. A host with no draft of its own, or
+                              a draft whose control is already the header button, would leave
+                              this against the separator that opened the group. */}
+                          {showsDraftToggle ? <MenuSeparator /> : null}
                           <MenuRadioGroup
                             value={selectedMergeMethod}
                             onValueChange={(method) =>
@@ -894,14 +913,16 @@ export function PullRequestDetailPanel({
                                     icon and the label need their own row to share a line. */}
                                 <span className="flex min-w-0 items-center gap-2">
                                   <GitMergeIcon className="size-3.5" />
-                                  <span className="capitalize">{method}</span>
+                                  <span>{MERGE_METHOD_LABELS[method]}</span>
                                 </span>
                               </MenuRadioItem>
                             ))}
                           </MenuRadioGroup>
                         </>
                       ) : null}
-                      <MenuSeparator />
+                      {pullRequestActionMenuHasGroup(showsDraftToggle, showsMergeMethods) ? (
+                        <MenuSeparator />
+                      ) : null}
                     </>
                   ) : null}
                   <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
@@ -997,7 +1018,7 @@ export function PullRequestDetailPanel({
                   disabled={actionPending}
                   onClick={() => setConfirmAction("merge")}
                 >
-                  {actionPending ? "Merging..." : "Merge"}
+                  {actionPending ? "Merging..." : selectedMergeMethodLabel}
                 </Button>
               ) : null}
             </>
@@ -1436,7 +1457,7 @@ export function PullRequestDetailPanel({
                 if (action === "close") void perform("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              {confirmAction === "merge" ? selectedMergeMethodLabel : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

@@ -1191,6 +1191,10 @@ function PullRequestsRouteView() {
       !pullRequestsSupported || rightPanelState.isOpen ? null : (
         <span aria-hidden className="w-7 shrink-0 sm:w-5" />
       ),
+    titlebarControls:
+      // A no-drag descendant of the desktop header remains clickable; an
+      // overlapping sibling can still be swallowed by app-region hit testing.
+      pullRequestsSupported && !rightPanelState.isOpen ? openPanelControls : null,
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
   };
@@ -1316,7 +1320,7 @@ function PullRequestsRouteView() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
-        {pullRequestsSupported ? openPanelControls : null}
+        {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
         {!rightPanelUsesSheet ? (
@@ -1355,6 +1359,7 @@ function PullRequestsColumn({
   searchInput,
   filtersMenu,
   rightPanelControl,
+  titlebarControls,
   rightPanelOpen,
   listBody,
 }: {
@@ -1363,6 +1368,7 @@ function PullRequestsColumn({
   searchInput: ReactNode;
   filtersMenu: ReactNode;
   rightPanelControl: ReactNode;
+  titlebarControls: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
 }) {
@@ -1400,6 +1406,7 @@ function PullRequestsColumn({
           COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
       >
+        {titlebarControls}
         <div ref={topbarSearchRef} className="flex min-w-0 flex-1 items-center gap-2">
           {searchInput}
           {filtersMenu}
@@ -1412,12 +1419,8 @@ function PullRequestsColumn({
         >
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
+        {rightPanelControl}
       </header>
-      {rightPanelControl ? (
-        <div className="workspace-titlebar-controls z-20 [-webkit-app-region:no-drag]">
-          {rightPanelControl}
-        </div>
-      ) : null}
 
       <div className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the

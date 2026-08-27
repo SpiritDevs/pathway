@@ -23,7 +23,10 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@spiritdevs/client-runtime/state/thread-settled";
-import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/models";
+import {
+  type EnvironmentThreadShell,
+  threadRuntimeIsActive,
+} from "@spiritdevs/client-runtime/state/models";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import {
   scopeProjectRef,
@@ -175,11 +178,10 @@ import { workspaceThreadStartAvailability } from "./projects/workspaceProjects.l
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
-  deriveProviderInstanceEntries,
+  deriveProviderEntriesByEnvironment,
   shouldShowProviderInstanceBadge,
   type ProviderInstanceEntry,
 } from "../providerInstances";
-import { primaryServerProvidersAtom } from "../state/server";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
@@ -280,6 +282,8 @@ function WorkingDuration(props: { startedAt: string | null }) {
     </span>
   );
 }
+
+const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new Map();
 
 function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
@@ -1332,25 +1336,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     aria-label="Wake thread now"
                     onClick={handleUnsnoozeClick}
                     className={cn(
-                      "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                      "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
                       isWoke && "group-hover/sidebar-row:static",
                     )}
                   >
-                    <AlarmClockOffIcon className="size-3" />
+                    <AlarmClockOffIcon className="mb-px size-3" />
                   </button>
                 )
               ) : !props.settlementSupported ? null : variantAction === "unsettle" ? (
-                <button
-                  type="button"
-                  aria-label="Un-settle thread"
-                  onClick={handleUnsettleClick}
-                  className={cn(
-                    "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                    isWoke && "group-hover/sidebar-row:static",
-                  )}
-                >
-                  <Undo2Icon className="mb-px size-3.5" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Un-settle thread"
+                        onClick={handleUnsettleClick}
+                        className={cn(
+                          "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                          isWoke && "group-hover/sidebar-row:static",
+                        )}
+                      />
+                    }
+                  >
+                    <Undo2Icon className="mb-px size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">Un-settle thread</TooltipPopup>
+                </Tooltip>
               ) : (
                 <button
                   type="button"
@@ -1769,6 +1780,7 @@ export default function Sidebar() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
+  const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -1780,6 +1792,7 @@ export default function Sidebar() {
     pinThread,
     unpinThread,
     reorderPinnedThread,
+    archiveThread,
     deleteThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -1940,15 +1953,18 @@ export default function Sidebar() {
   }, [projects.length, threadStartAvailability, workspaceProjects.length]);
 
   const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
-  const serverProviders = useAtomValue(primaryServerProvidersAtom);
-  const providerEntryByInstanceId = useMemo(
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  // Threads on non-primary environments (T3 Connect, hosted) resolve their
+  // provider entry from their own environment's config: default instance ids
+  // are driver slugs, so a flat map would collide across environments.
+  const providerEntriesByEnvironment = useMemo(
     () =>
-      new Map(
-        deriveProviderInstanceEntries(serverProviders).map(
-          (entry) => [entry.instanceId as string, entry] as const,
+      deriveProviderEntriesByEnvironment(
+        [...serverConfigs].map(
+          ([environmentId, config]) => [environmentId, config.providers] as const,
         ),
       ),
-    [serverProviders],
+    [serverConfigs],
   );
   const sideChatsByParentKey = useMemo(() => {
     const grouped = new Map<string, EnvironmentThreadShell[]>();
@@ -2138,7 +2154,6 @@ export default function Sidebar() {
   // the partition works directly off live shells: no archived-snapshot
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
-  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const {
     pinnedThreads,
     reorderablePinnedKeys,
@@ -3258,6 +3273,7 @@ export default function Sidebar() {
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
+              isRunning: threadRuntimeIsActive(thread.runtime),
               supports: {
                 settlement: supportsSettlement,
                 snooze: supportsSnooze,
@@ -3361,6 +3377,34 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "archive": {
+            if (confirmThreadArchive) {
+              const confirmed = await settlePromise(() =>
+                api.dialogs.confirm(`Archive thread "${thread.title}"?`),
+              );
+              if (confirmed._tag === "Failure" || !confirmed.value) return;
+            }
+            let didArchive = false;
+            const result = await archiveThread(threadRef, {
+              onArchived: () => {
+                didArchive = true;
+              },
+            });
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: didArchive
+                    ? "Thread archived, but navigation failed"
+                    : "Failed to archive thread",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+              return;
+            }
+            return;
+          }
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -3394,12 +3438,14 @@ export default function Sidebar() {
       })();
     },
     [
+      archiveThread,
       attemptPin,
       attemptSettle,
       attemptSnooze,
       attemptUnpin,
       attemptUnsettle,
       attemptUnsnooze,
+      confirmThreadArchive,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
@@ -3770,8 +3816,11 @@ export default function Sidebar() {
                           ) ?? null
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
-                        providerEntryByInstanceId={providerEntryByInstanceId}
                         sideChats={sideChatsByParentKey.get(threadKey) ?? []}
+                        providerEntryByInstanceId={
+                          providerEntriesByEnvironment.get(thread.environmentId) ??
+                          EMPTY_PROVIDER_ENTRIES
+                        }
                         isHighlighted={activeSearchResultIndex === index}
                         isRouteActive={routeThreadKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
@@ -3888,8 +3937,11 @@ export default function Sidebar() {
                             `${thread.environmentId}:${thread.projectId}`,
                           ) ?? null
                         }
-                        providerEntryByInstanceId={providerEntryByInstanceId}
                         sideChats={sideChatsByParentKey.get(threadKey) ?? []}
+                        providerEntryByInstanceId={
+                          providerEntriesByEnvironment.get(thread.environmentId) ??
+                          EMPTY_PROVIDER_ENTRIES
+                        }
                         timestampFormat={timestampFormat}
                         onThreadClick={handleThreadClick}
                         onThreadActivate={navigateToThread}

@@ -97,6 +97,7 @@ import {
   resolveTimelineMinimapTopPercent,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
+  shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -1635,6 +1636,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenFilePreview={ctx.onOpenFilePreview}
           onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           isStreaming={Boolean(row.message.streaming)}
+          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
           skills={ctx.skills}
         />
         <AssistantChangedFilesSection
@@ -2562,6 +2564,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             skills={props.skills}
             className="text-foreground"
             lineBreaks
+            parseRawHtml={false}
           />
         ) : null}
         {trailingWhitespace ? <span aria-hidden="true">{trailingWhitespace}</span> : null}
@@ -2586,6 +2589,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                   skills={props.skills}
                   className="text-foreground"
                   lineBreaks
+                  parseRawHtml={false}
                 />
               </div>
             ) : null
@@ -2676,6 +2680,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           skills={props.skills}
           className="text-foreground"
           lineBreaks
+          parseRawHtml={false}
         />,
       );
     } else if (inlinePrefix.length === 0) {
@@ -2703,6 +2708,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       skills={props.skills}
       className="text-foreground"
       lineBreaks
+      parseRawHtml={false}
     />
   );
 });
