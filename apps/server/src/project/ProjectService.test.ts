@@ -120,10 +120,12 @@ it.layer(TestLayer)("ProjectService", (it) => {
         commandId: CommandId.make("command:project:update"),
         projectId,
         title: "Renamed",
+        defaultThreadEnvMode: "worktree",
         faviconPath: "brand assets/project icon.svg",
       });
       assert.equal(updated.title, "Renamed");
       assert.isTrue(updated.titleIsCustom);
+      assert.equal(updated.defaultThreadEnvMode, "worktree");
       assert.equal(updated.createdAt, created.createdAt);
 
       const sql = yield* SqlClient.SqlClient;
@@ -145,6 +147,7 @@ it.layer(TestLayer)("ProjectService", (it) => {
       assert.isTrue(Option.isSome(byId));
       assert.isTrue(Option.isSome(byWorkspace));
       assert.equal(Option.getOrThrow(byId).faviconPath, "brand assets/project icon.svg");
+      assert.equal(Option.getOrThrow(byId).defaultThreadEnvMode, "worktree");
       assert.equal(Option.getOrThrow(byWorkspace).faviconPath, "brand assets/project icon.svg");
       assert.equal(Option.getOrThrow(byWorkspace).id, projectId);
       assert.deepEqual(

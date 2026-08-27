@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { RepositoryIdentity } from "./environment.ts";
+import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
   CommandId,
@@ -52,6 +52,8 @@ export const Project = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  // Optional on the wire so clients can still read snapshots from older servers.
+  defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -110,6 +112,7 @@ export const ProjectMutation = Schema.Union([
     workspaceRoot: Schema.optional(TrimmedNonEmptyString),
     createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
     defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
+    defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
     faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
     scripts: Schema.optional(Schema.Array(ProjectScript)),
   }),

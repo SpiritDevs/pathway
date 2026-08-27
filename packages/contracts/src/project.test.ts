@@ -81,6 +81,25 @@ describe("project mutations", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts setting and clearing the new-thread workspace override", () => {
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-workspace",
+        projectId: "project-1",
+        defaultThreadEnvMode: "worktree",
+      }),
+    ).toMatchObject({ defaultThreadEnvMode: "worktree" });
+    expect(
+      decodeMutation({
+        type: "project.update",
+        commandId: "command-project-workspace-reset",
+        projectId: "project-1",
+        defaultThreadEnvMode: null,
+      }),
+    ).toMatchObject({ defaultThreadEnvMode: null });
+  });
 });
 
 describe("project RPC errors", () => {

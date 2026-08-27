@@ -71,6 +71,9 @@ export const projectHttpApiLayer = HttpApiBuilder.group(
                     ...(mutation.defaultModelSelection === undefined
                       ? {}
                       : { defaultModelSelection: mutation.defaultModelSelection }),
+                    ...(mutation.defaultThreadEnvMode === undefined
+                      ? {}
+                      : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
                     ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
                   })
                 : projects.delete({
