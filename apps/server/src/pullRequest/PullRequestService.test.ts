@@ -1656,6 +1656,55 @@ it.effect("publishes a marked agent finding once across concurrent clients", () 
   }),
 );
 
+it.effect("refuses marked agent findings when host activity is truncated", () =>
+  Effect.gen(function* () {
+    let submissions = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "pathway", workspaceRoot: "/a", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestActivity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 500,
+              commentsTruncated: true,
+              reviewThreads: [],
+              commits: [],
+            }),
+          submitReview: () =>
+            Effect.sync(() => {
+              submissions += 1;
+            }),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.submitReview({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        verdict: "comment",
+        body: "One finding",
+        comments: [
+          {
+            path: "src/a.ts",
+            line: 1,
+            side: "right",
+            body: "Problem\n\n<!-- pathway-agent-review:thread-1:message-1:0 -->",
+          },
+        ],
+      }),
+    );
+
+    if (error._tag !== "PullRequestOperationError") return assert.fail("unexpected error type");
+    assert.include(error.detail, "could not safely verify");
+    assert.strictEqual(submissions, 0);
+  }),
+);
+
 it.effect("refuses to resolve a conversation on a host that cannot", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

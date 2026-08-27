@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   agentReviewSummary,
   buildPullRequestAgentReviewPrompt,
+  markedAgentReviewFindings,
   parseAgentReviewFindings,
 } from "./pullRequestAgentReview.logic";
 
@@ -25,6 +26,27 @@ describe("agent pull request review markers", () => {
     ]);
     expect(agentReviewSummary(response)).toContain("Two findings.");
     expect(agentReviewSummary(response)).not.toContain("pathway-review-comment");
+  });
+
+  it("gives parsed findings deterministic publication markers", () => {
+    expect(
+      markedAgentReviewFindings({
+        text: '<pathway-review-comment>{"path":"src/a.ts","line":12,"side":"right","body":"This can throw."}</pathway-review-comment>',
+        threadId: "thread-1",
+        messageId: "message-1",
+      }),
+    ).toEqual([
+      {
+        finding: {
+          index: 0,
+          path: "src/a.ts",
+          line: 12,
+          side: "right",
+          body: "This can throw.",
+        },
+        markerId: "pathway-agent-review:thread-1:message-1:0",
+      },
+    ]);
   });
 
   it("asks for review-only work and exact diff anchors", () => {

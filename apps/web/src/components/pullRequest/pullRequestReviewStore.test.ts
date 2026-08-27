@@ -1,6 +1,11 @@
+import { ProjectId } from "@spiritdevs/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { type PendingReviewComment, usePullRequestReviewStore } from "./pullRequestReviewStore";
+import {
+  type PendingReviewComment,
+  stageAgentReviewFindings,
+  usePullRequestReviewStore,
+} from "./pullRequestReviewStore";
 
 function comment(id: string, body = id): PendingReviewComment {
   return { id, body, path: "src/app.ts", line: 1, side: "right" };
@@ -33,6 +38,47 @@ describe("pull request review drafts", () => {
     expect(usePullRequestReviewStore.getState().drafts["review-a"]).toEqual([
       comment("agent-finding"),
     ]);
+  });
+
+  it("stages an agent finding and its summary together", () => {
+    stageAgentReviewFindings({
+      reference: {
+        projectId: ProjectId.make("project-1"),
+        repository: "acme/app",
+        number: 42,
+      },
+      messageText: [
+        "Review summary",
+        '<pathway-review-comment>{"path":"src/app.ts","line":2,"side":"right","body":"Finding"}</pathway-review-comment>',
+      ].join("\n"),
+      findings: [
+        {
+          markerId: "pathway-agent-review:thread-1:message-1:0",
+          finding: {
+            index: 0,
+            path: "src/app.ts",
+            line: 2,
+            side: "right",
+            body: "Finding",
+          },
+        },
+      ],
+    });
+
+    expect(usePullRequestReviewStore.getState()).toMatchObject({
+      drafts: {
+        "project-1/acme/app#42": [
+          {
+            id: "pathway-agent-review:thread-1:message-1:0",
+            path: "src/app.ts",
+            line: 2,
+            side: "right",
+            body: "Finding",
+          },
+        ],
+      },
+      summaries: { "project-1/acme/app#42": "Review summary" },
+    });
   });
 
   it("keeps summary bodies isolated by review key", () => {

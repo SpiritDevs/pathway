@@ -9,6 +9,8 @@
 import type { ProjectId, PullRequestDiffSide, PullRequestRef } from "@spiritdevs/contracts";
 import { create } from "zustand";
 
+import { agentReviewSummary, type MarkedAgentReviewFinding } from "./pullRequestAgentReview.logic";
+
 export interface PendingReviewComment {
   readonly id: string;
   readonly path: string;
@@ -90,6 +92,29 @@ export const usePullRequestReviewStore = create<PullRequestReviewStoreState>()((
       return { summaries: rest };
     }),
 }));
+
+export function stageAgentReviewFindings(input: {
+  readonly reference: PullRequestRef;
+  readonly messageText: string;
+  readonly findings: ReadonlyArray<MarkedAgentReviewFinding>;
+}): void {
+  const store = usePullRequestReviewStore.getState();
+  const reviewKey = pullRequestReviewKey(input.reference);
+  for (const { finding, markerId } of input.findings) {
+    store.addComment(reviewKey, {
+      id: markerId,
+      path: finding.path,
+      ...(finding.oldPath === undefined ? {} : { oldPath: finding.oldPath }),
+      line: finding.line,
+      side: finding.side,
+      body: finding.body,
+    });
+  }
+  const summary = agentReviewSummary(input.messageText);
+  if (summary.length > 0 && (store.summaries[reviewKey] ?? "").trim().length === 0) {
+    store.setSummary(reviewKey, summary);
+  }
+}
 
 /** The comments a pull request's draft holds, stable across renders while it is empty. */
 export function usePendingReviewComments(reference: {

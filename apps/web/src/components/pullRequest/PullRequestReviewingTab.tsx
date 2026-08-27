@@ -8,16 +8,8 @@ import { useThreadProjection, useThreadShell } from "~/state/entities";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
-import {
-  agentReviewCommentMarkerId,
-  agentReviewSummary,
-  parseAgentReviewFindings,
-} from "./pullRequestAgentReview.logic";
-import {
-  pullRequestReviewKey,
-  usePendingReviewComments,
-  usePullRequestReviewStore,
-} from "./pullRequestReviewStore";
+import { markedAgentReviewFindings } from "./pullRequestAgentReview.logic";
+import { stageAgentReviewFindings, usePendingReviewComments } from "./pullRequestReviewStore";
 
 // ChatView imports the pull-request panel for thread-side PR tabs. Loading it synchronously from
 // this panel would make that dependency circular; the review tab is already an on-demand surface.
@@ -45,7 +37,6 @@ export function PullRequestReviewingTab({
   const shell = useThreadShell(threadRef);
   const projection = useThreadProjection(threadRef);
   const processedMessageIds = useRef(new Set<string>());
-  const reviewKey = pullRequestReviewKey(reference);
   const pendingComments = usePendingReviewComments(reference);
 
   useEffect(() => {
@@ -62,47 +53,24 @@ export function PullRequestReviewingTab({
       ) {
         continue;
       }
-      const findings = parseAgentReviewFindings(message.text);
-      if (findings.length === 0) {
+      const marked = markedAgentReviewFindings({
+        text: message.text,
+        threadId,
+        messageId: message.id,
+      });
+      if (marked.length === 0) {
         processedMessageIds.current.add(message.id);
         continue;
       }
-      const marked = findings.map((finding) => ({
-        finding,
-        markerId: agentReviewCommentMarkerId({
-          threadId,
-          messageId: message.id,
-          findingIndex: finding.index,
-        }),
-      }));
-      const newFindings = marked;
       processedMessageIds.current.add(message.id);
-      if (newFindings.length === 0) continue;
 
-      const stage = () => {
-        const store = usePullRequestReviewStore.getState();
-        for (const { finding, markerId } of newFindings) {
-          store.addComment(reviewKey, {
-            id: markerId,
-            path: finding.path,
-            ...(finding.oldPath === undefined ? {} : { oldPath: finding.oldPath }),
-            line: finding.line,
-            side: finding.side,
-            body: finding.body,
-          });
-        }
-        const summary = agentReviewSummary(message.text);
-        if (summary.length > 0 && (store.summaries[reviewKey] ?? "").trim().length === 0) {
-          store.setSummary(reviewKey, summary);
-        }
-        toastManager.add({
-          type: "success",
-          title: `${newFindings.length} agent ${newFindings.length === 1 ? "finding" : "findings"} ready in Code`,
-        });
-      };
-      stage();
+      stageAgentReviewFindings({ reference, messageText: message.text, findings: marked });
+      toastManager.add({
+        type: "success",
+        title: `${marked.length} agent ${marked.length === 1 ? "finding" : "findings"} ready in Code`,
+      });
     }
-  }, [environmentId, projection, publishComments, reference, reviewKey, threadId]);
+  }, [projection, publishComments, reference, threadId]);
 
   if (shell === null) {
     return (

@@ -41,6 +41,7 @@ import {
   type SourceControlProviderKind,
 } from "@spiritdevs/contracts";
 import { detectSourceControlProviderFromRemoteUrl } from "@spiritdevs/shared/sourceControl";
+import { pullRequestAgentReviewMarkerIds } from "@spiritdevs/shared/pullRequestReview";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -79,14 +80,6 @@ const REPOSITORY_CONCURRENCY = 12;
  * of searches rather than in a request per repository.
  */
 const REPOSITORY_SEARCH_CHUNK = 100;
-const AGENT_REVIEW_MARKER_PATTERN = /<!-- (pathway-agent-review:[^\s>]+) -->/gu;
-
-function agentReviewMarkerIds(body: string): ReadonlySet<string> {
-  return new Set(
-    [...body.matchAll(AGENT_REVIEW_MARKER_PATTERN)].flatMap((match) => match[1] ?? []),
-  );
-}
-
 /**
  * Every read leaves the process — a CLI per repository, against hosts whose limits are low
  * (GitHub's search API allows ~30 requests a minute) — so answers are shared for a short
@@ -1271,7 +1264,9 @@ export const make = Effect.gen(function* () {
                 comments,
               });
             const requestedMarkers = new Set(
-              input.comments.flatMap((comment) => [...agentReviewMarkerIds(comment.body)]),
+              input.comments.flatMap((comment) => [
+                ...pullRequestAgentReviewMarkerIds(comment.body),
+              ]),
             );
             if (requestedMarkers.size === 0) {
               return publish(input.comments).pipe(
@@ -1289,15 +1284,20 @@ export const make = Effect.gen(function* () {
                 .pipe(
                   Effect.mapError(toPullRequestError("submitReview")),
                   Effect.flatMap((activity) => {
+                    if (activity.commentsTruncated) {
+                      return refuse(
+                        "The pull request activity was truncated, so Pathway could not safely verify whether these agent findings were already published. Refresh and try again.",
+                      );
+                    }
                     const publishedMarkers = new Set(
                       activity.reviewThreads.flatMap((thread) =>
                         thread.comments.flatMap((comment) => [
-                          ...agentReviewMarkerIds(comment.body),
+                          ...pullRequestAgentReviewMarkerIds(comment.body),
                         ]),
                       ),
                     );
                     const comments = input.comments.filter((comment) => {
-                      const markers = agentReviewMarkerIds(comment.body);
+                      const markers = pullRequestAgentReviewMarkerIds(comment.body);
                       return (
                         markers.size === 0 || [...markers].some((id) => !publishedMarkers.has(id))
                       );

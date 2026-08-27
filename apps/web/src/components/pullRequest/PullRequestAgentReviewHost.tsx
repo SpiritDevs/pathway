@@ -1,41 +1,43 @@
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
-import type { PullRequestReviewThread } from "@spiritdevs/contracts";
-import { useEffect, useRef, useState } from "react";
+import { threadRuntimeIsActive } from "@spiritdevs/client-runtime/state/models";
+import { deriveLatestThreadRun } from "@spiritdevs/client-runtime/state/thread-execution";
+import { pullRequestAgentReviewMarkerIds } from "@spiritdevs/shared/pullRequestReview";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useThreadProjection, useThreadShells } from "~/state/entities";
+import { useThreadProjection, useThreadShell, useThreadShells } from "~/state/entities";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { toastManager } from "../ui/toast";
 import {
   reconcilePullRequestReviewPublisherTargets,
+  pullRequestReviewCanFinish,
+  pullRequestReviewProcessingDisposition,
+  pullRequestReviewPublisherTargetKey,
   type PullRequestReviewPublisherTarget,
 } from "./PullRequestAgentReviewHost.logic";
 import {
-  agentReviewCommentMarkerId,
   agentReviewSummary,
-  parseAgentReviewFindings,
+  markedAgentReviewFindings,
   reviewCommentBodyWithMarker,
 } from "./pullRequestAgentReview.logic";
-import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
-
-function publishedMarkerIds(threads: ReadonlyArray<PullRequestReviewThread>): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const comment of threads.flatMap((thread) => thread.comments)) {
-    for (const match of comment.body.matchAll(/<!-- (pathway-agent-review:[^\s>]+) -->/gu)) {
-      if (match[1]) ids.add(match[1]);
-    }
-  }
-  return ids;
-}
+import { stageAgentReviewFindings } from "./pullRequestReviewStore";
 
 function PullRequestAgentReviewPublisher({
   target,
+  onFinished,
 }: {
   readonly target: PullRequestReviewPublisherTarget;
+  readonly onFinished: (target: PullRequestReviewPublisherTarget) => void;
 }) {
-  const projection = useThreadProjection(scopeThreadRef(target.environmentId, target.threadId));
-  const { data: activity, refresh: refreshActivity } = useEnvironmentQuery(
+  const threadRef = scopeThreadRef(target.environmentId, target.threadId);
+  const shell = useThreadShell(threadRef);
+  const projection = useThreadProjection(threadRef);
+  const {
+    data: activity,
+    error: activityError,
+    refresh: refreshActivity,
+  } = useEnvironmentQuery(
     pullRequestEnvironment.activity({
       environmentId: target.environmentId,
       input: target.reference,
@@ -45,43 +47,98 @@ function PullRequestAgentReviewPublisher({
     reportFailure: false,
   });
   const processedMessageIds = useRef(new Set<string>());
+  const publishing = useRef(false);
+  const [processingVersion, setProcessingVersion] = useState(0);
 
   useEffect(() => {
-    if (projection === null || activity === null) return;
-    const alreadyPublished = publishedMarkerIds(activity.reviewThreads);
-    for (const message of projection.projection.messages) {
+    if (projection === null || publishing.current) return;
+    const active = shell !== null && threadRuntimeIsActive(shell.runtime);
+    const latestRun = deriveLatestThreadRun(projection.projection);
+    const finishIfComplete = () => {
       if (
-        message.role !== "assistant" ||
-        message.streaming ||
-        processedMessageIds.current.has(message.id)
+        pullRequestReviewCanFinish({
+          active,
+          processedMessageIds: processedMessageIds.current,
+          latestRun,
+        })
       ) {
-        continue;
+        onFinished(target);
       }
-      const findings = parseAgentReviewFindings(message.text);
-      if (findings.length === 0) {
-        processedMessageIds.current.add(message.id);
-        continue;
-      }
-      const marked = findings.map((finding) => ({
-        finding,
-        markerId: agentReviewCommentMarkerId({
-          threadId: target.threadId,
-          messageId: message.id,
-          findingIndex: finding.index,
-        }),
-      }));
-      const newFindings = marked.filter(({ markerId }) => !alreadyPublished.has(markerId));
-      processedMessageIds.current.add(message.id);
-      if (newFindings.length === 0) continue;
+    };
+    const messages = projection.projection.messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        !message.streaming &&
+        !processedMessageIds.current.has(message.id),
+    );
+    if (messages.length === 0) {
+      finishIfComplete();
+      return;
+    }
+    const disposition = pullRequestReviewProcessingDisposition({
+      activityAvailable: activity !== null,
+      activityError,
+    });
+    if (disposition === "wait") return;
 
-      void (async () => {
+    const alreadyPublished = new Set(
+      activity?.reviewThreads.flatMap((thread) =>
+        thread.comments.flatMap((comment) => [...pullRequestAgentReviewMarkerIds(comment.body)]),
+      ) ?? [],
+    );
+    const prepared = messages.map((message) => {
+      const marked = markedAgentReviewFindings({
+        text: message.text,
+        threadId: target.threadId,
+        messageId: message.id,
+      });
+      processedMessageIds.current.add(message.id);
+      return {
+        message,
+        findings: marked.filter(({ markerId }) => !alreadyPublished.has(markerId)),
+      };
+    });
+    const findingCount = prepared.reduce((count, entry) => count + entry.findings.length, 0);
+
+    if (disposition === "stage") {
+      for (const { message, findings } of prepared) {
+        if (findings.length > 0) {
+          stageAgentReviewFindings({
+            reference: target.reference,
+            messageText: message.text,
+            findings,
+          });
+        }
+      }
+      if (findingCount > 0) {
+        toastManager.add({
+          type: "error",
+          title: "The agent review could not be published",
+          description: "Its findings are still available as drafts in Code.",
+        });
+      }
+      finishIfComplete();
+      return;
+    }
+
+    if (findingCount === 0) {
+      finishIfComplete();
+      return;
+    }
+
+    publishing.current = true;
+    void (async () => {
+      let publishedCount = 0;
+      let stagedCount = 0;
+      for (const { message, findings } of prepared) {
+        if (findings.length === 0) continue;
         const result = await submitReview({
           environmentId: target.environmentId,
           input: {
             ...target.reference,
             verdict: "comment",
             body: agentReviewSummary(message.text),
-            comments: newFindings.map(({ finding, markerId }) => ({
+            comments: findings.map(({ finding, markerId }) => ({
               path: finding.path,
               ...(finding.oldPath === undefined ? {} : { oldPath: finding.oldPath }),
               line: finding.line,
@@ -91,38 +148,46 @@ function PullRequestAgentReviewPublisher({
           },
         });
         if (result._tag === "Failure") {
-          const store = usePullRequestReviewStore.getState();
-          const reviewKey = pullRequestReviewKey(target.reference);
-          for (const { finding, markerId } of newFindings) {
-            store.addComment(reviewKey, {
-              id: markerId,
-              path: finding.path,
-              ...(finding.oldPath === undefined ? {} : { oldPath: finding.oldPath }),
-              line: finding.line,
-              side: finding.side,
-              body: finding.body,
-            });
-          }
-          const summary = agentReviewSummary(message.text);
-          if (summary.length > 0 && (store.summaries[reviewKey] ?? "").trim().length === 0) {
-            store.setSummary(reviewKey, summary);
-          }
-          toastManager.add({
-            type: "error",
-            title: "The agent review could not be published",
-            description: "Its findings are still available as drafts in Code.",
+          stageAgentReviewFindings({
+            reference: target.reference,
+            messageText: message.text,
+            findings,
           });
-          return;
+          stagedCount += findings.length;
+        } else {
+          publishedCount += findings.length;
         }
+      }
+      publishing.current = false;
+      setProcessingVersion((version) => version + 1);
+      if (stagedCount > 0) {
+        toastManager.add({
+          type: "error",
+          title: "The agent review could not be published",
+          description: "Its findings are still available as drafts in Code.",
+        });
+      }
+      if (publishedCount > 0) {
         toastManager.add({
           type: "success",
           title: "Agent review published",
-          description: `${newFindings.length} inline ${newFindings.length === 1 ? "comment" : "comments"} posted.`,
+          description: `${publishedCount} inline ${publishedCount === 1 ? "comment" : "comments"} posted.`,
         });
         refreshActivity();
-      })();
-    }
-  }, [activity, projection, refreshActivity, submitReview, target]);
+      }
+      finishIfComplete();
+    })();
+  }, [
+    activity,
+    activityError,
+    onFinished,
+    processingVersion,
+    projection,
+    refreshActivity,
+    shell,
+    submitReview,
+    target,
+  ]);
 
   return null;
 }
@@ -131,14 +196,38 @@ function PullRequestAgentReviewPublisher({
 export function PullRequestAgentReviewHost() {
   const threads = useThreadShells();
   const [targets, setTargets] = useState<ReadonlyArray<PullRequestReviewPublisherTarget>>([]);
+  const [completedThreadKeys, setCompletedThreadKeys] = useState<ReadonlySet<string>>(new Set());
+
+  const finishTarget = useCallback((target: PullRequestReviewPublisherTarget) => {
+    const key = pullRequestReviewPublisherTargetKey(target);
+    setCompletedThreadKeys((current) => new Set(current).add(key));
+    setTargets((current) =>
+      current.filter((candidate) => pullRequestReviewPublisherTargetKey(candidate) !== key),
+    );
+  }, []);
 
   useEffect(() => {
-    setTargets((current) => reconcilePullRequestReviewPublisherTargets(threads, current));
+    const activeThreadKeys = new Set(
+      threads
+        .filter((thread) => threadRuntimeIsActive(thread.runtime))
+        .map((thread) => `${thread.environmentId}\u0000${thread.id}`),
+    );
+    setCompletedThreadKeys((current) => {
+      if (![...current].some((key) => activeThreadKeys.has(key))) return current;
+      return new Set([...current].filter((key) => !activeThreadKeys.has(key)));
+    });
   }, [threads]);
+
+  useEffect(() => {
+    setTargets((current) =>
+      reconcilePullRequestReviewPublisherTargets(threads, current, completedThreadKeys),
+    );
+  }, [completedThreadKeys, threads]);
 
   return targets.map((target) => (
     <PullRequestAgentReviewPublisher
       key={`${target.environmentId}:${target.threadId}`}
+      onFinished={finishTarget}
       target={target}
     />
   ));
