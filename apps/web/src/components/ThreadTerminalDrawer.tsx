@@ -3,7 +3,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
-import { type TerminalSessionState } from "@spiritdevs/client-runtime/state/terminal";
+import {
+  terminalBufferAppend,
+  type TerminalSessionState,
+} from "@spiritdevs/client-runtime/state/terminal";
 import {
   EllipsisIcon,
   Maximize2Icon,
@@ -387,6 +390,8 @@ export function TerminalViewport({
     }),
   );
   const terminalBuffer = terminalSession.buffer;
+  const terminalBufferEpoch = terminalSession.bufferEpoch;
+  const terminalBufferOffset = terminalSession.bufferOffset;
   const terminalError = terminalSession.error;
   const terminalStatus = terminalSession.status;
   const synchronizedStatusRef = useRef<TerminalSessionState["status"]>("closed");
@@ -410,6 +415,8 @@ export function TerminalViewport({
   const terminalVersion = terminalSession.version;
   const previousSessionRef = useRef({
     buffer: terminalBuffer,
+    bufferEpoch: terminalBufferEpoch,
+    bufferOffset: terminalBufferOffset,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -417,6 +424,8 @@ export function TerminalViewport({
   const latestSessionRef = useRef(previousSessionRef.current);
   latestSessionRef.current = {
     buffer: terminalBuffer,
+    bufferEpoch: terminalBufferEpoch,
+    bufferOffset: terminalBufferOffset,
     error: terminalError,
     status: terminalStatus,
     version: terminalVersion,
@@ -802,6 +811,8 @@ export function TerminalViewport({
     const terminal = terminalRef.current;
     const current = {
       buffer: terminalBuffer,
+      bufferEpoch: terminalBufferEpoch,
+      bufferOffset: terminalBufferOffset,
       error: terminalError,
       status: terminalStatus,
       version: terminalVersion,
@@ -817,13 +828,11 @@ export function TerminalViewport({
       return;
     }
 
-    if (
-      current.buffer.length >= previous.buffer.length &&
-      current.buffer.startsWith(previous.buffer)
-    ) {
-      terminal.write(current.buffer.slice(previous.buffer.length));
-    } else {
+    const appended = terminalBufferAppend(previous, current);
+    if (appended === null) {
       writeTerminalBuffer(terminal, current.buffer);
+    } else {
+      terminal.write(appended);
     }
     terminal.clearSelection();
 
@@ -837,7 +846,15 @@ export function TerminalViewport({
       });
     }
     previousSessionRef.current = current;
-  }, [autoFocus, terminalBuffer, terminalError, terminalStatus, terminalVersion]);
+  }, [
+    autoFocus,
+    terminalBuffer,
+    terminalBufferEpoch,
+    terminalBufferOffset,
+    terminalError,
+    terminalStatus,
+    terminalVersion,
+  ]);
 
   useEffect(() => {
     if (!autoFocus) return;
