@@ -408,6 +408,28 @@ function toAuthAccessStreamEvent(
   }
 }
 
+type ProjectUpdateMutation = Extract<ProjectMutation, { readonly type: "project.update" }>;
+
+export function wsProjectUpdateInputFromMutation(
+  mutation: ProjectUpdateMutation,
+): ProjectService.ProjectUpdateInput {
+  return {
+    commandId: mutation.commandId,
+    projectId: mutation.projectId,
+    ...(mutation.title === undefined ? {} : { title: mutation.title }),
+    ...(mutation.titleIsCustom === undefined ? {} : { titleIsCustom: mutation.titleIsCustom }),
+    ...(mutation.workspaceRoot === undefined ? {} : { workspaceRoot: mutation.workspaceRoot }),
+    ...(mutation.defaultModelSelection === undefined
+      ? {}
+      : { defaultModelSelection: mutation.defaultModelSelection }),
+    ...(mutation.defaultThreadEnvMode === undefined
+      ? {}
+      : { defaultThreadEnvMode: mutation.defaultThreadEnvMode }),
+    ...(mutation.faviconPath === undefined ? {} : { faviconPath: mutation.faviconPath }),
+    ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
+  };
+}
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
@@ -1045,22 +1067,7 @@ const makeWsRpcLayer = (
               ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
             });
           case "project.update":
-            return yield* projectService.update({
-              commandId: mutation.commandId,
-              projectId: mutation.projectId,
-              ...(mutation.title === undefined ? {} : { title: mutation.title }),
-              ...(mutation.titleIsCustom === undefined
-                ? {}
-                : { titleIsCustom: mutation.titleIsCustom }),
-              ...(mutation.workspaceRoot === undefined
-                ? {}
-                : { workspaceRoot: mutation.workspaceRoot }),
-              ...(mutation.defaultModelSelection === undefined
-                ? {}
-                : { defaultModelSelection: mutation.defaultModelSelection }),
-              ...(mutation.faviconPath === undefined ? {} : { faviconPath: mutation.faviconPath }),
-              ...(mutation.scripts === undefined ? {} : { scripts: mutation.scripts }),
-            });
+            return yield* projectService.update(wsProjectUpdateInputFromMutation(mutation));
           case "project.delete": {
             const snapshot = yield* threadManagement.getShellSnapshot();
             const projectThreads = [...snapshot.threads, ...snapshot.archivedThreads].filter(
