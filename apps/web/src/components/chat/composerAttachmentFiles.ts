@@ -3,11 +3,13 @@ import type { ComposerAttachment, ComposerFileAttachment } from "../../composerD
 export function findMatchingFileMarker(
   attachments: ReadonlyArray<ComposerAttachment>,
   incoming: ComposerFileAttachment,
+  consumedMarkerIds: ReadonlySet<string> = new Set(),
 ): ComposerFileAttachment | undefined {
   return attachments.find(
     (current): current is ComposerFileAttachment =>
       current.type === "file" &&
       current.file === null &&
+      !consumedMarkerIds.has(current.id) &&
       current.name === incoming.name &&
       current.mimeType === incoming.mimeType &&
       current.sizeBytes === incoming.sizeBytes,

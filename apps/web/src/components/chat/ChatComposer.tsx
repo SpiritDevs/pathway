@@ -2358,6 +2358,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const uploadedFileByComposerId = new Map(
       files.map((file, index) => [file.id, uploadedFiles[index]]),
     );
+    const persistedFiles = files.flatMap((file) => {
+      const uploaded = uploadedFileByComposerId.get(file.id);
+      return uploaded
+        ? [
+            {
+              type: "file" as const,
+              id: file.id,
+              name: file.name,
+              mimeType: file.mimeType,
+              sizeBytes: file.sizeBytes,
+              attachmentId: uploaded.id,
+              environmentId,
+            } satisfies PersistedComposerImageAttachment,
+          ]
+        : [];
+    });
+    const imageAttachments = images.filter(
+      (attachment): attachment is ComposerImageAttachment => attachment.type === "image",
+    );
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
     // twice. Guard on the snapshot itself rather than a bare boolean: once
     // the composer has been cleared the user can type something genuinely
@@ -2372,19 +2391,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const stashTarget = composerDraftTarget;
     const entryId = randomUUID();
     try {
-      // Persist the text-only entry *first*, then clear. Ordering matters in
+      // Persist the prompt and ready file markers *first*, then clear. Ordering matters in
       // both directions: writing before clearing means a crash or closed tab
       // mid-encode still leaves the prompt recoverable, while clearing before
       // the async image work means edits typed during encoding are not wiped.
-      // Images are appended to the stored entry as they finish encoding.
+      // Image bytes are appended to the stored entry as they finish encoding.
       const { evicted, written, durable } = stashEntryToQueue({
         id: entryId,
         createdAt: new Date().toISOString(),
         prompt,
-        attachments: [],
+        attachments: persistedFiles,
         droppedImageNames: [],
         unreadableImageNames: [],
-        pendingImageCount: images.length,
+        pendingImageCount: imageAttachments.length,
       });
 
       // Clearing the composer is only safe once the write actually landed.
@@ -2447,28 +2466,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // Images are compressed into browser storage. Generic files retain only
       // their durable pending-upload marker, so stashing never base64-encodes
       // a large file into localStorage.
-      const candidateAttachments: PersistedComposerImageAttachment[] = [];
+      const encodedImageAttachments: PersistedComposerImageAttachment[] = [];
       const oversizedImageNames: string[] = [];
       const unreadableImageNames: string[] = [];
       let usedAttachmentChars = 0;
-      for (const image of images) {
-        if (image.type === "file") {
-          const uploaded = uploadedFileByComposerId.get(image.id);
-          if (!uploaded) {
-            unreadableImageNames.push(image.name);
-            continue;
-          }
-          candidateAttachments.push({
-            type: "file",
-            id: image.id,
-            name: image.name,
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-            attachmentId: uploaded.id,
-            environmentId,
-          });
-          continue;
-        }
+      for (const image of imageAttachments) {
         if (usedAttachmentChars >= MAX_STASH_ENTRY_ATTACHMENT_CHARS) {
           oversizedImageNames.push(image.name);
           continue;
@@ -2494,12 +2496,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           sizeBytes: result.image.sizeBytes,
           dataUrl: result.image.dataUrl,
         } satisfies PersistedComposerImageAttachment;
-        candidateAttachments.push(attachment);
+        encodedImageAttachments.push(attachment);
         usedAttachmentChars += attachment.dataUrl.length;
       }
 
       const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, {
-        attachments: candidateAttachments,
+        attachments: encodedImageAttachments,
         droppedImageNames: oversizedImageNames,
         unreadableImageNames,
       });
@@ -2510,7 +2512,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // which reads as an orphan after reload — so say so now. Gated on the
         // entry write having been durable: on the in-memory fallback nothing
         // is ever durable, and the session-only warning already covered it.
-        if (!imagesDurable && durable && images.length > 0) {
+        if (!imagesDurable && durable && imageAttachments.length > 0) {
           toastManager.add({
             type: "warning",
             title: "Stashed attachments were not saved",
@@ -2519,26 +2521,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             data: { hideCopyButton: true },
           });
         }
-      } else if (candidateAttachments.length > 0) {
-        for (const attachment of candidateAttachments) {
-          if (
-            attachment.type === "file" &&
-            attachment.attachmentId !== undefined &&
-            attachment.environmentId !== undefined
-          ) {
-            releasePersistedAttachmentUpload({
-              environmentId: attachment.environmentId as EnvironmentId,
-              attachmentId: attachment.attachmentId,
-            });
-          }
-        }
+      } else if (encodedImageAttachments.length > 0) {
         // The entry was restored or deleted before its images finished
         // encoding, so they have nowhere to land. Say so rather than letting
         // them evaporate.
         toastManager.add({
           type: "warning",
           title: "Stashed attachments did not attach",
-          description: `That prompt was restored or deleted before ${candidateAttachments.length} attachment${candidateAttachments.length === 1 ? "" : "s"} finished saving. Re-attach ${candidateAttachments.length === 1 ? "it" : "them"} if you still need ${candidateAttachments.length === 1 ? "it" : "them"}.`,
+          description: `That prompt was restored or deleted before ${encodedImageAttachments.length} attachment${encodedImageAttachments.length === 1 ? "" : "s"} finished saving. Re-attach ${encodedImageAttachments.length === 1 ? "it" : "them"} if you still need ${encodedImageAttachments.length === 1 ? "it" : "them"}.`,
           data: { hideCopyButton: true },
         });
       }
@@ -2707,10 +2697,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file: attachmentFile,
         });
       }
+      const consumedMarkerIds = new Set<string>();
       for (const attachment of nextImages) {
         if (attachment.type !== "file") continue;
-        const marker = findMatchingFileMarker(draftAttachmentSnapshot, attachment);
+        const marker = findMatchingFileMarker(
+          draftAttachmentSnapshot,
+          attachment,
+          consumedMarkerIds,
+        );
         if (!marker) continue;
+        consumedMarkerIds.add(marker.id);
         releaseDraftAttachment(marker);
         removeComposerDraftImage(draftTarget, marker.id);
       }

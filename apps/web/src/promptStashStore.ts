@@ -265,7 +265,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
     const nextEntries = [...entries];
     nextEntries[index] = {
       ...existing,
-      attachments: images.attachments,
+      attachments: [...existing.attachments, ...images.attachments],
       droppedImageNames: images.droppedImageNames,
       unreadableImageNames: images.unreadableImageNames,
       pendingImageCount: 0,

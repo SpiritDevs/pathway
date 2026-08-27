@@ -28,6 +28,10 @@ describe("composer attachment files", () => {
 
     expect(findMatchingFileMarker([originMarker], incoming)?.id).toBe("origin-marker");
     expect(findMatchingFileMarker([navigationMarker], incoming)?.id).toBe("navigation-marker");
+    expect(
+      findMatchingFileMarker([originMarker, navigationMarker], incoming, new Set([originMarker.id]))
+        ?.id,
+    ).toBe("navigation-marker");
   });
 
   it("converts text only when the resulting prompt would exceed the send limit", () => {

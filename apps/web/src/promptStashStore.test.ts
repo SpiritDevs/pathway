@@ -152,7 +152,21 @@ describe("promptStashStore", () => {
 
   it("finalizeEntryImages attaches images and clears the pending count", () => {
     const store = usePromptStashStore.getState();
-    store.stashEntry({ ...makeEntry({ id: "pending" }), pendingImageCount: 2 });
+    store.stashEntry({
+      ...makeEntry({ id: "pending" }),
+      attachments: [
+        {
+          type: "file",
+          id: "file-1",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 42,
+          attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+          environmentId: "environment-1",
+        },
+      ],
+      pendingImageCount: 2,
+    });
 
     const { attached } = store.finalizeEntryImages("pending", {
       attachments: [
@@ -170,7 +184,7 @@ describe("promptStashStore", () => {
 
     expect(attached).toBe(true);
     const entry = usePromptStashStore.getState().entries[0];
-    expect(entry?.attachments).toHaveLength(1);
+    expect(entry?.attachments.map((attachment) => attachment.id)).toEqual(["file-1", "img-1"]);
     expect(entry?.droppedImageNames).toEqual(["big.png"]);
     expect(entry?.pendingImageCount).toBe(0);
   });
