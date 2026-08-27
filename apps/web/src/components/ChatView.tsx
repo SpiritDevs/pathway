@@ -240,7 +240,6 @@ import {
   awaitAttachmentUploads,
   getUploadedFileAttachments,
   releaseDraftAttachment,
-  releaseDraftAttachments,
 } from "../lib/attachmentUploadQueue";
 import {
   appendTerminalContextsToPrompt,
@@ -6232,7 +6231,6 @@ function ChatViewContent(props: ChatViewProps) {
         planMarkdown: activeProposedPlan.planMarkdown,
       });
       promptRef.current = "";
-      releaseDraftAttachments(composerImages);
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
       await onSubmitPlanFollowUp({
