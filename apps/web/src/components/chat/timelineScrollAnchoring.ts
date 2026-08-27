@@ -35,6 +35,20 @@ export function keepTimelineEndVisibleAfterOverlayGrowth({
   }
 }
 
+export function scrollTimelineToEndIfFollowing({
+  timeline,
+  scrollMode,
+  animated,
+}: {
+  readonly timeline: { scrollToEnd?: (options: { animated: boolean }) => unknown } | null;
+  readonly scrollMode: TimelineScrollMode;
+  readonly animated: boolean;
+}): void {
+  if (timeline?.scrollToEnd && scrollMode === "following-end") {
+    void timeline.scrollToEnd({ animated });
+  }
+}
+
 export function getRowBottom(state: TimelineListMeasurementState, index: number): number | null {
   const top = state.positionAtIndex(index);
   const height = state.sizeAtIndex(index);

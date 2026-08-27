@@ -3,6 +3,7 @@ import {
   getAnchoredTurnMetrics,
   getRowBottom,
   keepTimelineEndVisibleAfterOverlayGrowth,
+  scrollTimelineToEndIfFollowing,
 } from "./timelineScrollAnchoring";
 
 function buildState({
@@ -26,6 +27,30 @@ function buildState({
 }
 
 describe("timeline scroll anchoring", () => {
+  it("ignores a deferred end scroll after the user leaves live-follow mode", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "free-scrolling",
+      animated: true,
+    });
+
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("runs a deferred end scroll while live-follow is still active", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "following-end",
+      animated: true,
+    });
+
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  });
+
   it("keeps the live edge visible when the composer overlay grows", () => {
     const scrollToEnd = vi.fn();
 

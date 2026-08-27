@@ -298,8 +298,8 @@ index b3c5a306b293f797a8b338adfca3060c0f6db22b..4227ed22da8865b7493f47f199f4d8f4
 +            if (insetStartAdjustment > 0) {
 +              scroller == null ? void 0 : scroller.scrollTo({
 +                animated: maintainScrollAtEnd.animated,
-+                x: 0,
-+                y: Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength)
++                x: state.props.horizontal ? Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength) : 0,
++                y: state.props.horizontal ? 0 : Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength)
 +              });
 +            } else {
 +              scroller == null ? void 0 : scroller.scrollToEnd({
@@ -423,7 +423,7 @@ index b3c5a306b293f797a8b338adfca3060c0f6db22b..4227ed22da8865b7493f47f199f4d8f4
 +        revealStableFrames = 0;
 +        const scroller = state.refScroller.current;
 +        if (scroller) {
-+          scroller.scrollTo({ animated: false, x: 0, y: endOffset });
++          scroller.scrollTo({ animated: false, x: state.props.horizontal ? endOffset : 0, y: state.props.horizontal ? 0 : endOffset });
 +        }
 +      } else {
 +        settledFrames++;
@@ -655,8 +655,8 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..2d556eecb0bafe2f54084c809f82144c
 +            if (insetStartAdjustment > 0) {
 +              scroller == null ? void 0 : scroller.scrollTo({
 +                animated: maintainScrollAtEnd.animated,
-+                x: 0,
-+                y: Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength)
++                x: state.props.horizontal ? Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength) : 0,
++                y: state.props.horizontal ? 0 : Math.max(-insetStartAdjustment, getContentSize(ctx) - state.scrollLength)
 +              });
 +            } else {
 +              scroller == null ? void 0 : scroller.scrollToEnd({
@@ -780,7 +780,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..2d556eecb0bafe2f54084c809f82144c
 +        revealStableFrames = 0;
 +        const scroller = state.refScroller.current;
 +        if (scroller) {
-+          scroller.scrollTo({ animated: false, x: 0, y: endOffset });
++          scroller.scrollTo({ animated: false, x: state.props.horizontal ? endOffset : 0, y: state.props.horizontal ? 0 : endOffset });
 +        }
 +      } else {
 +        settledFrames++;

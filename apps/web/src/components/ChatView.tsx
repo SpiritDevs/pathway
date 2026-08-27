@@ -108,7 +108,11 @@ import {
   isLatestRunSettled,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
-import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
+import {
+  getAnchoredTurnMetrics,
+  scrollTimelineToEndIfFollowing,
+  type TimelineScrollMode,
+} from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -4487,7 +4491,11 @@ function ChatViewContent(props: ChatViewProps) {
     setShowScrollToBottom(false);
     setTimelineAnchor(releaseChatTimelineAnchor);
     requestAnimationFrame(() => {
-      void legendListRef.current?.scrollToEnd?.({ animated });
+      scrollTimelineToEndIfFollowing({
+        timeline: legendListRef.current,
+        scrollMode: timelineScrollModeRef.current,
+        animated,
+      });
     });
   }, []);
   useEffect(() => {
@@ -8298,6 +8306,7 @@ function ChatViewContent(props: ChatViewProps) {
                 threadRef={activeThreadRef}
                 tabId={activePreviewMiniPlayer.tabId}
                 bottomInset={isDraftHeroState ? 0 : composerOverlayHeight}
+                inlineDetailsPanelOpen={inlineThreadPanelOpen}
               />
             ) : null}
 
