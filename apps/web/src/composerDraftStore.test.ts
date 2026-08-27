@@ -61,11 +61,13 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
   finalizePromotedDraftThreadByRef,
+  hydrateImagesFromPersisted,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
   markPromotedDraftThreads,
   markPromotedDraftThreadsByRef,
   type ComposerImageAttachment,
+  type ComposerFileAttachment,
   useComposerDraftStore,
   DraftId,
 } from "./composerDraftStore";
@@ -103,6 +105,66 @@ function makeImage(input: {
     file,
   };
 }
+
+function makeFileAttachment(input: {
+  id: string;
+  name?: string;
+  mimeType?: string;
+  contents?: string;
+}): ComposerFileAttachment {
+  const name = input.name ?? "README.md";
+  const mimeType = input.mimeType ?? "text/markdown";
+  const file = new File([input.contents ?? "contents"], name, { type: mimeType });
+  return {
+    type: "file",
+    id: input.id,
+    name,
+    mimeType,
+    sizeBytes: file.size,
+    previewUrl: "",
+    file,
+  };
+}
+
+describe("composer attachment hydration", () => {
+  it("preserves generic file attachment metadata", () => {
+    const [attachment] = hydrateImagesFromPersisted([
+      {
+        type: "file",
+        id: "file-json",
+        name: "data.json",
+        mimeType: "application/json",
+        sizeBytes: 2,
+        dataUrl: "data:application/json;base64,e30=",
+      },
+    ]);
+
+    expect(attachment?.type).toBe("file");
+    expect(attachment?.name).toBe("data.json");
+    expect(attachment?.file?.type).toBe("application/json");
+  });
+
+  it("hydrates uploaded file markers without storing file bytes", () => {
+    const [attachment] = hydrateImagesFromPersisted([
+      {
+        type: "file",
+        id: "file-pdf",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+        environmentId: "environment-1",
+      },
+    ]);
+
+    expect(attachment).toMatchObject({
+      type: "file",
+      file: null,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+      uploadEnvironmentId: "environment-1",
+    });
+  });
+});
 
 function makeTerminalContext(input: {
   id: string;
@@ -239,6 +301,17 @@ describe("composerDraftStore addImages", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
 
+  it("keeps distinct same-named files with matching metadata", () => {
+    const first = makeFileAttachment({ id: "file-a", contents: "first000" });
+    const second = makeFileAttachment({ id: "file-b", contents: "second00" });
+
+    useComposerDraftStore.getState().addImages(threadRef, [first, second]);
+
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.images.map((attachment) => attachment.id),
+    ).toEqual(["file-a", "file-b"]);
+  });
+
   it("does not revoke blob URLs that are still used by an accepted duplicate image", () => {
     const first = makeImage({
       id: "img-shared",
@@ -352,6 +425,32 @@ describe("composerDraftStore moveComposerContent", () => {
       "Destination draft",
     );
   });
+
+  it("tracks the current attachment owner across a composer move", () => {
+    const store = useComposerDraftStore.getState();
+    const file = makeFileAttachment({ id: "file-moving" });
+    store.addImage(sourceRef, file);
+
+    expect(store.findAttachmentTarget(file.id)).toEqual(sourceRef);
+    expect(store.moveComposerContent(sourceRef, destinationRef)).toBe(true);
+    expect(useComposerDraftStore.getState().findAttachmentTarget(file.id)).toEqual(destinationRef);
+
+    useComposerDraftStore
+      .getState()
+      .setFileUpload(
+        destinationRef,
+        file.id,
+        TEST_ENVIRONMENT_ID,
+        "pending-00000000-0000-4000-8000-000000000001-md",
+      );
+    expect(
+      useComposerDraftStore.getState().getComposerDraft(destinationRef)?.images[0],
+    ).toMatchObject({
+      id: file.id,
+      uploadEnvironmentId: TEST_ENVIRONMENT_ID,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-md",
+    });
+  });
 });
 
 describe("composerDraftStore syncPersistedAttachments", () => {
@@ -407,6 +506,48 @@ describe("composerDraftStore syncPersistedAttachments", () => {
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
+  });
+
+  it("rehydrates marker-only uploaded files from persisted drafts", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const threadKey = threadKeyFor(threadId, TEST_ENVIRONMENT_ID);
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadKey: {
+          [threadKey]: {
+            prompt: "",
+            attachments: [
+              {
+                type: "file",
+                id: "file-pdf",
+                name: "report.pdf",
+                mimeType: "application/pdf",
+                sizeBytes: 42,
+                attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+                environmentId: TEST_ENVIRONMENT_ID,
+              },
+            ],
+          },
+        },
+        draftThreadsByThreadKey: {},
+        logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(mergedState.draftsByThreadKey[threadKey]?.images[0]).toMatchObject({
+      type: "file",
+      file: null,
+      uploadedAttachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+      uploadEnvironmentId: TEST_ENVIRONMENT_ID,
+    });
   });
 });
 

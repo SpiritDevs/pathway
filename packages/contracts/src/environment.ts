@@ -93,6 +93,14 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can resolve repository identity for an arbitrary directory before project creation. */
   projectDirectoryInspection: Schema.optionalKey(Schema.Boolean),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
+  /** Direct attachment uploads supported by the server. */
+  attachmentUploads: Schema.optionalKey(Schema.Boolean),
+  /** Missing on servers that only accept inline image attachments. */
+  fileAttachments: Schema.optionalKey(
+    Schema.Struct({
+      maxUploadBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+    }),
+  ),
   /** Server exposes the pull-request list, detail, activity, diff, and mutation APIs. Absent on
       servers from before the pull-request workspace shipped, so clients must not probe them. */
   pullRequests: Schema.optionalKey(Schema.Boolean),

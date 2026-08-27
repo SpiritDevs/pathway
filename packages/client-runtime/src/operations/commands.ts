@@ -4,11 +4,11 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
-  type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
   type PlanId,
+  type PendingChatAttachment,
   type ProjectFaviconPath,
   type ProjectId,
   type ProjectScript,
@@ -163,7 +163,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
     readonly messageId: MessageId;
     readonly role: "user";
     readonly text: string;
-    readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
+    readonly attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>;
   };
   readonly modelSelection?: ModelSelection;
   readonly titleSeed?: string;
@@ -265,29 +265,15 @@ const getProjection = (threadId: ThreadId) =>
 const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(function* (
   threadId: ThreadId,
   messageId: MessageId,
-  attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>,
+  attachments: ReadonlyArray<PendingChatAttachment | UploadChatAttachment>,
 ) {
-  const stored = attachments.filter(
-    (attachment): attachment is ChatAttachment => "id" in attachment,
-  );
-  const uploads = attachments.filter(
-    (attachment): attachment is UploadChatAttachment => "dataUrl" in attachment,
-  );
-  if (uploads.length === 0) return stored;
+  if (attachments.length === 0) return [];
   const result = yield* request(WS_METHODS.assetsPersistChatAttachments, {
     threadId,
     messageId,
-    attachments: uploads,
+    attachments,
   });
-  if (stored.length === 0) return result.attachments;
-  const byUpload = new Map(
-    uploads.map((attachment, index) => [attachment, result.attachments[index]]),
-  );
-  return attachments.flatMap((attachment) => {
-    if ("id" in attachment) return [attachment];
-    const persisted = byUpload.get(attachment);
-    return persisted === undefined ? [] : [persisted];
-  });
+  return result.attachments;
 });
 
 const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (

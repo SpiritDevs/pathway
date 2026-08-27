@@ -39,6 +39,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { cursorSdkModelSelection } from "../../provider/cursorSdkModel.ts";
@@ -93,6 +94,14 @@ export { cursorSdkModelSelection } from "../../provider/cursorSdkModel.ts";
 
 export const CURSOR_DRIVER_KIND = CURSOR_PROVIDER;
 export const CURSOR_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CURSOR_DRIVER_KIND);
+
+export function cursorUserMessageIsEmpty(input: {
+  readonly resolvedText: string;
+  readonly imageCount: number;
+}): boolean {
+  return input.resolvedText.length === 0 && input.imageCount === 0;
+}
+
 const DEFAULT_CURSOR_SETTINGS = Schema.decodeSync(CursorSettings)({});
 
 export const CursorProviderCapabilitiesV2 = {
@@ -2014,13 +2023,17 @@ export function makeCursorAdapterV2(
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapterV2TurnInput,
         ) {
-          const text = pathwayOrchestrationPromptForFirstRun({
-            prompt: turnInput.message.text,
-            runOrdinal: turnInput.runOrdinal,
-            hasPathwayMcp: cursorMcpServers(turnInput.threadId) !== undefined,
+          const text = appendFileAttachmentPromptText({
+            text: pathwayOrchestrationPromptForFirstRun({
+              prompt: turnInput.message.text,
+              runOrdinal: turnInput.runOrdinal,
+              hasPathwayMcp: cursorMcpServers(turnInput.threadId) !== undefined,
+            }),
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachments: turnInput.message.attachments,
           });
           const images = yield* Effect.forEach(
-            turnInput.message.attachments,
+            turnInput.message.attachments.filter((attachment) => attachment.type === "image"),
             (attachment: ChatAttachment) =>
               Effect.gen(function* () {
                 const path = resolveAttachmentPath({
@@ -2050,7 +2063,7 @@ export function makeCursorAdapterV2(
               }),
             { concurrency: 1 },
           );
-          if (turnInput.message.text.length === 0 && images.length === 0) {
+          if (cursorUserMessageIsEmpty({ resolvedText: text, imageCount: images.length })) {
             return yield* new ProviderAdapterProtocolError({
               driver: CURSOR_PROVIDER,
               detail: "Cursor turn requires non-empty text or attachments.",

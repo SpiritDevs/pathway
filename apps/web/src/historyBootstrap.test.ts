@@ -136,4 +136,34 @@ describe("buildBootstrapInput", () => {
     expect(result.text).toContain("Attached image");
     expect(result.text).toContain("screenshot.png");
   });
+
+  it("captures generic file attachment context in transcript blocks", () => {
+    const result = buildBootstrapInput(
+      [
+        {
+          id: messageId("u-file"),
+          role: "user",
+          text: "Compare this data",
+          attachments: [
+            {
+              type: "file",
+              id: "file-1",
+              name: "results.json",
+              mimeType: "application/json",
+              sizeBytes: 512,
+            },
+          ],
+          createdAt: "2026-02-09T00:00:00.000Z",
+          runId: null,
+          updatedAt: "2026-02-09T00:00:00.000Z",
+          streaming: false,
+        },
+      ],
+      "What changed?",
+      1_500,
+    );
+
+    expect(result.text).toContain("Attached file");
+    expect(result.text).toContain("results.json");
+  });
 });

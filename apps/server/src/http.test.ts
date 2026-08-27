@@ -55,4 +55,19 @@ describe("assetResponseHeaders", () => {
       "text/html; charset=utf-8",
     );
   });
+
+  it("forces generic attachments to download without active document MIME types", () => {
+    expect(
+      assetResponseHeaders("/attachments/report.html", {
+        download: true,
+        fileName: 'quarterly "report".html',
+        mimeType: "text/html",
+      }),
+    ).toMatchObject({
+      "Content-Disposition": 'attachment; filename="quarterly _report_.html"',
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Content-Type": "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
+    });
+  });
 });

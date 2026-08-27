@@ -7,7 +7,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
-import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
   deriveProjectGroupingOverrideKey,
@@ -42,6 +42,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
 import { isElectron } from "../../env";
 import {
   useClientSettings,
@@ -877,6 +878,15 @@ export function ProjectDetail({
       const clearMemberDrafts = () => {
         for (const member of members) {
           const projectRef = scopeProjectRef(member.environmentId, member.id);
+          releaseProjectDraftUploads(
+            projectRef,
+            projectThreads
+              .filter(
+                (thread) =>
+                  thread.environmentId === member.environmentId && thread.projectId === member.id,
+              )
+              .map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+          );
           const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
           if (projectDraftThread) {
             draftStore.clearDraftThread(projectDraftThread.draftId);
@@ -1088,6 +1098,10 @@ export function ProjectDetail({
       if (member !== null) {
         const draftStore = useComposerDraftStore.getState();
         const projectRef = scopeProjectRef(member.environmentId, member.id);
+        releaseProjectDraftUploads(
+          projectRef,
+          connectionThreads.map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+        );
         const draftThread = draftStore.getDraftThreadByProjectRef(projectRef);
         if (draftThread) draftStore.clearDraftThread(draftThread.draftId);
         draftStore.clearProjectDraftThreadId(projectRef);

@@ -56,6 +56,7 @@ import {
   CornerUpRightIcon,
   GripVerticalIcon,
   ListOrderedIcon,
+  PaperclipIcon,
   PencilIcon,
   XIcon,
 } from "lucide-react";
@@ -381,6 +382,15 @@ export function QueuedRunsControl(props: {
         <span className="min-w-0 flex-1 truncate text-xs" title={input.text}>
           {input.text}
         </span>
+        {input.attachments.length > 0 ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground"
+            aria-label={`${input.attachments.length} attachment${input.attachments.length === 1 ? "" : "s"}`}
+          >
+            <PaperclipIcon aria-hidden className="size-3" />
+            {input.attachments.length}
+          </span>
+        ) : null}
         <Button
           size="icon-xs"
           variant="ghost"

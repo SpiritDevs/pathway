@@ -57,6 +57,7 @@ import {
   AssetWorkspaceContextResolutionError,
   ChatAttachmentId,
   PersistChatAttachmentsError,
+  type PersistChatAttachmentsInput,
   RpcClientId,
   shouldStartPushAutoSettlement,
   EnvironmentAuthorizationError,
@@ -114,7 +115,13 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
-import { attachmentRelativePath, createDeterministicAttachmentId } from "./attachmentStore.ts";
+import {
+  attachmentMetadataMatchesStoredPath,
+  attachmentRelativePath,
+  createDeterministicAttachmentId,
+  planAttachmentClaim,
+} from "./attachmentStore.ts";
+import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
@@ -190,13 +197,7 @@ function unexpectedCompatibilityError(error: never): never {
 const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
-  readonly attachments: ReadonlyArray<{
-    readonly type: "image";
-    readonly name: string;
-    readonly mimeType: string;
-    readonly sizeBytes: number;
-    readonly dataUrl: string;
-  }>;
+  readonly attachments: PersistChatAttachmentsInput["attachments"];
 }) {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -204,10 +205,62 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
   return yield* Effect.forEach(
     input.attachments.map((attachment, index) => ({ attachment, index })),
     Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
+      if ("id" in attachment) {
+        const claim = planAttachmentClaim({
+          attachmentsDir: config.attachmentsDir,
+          threadId: input.threadId,
+          attachmentId: attachment.id,
+        });
+        if (!claim.ok) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} cannot be sent: ${claim.reason}.`,
+          });
+        }
+        if (
+          !attachmentMetadataMatchesStoredPath({
+            attachment,
+            storedPath: claim.currentPath,
+          })
+        ) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} metadata does not match its upload.`,
+          });
+        }
+        const info = yield* fileSystem.stat(claim.currentPath).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PersistChatAttachmentsError({
+                message: `Could not inspect attachment ${attachment.name}.`,
+                cause,
+              }),
+          ),
+        );
+        if (info.type !== "File" || Number(info.size) !== attachment.sizeBytes) {
+          return yield* new PersistChatAttachmentsError({
+            message: `Attachment ${attachment.name} size does not match its upload.`,
+          });
+        }
+        yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+          Effect.mapError(
+            (cause) =>
+              new PersistChatAttachmentsError({
+                message: `Could not claim attachment ${attachment.name}.`,
+                cause,
+              }),
+          ),
+        );
+        return {
+          type: attachment.type,
+          id: ChatAttachmentId.make(claim.finalId),
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+        };
+      }
       const parsed = parseBase64DataUrl(attachment.dataUrl);
       if (parsed === null || parsed.mimeType !== attachment.mimeType.toLowerCase()) {
         return yield* new PersistChatAttachmentsError({
-          message: `Attachment ${attachment.name} has an invalid image payload.`,
+          message: `Attachment ${attachment.name} has an invalid payload.`,
         });
       }
       const bytes = yield* Effect.fromResult(Encoding.decodeBase64(parsed.base64)).pipe(
@@ -231,7 +284,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
         });
       }
       const persisted = {
-        type: "image" as const,
+        type: attachment.type,
         id: ChatAttachmentId.make(rawId),
         name: attachment.name,
         mimeType: attachment.mimeType,
@@ -1854,6 +1907,16 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.assetsPersistChatAttachments,
             persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.attachmentsCreateUploadUrl]: (input) =>
+          observeRpcEffect(WS_METHODS.attachmentsCreateUploadUrl, issueAttachmentUploadUrl(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.attachmentsDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.attachmentsDelete,
+            deletePendingAttachment(input.attachmentId),
             { "rpc.aggregate": "orchestration" },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>

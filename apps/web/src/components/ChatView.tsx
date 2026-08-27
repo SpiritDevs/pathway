@@ -226,6 +226,8 @@ import {
 } from "../logicalProject";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
+  type ComposerAttachment,
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   composerDraftHasUserContent,
@@ -234,6 +236,11 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import {
+  awaitAttachmentUploads,
+  getUploadedFileAttachments,
+  releaseDraftAttachment,
+} from "../lib/attachmentUploadQueue";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -357,7 +364,7 @@ import {
   openForkedThreadSideChatWhenReady,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
-  cloneComposerImageForRetry,
+  cloneComposerAttachmentForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
   loadQueuedComposerImages,
@@ -401,9 +408,10 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { normalizeComposerAttachmentName } from "./chat/composerAttachmentFiles";
 
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more files without additional text. Respond using the conversation context and the attached file(s).]";
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
 const EMPTY_PROVIDERS: ServerProvider[] = [];
@@ -1489,7 +1497,7 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setLogicalProjectDraftThreadId,
   );
   const promptRef = useRef("");
-  const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
+  const composerImagesRef = useRef<ComposerAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
@@ -2354,6 +2362,10 @@ function ChatViewContent(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const maxFileAttachmentBytes =
+    serverConfig?.environment.capabilities.attachmentUploads === true
+      ? (serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes ?? null)
+      : null;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2751,13 +2763,28 @@ function ChatViewContent(props: ChatViewProps) {
         : EMPTY_ATTACHMENT_IDS,
     [committedServerAttachmentIds, isServerThread, queuedServerAttachmentIds],
   );
+  const serverAttachmentMetadataById = useMemo(() => {
+    const byId = new Map<string, ChatAttachment>();
+    for (const row of presentedServerVisibleTurnItems) {
+      if (row.item.type !== "user_message") continue;
+      for (const attachment of row.item.attachments) byId.set(attachment.id, attachment);
+    }
+    for (const message of serverProjection?.messages ?? []) {
+      for (const attachment of message.attachments) byId.set(attachment.id, attachment);
+    }
+    return byId;
+  }, [presentedServerVisibleTurnItems, serverProjection]);
   const serverAttachmentResources = useMemo(
     () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
+      serverAttachmentIds.map((attachmentId) => {
+        const attachment = serverAttachmentMetadataById.get(attachmentId);
+        return {
+          _tag: "attachment" as const,
+          attachmentId,
+          ...(attachment ? { fileName: attachment.name, mimeType: attachment.mimeType } : {}),
+        };
+      }),
+    [serverAttachmentIds, serverAttachmentMetadataById],
   );
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
   const serverAttachmentUrlById = useMemo(
@@ -2904,7 +2931,7 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
-      let images: ComposerImageAttachment[];
+      let images: ComposerAttachment[];
       try {
         images = await loadQueuedComposerImages(input.attachments);
       } catch (error) {
@@ -6328,21 +6355,44 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
+    const composerFileAttachmentsSnapshot = composerImagesSnapshot.filter(
+      (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
     );
+    const turnAttachmentsPromise = (async () => {
+      await awaitAttachmentUploads(composerFileAttachmentsSnapshot.map((file) => file.id));
+      const uploadedFiles = getUploadedFileAttachments({
+        environmentId,
+        files: composerFileAttachmentsSnapshot,
+      });
+      if (uploadedFiles === null) {
+        throw new Error("Wait for file attachments to finish uploading, then try again.");
+      }
+      const uploadedByComposerId = new Map(
+        composerFileAttachmentsSnapshot.map((file, index) => [file.id, uploadedFiles[index]]),
+      );
+      return Promise.all(
+        composerImagesSnapshot.map(async (image) => {
+          if (image.type === "file") {
+            const uploaded = uploadedByComposerId.get(image.id);
+            if (!uploaded) throw new Error(`'${image.name}' is not ready to send.`);
+            return uploaded;
+          }
+          return {
+            type: "image" as const,
+            name: normalizeComposerAttachmentName(image.name, image.type),
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          };
+        }),
+      );
+    })();
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
+      type: image.type,
       id: image.id,
-      name: image.name,
+      name: normalizeComposerAttachmentName(image.name, image.type),
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
@@ -6595,6 +6645,10 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
+    if (turnStartSucceeded) {
+      for (const file of composerFileAttachmentsSnapshot) releaseDraftAttachment(file);
+    }
+
     if (failure !== null) {
       if (
         promptRef.current.length === 0 &&
@@ -6619,7 +6673,7 @@ function ChatViewContent(props: ChatViewProps) {
           });
         }
         promptRef.current = promptForSend;
-        const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
+        const retryComposerImages = composerImagesSnapshot.map(cloneComposerAttachmentForRetry);
         composerImagesRef.current = retryComposerImages;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;
@@ -8089,6 +8143,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            maxFileAttachmentBytes={maxFileAttachmentBytes}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

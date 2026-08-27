@@ -6,6 +6,7 @@ import {
   MAX_STASH_ENTRIES,
   PROMPT_STASH_STORAGE_KEY,
   MAX_STASH_ENTRY_ATTACHMENT_CHARS,
+  estimateAttachmentDataUrlChars,
   partitionStashAttachments,
   usePromptStashStore,
   writePromptStashStorageForTest,
@@ -44,6 +45,18 @@ function resetPromptStashStore() {
 }
 
 describe("partitionStashAttachments", () => {
+  it("estimates base64 data URLs before allocating their strings", () => {
+    expect(estimateAttachmentDataUrlChars({ mimeType: "text/plain", sizeBytes: 3 })).toBe(
+      "data:text/plain;base64,".length + 4,
+    );
+    expect(
+      estimateAttachmentDataUrlChars({
+        mimeType: "application/octet-stream",
+        sizeBytes: 10 * 1024 * 1024,
+      }),
+    ).toBeGreaterThan(MAX_STASH_ENTRY_ATTACHMENT_CHARS);
+  });
+
   it("keeps attachments within the budget and reports dropped names in order", () => {
     const small = {
       id: "a",
@@ -139,7 +152,21 @@ describe("promptStashStore", () => {
 
   it("finalizeEntryImages attaches images and clears the pending count", () => {
     const store = usePromptStashStore.getState();
-    store.stashEntry({ ...makeEntry({ id: "pending" }), pendingImageCount: 2 });
+    store.stashEntry({
+      ...makeEntry({ id: "pending" }),
+      attachments: [
+        {
+          type: "file",
+          id: "file-1",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 42,
+          attachmentId: "pending-00000000-0000-4000-8000-000000000001-pdf",
+          environmentId: "environment-1",
+        },
+      ],
+      pendingImageCount: 2,
+    });
 
     const { attached } = store.finalizeEntryImages("pending", {
       attachments: [
@@ -157,7 +184,7 @@ describe("promptStashStore", () => {
 
     expect(attached).toBe(true);
     const entry = usePromptStashStore.getState().entries[0];
-    expect(entry?.attachments).toHaveLength(1);
+    expect(entry?.attachments.map((attachment) => attachment.id)).toEqual(["file-1", "img-1"]);
     expect(entry?.droppedImageNames).toEqual(["big.png"]);
     expect(entry?.pendingImageCount).toBe(0);
   });

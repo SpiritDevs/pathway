@@ -56,6 +56,7 @@ import {
   CircleAlertIcon,
   CircleDotIcon,
   EyeIcon,
+  FileTextIcon,
   GitForkIcon,
   GlobeIcon,
   type LucideIcon,
@@ -74,6 +75,7 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
+import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
@@ -1169,7 +1171,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const userImages = row.message.attachments ?? [];
+  const userAttachments = row.message.attachments ?? [];
   const issueContextState = extractTrailingIssueContexts(row.message.text);
   const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
   const terminalContexts = displayedUserMessage.contexts;
@@ -1186,8 +1188,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     ...displayedUserMessage.elementContexts,
     ...elementContextState.contexts,
   ];
-  const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
-  const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
+  const previewImages = userAttachments.filter(
+    (attachment) =>
+      attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
+  );
+  const regularImages = userAttachments.filter(
+    (attachment) =>
+      attachment.type === "image" && !attachment.name.startsWith("preview-annotation-"),
+  );
+  const fileAttachments = userAttachments.filter((attachment) => attachment.type === "file");
+  const unknownAttachments = userAttachments.filter(
+    (attachment) => attachment.type !== "image" && attachment.type !== "file",
+  );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const editableText = splitEditableUserMessageText(row.message.text).editableText;
   const canEditMessage =
@@ -1245,6 +1257,53 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   </div>
                 )}
               </div>
+            ))}
+          </div>
+        )}
+        {fileAttachments.length > 0 && (
+          <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
+            {fileAttachments.map((attachment) => {
+              const content = (
+                <>
+                  <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="max-w-48 truncate">{attachment.name}</span>
+                  <span className="shrink-0 text-muted-foreground/70">
+                    {formatAttachmentSizeLabel(attachment.sizeBytes)}
+                  </span>
+                </>
+              );
+              const className =
+                "inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]";
+              return attachment.previewUrl ? (
+                <a
+                  key={attachment.id}
+                  href={attachment.previewUrl}
+                  download={attachment.name}
+                  className={cn(className, "hover:bg-background")}
+                  aria-label={`Download ${attachment.name}`}
+                >
+                  {content}
+                </a>
+              ) : (
+                <span key={attachment.id} className={className}>
+                  {content}
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {unknownAttachments.length > 0 && (
+          <div className="mb-2 flex max-w-[420px] flex-wrap gap-1.5">
+            {unknownAttachments.map((attachment) => (
+              <span
+                key={attachment.id}
+                className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/80 bg-background/70 px-2 py-1 text-[11px]"
+                aria-label={`Unsupported ${attachment.type} attachment ${attachment.name}`}
+              >
+                <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="max-w-48 truncate">{attachment.name}</span>
+                <span className="shrink-0 text-muted-foreground/70">Unsupported attachment</span>
+              </span>
             ))}
           </div>
         )}

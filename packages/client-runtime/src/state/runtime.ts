@@ -326,15 +326,25 @@ export async function executeAtomCommand<A, E>(
   return result;
 }
 
+export interface AtomQueryOptions extends AtomCommandOptions {
+  readonly refresh?: boolean;
+}
+
 export async function executeAtomQuery<A, E>(
   registry: AtomRegistry.AtomRegistry,
   atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
-  options: AtomCommandOptions = {},
+  options: AtomQueryOptions = {},
   reporter: AtomCommandReporter = console,
 ): Promise<AtomCommandResult<A, E>> {
   const query = Effect.scoped(
     Effect.gen(function* () {
       yield* AtomRegistry.mount(registry, atom);
+      if (options.refresh) {
+        yield* Effect.sync(() => {
+          const current = registry.get(atom);
+          if (current._tag !== "Initial" && !current.waiting) registry.refresh(atom);
+        });
+      }
       return yield* AtomRegistry.getResult(registry, atom, {
         suspendOnWaiting: true,
       });

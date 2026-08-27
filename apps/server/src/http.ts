@@ -30,6 +30,11 @@ import { OtlpTracer } from "effect/unstable/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import {
+  ATTACHMENT_UPLOAD_ROUTE_PREFIX,
+  storeAttachmentUpload,
+  validateAttachmentUploadToken,
+} from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
@@ -95,15 +100,42 @@ export const cloudSyncDebugRouteLayer = HttpRouter.add(
 );
 // #endregion DEBUG
 
-export function assetResponseHeaders(filePath: string): Record<string, string> {
+const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
+const isSafeDownloadMimeType = (mimeType: string): boolean =>
+  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
+  !/(?:^text\/html$|svg|xml)/i.test(mimeType.trim().toLowerCase());
+
+export function downloadContentDisposition(fileName?: string): string {
+  if (fileName === undefined) return "attachment";
+  const sanitized = fileName.toWellFormed().replace(/[\u0000-\u001f"\\]/g, "_");
+  const asciiFallback = sanitized.replace(/[^\u0020-\u007e]/g, "_");
+  return `attachment; filename="${asciiFallback}"${
+    asciiFallback === sanitized ? "" : `; filename*=UTF-8''${encodeURIComponent(sanitized)}`
+  }`;
+}
+
+export function assetResponseHeaders(
+  filePath: string,
+  options?: { readonly download?: boolean; readonly fileName?: string; readonly mimeType?: string },
+): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
-    ...(lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+    ...(options?.download
+      ? {
+          "Content-Disposition": downloadContentDisposition(options.fileName),
+          "Content-Security-Policy": "default-src 'none'; sandbox",
+          "Content-Type":
+            options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
+              ? options.mimeType
+              : "application/octet-stream",
+        }
+      : {}),
+    ...(!options?.download && (lowerPath.endsWith(".html") || lowerPath.endsWith(".htm"))
       ? { "Content-Type": "text/html; charset=utf-8" }
       : {}),
-    ...(lowerPath.endsWith(".svg")
+    ...(!options?.download && lowerPath.endsWith(".svg")
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),
   };
@@ -273,10 +305,42 @@ export const assetRouteLayer = HttpRouter.add(
     }
     return yield* HttpServerResponse.file(asset.path, {
       status: 200,
-      headers: assetResponseHeaders(asset.path),
+      headers: assetResponseHeaders(
+        asset.path,
+        asset.download
+          ? {
+              download: true,
+              ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
+              ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
+            }
+          : undefined,
+      ),
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
+  }),
+);
+
+export const attachmentUploadRouteLayer = HttpRouter.add(
+  "POST",
+  `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const token = url.value.pathname.slice(`${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/`.length);
+    const claims = yield* validateAttachmentUploadToken(token);
+    if (!claims) return HttpServerResponse.text("Invalid or expired upload URL.", { status: 401 });
+    const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+    if (contentType !== claims.mimeType.toLowerCase()) {
+      return HttpServerResponse.text("Content-Type does not match upload metadata.", {
+        status: 400,
+      });
+    }
+    const stored = yield* storeAttachmentUpload(claims, request.stream);
+    return stored.ok
+      ? HttpServerResponse.empty({ status: 204 })
+      : HttpServerResponse.text(stored.detail, { status: stored.status });
   }),
 );
 
