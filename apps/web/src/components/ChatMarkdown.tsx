@@ -1550,7 +1550,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
               }
             }}
             onContextMenu={(event) => {
-              if (!canOpenInPreview || !href || !faviconHost) return;
+              if ((!canOpenInPreview && !canAttachPullRequest) || !href || !faviconHost) return;
               event.preventDefault();
               event.stopPropagation();
               const api = readLocalApi();
@@ -1559,15 +1559,19 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
                 href,
                 position: { x: event.clientX, y: event.clientY },
                 showContextMenu: (items, position) => api.contextMenu.show(items, position),
-                openInPreview: async (target) => {
-                  const result = await openExternalLinkInPreview(target);
-                  if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-                    reportMarkdownActionFailure(
-                      { operation: "open-link-in-preview", target },
-                      result.cause,
-                    );
-                  }
-                },
+                ...(canOpenInPreview
+                  ? {
+                      openInPreview: async (target: string) => {
+                        const result = await openExternalLinkInPreview(target);
+                        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                          reportMarkdownActionFailure(
+                            { operation: "open-link-in-preview", target },
+                            result.cause,
+                          );
+                        }
+                      },
+                    }
+                  : {}),
                 openExternal: (target) => api.shell.openExternal(target),
                 copyLink: (target) => writeTextToClipboard(target, "link"),
                 ...(canAttachPullRequest && attachPullRequest

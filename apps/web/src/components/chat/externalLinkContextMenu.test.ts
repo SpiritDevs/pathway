@@ -75,6 +75,34 @@ describe("external chat link context menu", () => {
     expect(attachPullRequest).toHaveBeenCalledWith(href);
   });
 
+  it("omits the integrated browser action when preview is unavailable", async () => {
+    const harness = createHarness(null);
+    const attachPullRequest = vi.fn().mockResolvedValue(undefined);
+
+    await showExternalLinkContextMenu({
+      href: "https://github.com/SpiritDevs/pathway/pull/47",
+      position: { x: 12, y: 24 },
+      showContextMenu: harness.showContextMenu,
+      openExternal: harness.openExternal,
+      copyLink: harness.copyLink,
+      attachPullRequest,
+      reportFailure: harness.reportFailure,
+    });
+
+    expect(harness.showContextMenu).toHaveBeenCalledWith(
+      [
+        {
+          id: "attach-pull-request",
+          label: "Attach PR to thread",
+          separatorAfter: true,
+        },
+        { id: "open-external", label: "Open in system browser" },
+        { id: "copy-link", label: "Copy Link" },
+      ],
+      { x: 12, y: 24 },
+    );
+  });
+
   it("copies the exact destination without opening it", async () => {
     const harness = createHarness("copy-link");
     const href = "https://example.com/docs?topic=menus#copy";

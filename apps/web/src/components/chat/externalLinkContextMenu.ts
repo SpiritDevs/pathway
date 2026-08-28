@@ -33,7 +33,7 @@ interface ShowExternalLinkContextMenuOptions {
     items: readonly ContextMenuItem<ExternalLinkContextMenuAction>[],
     position: { readonly x: number; readonly y: number },
   ) => Promise<ExternalLinkContextMenuAction | null>;
-  readonly openInPreview: (href: string) => Promise<void>;
+  readonly openInPreview?: ((href: string) => Promise<void>) | undefined;
   readonly openExternal: (href: string) => Promise<void>;
   readonly copyLink: (href: string) => Promise<unknown>;
   readonly attachPullRequest?: ((href: string) => Promise<unknown>) | undefined;
@@ -74,6 +74,9 @@ export async function showExternalLinkContextMenu({
 }: ShowExternalLinkContextMenuOptions): Promise<void> {
   let action: ExternalLinkContextMenuAction | null;
   try {
+    const items = EXTERNAL_LINK_CONTEXT_MENU_ITEMS.filter(
+      (item) => item.id !== "open-in-preview" || openInPreview !== undefined,
+    );
     action = await showContextMenu(
       attachPullRequest
         ? [
@@ -82,9 +85,9 @@ export async function showExternalLinkContextMenu({
               label: "Attach PR to thread",
               separatorAfter: true,
             },
-            ...EXTERNAL_LINK_CONTEXT_MENU_ITEMS,
+            ...items,
           ]
-        : EXTERNAL_LINK_CONTEXT_MENU_ITEMS,
+        : items,
       position,
     );
   } catch (cause) {
@@ -96,7 +99,7 @@ export async function showExternalLinkContextMenu({
     if (action === "attach-pull-request") {
       await attachPullRequest?.(href);
     } else if (action === "open-in-preview") {
-      await openInPreview(href);
+      await openInPreview?.(href);
     } else if (action === "open-external") {
       await openExternal(href);
     } else if (action === "copy-link") {
