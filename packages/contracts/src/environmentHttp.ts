@@ -24,7 +24,13 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  AuthSessionId,
+  EnvironmentId,
+  PortSchema,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { EnvironmentRelayLinkState } from "./cloudProject.ts";
 import {
@@ -358,6 +364,14 @@ export const EnvironmentCloudLinkStateResult = Schema.Struct({
   // clients can present the two capabilities as independent settings.
   // Optional so newer clients tolerate older environment servers.
   managedTunnelActive: Schema.optional(Schema.Boolean),
+  // The loopback port installed in the managed tunnel. `undefined` means the
+  // environment server predates port tracking; `null` means a current server
+  // has no recorded port and the link must be reconciled once.
+  managedTunnelLocalPort: Schema.optional(Schema.NullOr(PortSchema)),
+  // The port this environment server is currently configured to listen on.
+  // Comparing two server-owned values stays correct when a development proxy
+  // gives the browser a different public port. Optional for older servers.
+  currentLocalHttpPort: Schema.optional(PortSchema),
   publishAgentActivity: Schema.Boolean,
 });
 export type EnvironmentCloudLinkStateResult = typeof EnvironmentCloudLinkStateResult.Type;

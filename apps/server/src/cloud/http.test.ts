@@ -44,6 +44,7 @@ import * as CliTokenManager from "./CliTokenManager.ts";
 import type { RelayLinkProofRequest } from "@spiritdevs/contracts/relay";
 import {
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
   RELAY_ISSUER_SECRET,
@@ -56,7 +57,9 @@ import {
   consumeCloudReplayGuards,
   isSupportedLinkProviderKind,
   linkProofScopes,
+  managedTunnelLocalPortFromRequest,
   pendingServiceUpdateExists,
+  readCloudLinkState,
   reconcileDesiredCloudLink,
   releaseManagedTunnelOnShutdown,
 } from "./http.ts";
@@ -846,6 +849,30 @@ describe("link proof provider kinds", () => {
     ]);
     expect(linkProofScopes(proofRequest("manual"))).toEqual(["agent_activity_notifications"]);
   });
+
+  it("records managed tunnel ports only from direct loopback requests", () => {
+    expect(
+      managedTunnelLocalPortFromRequest(
+        HttpServerRequest.fromWeb(new Request("http://127.0.0.1:3800/api/connect/relay-config")),
+      ),
+    ).toBe(3_800);
+    expect(
+      managedTunnelLocalPortFromRequest(
+        HttpServerRequest.fromWeb(
+          new Request("http://127.0.0.1:3800/api/connect/relay-config", {
+            headers: { "x-forwarded-host": "public.example.test" },
+          }),
+        ),
+      ),
+    ).toBeNull();
+    expect(
+      managedTunnelLocalPortFromRequest(
+        HttpServerRequest.fromWeb(
+          new Request("https://public.example.test/api/connect/relay-config"),
+        ),
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("cloud relay config replacement", () => {
@@ -896,6 +923,74 @@ describe("cloud relay config replacement", () => {
 
       expect(new TextDecoder().decode(values.get(CLOUD_LINKED_USER_ID))).toBe("current-user");
       expect(reads).not.toContain(CLOUD_LINKED_USER_ID);
+    }),
+  );
+
+  it.effect("persists and reports the local port installed in a managed tunnel", () =>
+    Effect.gen(function* () {
+      const encoded = (value: string) => new TextEncoder().encode(value);
+      const values = new Map<string, Uint8Array>();
+      const secrets: ServerSecretStore.ServerSecretStore["Service"] = {
+        get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+        set: (name, value) =>
+          Effect.sync(() => {
+            values.set(name, value);
+          }),
+        create: unusedSecretStoreOperation,
+        getOrCreateRandom: unusedSecretStoreOperation,
+        remove: (name) =>
+          Effect.sync(() => {
+            values.delete(name);
+          }),
+      };
+      const cloudMintPublicKey = NodeCrypto.generateKeyPairSync("ed25519", {
+        publicKeyEncoding: { format: "pem", type: "spki" },
+        privateKeyEncoding: { format: "pem", type: "pkcs8" },
+      }).publicKey;
+      const runtimeConfig = {
+        environmentId: EnvironmentId.make("environment-1"),
+        providerKind: "cloudflare_tunnel" as const,
+        connectorToken: "connector-token",
+      };
+      const dependencies = {
+        secrets,
+        currentLocalHttpPort: 3_800,
+        endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
+          applyConfig: () =>
+            Effect.succeed({
+              status: "running" as const,
+              providerKind: "cloudflare_tunnel" as const,
+              pid: 123,
+            }),
+        }),
+      } as CloudHttpDependencies;
+
+      yield* applyCloudRelayConfig(
+        dependencies,
+        {
+          relayUrl: "https://relay.example.test",
+          relayIssuer: "https://relay.example.test",
+          cloudUserId: "current-user",
+          environmentCredential: "current-credential",
+          cloudMintPublicKey,
+          endpointRuntime: runtimeConfig,
+        },
+        3_800,
+      );
+
+      expect(new TextDecoder().decode(values.get(CLOUD_MANAGED_TUNNEL_LOCAL_PORT))).toBe("3800");
+      expect(yield* readCloudLinkState(dependencies)).toMatchObject({
+        linked: true,
+        managedTunnelActive: true,
+        managedTunnelLocalPort: 3_800,
+        currentLocalHttpPort: 3_800,
+      });
+
+      values.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, encoded("not-a-port"));
+      expect(yield* readCloudLinkState(dependencies)).toMatchObject({
+        managedTunnelActive: true,
+        managedTunnelLocalPort: null,
+      });
     }),
   );
 });

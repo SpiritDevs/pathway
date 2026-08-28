@@ -85,6 +85,57 @@ describe("always-on Pathway Connect state", () => {
     ).toBe(false);
   });
 
+  it("relinks when the managed tunnel targets a stale local port", () => {
+    const state = {
+      linked: true,
+      managedTunnelActive: true,
+      managedTunnelLocalPort: 3_773,
+      currentLocalHttpPort: 3_800,
+      publishAgentActivity: true,
+      desiredManagedTunnel: true,
+      linkedRelayUrl: "https://relay.example.test",
+      configuredRelayUrl: "https://relay.example.test",
+    };
+
+    expect(isAlwaysOnCloudLinkState(state)).toBe(false);
+    expect(shouldRelinkCloudEnvironment(state)).toBe(true);
+    expect(isAlwaysOnCloudLinkState({ ...state, managedTunnelLocalPort: 3_800 })).toBe(true);
+    expect(shouldRelinkCloudEnvironment({ ...state, managedTunnelLocalPort: 3_800 })).toBe(false);
+  });
+
+  it("reconciles a current server with no recorded port only once", () => {
+    const state = {
+      linked: true,
+      managedTunnelActive: true,
+      currentLocalHttpPort: 3_800,
+      publishAgentActivity: true,
+      desiredManagedTunnel: true,
+      linkedRelayUrl: "https://relay.example.test",
+      configuredRelayUrl: "https://relay.example.test",
+    };
+
+    expect(isAlwaysOnCloudLinkState({ ...state, managedTunnelLocalPort: null })).toBe(false);
+    expect(shouldRelinkCloudEnvironment({ ...state, managedTunnelLocalPort: null })).toBe(true);
+    expect(isAlwaysOnCloudLinkState(state)).toBe(true);
+    expect(shouldRelinkCloudEnvironment(state)).toBe(false);
+  });
+
+  it("does not guess about drift when an older server omits its current port", () => {
+    const state = {
+      linked: true,
+      managedTunnelActive: true,
+      managedTunnelLocalPort: 3_773,
+      currentLocalHttpPort: null,
+      publishAgentActivity: true,
+      desiredManagedTunnel: true,
+      linkedRelayUrl: "https://relay.example.test",
+      configuredRelayUrl: "https://relay.example.test",
+    };
+
+    expect(isAlwaysOnCloudLinkState(state)).toBe(true);
+    expect(shouldRelinkCloudEnvironment(state)).toBe(false);
+  });
+
   it("stops automatic reconnection after five attempts", () => {
     expect(AUTOMATIC_CLOUD_LINK_MAX_ATTEMPTS).toBe(5);
     expect(shouldScheduleAutomaticCloudRetry(4)).toBe(true);

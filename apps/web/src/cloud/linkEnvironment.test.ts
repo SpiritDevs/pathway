@@ -305,7 +305,7 @@ describe("web cloud link environment client", () => {
     }),
   );
 
-  it.effect("reads primary cloud link state from the explicit target", () =>
+  it.effect("preserves the server port when the explicit target is a development proxy", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn().mockResolvedValue(
         Response.json({
@@ -314,6 +314,8 @@ describe("web cloud link environment client", () => {
           relayUrl: "https://relay.example.test",
           relayIssuer: "https://relay.example.test",
           managedTunnelActive: true,
+          managedTunnelLocalPort: 13_773,
+          currentLocalHttpPort: 13_773,
           publishAgentActivity: false,
         }),
       );
@@ -328,6 +330,8 @@ describe("web cloud link environment client", () => {
           relayUrl: "https://relay.example.test",
           relayIssuer: "https://relay.example.test",
           managedTunnelActive: true,
+          managedTunnelLocalPort: 13_773,
+          currentLocalHttpPort: 13_773,
           publishAgentActivity: false,
         }),
       );
