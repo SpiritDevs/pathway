@@ -4,11 +4,25 @@ import type {
   SourceControlProviderKind,
 } from "@spiritdevs/contracts";
 
+export function getChangeRequestTerminologyFromUrl(url: string): ChangeRequestTerminology {
+  try {
+    return new URL(url).pathname.includes("/-/merge_requests/")
+      ? { shortLabel: "MR", singular: "merge request" }
+      : { shortLabel: "PR", singular: "pull request" };
+  } catch {
+    return { shortLabel: "PR", singular: "pull request" };
+  }
+}
+
 export function sourceControlMarkerLabel(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,
 ): string {
-  if (item.pullRequestAction === "attached") return "PR attached";
-  if (item.pullRequestAction === "detached") return "PR detached";
+  const changeRequestLabel =
+    item.pullRequest === null
+      ? "PR"
+      : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+  if (item.pullRequestAction === "attached") return `${changeRequestLabel} attached`;
+  if (item.pullRequestAction === "detached") return `${changeRequestLabel} detached`;
   if (item.pullRequest !== null) {
     return item.committed ? "Committed, pushed, and PR created" : "Pushed and PR created";
   }

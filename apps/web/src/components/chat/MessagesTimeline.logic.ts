@@ -258,6 +258,33 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
+export function resolveActiveAttachedPullRequestItemId(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+): string | null {
+  let active: {
+    readonly itemId: string;
+    readonly pullRequest: { readonly number: number; readonly url: string };
+  } | null = null;
+  for (const row of rows) {
+    if (row.kind !== "event" || row.projectedItem.visibility !== "local") continue;
+    const item = row.projectedItem.item;
+    if (item.type !== "source_control") continue;
+    if (item.pullRequestAction === "attached" && item.pullRequest !== null) {
+      active = { itemId: item.id, pullRequest: item.pullRequest };
+    }
+    if (
+      item.pullRequestAction === "detached" &&
+      item.pullRequest !== null &&
+      active !== null &&
+      active.pullRequest.number === item.pullRequest.number &&
+      active.pullRequest.url === item.pullRequest.url
+    ) {
+      active = null;
+    }
+  }
+  return active?.itemId ?? null;
+}
+
 export function computeMessageDurationStart(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Map<string, string> {

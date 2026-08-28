@@ -24,6 +24,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
@@ -1724,9 +1725,15 @@ function ChatMarkdown({
   const attachPullRequestCommand = useAtomCommand(threadEnvironment.attachPullRequest, {
     reportFailure: false,
   });
+  const threadServerConfig = useAtomValue(
+    serverEnvironment.configValueAtom(threadRef?.environmentId ?? null),
+  );
+  const supportsPullRequestAttachments =
+    threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
   const attachPullRequest = useCallback(
     async (target: string) => {
-      if (!threadRef || !cwd) return;
+      if (!threadRef || !cwd || !supportsPullRequestAttachments) return;
+      const terminology = getChangeRequestTerminologyFromUrl(target);
       const result = await attachPullRequestCommand({
         environmentId: threadRef.environmentId,
         input: {
@@ -1741,7 +1748,7 @@ function ChatMarkdown({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to attach PR",
+            title: `Failed to attach ${terminology.shortLabel}`,
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -1749,11 +1756,11 @@ function ChatMarkdown({
       }
       toastManager.add({
         type: "success",
-        title: `PR #${result.value.number} attached`,
+        title: `${getChangeRequestTerminologyFromUrl(result.value.url).shortLabel} #${result.value.number} attached`,
         description: result.value.title,
       });
     },
-    [attachPullRequestCommand, cwd, threadRef],
+    [attachPullRequestCommand, cwd, supportsPullRequestAttachments, threadRef],
   );
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const environmentId = useActiveEnvironmentId();
@@ -1907,7 +1914,8 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
-        attachPullRequest: threadRef && cwd ? attachPullRequest : undefined,
+        attachPullRequest:
+          threadRef && cwd && supportsPullRequestAttachments ? attachPullRequest : undefined,
         cwd,
         diffThemeName,
         fileLinkParentSuffixByPath,
@@ -1941,6 +1949,7 @@ function ChatMarkdown({
       openMarkdownFileInPreview,
       resolvedTheme,
       skills,
+      supportsPullRequestAttachments,
       threadRef,
     ],
   );

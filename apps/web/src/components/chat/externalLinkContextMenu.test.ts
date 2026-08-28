@@ -75,6 +75,23 @@ describe("external chat link context menu", () => {
     expect(attachPullRequest).toHaveBeenCalledWith(href);
   });
 
+  it("uses merge-request terminology for GitLab links", async () => {
+    const harness = createHarness(null);
+
+    await showExternalLinkContextMenu({
+      href: "https://gitlab.com/acme/pathway/-/merge_requests/47",
+      position: { x: 12, y: 24 },
+      attachPullRequest: vi.fn().mockResolvedValue(undefined),
+      ...harness,
+    });
+
+    expect(harness.showContextMenu.mock.calls[0]?.[0]?.[0]).toEqual({
+      id: "attach-pull-request",
+      label: "Attach MR to thread",
+      separatorAfter: true,
+    });
+  });
+
   it("omits the integrated browser action when preview is unavailable", async () => {
     const harness = createHarness(null);
     const attachPullRequest = vi.fn().mockResolvedValue(undefined);

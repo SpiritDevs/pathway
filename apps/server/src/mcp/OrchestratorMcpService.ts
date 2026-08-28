@@ -64,6 +64,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 
 import { isBuiltInProviderAdapterDriverV2 } from "../orchestration-v2/builtInProviderAdapterDrivers.ts";
 import { subagentResultForRun } from "../orchestration-v2/SubagentProjection.ts";
@@ -633,10 +634,12 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
     case "source_control": {
       const commit = item.commitSha === undefined ? "" : ` Commit ${item.commitSha}.`;
       if (item.pullRequestAction === "attached" && item.pullRequest !== null) {
-        return `PR attached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
+        const label = getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+        return `${label} attached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
       }
       if (item.pullRequestAction === "detached" && item.pullRequest !== null) {
-        return `PR detached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
+        const label = getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+        return `${label} detached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
       }
       return item.pullRequest === null
         ? item.committed

@@ -8,7 +8,10 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
-import { sourceControlMarkerLabel } from "@spiritdevs/shared/sourceControl";
+import {
+  getChangeRequestTerminologyFromUrl,
+  sourceControlMarkerLabel,
+} from "@spiritdevs/shared/sourceControl";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
@@ -206,6 +209,10 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "source_control") {
     const commitSha = item.commitSha;
+    const changeRequestLabel =
+      item.pullRequest === null
+        ? "PR"
+        : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
     return (
       <TimelineSystemDivider
         label={sourceControlMarkerLabel(item)}
@@ -227,10 +234,10 @@ export function V2LifecycleRow(props: {
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
-                  aria-label={`Open PR #${item.pullRequest.number}`}
+                  aria-label={`Open ${changeRequestLabel} #${item.pullRequest.number}`}
                   title={
                     props.onDetachPullRequest
-                      ? "Open PR. Right-click to detach from thread."
+                      ? `Open ${changeRequestLabel}. Right-click to detach from thread.`
                       : undefined
                   }
                   onContextMenu={(event) => {
@@ -240,10 +247,15 @@ export function V2LifecycleRow(props: {
                     const api = readLocalApi();
                     if (!api) return;
                     void api.contextMenu
-                      .show([{ id: "detach-pull-request", label: "Detach PR from thread" }], {
-                        x: event.clientX,
-                        y: event.clientY,
-                      })
+                      .show(
+                        [
+                          {
+                            id: "detach-pull-request",
+                            label: `Detach ${changeRequestLabel} from thread`,
+                          },
+                        ],
+                        { x: event.clientX, y: event.clientY },
+                      )
                       .then((action) => {
                         if (action === "detach-pull-request" && item.pullRequest !== null) {
                           props.onDetachPullRequest?.(item.pullRequest);

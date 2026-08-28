@@ -244,6 +244,19 @@ describe("orchestration V2 contracts", () => {
     expect(item.pullRequest?.number).toBe(47);
   });
 
+  it("rejects source-control actions without a pull request", () => {
+    expect(() =>
+      decodeOrchestrationV2Command({
+        type: "thread.source-control.record",
+        commandId: "command-source-control-invalid",
+        threadId: "thread-1",
+        committed: false,
+        pullRequestAction: "attached",
+        pullRequest: null,
+      }),
+    ).toThrow();
+  });
+
   it("decodes app-owned delegated task commands", () => {
     const command = decodeOrchestrationV2Command({
       type: "delegated_task.request",

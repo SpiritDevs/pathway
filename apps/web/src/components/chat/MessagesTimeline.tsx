@@ -35,6 +35,7 @@ import {
   type ReactNode,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { useAtomValue } from "@effect/atom-react";
 import { FileDiff } from "@pierre/diffs/react";
 import {
   type TimelineEntry,
@@ -100,6 +101,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  resolveActiveAttachedPullRequestItemId,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   shouldPreserveAssistantLineBreaks,
@@ -143,6 +145,7 @@ import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { UsageLimitRecoveryActions } from "./UsageLimitRecoveryActions";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
+import { serverEnvironment } from "../../state/server";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 import {
@@ -613,23 +616,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const rows = useStableRows(rawRows);
   const threadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
-  const activeAttachedPullRequestItemId = useMemo(() => {
-    let activeItemId: string | null = null;
-    for (const row of rows) {
-      if (row.kind !== "event" || row.projectedItem.visibility !== "local") continue;
-      const item = row.projectedItem.item;
-      if (item.type !== "source_control") continue;
-      if (item.pullRequestAction === "attached") activeItemId = item.id;
-      if (item.pullRequestAction === "detached") activeItemId = null;
-    }
-    return activeItemId;
-  }, [rows]);
+  const threadServerConfig = useAtomValue(
+    serverEnvironment.configValueAtom(activeThreadEnvironmentId),
+  );
+  const supportsPullRequestAttachments =
+    threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
+  const resolvedActiveAttachedPullRequestItemId = useMemo(
+    () => resolveActiveAttachedPullRequestItemId(rows),
+    [rows],
+  );
+  const activeAttachedPullRequestItemId = supportsPullRequestAttachments
+    ? resolvedActiveAttachedPullRequestItemId
+    : null;
   const detachPullRequest = useAtomCommand(threadEnvironment.detachPullRequest, {
     reportFailure: false,
   });
   const onDetachPullRequest = useCallback(
     (pullRequest: { readonly number: number; readonly url: string }) => {
-      if (threadRef === null) return;
+      if (threadRef === null || !supportsPullRequestAttachments) return;
       void detachPullRequest({
         environmentId: threadRef.environmentId,
         input: { threadId: threadRef.threadId, pullRequest },
@@ -645,7 +649,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         );
       });
     },
-    [detachPullRequest, threadRef],
+    [detachPullRequest, supportsPullRequestAttachments, threadRef],
   );
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.

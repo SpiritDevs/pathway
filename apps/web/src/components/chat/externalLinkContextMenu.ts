@@ -1,4 +1,5 @@
 import type { ContextMenuItem } from "@spiritdevs/contracts";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 
 export type ExternalLinkContextMenuAction =
   | "attach-pull-request"
@@ -74,6 +75,7 @@ export async function showExternalLinkContextMenu({
 }: ShowExternalLinkContextMenuOptions): Promise<void> {
   let action: ExternalLinkContextMenuAction | null;
   try {
+    const changeRequestLabel = getChangeRequestTerminologyFromUrl(href).shortLabel;
     const items = EXTERNAL_LINK_CONTEXT_MENU_ITEMS.filter(
       (item) => item.id !== "open-in-preview" || openInPreview !== undefined,
     );
@@ -82,7 +84,7 @@ export async function showExternalLinkContextMenu({
         ? [
             {
               id: "attach-pull-request",
-              label: "Attach PR to thread",
+              label: `Attach ${changeRequestLabel} to thread`,
               separatorAfter: true,
             },
             ...items,
