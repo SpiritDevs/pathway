@@ -146,6 +146,7 @@ interface ChatMarkdownProps {
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 
 const EMPTY_ISSUE_MENTION_CANDIDATES: ReadonlyArray<string> = [];
+const EMPTY_MARKDOWN_FILE_LINK_META: ReadonlyMap<string, MarkdownFileLinkMeta> = new Map();
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -757,18 +758,15 @@ interface SuspenseShikiCodeBlockProps {
   className: string | undefined;
   code: string;
   themeName: DiffThemeName;
-  isStreaming: boolean;
 }
 
-function SuspenseShikiCodeBlock({
-  className,
-  code,
-  themeName,
-  isStreaming,
-}: SuspenseShikiCodeBlockProps) {
+function SuspenseShikiCodeBlock({ className, code, themeName }: SuspenseShikiCodeBlockProps) {
   const language = extractFenceLanguage(className);
-  const cacheKey = createHighlightCacheKey(code, language, themeName);
-  const cachedHighlightedHtml = !isStreaming ? highlightedCodeCache.get(cacheKey) : null;
+  const cacheKey = useMemo(
+    () => createHighlightCacheKey(code, language, themeName),
+    [code, language, themeName],
+  );
+  const cachedHighlightedHtml = highlightedCodeCache.get(cacheKey);
 
   if (cachedHighlightedHtml != null) {
     return (
@@ -785,7 +783,6 @@ function SuspenseShikiCodeBlock({
       language={language}
       themeName={themeName}
       cacheKey={cacheKey}
-      isStreaming={isStreaming}
     />
   );
 }
@@ -795,7 +792,6 @@ interface UncachedShikiCodeBlockProps {
   language: string;
   themeName: DiffThemeName;
   cacheKey: string;
-  isStreaming: boolean;
 }
 
 function UncachedShikiCodeBlock({
@@ -803,7 +799,6 @@ function UncachedShikiCodeBlock({
   language,
   themeName,
   cacheKey,
-  isStreaming,
 }: UncachedShikiCodeBlockProps) {
   const highlighter = use(getSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
@@ -821,14 +816,12 @@ function UncachedShikiCodeBlock({
   }, [code, highlighter, language, themeName]);
 
   useEffect(() => {
-    if (!isStreaming) {
-      highlightedCodeCache.set(
-        cacheKey,
-        highlightedHtml,
-        estimateHighlightedSize(highlightedHtml, code),
-      );
-    }
-  }, [cacheKey, code, highlightedHtml, isStreaming]);
+    highlightedCodeCache.set(
+      cacheKey,
+      highlightedHtml,
+      estimateHighlightedSize(highlightedHtml, code),
+    );
+  }, [cacheKey, code, highlightedHtml]);
 
   return (
     <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
@@ -1391,7 +1384,7 @@ interface ChatMarkdownComponentsContext {
   ) => Promise<AtomCommandResult<unknown, unknown>>;
   readonly resolvedTheme: "light" | "dark";
   readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
-  readonly text: string;
+  readonly textRef: React.RefObject<string>;
   readonly threadRef: ScopedThreadRef | undefined;
 }
 
@@ -1415,7 +1408,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     openMarkdownFileInPreview,
     resolvedTheme,
     skills,
-    text,
+    textRef,
     threadRef,
   } = ctx;
   // Mentions run first and splice their text into strings and links, so the skill pass that runs
@@ -1484,7 +1477,9 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
     li({ node, children, ...props }) {
       const listItemStart = node?.position?.start.offset;
       const markerOffset =
-        typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
+        typeof listItemStart === "number"
+          ? findTaskListMarkerOffset(textRef.current, listItemStart)
+          : null;
       return (
         <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
           {renderInlineChildren(children)}
@@ -1638,6 +1633,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
 
       const language = extractFenceLanguage(codeBlock.className);
       const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
+      const plainCodeBlock = <pre {...props}>{children}</pre>;
       return (
         <MarkdownCodeBlock
           code={codeBlock.code}
@@ -1645,16 +1641,19 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
           fenceTitle={fenceTitle}
           theme={resolvedTheme}
         >
-          <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-            <Suspense fallback={<pre {...props}>{children}</pre>}>
-              <SuspenseShikiCodeBlock
-                className={codeBlock.className}
-                code={codeBlock.code}
-                themeName={diffThemeName}
-                isStreaming={isStreaming}
-              />
-            </Suspense>
-          </RenderErrorBoundary>
+          {isStreaming ? (
+            plainCodeBlock
+          ) : (
+            <RenderErrorBoundary fallback={plainCodeBlock}>
+              <Suspense fallback={plainCodeBlock}>
+                <SuspenseShikiCodeBlock
+                  className={codeBlock.className}
+                  code={codeBlock.code}
+                  themeName={diffThemeName}
+                />
+              </Suspense>
+            </RenderErrorBoundary>
+          )}
         </MarkdownCodeBlock>
       );
     },
@@ -1675,11 +1674,15 @@ function ChatMarkdown({
   parseRawHtml = true,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
+  const textRef = useRef(text);
+  textRef.current = text;
+  const settledText = isStreaming ? null : text;
   // What this message could be mentioning, from its own text alone: no store, no subscription, and
   // nothing at all while the text is still arriving, when linkifying is off anyway.
   const issueMentionCandidates = useMemo(
-    () => (isStreaming ? EMPTY_ISSUE_MENTION_CANDIDATES : extractIssueKeyMentions(text)),
-    [isStreaming, text],
+    () =>
+      settledText === null ? EMPTY_ISSUE_MENTION_CANDIDATES : extractIssueKeyMentions(settledText),
+    [settledText],
   );
   // Only a message that names a key subscribes to the tracker. The ones that do then narrow it to
   // their own keys through a signature: an issue write anywhere else in the tracker leaves the
@@ -1711,11 +1714,12 @@ function ChatMarkdown({
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
+    if (settledText === null) return EMPTY_MARKDOWN_FILE_LINK_META;
     const metaByHref = new Map<
       string,
       NonNullable<ReturnType<typeof resolveMarkdownFileLinkMeta>>
     >();
-    for (const href of extractMarkdownLinkHrefs(text)) {
+    for (const href of extractMarkdownLinkHrefs(settledText)) {
       const normalizedHref = normalizeMarkdownLinkHrefKey(href);
       if (metaByHref.has(normalizedHref)) continue;
       const meta = resolveMarkdownFileLinkMeta(normalizedHref, cwd);
@@ -1724,10 +1728,11 @@ function ChatMarkdown({
       }
     }
     return metaByHref;
-  }, [cwd, text]);
+  }, [cwd, settledText]);
   const inlineCodeFileLinkMetaByText = useMemo(() => {
+    if (settledText === null) return EMPTY_MARKDOWN_FILE_LINK_META;
     const metaByText = new Map<string, MarkdownFileLinkMeta>();
-    for (const span of extractInlineCodeSpans(text)) {
+    for (const span of extractInlineCodeSpans(settledText)) {
       if (metaByText.has(span)) continue;
       const meta = resolveInlineCodeFileLinkMeta(span, cwd);
       if (meta) {
@@ -1735,7 +1740,7 @@ function ChatMarkdown({
       }
     }
     return metaByText;
-  }, [cwd, text]);
+  }, [cwd, settledText]);
   const fileLinkParentSuffixByPath = useMemo(() => {
     const filePaths = [
       ...[...markdownFileLinkMetaByHref.values()].map((meta) => meta.filePath),
@@ -1866,7 +1871,7 @@ function ChatMarkdown({
         openMarkdownFileInPreview,
         resolvedTheme,
         skills,
-        text,
+        textRef,
         threadRef,
       }),
     [
@@ -1884,7 +1889,6 @@ function ChatMarkdown({
       openMarkdownFileInPreview,
       resolvedTheme,
       skills,
-      text,
       threadRef,
     ],
   );
