@@ -16,6 +16,7 @@ import {
   isExplicitRelativeProjectPath,
 } from "@spiritdevs/client-runtime/state/projects";
 import {
+  completeFilesystemBrowsePath,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
 } from "@spiritdevs/client-runtime/state/filesystem";
@@ -88,6 +89,23 @@ export function ProjectDirectoryField({
         autoFocus={autoFocus}
         disabled={disabled}
         onChange={(event) => onChange(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (
+            event.key !== "Tab" ||
+            event.shiftKey ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey
+          ) {
+            return;
+          }
+          const completion = completeFilesystemBrowsePath(value, entries);
+          if (completion === null) {
+            return;
+          }
+          event.preventDefault();
+          onChange(completion);
+        }}
         placeholder="~/code/my-project"
         spellCheck={false}
         value={value}

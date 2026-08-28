@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canPreloadBrowsePath,
+  completeFilesystemBrowsePath,
   createBrowseNavigationCoordinator,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
@@ -34,6 +35,34 @@ describe("filesystem browse model", () => {
     expect(filterFilesystemBrowseEntries(entries, "").visibleEntries).toEqual(entries.slice(1));
     expect(filterFilesystemBrowseEntries(entries, ".").visibleEntries).toEqual(entries.slice(0, 1));
     expect(filterFilesystemBrowseEntries(entries, "Code").exactEntry).toEqual(entries[1]);
+  });
+
+  it("completes a sole directory match and keeps the platform separator", () => {
+    const entries = [
+      { name: "GitHub", fullPath: "/Users/test/GitHub" },
+      { name: "Pictures", fullPath: "/Users/test/Pictures" },
+    ];
+
+    expect(completeFilesystemBrowsePath("~/git", entries)).toBe("~/GitHub/");
+    expect(completeFilesystemBrowsePath("C:\\Users\\git", entries)).toBe("C:\\Users\\GitHub\\");
+  });
+
+  it("completes multiple matches only through their shared prefix", () => {
+    const entries = [
+      { name: "GitHub", fullPath: "/Users/test/GitHub" },
+      { name: "GitLab", fullPath: "/Users/test/GitLab" },
+      { name: "Pictures", fullPath: "/Users/test/Pictures" },
+    ];
+
+    expect(completeFilesystemBrowsePath("~/gi", entries)).toBe("~/Git");
+    expect(completeFilesystemBrowsePath("~/Git", entries)).toBeNull();
+  });
+
+  it("does not complete when no visible directory matches", () => {
+    const entries = [{ name: ".git", fullPath: "/Users/test/.git" }];
+
+    expect(completeFilesystemBrowsePath("~/gi", entries)).toBeNull();
+    expect(completeFilesystemBrowsePath("~/.", entries)).toBe("~/.git/");
   });
 });
 
