@@ -108,10 +108,14 @@ export function resolveActiveThreadRouteRef(
   return draftThread.promotedTo;
 }
 
-export function promotedDraftThreadIsFilteredOut(input: {
+export function promotedDraftThreadIsUnavailable(input: {
   readonly hasPromotedThread: boolean;
   readonly promotedThreadExists: boolean;
   readonly promotedThreadVisible: boolean;
+  readonly promotedThreadDeleted: boolean;
 }): boolean {
-  return input.hasPromotedThread && input.promotedThreadExists && !input.promotedThreadVisible;
+  return (
+    input.hasPromotedThread &&
+    (input.promotedThreadDeleted || (input.promotedThreadExists && !input.promotedThreadVisible))
+  );
 }

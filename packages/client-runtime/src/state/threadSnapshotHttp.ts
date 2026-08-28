@@ -102,9 +102,8 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
           Effect.map((snapshot): ThreadSnapshotLoadResult => ({ _tag: "Snapshot", snapshot })),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           // A cloud-discovered or draft-promoting shell can reach the client before the owning
-          // environment commits thread.create. Keep 404 distinct for diagnostics, but let the
-          // thread state fall through to the retrying socket path instead of poisoning this id as
-          // deleted before it has materialized.
+          // environment commits thread.create. Keep 404 distinct for diagnostics so thread state
+          // can use its bounded materialization retries before deciding the id is genuinely deleted.
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(

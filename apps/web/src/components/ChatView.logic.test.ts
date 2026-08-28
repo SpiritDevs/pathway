@@ -38,6 +38,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
+  resolveThreadProjectionWorkingPresentation,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
@@ -97,6 +98,64 @@ describe("threadProjectionIsPending", () => {
     expect(threadProjectionIsPending(startedThread, false)).toBe(true);
     expect(threadProjectionIsPending(startedThread, true)).toBe(false);
     expect(threadProjectionIsPending(makeThread(), false)).toBe(false);
+  });
+});
+
+describe("resolveThreadProjectionWorkingPresentation", () => {
+  const runningThread = makeThread({
+    latestRun: {
+      runId: RunId.make("run-1"),
+      status: "running",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: null,
+      assistantMessageId: null,
+    },
+  });
+
+  it("distinguishes active, completed, and unsuccessful pending projections", () => {
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: false,
+        isWorking: false,
+        latestRun: runningThread.latestRun,
+      }),
+    ).toBe("activity");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
+        isWorking: true,
+        latestRun: runningThread.latestRun,
+      }),
+    ).toBe("connecting");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
+        isWorking: false,
+        latestRun: { ...runningThread.latestRun!, status: "completed", completedAt: now },
+      }),
+    ).toBe("connecting-complete");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
+        isWorking: false,
+        latestRun: { ...runningThread.latestRun!, status: "failed", completedAt: now },
+      }),
+    ).toBe("connecting-settled");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
+        isWorking: false,
+        latestRun: runningThread.latestRun,
+      }),
+    ).toBe("connecting");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
+        isWorking: false,
+        latestRun: null,
+      }),
+    ).toBe("connecting-neutral");
   });
 });
 

@@ -7,7 +7,7 @@ import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
   promotedDraftCanNavigateToCanonicalThread,
-  promotedDraftThreadIsFilteredOut,
+  promotedDraftThreadIsUnavailable,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
   resolveThreadRouteRef,
@@ -96,28 +96,39 @@ describe("threadRoutes", () => {
     ).toBeNull();
   });
 
-  it("closes a promoted draft only when its existing server thread is filtered out", () => {
+  it("closes a promoted draft when its server thread is filtered out or deleted", () => {
     expect(
-      promotedDraftThreadIsFilteredOut({
+      promotedDraftThreadIsUnavailable({
         hasPromotedThread: true,
         promotedThreadExists: true,
         promotedThreadVisible: false,
+        promotedThreadDeleted: false,
       }),
     ).toBe(true);
     expect(
-      promotedDraftThreadIsFilteredOut({
+      promotedDraftThreadIsUnavailable({
         hasPromotedThread: true,
         promotedThreadExists: false,
         promotedThreadVisible: false,
+        promotedThreadDeleted: false,
       }),
     ).toBe(false);
     expect(
-      promotedDraftThreadIsFilteredOut({
+      promotedDraftThreadIsUnavailable({
         hasPromotedThread: true,
         promotedThreadExists: true,
         promotedThreadVisible: true,
+        promotedThreadDeleted: false,
       }),
     ).toBe(false);
+    expect(
+      promotedDraftThreadIsUnavailable({
+        hasPromotedThread: true,
+        promotedThreadExists: true,
+        promotedThreadVisible: true,
+        promotedThreadDeleted: true,
+      }),
+    ).toBe(true);
   });
 
   it("keeps a promoted draft mounted until its first user message is visible", () => {

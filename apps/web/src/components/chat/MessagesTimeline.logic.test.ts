@@ -1199,6 +1199,66 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("keeps a completed connecting placeholder after the shell settles", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: false,
+      workingPresentation: "connecting-complete",
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: "2026-01-01T00:00:00Z",
+        presentation: "connecting-complete",
+      },
+    ]);
+  });
+
+  it("keeps a stopped connecting placeholder after an unsuccessful shell settles", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: false,
+      workingPresentation: "connecting-settled",
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: "2026-01-01T00:00:00Z",
+        presentation: "connecting-settled",
+      },
+    ]);
+  });
+
+  it("keeps a neutral connecting placeholder when no run summary is available", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: false,
+      workingPresentation: "connecting-neutral",
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: null,
+        presentation: "connecting-neutral",
+      },
+    ]);
+  });
+
   it("only shows assistant metadata on the terminal assistant message", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

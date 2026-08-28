@@ -13,9 +13,14 @@ import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransiti
 import {
   buildThreadRouteParams,
   promotedDraftCanNavigateToCanonicalThread,
-  promotedDraftThreadIsFilteredOut,
+  promotedDraftThreadIsUnavailable,
 } from "../threadRoutes";
-import { useThreadRefs, useThreadShell, useThreadVisibleTurnItems } from "../state/entities";
+import {
+  useThreadRefs,
+  useThreadShell,
+  useThreadStatus,
+  useThreadVisibleTurnItems,
+} from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
@@ -34,6 +39,7 @@ function DraftChatThreadRouteView() {
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
   const serverThread = useThreadShell(serverThreadRef);
+  const serverThreadStatus = useThreadStatus(serverThreadRef);
   const unfilteredEnvironmentShell = useEnvironmentQuery(
     serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
   );
@@ -41,13 +47,14 @@ function DraftChatThreadRouteView() {
     unfilteredEnvironmentShell.data === null
       ? null
       : Option.getOrNull(unfilteredEnvironmentShell.data.snapshot);
-  const promotedThreadFilteredOut = promotedDraftThreadIsFilteredOut({
+  const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({
     hasPromotedThread: draftSession?.promotedTo != null,
     promotedThreadExists:
       serverThreadRef !== null &&
       (unfilteredSnapshot?.threads.some((thread) => thread.id === serverThreadRef.threadId) ??
         false),
     promotedThreadVisible: serverThread !== null,
+    promotedThreadDeleted: serverThreadStatus === "deleted",
   });
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverVisibleTurnItems = useThreadVisibleTurnItems(serverThreadRef);
@@ -91,9 +98,9 @@ function DraftChatThreadRouteView() {
   }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
-    if (!promotedThreadFilteredOut) return;
+    if (!promotedThreadUnavailable) return;
     void navigate({ to: "/threads", replace: true });
-  }, [navigate, promotedThreadFilteredOut]);
+  }, [navigate, promotedThreadUnavailable]);
 
   useEffect(() => {
     if (draftSession || canonicalThreadRef) {
@@ -102,7 +109,7 @@ function DraftChatThreadRouteView() {
     void navigate({ to: "/threads", replace: true });
   }, [canonicalThreadRef, draftSession, navigate]);
 
-  if (!draftSession || promotedThreadFilteredOut) {
+  if (!draftSession || promotedThreadUnavailable) {
     return null;
   }
 

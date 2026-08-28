@@ -194,6 +194,13 @@ export type TimelineLatestRun = Pick<
   "runId" | "status" | "startedAt" | "completedAt"
 >;
 
+export type WorkingPresentation =
+  | "activity"
+  | "connecting"
+  | "connecting-complete"
+  | "connecting-settled"
+  | "connecting-neutral";
+
 export type MessagesTimelineRow =
   | {
       kind: "work";
@@ -247,7 +254,7 @@ export type MessagesTimelineRow =
       kind: "working";
       id: string;
       createdAt: string | null;
-      presentation: "activity" | "connecting";
+      presentation: WorkingPresentation;
     }
   | {
       kind: "waiting-background";
@@ -553,7 +560,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   isWorking: boolean;
-  workingPresentation?: "activity" | "connecting";
+  workingPresentation?: WorkingPresentation;
   activeTurnStartedAt: string | null;
   pendingBackgroundTasks?: ReadonlyArray<{
     readonly taskId: string;
@@ -728,7 +735,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.isWorking) {
+  if (input.isWorking || (input.workingPresentation ?? "activity") !== "activity") {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",

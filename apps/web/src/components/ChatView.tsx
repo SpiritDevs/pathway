@@ -410,6 +410,7 @@ import {
   shortcutScopeOwnsEvent,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  resolveThreadProjectionWorkingPresentation,
   shouldShowComposerContextStrip,
   startNewThreadForProject,
   threadProjectionIsPending,
@@ -8441,7 +8442,11 @@ function ChatViewContent(props: ChatViewProps) {
               <MessagesTimeline
                 key={activeThread.id}
                 isWorking={isWorking}
-                workingPresentation={isThreadProjectionPending ? "connecting" : "activity"}
+                workingPresentation={resolveThreadProjectionWorkingPresentation({
+                  projectionPending: isThreadProjectionPending,
+                  isWorking,
+                  latestRun: activeLatestRun,
+                })}
                 activeTurnInProgress={isWorking || !latestRunSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
                 pendingBackgroundTasks={pendingBackgroundTasks}
@@ -8517,10 +8522,10 @@ function ChatViewContent(props: ChatViewProps) {
               ref={setComposerOverlayElement}
               data-chat-composer-overlay="true"
               className={cn(
-                isThreadProjectionPending && "hidden",
                 isDraftHeroState
                   ? "pointer-events-none absolute inset-0 z-20 flex items-center"
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2",
+                isThreadProjectionPending && "hidden",
               )}
             >
               <div

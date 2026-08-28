@@ -548,6 +548,33 @@ export function threadProjectionIsPending(
   return !projectionAvailable && threadHasStarted(thread);
 }
 
+export function resolveThreadProjectionWorkingPresentation(input: {
+  projectionPending: boolean;
+  isWorking: boolean;
+  latestRun: Thread["latestRun"];
+}):
+  | "activity"
+  | "connecting"
+  | "connecting-complete"
+  | "connecting-settled"
+  | "connecting-neutral" {
+  if (!input.projectionPending) return "activity";
+  if (input.isWorking) return "connecting";
+  switch (input.latestRun?.status) {
+    case "completed":
+      return "connecting-complete";
+    case "failed":
+    case "cancelled":
+    case "interrupted":
+    case "rolled_back":
+      return "connecting-settled";
+    case undefined:
+      return "connecting-neutral";
+    default:
+      return "connecting";
+  }
+}
+
 // A live runtime carries its provider driver directly. Settled threads no
 // longer have that runtime, so their persisted instance selection must be
 // resolved through the current provider catalogue before it can become a
