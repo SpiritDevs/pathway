@@ -29,6 +29,7 @@ export interface ShortcutModifierStateLike {
 }
 
 export interface ShortcutMatchContext {
+  agentThreadsView: boolean;
   terminalFocus: boolean;
   terminalOpen: boolean;
   previewFocus: boolean;
@@ -123,6 +124,7 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
   return {
+    agentThreadsView: false,
     terminalFocus: false,
     terminalOpen: false,
     previewFocus: false,

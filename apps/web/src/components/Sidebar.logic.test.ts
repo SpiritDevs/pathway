@@ -17,9 +17,11 @@ import {
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   hasUnseenCompletion,
+  intersectSidebarProjectScopes,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isTrailingDoubleClick,
+  mergeActiveThreadOrderPreference,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -33,6 +35,7 @@ import {
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
+  filterSidebarWorkspaceProjectsForFocus,
   shouldClearThreadSelectionOnMouseDown,
   shouldNavigateAfterProjectRemoval,
   shouldShowSidebarV2Duration,
@@ -85,6 +88,48 @@ describe("animatePinnedLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animatePinnedLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("Focus and project sidebar scoping", () => {
+  it("intersects Focus and project scopes while preserving null as unfiltered", () => {
+    const projectScope = new Set(["environment-a:project-a", "environment-b:project-b"]);
+    const focusScope = new Set(["environment-b:project-b", "environment-c:project-c"]);
+
+    expect(intersectSidebarProjectScopes(null, null)).toBeNull();
+    expect(intersectSidebarProjectScopes(projectScope, null)).toBe(projectScope);
+    expect(intersectSidebarProjectScopes(null, focusScope)).toBe(focusScope);
+    expect([...intersectSidebarProjectScopes(projectScope, focusScope)!]).toEqual([
+      "environment-b:project-b",
+    ]);
+  });
+
+  it("lists only workspace projects backed by a project in the active Focus", () => {
+    const projects = [
+      {
+        id: "work",
+        group: {
+          memberProjectRefs: [
+            { environmentId: "environment-a", projectId: "project-a" },
+            { environmentId: "environment-b", projectId: "project-b" },
+          ],
+        },
+      },
+      {
+        id: "personal",
+        group: {
+          memberProjectRefs: [{ environmentId: "environment-c", projectId: "project-c" }],
+        },
+      },
+      { id: "cloud-only", group: null },
+    ];
+
+    expect(
+      filterSidebarWorkspaceProjectsForFocus(projects, new Set(["environment-b:project-b"])).map(
+        (project) => project.id,
+      ),
+    ).toEqual(["work"]);
+    expect(filterSidebarWorkspaceProjectsForFocus(projects, null)).toBe(projects);
   });
 });
 
@@ -647,6 +692,45 @@ describe("orderItemsByPreferredIds", () => {
       "physical-a",
       "physical-b",
     ]);
+  });
+});
+
+describe("mergeActiveThreadOrderPreference", () => {
+  it("reorders visible keys without losing hidden or previously unarranged keys", () => {
+    const merged = mergeActiveThreadOrderPreference({
+      savedOrder: ["hidden-a", "visible-a", "hidden-b", "visible-b", "hidden-c"],
+      visibleOrder: ["visible-b", "visible-new", "visible-a"],
+      scoped: true,
+    });
+
+    expect(merged).toEqual([
+      "hidden-a",
+      "visible-b",
+      "hidden-b",
+      "visible-new",
+      "hidden-c",
+      "visible-a",
+    ]);
+    expect(merged.filter((key) => key.startsWith("hidden"))).toEqual([
+      "hidden-a",
+      "hidden-b",
+      "hidden-c",
+    ]);
+    expect(merged.filter((key) => key.startsWith("visible"))).toEqual([
+      "visible-b",
+      "visible-new",
+      "visible-a",
+    ]);
+  });
+
+  it("replaces and prunes the preference when the inbox is unscoped", () => {
+    expect(
+      mergeActiveThreadOrderPreference({
+        savedOrder: ["stale", "visible-a", "hidden"],
+        visibleOrder: ["visible-b", "visible-a"],
+        scoped: false,
+      }),
+    ).toEqual(["visible-b", "visible-a"]);
   });
 });
 

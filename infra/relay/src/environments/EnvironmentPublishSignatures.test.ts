@@ -1,5 +1,6 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { AttentionEvent } from "@spiritdevs/contracts";
 import type {
   RelayAgentActivityPublishProofPayload,
   RelayAgentActivityPublishRequest,
@@ -52,6 +53,12 @@ const state: RelayAgentActivityState = {
   updatedAt: "2026-05-25T00:00:00.000Z",
   deepLink: "/threads/env/thread",
 };
+const attentionEvent = {
+  eventId: "attention:thread:pending-approval:request",
+  threadId: state.threadId,
+  projectKey: "env:project",
+  eventKind: "pending-approval",
+} as AttentionEvent;
 const isEnvironmentPublishSignatureInvalid = Schema.is(
   EnvironmentPublishSignatures.EnvironmentPublishSignatureInvalid,
 );
@@ -77,9 +84,13 @@ const freshRequest = Effect.gen(function* () {
     environmentId: state.environmentId,
     threadId: state.threadId,
     state,
+    attentionEvents: [attentionEvent],
+    publishActivity: false,
   } satisfies RelayAgentActivityPublishProofPayload;
   return {
     state,
+    attentionEvents: [attentionEvent],
+    publishActivity: false,
     proof: signTestJwt(payload, keyPair.privateKey),
   } satisfies RelayAgentActivityPublishRequest;
 });
@@ -155,6 +166,33 @@ describe("EnvironmentPublishSignatures", () => {
           expect(result.failure).toMatchObject({
             environmentId: state.environmentId,
             threadId: state.threadId,
+            reason: "invalid_signature_or_payload",
+            stage: "validate_claims",
+          });
+        }
+      }
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("rejects Attention Event and activity-mode tampering", () =>
+    Effect.gen(function* () {
+      const request = yield* freshRequest;
+      const signatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
+      for (const tampered of [
+        { ...request, attentionEvents: [] },
+        { ...request, publishActivity: true },
+      ]) {
+        const result = yield* Effect.result(
+          signatures.verify({
+            environmentId: state.environmentId,
+            environmentPublicKey: keyPair.publicKey,
+            threadId: state.threadId,
+            request: tampered,
+          }),
+        );
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure).toMatchObject({
             reason: "invalid_signature_or_payload",
             stage: "validate_claims",
           });

@@ -27,6 +27,10 @@
       "types": "./src/cloudProject.ts",
       "import": "./src/cloudProject.ts"
     },
+    "./focus": {
+      "types": "./src/focus.ts",
+      "import": "./src/focus.ts"
+    },
     "./cloudSync": {
       "types": "./src/cloudSync.ts",
       "import": "./src/cloudSync.ts"

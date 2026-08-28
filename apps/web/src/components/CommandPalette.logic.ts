@@ -1,8 +1,14 @@
 import {
+  ALL_FOCUS_ID,
+  visibleFocuses,
+  type ActiveFocusId,
+} from "@spiritdevs/client-runtime/state/focuses";
+import {
   type FilesystemBrowseEntry,
   type KeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@spiritdevs/contracts";
+import type { Focus, FocusAssignment } from "@spiritdevs/contracts/focus";
 import type { SidebarThreadSortOrder } from "@spiritdevs/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
@@ -14,6 +20,27 @@ import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
+
+export function visibleFocusesForProjectKeys(input: {
+  readonly focuses: ReadonlyArray<Focus>;
+  readonly assignments: ReadonlyArray<FocusAssignment>;
+  readonly visibleProjectKeys: ReadonlySet<string>;
+}): ReadonlyArray<Focus> {
+  return visibleFocuses(input);
+}
+
+export function nextFocusId(input: {
+  readonly activeFocusId: ActiveFocusId;
+  readonly visibleFocuses: ReadonlyArray<Pick<Focus, "id">>;
+}): ActiveFocusId {
+  if (input.activeFocusId === ALL_FOCUS_ID) {
+    return input.visibleFocuses[0]?.id ?? ALL_FOCUS_ID;
+  }
+  const activeIndex = input.visibleFocuses.findIndex((focus) => focus.id === input.activeFocusId);
+  return activeIndex === -1 || activeIndex === input.visibleFocuses.length - 1
+    ? ALL_FOCUS_ID
+    : input.visibleFocuses[activeIndex + 1]!.id;
+}
 
 export function browseInputEndPaddingClass(input: {
   readonly willCreateProjectPath: boolean;

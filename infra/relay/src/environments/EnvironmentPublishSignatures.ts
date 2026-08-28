@@ -160,9 +160,17 @@ const make = Effect.gen(function* () {
         proof.threadId !== input.threadId ||
         proof.sub !== input.environmentId ||
         stableStringify(proof.state) !== stableStringify(input.request.state) ||
+        stableStringify(proof.attentionEvents ?? []) !==
+          stableStringify(input.request.attentionEvents ?? []) ||
+        (proof.publishActivity ?? true) !== (input.request.publishActivity ?? true) ||
         (input.request.state !== null &&
           (input.request.state.environmentId !== input.environmentId ||
-            input.request.state.threadId !== input.threadId))
+            input.request.state.threadId !== input.threadId)) ||
+        (input.request.attentionEvents ?? []).some(
+          (event) =>
+            event.threadId !== input.threadId ||
+            !event.projectKey.startsWith(`${input.environmentId}:`),
+        )
       ) {
         return yield* new EnvironmentPublishSignatureInvalid({
           environmentId: input.environmentId,

@@ -90,6 +90,13 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedThemeEditor.command, "themeEditor.toggle");
 
+    const parsedFocusCycle = yield* decode(KeybindingRule, {
+      key: "mod+alt+g",
+      command: "focus.cycle",
+      when: "agentThreadsView && !terminalFocus",
+    });
+    assert.strictEqual(parsedFocusCycle.command, "focus.cycle");
+
     const parsedLocal = yield* decode(KeybindingRule, {
       key: "mod+shift+n",
       command: "chat.newLocal",

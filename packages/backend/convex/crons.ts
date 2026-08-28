@@ -29,4 +29,11 @@ crons.hourly(
   internal.cloudProjects.revokeStaleEnvironmentBindings,
 );
 
+crons.interval(
+  "prune expired Focus notifications",
+  { minutes: 1 },
+  internal.focusNotifications.pruneExpired,
+  {},
+);
+
 export default crons;

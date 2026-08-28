@@ -175,6 +175,26 @@ async function deleteIds(ctx: MutationCtx, ids: Id<TableNames>[]) {
   for (const id of ids) await ctx.db.delete(id);
 }
 
+async function deleteEnvironmentFocusAssignments(
+  ctx: MutationCtx,
+  clerkSubject: string,
+  environmentId: string,
+): Promise<void> {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", clerkSubject))
+    .unique();
+  if (user === null) return;
+  const prefix = `${environmentId}:`;
+  const assignments = await ctx.db
+    .query("focusAssignments")
+    .withIndex("by_user_and_project", (q) =>
+      q.eq("userId", user._id).gte("projectKey", prefix).lt("projectKey", `${prefix}\uffff`),
+    )
+    .collect();
+  for (const assignment of assignments) await ctx.db.delete(assignment._id);
+}
+
 export const health = query({
   args: {},
   returns: v.literal(true),
@@ -764,6 +784,7 @@ export const revokeEnvironmentLink = mutation({
       )
       .unique();
     if (!row || !activeLink(row)) return false;
+    await deleteEnvironmentFocusAssignments(ctx, args.userId, args.environmentId);
     await ctx.db.patch(row._id, { revokedAt: args.now, updatedAt: args.now });
     return true;
   },
@@ -815,6 +836,7 @@ export const revokeEnvironmentLinkWithCredentials = mutation({
       )
       .unique();
     if (!row || !activeLink(row)) return { linkRevoked: false, credentialsRevoked: false };
+    await deleteEnvironmentFocusAssignments(ctx, args.userId, args.environmentId);
     await ctx.db.patch(row._id, { revokedAt: args.now, updatedAt: args.now });
     return {
       linkRevoked: true,

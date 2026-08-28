@@ -38,6 +38,7 @@ import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone
 import { makeRelayTraceLayer, RelayObservability } from "./observability.ts";
 import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
+import * as FocusNotificationRecorder from "./agentActivity/FocusNotificationRecorder.ts";
 import * as Devices from "./agentActivity/Devices.ts";
 import * as DpopProofs from "./auth/DpopProofs.ts";
 import * as ConvexConnectGrants from "./auth/ConvexConnectGrants.ts";
@@ -252,6 +253,7 @@ export const ApiLive = Api.make(
         ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
       ),
       Layer.provideMerge(AgentActivityRows.layer),
+      Layer.provideMerge(FocusNotificationRecorder.layer),
       Layer.provideMerge(Devices.layer),
       Layer.provideMerge(EnvironmentCredentials.layer),
       Layer.provideMerge(

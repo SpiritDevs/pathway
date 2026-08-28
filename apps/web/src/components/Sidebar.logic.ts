@@ -129,6 +129,35 @@ export function filterSidebarV2VisibleThreads<
   );
 }
 
+export function intersectSidebarProjectScopes(
+  projectScope: ReadonlySet<string> | null,
+  focusScope: ReadonlySet<string> | null,
+): ReadonlySet<string> | null {
+  if (projectScope === null) return focusScope;
+  if (focusScope === null) return projectScope;
+  const [smaller, larger] =
+    projectScope.size <= focusScope.size ? [projectScope, focusScope] : [focusScope, projectScope];
+  return new Set([...smaller].filter((projectKey) => larger.has(projectKey)));
+}
+
+export function filterSidebarWorkspaceProjectsForFocus<
+  T extends {
+    readonly group: {
+      readonly memberProjectRefs: ReadonlyArray<{
+        readonly environmentId: string;
+        readonly projectId: string;
+      }>;
+    } | null;
+  },
+>(projects: ReadonlyArray<T>, focusScope: ReadonlySet<string> | null): ReadonlyArray<T> {
+  if (focusScope === null) return projects;
+  return projects.filter((project) =>
+    project.group?.memberProjectRefs.some((projectRef) =>
+      focusScope.has(`${projectRef.environmentId}:${projectRef.projectId}`),
+    ),
+  );
+}
+
 export function getSidebarForkParentThreadId(
   thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
 ) {
@@ -367,6 +396,22 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   });
   const remaining = items.filter((_, index) => !emittedIndexes.has(index));
   return [...ordered, ...remaining];
+}
+
+export function mergeActiveThreadOrderPreference(input: {
+  readonly savedOrder: readonly string[];
+  readonly visibleOrder: readonly string[];
+  readonly scoped: boolean;
+}): string[] {
+  if (!input.scoped) return [...input.visibleOrder];
+
+  const visibleKeys = new Set(input.visibleOrder);
+  let visibleIndex = 0;
+  const merged = input.savedOrder.map((savedKey) => {
+    if (!visibleKeys.has(savedKey)) return savedKey;
+    return input.visibleOrder[visibleIndex++]!;
+  });
+  return [...merged, ...input.visibleOrder.slice(visibleIndex)];
 }
 
 export function getVisibleSidebarThreadIds<TThreadId>(

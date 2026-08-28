@@ -1,0 +1,3 @@
+# Thread notifications are a persisted, expiring log, not derived state
+
+Attention events (run finished unsettled, pending approval, awaiting input, failed) are written as notification records to Convex rather than derived on the fly from thread state + `lastVisitedAt`. Persisting was chosen so the feed survives thread-state changes, works across machines, and can show history; the cost is a cleanup obligation: records are deleted when read + 7 days or unread + 30 days, with a hard cap of 200 per user (oldest evicted). In v1 the badge counts all unread notifications and opening the tray marks everything read (a Convex watermark, so it clears on every machine); reading never deletes early — retention rules alone remove records.

@@ -61,6 +61,7 @@ import { decodeRelayJwt, normalizeRelayIssuer, verifyRelayJwt } from "@spiritdev
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
+import * as FocusNotificationRecorder from "../agentActivity/FocusNotificationRecorder.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as ConvexConnectGrants from "../auth/ConvexConnectGrants.ts";
@@ -1176,6 +1177,7 @@ export const serverApi = HttpApiBuilder.group(
   "server",
   Effect.fnUntraced(function* (handlers) {
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
+    const focusNotifications = yield* FocusNotificationRecorder.FocusNotificationRecorder;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
     return handlers.handle(
       "publishAgentActivity",
@@ -1192,6 +1194,19 @@ export const serverApi = HttpApiBuilder.group(
             threadId: params.threadId,
             request: payload,
           });
+          yield* Effect.forEach(
+            payload.attentionEvents ?? [],
+            (event) =>
+              focusNotifications.record({
+                environmentId: params.environmentId,
+                environmentPublicKey: principal.environmentPublicKey,
+                event,
+              }),
+            { concurrency: 4, discard: true },
+          );
+          if (payload.publishActivity === false) {
+            return { ok: true, deliveries: [] };
+          }
           return yield* publisher.publish({
             environmentId: params.environmentId,
             environmentPublicKey: principal.environmentPublicKey,
@@ -1344,6 +1359,7 @@ const RelayCommonPersistenceError = Schema.Union([
   AgentActivityRows.AgentActivityRowUpsertPersistenceError,
   AgentActivityRows.AgentActivityRowDeletePersistenceError,
   AgentActivityRows.AgentActivityRowListPersistenceError,
+  FocusNotificationRecorder.FocusNotificationRecordPersistenceError,
   LiveActivities.LiveActivityDeliveryMarkPersistenceError,
   DeliveryAttempts.DeliveryAttemptRecordPersistenceError,
 ]);
