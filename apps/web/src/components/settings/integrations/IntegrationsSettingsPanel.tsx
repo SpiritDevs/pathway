@@ -468,6 +468,48 @@ function SlackWorkspaceWizardController({
     [client, onChanged],
   );
 
+  const loadAutomation = useCallback(
+    async (selectedOwnerId: string): Promise<SlackWizardAutomationContext> => {
+      const selectedCompanyId = CompanyId.make(selectedOwnerId);
+      const summary = await client.getAutomation(selectedCompanyId);
+      return {
+        ownerId: selectedOwnerId,
+        settings: summary?.settings ?? automationFallback,
+        configured: summary !== null,
+        enabled: summary?.enabled ?? false,
+      };
+    },
+    [automationFallback, client],
+  );
+
+  const saveAutomation = useCallback(
+    async (
+      selectedOwnerId: string,
+      settings: IssueAutomationSettings,
+    ): Promise<SlackWizardAutomationContext> => {
+      if (!canManage) {
+        throw new Error(
+          "The integrations.manage permission is required to configure issue automation.",
+        );
+      }
+      const selectedCompanyId = CompanyId.make(selectedOwnerId);
+      const current = await client.getAutomation(selectedCompanyId);
+      const saved = await client.saveAutomation({
+        companyId: selectedCompanyId,
+        settings,
+        expectedRevision: current?.revision ?? null,
+      });
+      await onChanged(selectedCompanyId);
+      return {
+        ownerId: selectedOwnerId,
+        settings: saved.settings,
+        configured: true,
+        enabled: saved.enabled,
+      };
+    },
+    [canManage, client, onChanged],
+  );
+
   if (initialDraft === null) {
     return (
       <CompanySettingsSheet
@@ -638,40 +680,8 @@ function SlackWorkspaceWizardController({
           },
         ];
       }}
-      onLoadAutomation={async (selectedOwnerId): Promise<SlackWizardAutomationContext> => {
-        const selectedCompanyId = CompanyId.make(selectedOwnerId);
-        const summary = await client.getAutomation(selectedCompanyId);
-        return {
-          ownerId: selectedOwnerId,
-          settings: summary?.settings ?? automationFallback,
-          configured: summary !== null,
-          enabled: summary?.enabled ?? false,
-        };
-      }}
-      onSaveAutomation={async (
-        selectedOwnerId,
-        settings,
-      ): Promise<SlackWizardAutomationContext> => {
-        if (!canManage) {
-          throw new Error(
-            "The integrations.manage permission is required to configure issue automation.",
-          );
-        }
-        const selectedCompanyId = CompanyId.make(selectedOwnerId);
-        const current = await client.getAutomation(selectedCompanyId);
-        const saved = await client.saveAutomation({
-          companyId: selectedCompanyId,
-          settings,
-          expectedRevision: current?.revision ?? null,
-        });
-        await onChanged(selectedCompanyId);
-        return {
-          ownerId: selectedOwnerId,
-          settings: saved.settings,
-          configured: true,
-          enabled: saved.enabled,
-        };
-      }}
+      onLoadAutomation={loadAutomation}
+      onSaveAutomation={saveAutomation}
       onComplete={(draft) => {
         if (draft.ownerId !== null) void onChanged(CompanyId.make(draft.ownerId));
       }}

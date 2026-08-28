@@ -216,8 +216,9 @@ export function SlackWorkspaceWizardSheet({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [expandedRuleId, setExpandedRuleId] = useState<string | null>(null);
   const requestVersionRef = useRef(0);
-  const automationRequestOwnerRef = useRef<string | null>(null);
+  const automationOwnerRef = useRef(draft.ownerId);
   const wasOpenRef = useRef(false);
+  automationOwnerRef.current = draft.ownerId;
 
   const selectedOwner = owners.find((owner) => owner.id === draft.ownerId) ?? null;
   const ownerCatalog = draft.ownerId ? getOwnerCatalog(draft.ownerId) : EMPTY_SLACK_OWNER_CATALOG;
@@ -273,7 +274,6 @@ export function SlackWorkspaceWizardSheet({
     setAutomationContext(initialAutomation);
     setAutomationLoadState("idle");
     setAutomationSaveState("idle");
-    automationRequestOwnerRef.current = null;
     setActivationStages(defaultSlackActivationStages());
     setActivationState("idle");
     setError(null);
@@ -282,16 +282,14 @@ export function SlackWorkspaceWizardSheet({
   }, [initialAutomation, initialDraft, open]);
 
   useEffect(() => {
-    if (
-      !open ||
-      draft.ownerId === null ||
-      automationContext.ownerId === draft.ownerId ||
-      automationRequestOwnerRef.current === draft.ownerId
-    ) {
+    if (!open || draft.ownerId === null) {
+      return;
+    }
+    if (automationContext.ownerId === draft.ownerId) {
+      setAutomationLoadState("ready");
       return;
     }
     let cancelled = false;
-    automationRequestOwnerRef.current = draft.ownerId;
     setAutomationLoadState("loading");
     void onLoadAutomation(draft.ownerId)
       .then((next) => {
@@ -308,6 +306,10 @@ export function SlackWorkspaceWizardSheet({
       cancelled = true;
     };
   }, [automationContext.ownerId, draft.ownerId, onLoadAutomation, open]);
+
+  useEffect(() => {
+    setAutomationSaveState("idle");
+  }, [draft.ownerId]);
 
   const loadChannels = useCallback(
     async (ownerId: string, integrationId: string) => {
@@ -426,14 +428,17 @@ export function SlackWorkspaceWizardSheet({
   };
 
   const saveAutomation = async (next: IssueAutomationSettings) => {
-    if (draft.ownerId === null || selectedAutomation === null) return;
+    const ownerId = draft.ownerId;
+    if (ownerId === null || selectedAutomation === null) return;
     setAutomationSaveState("loading");
     setError(null);
     try {
-      const saved = await onSaveAutomation(draft.ownerId, next);
+      const saved = await onSaveAutomation(ownerId, next);
+      if (slackAutomationForOwner(saved, automationOwnerRef.current) === null) return;
       setAutomationContext(saved);
       setAutomationSaveState("ready");
     } catch (cause) {
+      if (automationOwnerRef.current !== ownerId) return;
       setAutomationSaveState("error");
       setError(cause instanceof Error ? cause.message : "Could not save issue automation.");
     }

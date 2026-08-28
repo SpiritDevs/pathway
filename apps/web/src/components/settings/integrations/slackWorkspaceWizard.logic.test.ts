@@ -50,7 +50,7 @@ const everyMessageRule = (): SlackRoutingRule => ({
 });
 
 describe("Slack workspace wizard navigation", () => {
-  it("does not reuse automation settings after the workspace owner changes", () => {
+  it("rejects stale automation loads and saves after the workspace owner changes", () => {
     const automation = {
       ownerId: "company-1",
       settings: DEFAULT_ISSUE_AUTOMATION_SETTINGS,
