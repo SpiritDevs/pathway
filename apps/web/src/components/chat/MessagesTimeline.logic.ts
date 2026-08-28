@@ -807,7 +807,18 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "message": {
       const bm = b as typeof a;
       return (
-        a.message === bm.message &&
+        (a.message === bm.message ||
+          (a.message.id === bm.message.id &&
+            a.message.role === bm.message.role &&
+            a.message.text === bm.message.text &&
+            a.message.attachments === bm.message.attachments &&
+            a.message.runId === bm.message.runId &&
+            a.message.streaming === bm.message.streaming &&
+            a.message.createdBy === bm.message.createdBy &&
+            a.message.creationSource === bm.message.creationSource &&
+            a.message.createdAt === bm.message.createdAt &&
+            a.message.updatedAt === bm.message.updatedAt &&
+            a.message.inputIntent === bm.message.inputIntent)) &&
         a.projectedItem === bm.projectedItem &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&

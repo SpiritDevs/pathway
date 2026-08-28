@@ -6123,6 +6123,15 @@ function ChatViewContent(props: ChatViewProps) {
       setThreadError,
     ],
   );
+  const onWaitUntilUsageResetForTimeline = useCallback(
+    (resetAt: string) => void onWaitUntilUsageReset(resetAt),
+    [onWaitUntilUsageReset],
+  );
+  const onRollbackCheckpointForTimeline = useCallback(
+    (input: { readonly checkpointId: string; readonly scopeId: string }) =>
+      void onRollbackCheckpoint(input),
+    [onRollbackCheckpoint],
+  );
 
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
@@ -8447,10 +8456,10 @@ function ChatViewContent(props: ChatViewProps) {
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}
                 onRecoverUsageLimit={onRecoverUsageLimit}
-                onWaitUntilUsageReset={(resetAt) => void onWaitUntilUsageReset(resetAt)}
+                onWaitUntilUsageReset={onWaitUntilUsageResetForTimeline}
                 usageLimitRecoveryPending={continuationPending || usageLimitWaitPending}
                 canWaitUntilUsageReset={supportsSnooze}
-                onRollbackCheckpoint={(input) => void onRollbackCheckpoint(input)}
+                onRollbackCheckpoint={onRollbackCheckpointForTimeline}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}

@@ -1380,6 +1380,52 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(repeated.result).toBe(initial.result);
   });
 
+  it("reuses message rows when rebuilt messages have the same cheap fields", () => {
+    const createRows = (text: string, streaming = false) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [
+          {
+            id: "entry-user-1",
+            kind: "message" as const,
+            createdAt: "2026-01-01T00:00:00Z",
+            message: {
+              id: "user-1" as never,
+              role: "user" as const,
+              text,
+              runId: null,
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-01-01T00:00:00Z",
+              streaming,
+            },
+          },
+        ],
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+
+    const firstRows = createRows("Same text");
+    const initial = computeStableMessagesTimelineRows(firstRows, {
+      byId: new Map(),
+      result: [],
+    });
+    const rebuiltRows = createRows("Same text");
+
+    expect(rebuiltRows[0]?.kind).toBe("message");
+    expect(firstRows[0]?.kind).toBe("message");
+    if (rebuiltRows[0]?.kind === "message" && firstRows[0]?.kind === "message") {
+      expect(rebuiltRows[0].message).not.toBe(firstRows[0].message);
+    }
+
+    const repeated = computeStableMessagesTimelineRows(rebuiltRows, initial);
+    expect(repeated).toBe(initial);
+
+    const changed = computeStableMessagesTimelineRows(createRows("Same text", true), repeated);
+    expect(changed).not.toBe(repeated);
+    expect(changed.result[0]).not.toBe(repeated.result[0]);
+  });
+
   it("reuses work rows when equivalent timeline derivations create new grouped arrays", () => {
     const firstWorkEntry = {
       id: "work-1",
