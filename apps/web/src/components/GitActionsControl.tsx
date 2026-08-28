@@ -1,9 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  PUSH_AUTO_SETTLE_DELAY_MS,
-  shouldStartPushAutoSettlement,
-  type ScopedThreadRef,
-} from "@spiritdevs/contracts";
+import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -50,10 +46,11 @@ import {
   collectThreadTouchedPaths,
   type CommitFileScope,
   formatGitActionElapsed,
-  formatPushAutoSettlementCountdown,
+  formatLegacyPushAutoSettlementCountdown,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
   isPushCommandFailure,
-  pushAutoSettlementActivityKey,
+  legacyPushAutoSettlementActivityKey,
+  LEGACY_PUSH_AUTO_SETTLE_DELAY_MS,
   type GitActionProgressPresentation,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -68,6 +65,7 @@ import {
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
   resolveThreadBranchUpdate,
+  shouldWarnAboutLegacyPushAutoSettlement,
   splitWorkingTreeFilesByThread,
 } from "./GitActionsControl.logic";
 import { AnimatedHeight } from "./AnimatedHeight";
@@ -173,8 +171,8 @@ interface InlineGitActionSuccess {
   readonly title: string;
   readonly description: string | null;
   readonly scopeKey: string;
-  readonly autoSettleAtMs: number | null;
-  readonly autoSettleActivityKey: string | null;
+  readonly legacyAutoSettleAtMs: number | null;
+  readonly legacyAutoSettleActivityKey: string | null;
 }
 
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
@@ -477,14 +475,15 @@ function GitActionProgressButtonContent({
 function GitActionSuccessButtonContent({ success }: { success: InlineGitActionSuccess }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (success.autoSettleAtMs === null) return;
+    if (success.legacyAutoSettleAtMs === null) return;
     const update = () => setNowMs(Date.now());
     update();
     const timer = window.setInterval(update, 250);
     return () => window.clearInterval(timer);
-  }, [success.autoSettleAtMs]);
+  }, [success.legacyAutoSettleAtMs]);
   const description =
-    formatPushAutoSettlementCountdown(success.autoSettleAtMs, nowMs) ?? success.description;
+    formatLegacyPushAutoSettlementCountdown(success.legacyAutoSettleAtMs, nowMs) ??
+    success.description;
   const hasDescription = description !== null;
 
   return (
@@ -1175,7 +1174,7 @@ export default function GitActionsControl({
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const visibleInlineSuccess = inlineSuccess?.scopeKey === successScopeKey ? inlineSuccess : null;
   const activeThreadActivityKey = activeServerThread
-    ? pushAutoSettlementActivityKey(activeServerThread)
+    ? legacyPushAutoSettlementActivityKey(activeServerThread)
     : null;
   let runGitActionWithToast: (input: RunGitActionWithToastInput) => Promise<void>;
 
@@ -1191,18 +1190,18 @@ export default function GitActionsControl({
     setInlineSuccess((current) => {
       if (
         current === null ||
-        current.autoSettleAtMs === null ||
-        current.autoSettleActivityKey === null ||
-        current.autoSettleActivityKey === activeThreadActivityKey ||
-        Date.now() >= current.autoSettleAtMs
+        current.legacyAutoSettleAtMs === null ||
+        current.legacyAutoSettleActivityKey === null ||
+        current.legacyAutoSettleActivityKey === activeThreadActivityKey ||
+        Date.now() >= current.legacyAutoSettleAtMs
       ) {
         return current;
       }
       return {
         ...current,
         description: "Settlement cancelled by new activity.",
-        autoSettleAtMs: null,
-        autoSettleActivityKey: null,
+        legacyAutoSettleAtMs: null,
+        legacyAutoSettleActivityKey: null,
       };
     });
   }, [activeThreadActivityKey]);
@@ -1530,23 +1529,26 @@ export default function GitActionsControl({
 
       const actionResult = result.value;
       syncThreadBranchAfterGitAction(actionResult);
-      const startsAutoSettlement = Boolean(
-        activeServerThread &&
-        serverConfig?.environment.capabilities.pushAutoSettlement === true &&
-        shouldStartPushAutoSettlement(actionResult, actionIsDefaultBranch),
-      );
-      const autoSettleAtMs = startsAutoSettlement ? Date.now() + PUSH_AUTO_SETTLE_DELAY_MS : null;
-      const autoSettleActivityKey =
-        startsAutoSettlement && activeServerThread !== null
-          ? pushAutoSettlementActivityKey(activeServerThread)
-          : null;
+      const warnsAboutLegacyAutoSettlement =
+        activeServerThread !== null &&
+        shouldWarnAboutLegacyPushAutoSettlement({
+          capability: serverConfig?.environment.capabilities.pushAutoSettlement === true,
+          result: actionResult,
+          isDefaultRef: actionIsDefaultBranch,
+        });
+      const legacyAutoSettleAtMs = warnsAboutLegacyAutoSettlement
+        ? Date.now() + LEGACY_PUSH_AUTO_SETTLE_DELAY_MS
+        : null;
+      const legacyAutoSettleActivityKey = warnsAboutLegacyAutoSettlement
+        ? legacyPushAutoSettlementActivityKey(activeServerThread)
+        : null;
       if (isPanel) {
         setInlineSuccess({
           title: actionResult.toast.title,
           description: actionResult.toast.description ?? null,
           scopeKey: successScopeKey,
-          autoSettleAtMs,
-          autoSettleActivityKey,
+          legacyAutoSettleAtMs,
+          legacyAutoSettleActivityKey,
         });
         return;
       }
@@ -1592,10 +1594,9 @@ export default function GitActionsControl({
           ? { dismissAfterVisibleMs: successToastTiming.dismissAfterVisibleMs }
           : {}),
       };
-      const successDescription = startsAutoSettlement
-        ? `Settling this thread in ${PUSH_AUTO_SETTLE_DELAY_MS / 1_000} seconds unless activity resumes.`
+      const successDescription = warnsAboutLegacyAutoSettlement
+        ? `Settling this thread in ${LEGACY_PUSH_AUTO_SETTLE_DELAY_MS / 1_000} seconds unless activity resumes.`
         : actionResult.toast.description;
-
       if (toastActionProps) {
         resultToastId = toastManager.add(
           stackedThreadToast({
@@ -1706,8 +1707,8 @@ export default function GitActionsControl({
             title,
             description,
             scopeKey: successScopeKey,
-            autoSettleAtMs: null,
-            autoSettleActivityKey: null,
+            legacyAutoSettleAtMs: null,
+            legacyAutoSettleActivityKey: null,
           });
           return;
         }
