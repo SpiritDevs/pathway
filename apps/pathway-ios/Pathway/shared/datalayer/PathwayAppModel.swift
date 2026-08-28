@@ -17,11 +17,12 @@ final class PathwayAppModel {
 
     @ObservationIgnored private let authProvider: PathwayAuthProvider
     @ObservationIgnored private let convex: ConvexClientWithAuth<PathwayAuthSession>
+    @ObservationIgnored private let performSignOut: @MainActor () async throws -> Void
     @ObservationIgnored private var hasRestoredSession = false
 
     init(
-        convexDeploymentURL: URL = AppConfiguration.convexDeploymentURL
-            ?? URL(string: "https://invalid.pathway.local")!
+        convexDeploymentURL: URL,
+        performSignOut: (@MainActor () async throws -> Void)? = nil
     ) {
         let provider = PathwayAuthProvider()
         authProvider = provider
@@ -29,6 +30,9 @@ final class PathwayAppModel {
             deploymentUrl: convexDeploymentURL.absoluteString,
             authProvider: provider
         )
+        self.performSignOut = performSignOut ?? {
+            try await provider.logout()
+        }
         provider.onSessionEnded = { [weak self] in
             self?.sessionDidEnd()
         }
@@ -68,9 +72,13 @@ final class PathwayAppModel {
     }
 
     func signOut() async {
-        await convex.logout()
-        authenticationErrorMessage = nil
-        authenticationState = .signedOut
+        do {
+            try await performSignOut()
+            authenticationErrorMessage = nil
+            authenticationState = .signedOut
+        } catch {
+            authenticationErrorMessage = error.localizedDescription
+        }
     }
 
     func sessionDidEnd() {

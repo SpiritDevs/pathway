@@ -48,8 +48,8 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 ## Current product boundary
 
 The SwiftUI foundation now contains only Pathway-native placeholders for Agents, Issues, Threads,
-Environments, and Settings. QuoteCloud document creation, document services, sending, sharing,
-approvals, billing, and workspace-specific backend contracts are intentionally excluded.
+Environments, and Settings. Copied product-domain screens and backend contracts are intentionally
+excluded.
 
 The detached chat button in the main bar presents the native Agent Orchestrator sheet. The
 placeholder includes chat history and close controls, prompt suggestions, mentions, attachments,

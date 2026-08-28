@@ -347,6 +347,12 @@ private struct PathwaySettingsView: View {
                         await appModel.signOut()
                     }
                 }
+
+                if let message = appModel.authenticationErrorMessage {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
 
             Section {

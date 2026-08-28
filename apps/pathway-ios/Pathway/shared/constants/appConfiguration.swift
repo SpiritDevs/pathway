@@ -4,16 +4,14 @@ enum AppConfiguration {
     static let clerkPublishableKey = nonemptyString(forInfoKey: "PATHWAY_CLERK_PUBLISHABLE_KEY")
     static let convexDeploymentURL = optionalURL(forInfoKey: "PATHWAY_CONVEX_URL")
     static let relayURL = optionalURL(forInfoKey: "PATHWAY_RELAY_URL")
-    static let pathwaySiteURL = optionalURL(forInfoKey: "PATHWAY_SITE_URL")
-        ?? URL(string: "https://app.spiritdevs.com")!
     static let convexJWTTemplate = "convex"
 
     static var missingRequiredKeys: [String] {
         [
             clerkPublishableKey == nil ? "PATHWAY_CLERK_PUBLISHABLE_KEY" : nil,
             convexDeploymentURL == nil ? "PATHWAY_CONVEX_URL" : nil,
-            relayURL == nil ? "PATHWAY_RELAY_URL" : nil,
-        ].compactMap { $0 }
+            relayURL == nil ? "PATHWAY_RELAY_URL" : nil
+        ].compactMap(\.self)
     }
 
     private static func nonemptyString(forInfoKey key: String) -> String? {

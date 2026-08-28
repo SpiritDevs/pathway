@@ -1,5 +1,5 @@
 //
-//  init.view.swift
+//  InitView.swift
 //  Pathway
 //
 //  Created by Corey Baines on 20/11/2024.
@@ -27,7 +27,7 @@ struct InitView: View {
                         .scaleEffect(1.5)
                         .accessibilityLabel("Loading Pathway")
                 case .signedIn:
-                    MainView()
+                    MainTabView()
                 case .signedOut, .signingIn:
                     LoginView()
                 }

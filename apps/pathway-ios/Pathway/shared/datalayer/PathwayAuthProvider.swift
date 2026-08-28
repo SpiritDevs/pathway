@@ -55,8 +55,16 @@ final class PathwayAuthProvider: AuthProvider {
     func logout() async throws {
         refreshTask?.cancel()
         refreshTask = nil
+
+        do {
+            try await Clerk.shared.auth.signOut()
+        } catch {
+            startRefreshListener()
+            throw error
+        }
+
+        onIDToken?(nil)
         onIDToken = nil
-        try await Clerk.shared.auth.signOut()
     }
 
     nonisolated func extractIdToken(from authResult: PathwayAuthSession) -> String {
@@ -89,16 +97,19 @@ final class PathwayAuthProvider: AuthProvider {
     private func startRefreshListener() {
         refreshTask?.cancel()
         refreshTask = Task { @MainActor [weak self] in
-            guard let self else { return }
             for await _ in Clerk.shared.auth.events {
+                guard let self else { return }
                 guard !Task.isCancelled else { return }
                 guard let session = Clerk.shared.session, session.status == .active else {
                     endSession()
                     return
                 }
                 guard let token = try? await session.getToken(.init(template: jwtTemplate)) else {
-                    continue
+                    guard !Task.isCancelled else { return }
+                    endSession()
+                    return
                 }
+                guard !Task.isCancelled else { return }
                 onIDToken?(token)
             }
         }
