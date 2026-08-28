@@ -7609,9 +7609,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
   };
 
-  const dispatchWithReceiptEffect = Effect.fn("orchestrationV2.dispatch.withReceipt")(function* (
+  const dispatchWithReceiptAttempt = Effect.fn("orchestrationV2.dispatch.withReceipt")(function* (
     command: OrchestrationV2Command,
-  ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
+    expectedThreadSequence?: number,
+  ): Effect.fn.Return<OrchestratorV2DispatchResult | null, OrchestratorV2Error> {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
       "orchestration_v2.command_type": command.type,
@@ -7671,28 +7672,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     );
 
     const acceptedAt = plan.events.at(-1)?.occurredAt ?? (yield* DateTime.now);
-    const committed = yield* eventSink
-      .commitCommand({
-        commandId: command.commandId,
-        threadId: commandThreadId(command),
-        commandType: command.type,
-        acceptedAt,
-        events: plan.events,
-        effects: plan.effects,
-        ...(plan.cancelUnsettledEffects === undefined
-          ? {}
-          : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
-        ),
-      );
+    const commitInput = {
+      commandId: command.commandId,
+      threadId: commandThreadId(command),
+      commandType: command.type,
+      acceptedAt,
+      events: plan.events,
+      effects: plan.effects,
+      ...(plan.cancelUnsettledEffects === undefined
+        ? {}
+        : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),
+    };
+    const mapCommitError = Effect.mapError(
+      (cause) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        }),
+    );
+    const committed =
+      expectedThreadSequence === undefined
+        ? {
+            ...(yield* eventSink.commitCommand(commitInput).pipe(mapCommitError)),
+            preconditionMatched: true,
+          }
+        : yield* eventSink
+            .commitCommandIfThreadSequence({
+              ...commitInput,
+              expectedThreadSequence,
+            })
+            .pipe(mapCommitError);
+
+    if (committed.receipt === null) {
+      return null;
+    }
 
     if (committed.receipt.status === "rejected") {
       return yield* new OrchestratorCommandPreviouslyRejectedError({
@@ -7714,16 +7728,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
+  const dispatchWithReceiptEffect = (command: OrchestrationV2Command) =>
+    dispatchWithReceiptAttempt(command).pipe(
+      Effect.flatMap((result) =>
+        result === null
+          ? Effect.die(new Error(`Unconditional command ${command.commandId} was not committed.`))
+          : Effect.succeed(result),
+      ),
+    );
+
   const dispatchWithReceipt = (command: OrchestrationV2Command) =>
     threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
 
   /** Complete the one-shot request only after every run and runtime request is
-      terminal and the normalized background roster is empty. Callers already
-      hold this thread's dispatch lock, so the readiness check and synthetic
-      settle command cannot race a queued-run promotion or a user cancellation. */
+      terminal and the normalized background roster is empty. The dispatch
+      lock serializes commands; the snapshot sequence additionally prevents a
+      direct provider event from landing between readiness and settlement. */
   const settleAfterCompletionIfReady = (threadId: ThreadId) =>
     Effect.gen(function* () {
-      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const snapshot = yield* projectionStore.getThreadSnapshot(threadId);
+      const projection = snapshot.projection;
       if (
         projection.thread.settleAfterCompletion !== true ||
         projection.thread.archivedAt !== null ||
@@ -7738,12 +7762,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
 
       const latestRunId = projection.runs.at(-1)?.id ?? "no-run";
-      yield* dispatchWithReceiptEffect({
-        type: "thread.settle",
-        commandId: CommandId.make(`command:settle-after-completion:${threadId}:${latestRunId}`),
-        threadId,
-      });
-      return true;
+      const settled = yield* dispatchWithReceiptAttempt(
+        {
+          type: "thread.settle",
+          commandId: CommandId.make(`command:settle-after-completion:${threadId}:${latestRunId}`),
+          threadId,
+        },
+        snapshot.snapshotSequence,
+      );
+      return settled !== null;
     });
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>

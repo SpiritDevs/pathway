@@ -12,6 +12,7 @@ describe("cloud Agent Thread publisher", () => {
       id: "thread-one",
       projectId: "project-one",
       title: "Visible title",
+      settleAfterCompletion: false,
       latestVisibleMessage: {
         id: "message-one",
         role: "assistant",
@@ -24,6 +25,7 @@ describe("cloud Agent Thread publisher", () => {
       id: "thread-one",
       projectId: "project-one",
       title: "Visible title",
+      settleAfterCompletion: false,
       latestVisibleMessage: {
         id: "message-one",
         role: "assistant",

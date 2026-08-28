@@ -584,6 +584,75 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("rejects a command when the thread sequence changed and permits a retry", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:foundation-sequence-guard");
+      const commandId = CommandId.make("command:foundation-sequence-guard-settle");
+      const thread = makeThread(threadId, now);
+
+      const created = yield* eventSink.commitCommand({
+        commandId: CommandId.make("command:foundation-sequence-guard-create"),
+        threadId,
+        commandType: "thread.create",
+        acceptedAt: now,
+        events: [threadCreatedEvent({ id: "event:foundation-sequence-guard-create", thread, now })],
+        effects: [],
+      });
+      const updatedThread = { ...thread, title: "Updated before settle" };
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("event:foundation-sequence-guard-update"),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: now,
+            payload: updatedThread,
+          },
+        ],
+      });
+
+      const settleInput = {
+        commandId,
+        threadId,
+        commandType: "thread.settle",
+        acceptedAt: now,
+        events: [
+          {
+            id: EventId.make("event:foundation-sequence-guard-settle"),
+            type: "thread.settled" as const,
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...updatedThread,
+              settledOverride: "settled" as const,
+              settledAt: now,
+            },
+          },
+        ],
+        effects: [],
+      };
+      const stale = yield* eventSink.commitCommandIfThreadSequence({
+        ...settleInput,
+        expectedThreadSequence: created.receipt.resultSequence,
+      });
+      assert.isFalse(stale.preconditionMatched);
+      assert.isNull(stale.receipt);
+      assert.isNull((yield* projectionStore.getThreadProjection(threadId)).thread.settledAt);
+
+      const currentSequence = yield* eventSink.latestSequence({ threadId });
+      const retried = yield* eventSink.commitCommandIfThreadSequence({
+        ...settleInput,
+        expectedThreadSequence: currentSequence,
+      });
+      assert.isTrue(retried.preconditionMatched);
+      assert.isNotNull(retried.receipt);
+      assert.isNotNull((yield* projectionStore.getThreadProjection(threadId)).thread.settledAt);
+    }),
+  );
+
   it.effect("does not wake claimers for effects from an idempotent command retry", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSinkV2;
