@@ -543,7 +543,6 @@ export const make = Effect.gen(function* () {
   const publishAttentionEvent = (event: AttentionEvent) =>
     publishAttentionEventUnsafe(event).pipe(
       Effect.retry({
-        while: (error) => !(error instanceof AttentionEventRelayConfigUnavailableError),
         times: 5,
         schedule: Schedule.exponential("5 seconds").pipe(
           Schedule.modifyDelay(({ duration }) =>
