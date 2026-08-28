@@ -354,6 +354,7 @@ export interface CloudHttpDependencies {
   readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
   readonly cliTokenManager: CliTokenManager.CloudCliTokenManager["Service"];
   readonly httpClient: HttpClient.HttpClient;
+  readonly currentLocalHttpPort?: number | undefined;
   readonly authorizeConnectGrant: (input: {
     readonly environmentId: RelayCloudMintCredentialProofPayload["environmentId"];
     readonly connectGrant: RelayValidatedConnectGrantIdentity;
@@ -833,16 +834,29 @@ export const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(f
     managedTunnelLocalPort: Option.isSome(endpointRuntimeConfig)
       ? Option.getOrNull(decodedManagedTunnelLocalPort)
       : null,
+    ...(dependencies.currentLocalHttpPort !== undefined
+      ? { currentLocalHttpPort: dependencies.currentLocalHttpPort }
+      : {}),
     publishAgentActivity: Option.isSome(publishAgentActivity)
       ? bytesToString(publishAgentActivity.value) === "true"
       : false,
   } satisfies EnvironmentCloudLinkStateResult;
 });
 
+const readCurrentCloudLinkState = Effect.fn("environment.cloud.readCurrentLinkState")(function* (
+  dependencies: CloudHttpDependencies,
+) {
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  return yield* readCloudLinkState({
+    ...dependencies,
+    ...(serverConfig.port > 0 ? { currentLocalHttpPort: serverConfig.port } : {}),
+  });
+});
+
 const cloudLinkStateHandler = Effect.fn("environment.cloud.linkState")(
   function* (dependencies: CloudHttpDependencies) {
     yield* requireEnvironmentScope(AuthRelayReadScope);
-    return yield* readCloudLinkState(dependencies);
+    return yield* readCurrentCloudLinkState(dependencies);
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,
@@ -907,7 +921,7 @@ const cloudPreferencesHandler = Effect.fn("environment.cloud.preferences")(
       PUBLISH_AGENT_ACTIVITY_SECRET,
       stringToBytes(String(payload.publishAgentActivity)),
     );
-    return yield* readCloudLinkState(dependencies);
+    return yield* readCurrentCloudLinkState(dependencies);
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,

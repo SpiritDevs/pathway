@@ -954,6 +954,7 @@ describe("cloud relay config replacement", () => {
       };
       const dependencies = {
         secrets,
+        currentLocalHttpPort: 3_800,
         endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime.of({
           applyConfig: () =>
             Effect.succeed({
@@ -982,6 +983,7 @@ describe("cloud relay config replacement", () => {
         linked: true,
         managedTunnelActive: true,
         managedTunnelLocalPort: 3_800,
+        currentLocalHttpPort: 3_800,
       });
 
       values.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, encoded("not-a-port"));

@@ -368,6 +368,10 @@ export const EnvironmentCloudLinkStateResult = Schema.Struct({
   // environment server predates port tracking; `null` means a current server
   // has no recorded port and the link must be reconciled once.
   managedTunnelLocalPort: Schema.optional(Schema.NullOr(PortSchema)),
+  // The port this environment server is currently configured to listen on.
+  // Comparing two server-owned values stays correct when a development proxy
+  // gives the browser a different public port. Optional for older servers.
+  currentLocalHttpPort: Schema.optional(PortSchema),
   publishAgentActivity: Schema.Boolean,
 });
 export type EnvironmentCloudLinkStateResult = typeof EnvironmentCloudLinkStateResult.Type;

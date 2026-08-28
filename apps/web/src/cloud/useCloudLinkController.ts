@@ -209,28 +209,12 @@ function managedTunnelTargetsCurrentPort(input: {
   // Older environment servers omit the field. They cannot persist the port,
   // so treating omission as drift would make a newer client relink forever.
   if (input.managedTunnelLocalPort === undefined) return true;
-  // Remote web and mobile clients see the public endpoint, not the host's
-  // loopback port. Only the directly connected host can diagnose port drift.
+  // Older environment servers do not report their current listening port.
   if (input.currentLocalHttpPort === null || input.currentLocalHttpPort === undefined) return true;
   return (
     input.managedTunnelLocalPort !== null &&
     input.managedTunnelLocalPort === input.currentLocalHttpPort
   );
-}
-
-export function localHttpPort(httpBaseUrl: string | null): number | null {
-  if (httpBaseUrl === null) return null;
-  try {
-    const url = new URL(httpBaseUrl);
-    const hostname = url.hostname
-      .trim()
-      .toLowerCase()
-      .replace(/^\[(.*)\]$/u, "$1");
-    if (hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "localhost") return null;
-    return Number(url.port || (url.protocol === "https:" ? 443 : 80));
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -372,7 +356,9 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
           ...(primaryCloudLinkState.data?.managedTunnelLocalPort !== undefined
             ? { managedTunnelLocalPort: primaryCloudLinkState.data.managedTunnelLocalPort }
             : {}),
-          currentLocalHttpPort: localHttpPort(target.httpBaseUrl),
+          ...(primaryCloudLinkState.data?.currentLocalHttpPort !== undefined
+            ? { currentLocalHttpPort: primaryCloudLinkState.data.currentLocalHttpPort }
+            : {}),
           desiredManagedTunnel: desired.managedTunnel,
           linkedRelayUrl,
           configuredRelayUrl,
@@ -465,14 +451,14 @@ export function useAlwaysOnCloudLink(): void {
   const lastHandledManualRelink = useRef(retryStatus.manualRelinkRequestId);
 
   const target = controller.linkState.target;
-  const currentLocalHttpPort = localHttpPort(target?.httpBaseUrl ?? null);
+  const currentLocalHttpPort = controller.linkState.data?.currentLocalHttpPort;
   const isSatisfied = isAlwaysOnCloudLinkState({
     linked: controller.linked,
     managedTunnelActive: controller.managedTunnelActive,
     ...(controller.linkState.data?.managedTunnelLocalPort !== undefined
       ? { managedTunnelLocalPort: controller.linkState.data.managedTunnelLocalPort }
       : {}),
-    currentLocalHttpPort,
+    ...(currentLocalHttpPort !== undefined ? { currentLocalHttpPort } : {}),
     publishAgentActivity: controller.publishAgentActivity,
     linkedRelayUrl: controller.linkState.data?.relayUrl ?? null,
     configuredRelayUrl: resolveCloudPublicConfig().relayUrl,
@@ -494,7 +480,7 @@ export function useAlwaysOnCloudLink(): void {
       manualRelinkRequestId: retryStatus.manualRelinkRequestId,
       manualRetryRequestId: retryStatus.manualRetryRequestId,
       phase: retryStatus.phase,
-      currentLocalHttpPort,
+      currentLocalHttpPort: currentLocalHttpPort ?? null,
       managedTunnelLocalPort: controller.linkState.data?.managedTunnelLocalPort ?? null,
       targetReady: target !== null,
     });

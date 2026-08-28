@@ -6,7 +6,6 @@ import {
   automaticCloudRetryDelayMs,
   isAlwaysOnCloudLinkState,
   isCloudAccountLinkConflict,
-  localHttpPort,
   resolveCloudAccountMembership,
   shouldRelinkCloudEnvironment,
   shouldScheduleAutomaticCloudRetry,
@@ -121,14 +120,7 @@ describe("always-on Pathway Connect state", () => {
     expect(shouldRelinkCloudEnvironment(state)).toBe(false);
   });
 
-  it("reads the current backend port from its local URL", () => {
-    expect(localHttpPort("http://127.0.0.1:3800")).toBe(3_800);
-    expect(localHttpPort("https://127.0.0.1")).toBe(443);
-    expect(localHttpPort("https://desktop.example.test")).toBeNull();
-    expect(localHttpPort("not a URL")).toBeNull();
-  });
-
-  it("leaves port reconciliation to a directly connected host", () => {
+  it("does not guess about drift when an older server omits its current port", () => {
     const state = {
       linked: true,
       managedTunnelActive: true,
