@@ -46,6 +46,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 import { ThreadLocation } from "./threadLocation.ts";
+import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -681,6 +682,7 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  tokenUsage: Schema.optional(ThreadTokenUsageSnapshot),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
 });
@@ -707,6 +709,14 @@ export const OrchestrationV2ContextHandoff = Schema.Struct({
   status: Schema.Literals(["pending", "ready", "failed", "superseded"]),
   summaryMessageId: Schema.NullOr(MessageId),
   summaryText: Schema.String,
+  compaction: Schema.optional(
+    Schema.Struct({
+      sourceChars: NonNegativeInt,
+      thresholdChars: PositiveInt,
+      maxSummaryChars: PositiveInt,
+      generation: Schema.Literals(["not_needed", "pending", "model", "fallback"]),
+    }),
+  ),
   createdByProviderInstanceId: Schema.NullOr(ProviderInstanceId),
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
@@ -1062,6 +1072,12 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("compaction"),
     driver: Schema.NullOr(ProviderDriverKind),
+    kind: Schema.optional(Schema.Literals(["model_switch", "provider_native"])),
+    contextHandoffId: Schema.optional(ContextHandoffId),
+    toProviderInstanceId: Schema.optional(ProviderInstanceId),
+    toModel: Schema.optional(Schema.String),
+    coveredRunOrdinals: Schema.optional(Schema.Struct({ from: PositiveInt, to: PositiveInt })),
+    method: Schema.optional(Schema.Literals(["direct", "model", "fallback", "native"])),
     summary: Schema.optional(Schema.String),
     beforeTokenCount: Schema.optional(NonNegativeInt),
     afterTokenCount: Schema.optional(NonNegativeInt),
@@ -1766,6 +1782,12 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("compaction"),
     driver: Schema.NullOr(ProviderDriverKind),
+    kind: Schema.optional(Schema.Literals(["model_switch", "provider_native"])),
+    contextHandoffId: Schema.optional(ContextHandoffId),
+    toProviderInstanceId: Schema.optional(ProviderInstanceId),
+    toModel: Schema.optional(Schema.String),
+    coveredRunOrdinals: Schema.optional(Schema.Struct({ from: PositiveInt, to: PositiveInt })),
+    method: Schema.optional(Schema.Literals(["direct", "model", "fallback", "native"])),
     summary: Schema.optional(Schema.String),
     beforeTokenCount: Schema.optional(NonNegativeInt),
     afterTokenCount: Schema.optional(NonNegativeInt),

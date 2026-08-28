@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vite-plus/test";
 import {
   CheckpointScopeId,
+  ContextHandoffId,
   ContextTransferId,
   MessageId,
   ProviderDriverKind,
@@ -28,6 +29,11 @@ import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ProviderAdapterForkThreadError } from "./ProviderAdapter.ts";
+import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+
+const unusedTextGenerationLayer = Layer.mock(TextGeneration)({});
+const serverSettingsLayer = ServerSettingsService.layerTest();
 
 it("does not commit running state when inherited background routing cannot be read", async () => {
   const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
@@ -93,6 +99,8 @@ it("does not commit running state when inherited background routing cannot be re
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
+        unusedTextGenerationLayer,
+        serverSettingsLayer,
       ),
     ),
   );
@@ -179,6 +187,8 @@ it("does not create a native fork after the starting attempt was cancelled", asy
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
         }),
+        unusedTextGenerationLayer,
+        serverSettingsLayer,
       ),
     ),
   );
@@ -375,6 +385,8 @@ it("atomically resolves a failed native fork as portable context when startup co
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
         }),
+        unusedTextGenerationLayer,
+        serverSettingsLayer,
       ),
     ),
   );
@@ -504,6 +516,8 @@ it("seeds related child routing only from routable subagents", async () => {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
         }),
+        unusedTextGenerationLayer,
+        serverSettingsLayer,
       ),
     ),
   );
@@ -523,4 +537,167 @@ it("seeds related child routing only from routable subagents", async () => {
       ProviderThreadId.make("provider_thread_related_seed_completed_child"),
     ]);
   }).pipe(Effect.provide(testLayer), Effect.runPromise);
+});
+
+it("generates and persists a pending model-switch summary before starting the provider", async () => {
+  const threadId = ThreadId.make("thread_provider_turn_start_compaction");
+  const sourceRunId = RunId.make("run_provider_turn_start_compaction_source");
+  const runId = RunId.make("run_provider_turn_start_compaction_target");
+  const attemptId = RunAttemptId.make("attempt_provider_turn_start_compaction");
+  const rootNodeId = NodeId.make("node_provider_turn_start_compaction");
+  const checkpointScopeId = CheckpointScopeId.make("checkpoint_scope_compaction");
+  const providerThreadId = ProviderThreadId.make("provider_thread_compaction_target");
+  const sourceProviderThreadId = ProviderThreadId.make("provider_thread_compaction_source");
+  const providerSessionId = ProviderSessionId.make("provider_session_compaction");
+  const providerInstanceId = ProviderInstanceId.make("codex");
+  const messageId = MessageId.make("message_provider_turn_start_compaction");
+  const handoffId = ContextHandoffId.make("handoff_provider_turn_start_compaction");
+  const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.6-sol" };
+  const providerThread = {
+    id: providerThreadId,
+    providerSessionId,
+    providerInstanceId,
+    nativeThreadRef: { driver: "codex", nativeId: "native-target", strength: "strong" },
+  };
+  const projection = {
+    thread: { id: threadId, modelSelection, worktreePath: "/workspace" },
+    runs: [
+      {
+        id: sourceRunId,
+        status: "completed",
+        ordinal: 1,
+        providerThreadId: sourceProviderThreadId,
+        providerInstanceId,
+        modelSelection: { instanceId: providerInstanceId, model: "gpt-5.5" },
+      },
+      {
+        id: runId,
+        status: "starting",
+        ordinal: 2,
+        rootNodeId,
+        activeAttemptId: attemptId,
+        providerThreadId,
+        providerInstanceId,
+        providerSessionId,
+        userMessageId: messageId,
+        modelSelection,
+      },
+    ],
+    nodes: [{ id: rootNodeId, checkpointScopeId }],
+    attempts: [{ id: attemptId }],
+    providerSessions: [
+      { id: providerSessionId, providerInstanceId, status: "ready", cwd: "/workspace" },
+    ],
+    providerThreads: [providerThread],
+    providerTurns: [],
+    messages: [
+      {
+        id: messageId,
+        text: "Continue after compaction",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+      },
+    ],
+    checkpointScopes: [{ id: checkpointScopeId }],
+    contextTransfers: [],
+    contextHandoffs: [
+      {
+        id: handoffId,
+        targetRunId: runId,
+        status: "pending",
+        strategy: "full_thread_summary",
+        summaryText: "deterministic fallback",
+        coveredRunOrdinals: { from: 1, to: 1 },
+        compaction: {
+          sourceChars: 20_000,
+          thresholdChars: 16_000,
+          maxSummaryChars: 8_000,
+          generation: "pending",
+        },
+      },
+    ],
+    turnItems: [
+      {
+        id: TurnItemId.make("turn-item-compaction-source"),
+        runId: sourceRunId,
+        status: "completed",
+        type: "user_message",
+        text: "Important source context",
+        attachments: [],
+      },
+      {
+        id: TurnItemId.make("turn-item-compaction-row"),
+        runId,
+        nodeId: rootNodeId,
+        status: "running",
+        type: "compaction",
+        contextHandoffId: handoffId,
+      },
+    ],
+    subagents: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+
+  const writes: Array<ReadonlyArray<{ readonly type: string; readonly payload: unknown }>> = [];
+  const writeIfRunCurrent = vi.fn((input: { readonly events: (typeof writes)[number] }) => {
+    writes.push(input.events);
+    return Effect.succeed({ committed: true, storedEvents: [] } as never);
+  });
+  let startedMessage = "";
+  const startRootRun = vi.fn((input: { readonly message: { readonly text: string } }) => {
+    startedMessage = input.message.text;
+    return Effect.void;
+  });
+  const investigate = vi.fn(() =>
+    Effect.succeed({ text: "## Current goal and latest user intent\n- Generated summary" }),
+  );
+  const layer = ProviderTurnStart.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
+        Layer.mock(EventSink.EventSinkV2)({
+          write: () => Effect.succeed({ storedEvents: [] } as never),
+          writeIfRunCurrent,
+        }),
+        IdAllocator.layer,
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadProjection: () => Effect.succeed(projection),
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          open: () =>
+            Effect.succeed({
+              providerSession: {
+                id: providerSessionId,
+                capabilities: CodexProviderCapabilitiesV2,
+              },
+              resumeThread: () => Effect.succeed(providerThread as never),
+            } as never),
+        }),
+        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
+        Layer.mock(RuntimePolicy.RuntimePolicyV2)({
+          resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
+        }),
+        Layer.succeed(TextGeneration, { investigate } as never),
+        serverSettingsLayer,
+      ),
+    ),
+  );
+
+  await ProviderTurnStart.ProviderTurnStartServiceV2.pipe(
+    Effect.flatMap((service) => service.start({ threadId, runId })),
+    Effect.provide(layer),
+    Effect.runPromise,
+  );
+
+  expect(investigate).toHaveBeenCalledOnce();
+  expect(startedMessage).toContain("Generated summary");
+  const events = writes.flat();
+  expect(
+    events.some(
+      (event) =>
+        event.type === "context-handoff.updated" &&
+        (event.payload as { compaction?: { generation?: string } }).compaction?.generation ===
+          "model",
+    ),
+  ).toBe(true);
 });

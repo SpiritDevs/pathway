@@ -683,6 +683,21 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       "logged options must record the forwardSubagentText flag",
     );
   });
+
+  it("passes a configured native auto-compaction window through Claude settings", () => {
+    const options = makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "native-auto-compact-window",
+      resume: false,
+      cwd: null,
+      settings: { ...DEFAULT_CLAUDE_SETTINGS, autoCompactWindow: "300000" },
+    });
+
+    assert.deepInclude(options.settings as Record<string, unknown>, {
+      autoCompactWindow: 300_000,
+    });
+    assert.notProperty(options, "autoCompactWindow");
+  });
 });
 
 describe("ClaudeAdapterV2 attachments", () => {

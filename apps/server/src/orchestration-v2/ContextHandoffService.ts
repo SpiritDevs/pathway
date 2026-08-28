@@ -67,6 +67,7 @@ export interface ContextHandoffServiceV2Shape {
       "delta_since_target_last_seen" | "full_thread_summary"
     >;
     readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+    readonly compactIfNeeded?: boolean;
     readonly maxChars?: number | null;
     readonly createdAt: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ContextHandoff, ContextHandoffServiceV2Error>;
@@ -86,6 +87,8 @@ function compactText(text: string, maxLength = 240): string {
 }
 
 export const DEFAULT_CONTEXT_HANDOFF_MAX_CHARS = 32_000;
+export const MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS = 16_000;
+export const MODEL_SWITCH_COMPACTION_MAX_SUMMARY_CHARS = 8_000;
 
 function contextHandoffBudget(maxChars: number | null | undefined): number {
   return Math.max(1, Math.floor(maxChars ?? DEFAULT_CONTEXT_HANDOFF_MAX_CHARS));
@@ -145,6 +148,92 @@ function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
     default:
       return null;
   }
+}
+
+function canonicalCompactionItem(item: OrchestrationV2TurnItem): string | null {
+  if (item.status === "pending" || item.status === "running" || item.status === "waiting") {
+    return null;
+  }
+  switch (item.type) {
+    case "user_message": {
+      const attachments = item.attachments.map((attachment) => attachment.name).join(", ");
+      return `User: ${item.text}${attachments ? `\nAttachments: ${attachments}` : ""}`;
+    }
+    case "assistant_message":
+      return `Assistant: ${item.text}`;
+    case "command_execution":
+      return `Command: ${item.input}`;
+    case "file_change":
+      return `File changed: ${item.fileName}`;
+    case "checkpoint":
+      return `Checkpoint: ${item.files.map((file) => file.path).join(", ") || "no changed files"}`;
+    case "error":
+      return `Error: ${item.failure.message}`;
+    case "compaction":
+      return item.summary ? `Earlier compaction: ${item.summary}` : null;
+    default:
+      return null;
+  }
+}
+
+export function contextCompactionSourceText(items: ReadonlyArray<OrchestrationV2TurnItem>): string {
+  return items
+    .flatMap((item) => {
+      const text = canonicalCompactionItem(item);
+      return text === null ? [] : [text];
+    })
+    .join("\n\n");
+}
+
+function makeDeterministicCompactionSummary(input: {
+  readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly maxChars: number;
+}): string {
+  const userItems = input.items.filter((item) => item.type === "user_message");
+  const assistantItems = input.items.filter((item) => item.type === "assistant_message");
+  const fileItems = input.items.filter((item) => item.type === "file_change");
+  const commandItems = input.items.filter((item) => item.type === "command_execution");
+  const errorItems = input.items.filter((item) => item.type === "error");
+  const latestUser = userItems.at(-1);
+  const latestAssistant = assistantItems.at(-1);
+  const recentConversation = input.items.flatMap((item) => {
+    const text = canonicalCompactionItem(item);
+    return text === null ? [] : [`- ${compactText(text, 600)}`];
+  });
+  return newestContextWithinBudget({
+    preamble: [
+      "Portable context summary for a fresh model session.",
+      "",
+      "## Current goal and latest user intent",
+      latestUser === undefined
+        ? "- No completed user message."
+        : `- ${compactText(latestUser.text, 800)}`,
+      "",
+      "## Agreed decisions and explicit constraints",
+      "- Preserve decisions and constraints from the recent canonical conversation below.",
+      "",
+      "## Completed work and verification",
+      ...commandItems.slice(-4).map((item) => `- Command: ${compactText(item.input, 180)}`),
+      "",
+      "## Current repository/workspace state and important files",
+      ...Array.from(new Set(fileItems.map((item) => item.fileName)))
+        .slice(-12)
+        .map((file) => `- ${compactText(file, 150)}`),
+      "",
+      "## Unresolved problems and next action",
+      latestAssistant === undefined
+        ? "- Continue from the latest user request."
+        : `- ${compactText(latestAssistant.text, 600)}`,
+      "",
+      "## Exact identifiers, commands, and errors that still matter",
+      ...errorItems.slice(-3).map((item) => `- Error: ${compactText(item.failure.message, 200)}`),
+      "",
+      "## Recent canonical conversation",
+    ],
+    itemLines: recentConversation,
+    emptyLine: "- No user-visible context items.",
+    maxChars: input.maxChars,
+  });
 }
 
 function makeForkDeltaSummary(input: {
@@ -347,6 +436,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         "delta_since_target_last_seen" | "full_thread_summary"
       >;
       readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
+      readonly compactIfNeeded?: boolean;
       readonly maxChars?: number | null;
       readonly createdAt: DateTime.Utc;
     }) {
@@ -368,6 +458,33 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
               }),
           ),
         );
+      const compactionSource = input.compactIfNeeded
+        ? contextCompactionSourceText(input.items)
+        : null;
+      const maxSummaryChars = Math.min(
+        MODEL_SWITCH_COMPACTION_MAX_SUMMARY_CHARS,
+        contextHandoffBudget(input.maxChars),
+      );
+      const needsModelCompaction =
+        compactionSource !== null &&
+        compactionSource.length > MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS;
+      const summaryText =
+        compactionSource === null
+          ? makeProviderHandoffSummary(input)
+          : needsModelCompaction
+            ? makeDeterministicCompactionSummary({
+                items: input.items,
+                maxChars: maxSummaryChars,
+              })
+            : newestContextWithinBudget({
+                preamble: [],
+                itemLines: compactionSource.length === 0 ? [] : [compactionSource],
+                emptyLine: "No user-visible context items.",
+                maxChars: Math.min(
+                  MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS,
+                  contextHandoffBudget(input.maxChars),
+                ),
+              });
       return {
         id: handoffId,
         transferId: input.transferId,
@@ -377,9 +494,19 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         toProviderThreadId: input.toProviderThreadId,
         coveredRunOrdinals: input.coveredRunOrdinals,
         strategy: input.strategy,
-        status: "ready",
+        status: needsModelCompaction ? "pending" : "ready",
         summaryMessageId: null,
-        summaryText: makeProviderHandoffSummary(input),
+        summaryText,
+        ...(compactionSource === null
+          ? {}
+          : {
+              compaction: {
+                sourceChars: compactionSource.length,
+                thresholdChars: MODEL_SWITCH_COMPACTION_THRESHOLD_CHARS,
+                maxSummaryChars,
+                generation: needsModelCompaction ? ("pending" as const) : ("not_needed" as const),
+              },
+            }),
         createdByProviderInstanceId: null,
         createdAt: input.createdAt,
         updatedAt: input.createdAt,

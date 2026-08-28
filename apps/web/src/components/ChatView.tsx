@@ -92,6 +92,8 @@ import {
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
@@ -196,6 +198,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   GitBranchIcon,
+  Minimize2Icon,
   PaperclipIcon,
   TriangleAlertIcon,
   WifiOffIcon,
@@ -343,6 +346,16 @@ import {
 } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { shouldOfferResumeCompaction } from "./chat/ContextWindowMeter.logic";
+import {
+  contextWindowSnapshotFromUsage,
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowTokens,
+} from "../lib/contextWindow";
+import {
+  CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
+  isClaudeResumeCompactionQuestion,
+} from "@spiritdevs/shared/claudeCompaction";
 import {
   browserTakeoverBannerItem,
   dismissBrowserTakeoverBannerForSession,
@@ -3234,6 +3247,45 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const activeProviderThread = useMemo(() => {
+    if (!serverProjection) return null;
+    const activeId = serverProjection.thread.activeProviderThreadId;
+    if (activeId !== null) {
+      const active = serverProjection.providerThreads.find((thread) => thread.id === activeId);
+      if (active) return active;
+    }
+    return (
+      serverProjection.providerThreads.findLast(
+        (thread) => thread.appThreadId === serverProjection.thread.id,
+      ) ?? null
+    );
+  }, [serverProjection]);
+  const activeContextWindow = useMemo(() => {
+    if (activeProviderThread?.tokenUsage) {
+      const usageRun = serverProjection?.runs.find(
+        (run) => run.ordinal === activeProviderThread.lastRunOrdinal,
+      );
+      return contextWindowSnapshotFromUsage(
+        activeProviderThread.tokenUsage,
+        DateTime.formatIso(usageRun?.completedAt ?? activeProviderThread.updatedAt),
+      );
+    }
+    return deriveLatestContextWindowSnapshot(presentedServerVisibleTurnItems);
+  }, [activeProviderThread, presentedServerVisibleTurnItems, serverProjection?.runs]);
+  const isContextCompacting = presentedServerVisibleTurnItems.some(
+    ({ item }) =>
+      item.type === "compaction" &&
+      item.kind === "model_switch" &&
+      item.runId === activeLatestRun?.runId &&
+      phase === "running" &&
+      (item.status === "pending" || item.status === "running"),
+  );
+  const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
+    useLocalStorage(
+      `pathway:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
+      false,
+      Schema.Boolean,
+    );
   const activeProviderEntry = useMemo(
     () =>
       continuationProviderEntries.find(
@@ -5241,6 +5293,27 @@ function ChatViewContent(props: ChatViewProps) {
     wasShownForCurrentMismatch:
       revealedBranchMismatchKey !== null && revealedBranchMismatchKey === activeBranchMismatchKey,
   });
+  const compactDisabled =
+    !activeThread ||
+    !activeProject ||
+    !isServerThread ||
+    selectedProvider !== "claudeAgent" ||
+    isWorking ||
+    isPreparingWorktree ||
+    activeEnvironmentUnavailable ||
+    pendingApprovals.length > 0 ||
+    pendingUserInputs.length > 0 ||
+    showPlanFollowUpPrompt ||
+    composerHasDraftContent;
+  const compactDisabledReason = compactDisabled
+    ? composerHasDraftContent
+      ? "Send or clear your draft before compacting"
+      : !activeProject
+        ? "Choose a project before compacting"
+        : selectedProvider !== "claudeAgent"
+          ? "Switch to Claude to use native context compaction"
+          : "Compacting is unavailable right now"
+    : null;
   useEffect(() => {
     setRevealedBranchMismatchKey((revealed) => {
       if (showBranchMismatchBanner) {
@@ -5536,12 +5609,88 @@ function ChatViewContent(props: ChatViewProps) {
   // composer remains the fallback so the prompt never disappears.
   const browserTakeoverBannerInPreview = previewPanelOpen ? browserTakeoverBanner : null;
   const browserTakeoverBannerInComposer = previewPanelOpen ? null : browserTakeoverBanner;
+  const [dismissedResumeCompactionKeys, setDismissedResumeCompactionKeys] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const resumeCompactionKey =
+    activeThread && activeContextWindow
+      ? `${activeThread.id}:${activeContextWindow.updatedAt}`
+      : null;
+  const resumeCompactionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (
+      !activeThread ||
+      !activeContextWindow ||
+      resumeCompactionKey === null ||
+      dismissedResumeCompactionKeys.has(resumeCompactionKey) ||
+      resumeCompactionPermanentlyDismissed ||
+      pendingUserInputs.length > 0 ||
+      phase === "running" ||
+      !shouldOfferResumeCompaction({
+        provider: selectedProvider,
+        usedTokens: activeContextWindow.usedTokens,
+        updatedAt: activeContextWindow.updatedAt,
+        now: `${nowMinute}:00.000Z`,
+      })
+    ) {
+      return null;
+    }
+
+    const compactAction = (
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={compactDisabled}
+        onClick={() => {
+          if (!compactDisabled) composerRef.current?.compactContext();
+        }}
+      >
+        Compact
+      </Button>
+    );
+    return {
+      id: `resume-compaction:${resumeCompactionKey}`,
+      variant: "info",
+      icon: <Minimize2Icon />,
+      title: "Resume with less context",
+      description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from an older session`,
+      actions: compactDisabledReason ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex">{compactAction}</span>} />
+          <TooltipPopup side="top">{compactDisabledReason}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        compactAction
+      ),
+      dismissLabel: "Keep full history",
+      onDismiss: () =>
+        setDismissedResumeCompactionKeys((keys) => new Set(keys).add(resumeCompactionKey)),
+    };
+  }, [
+    activeContextWindow,
+    activeThread,
+    compactDisabled,
+    compactDisabledReason,
+    dismissedResumeCompactionKeys,
+    nowMinute,
+    pendingUserInputs.length,
+    phase,
+    resumeCompactionKey,
+    resumeCompactionPermanentlyDismissed,
+    selectedProvider,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     const browserTakeoverItems =
       browserTakeoverBannerInComposer === null ? [] : [browserTakeoverBannerInComposer];
+    const resumeCompactionItems =
+      resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...systemComposerBannerItems, ...browserTakeoverItems, ...parkedThreadItems];
+      return [
+        ...systemComposerBannerItems,
+        ...browserTakeoverItems,
+        ...resumeCompactionItems,
+        ...parkedThreadItems,
+      ];
     }
     return [
       ...systemComposerBannerItems,
@@ -5585,6 +5734,7 @@ function ChatViewContent(props: ChatViewProps) {
           setBranchMismatchDismissTick((tick) => tick + 1);
         },
       },
+      ...resumeCompactionItems,
       ...parkedThreadItems,
     ];
   }, [
@@ -5594,6 +5744,7 @@ function ChatViewContent(props: ChatViewProps) {
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
+    resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
   ]);
@@ -6348,12 +6499,20 @@ function ChatViewContent(props: ChatViewProps) {
     if (
       !activeThread ||
       isSendBusy ||
+      isContextCompacting ||
       isConnecting ||
       activeEnvironmentUnavailable ||
       sendInFlightRef.current ||
       (target === "side-chat" && (!isServerThread || latestSideChatSourceRun === null))
     ) {
       notifyDirectAnnotationAttached();
+      if (isContextCompacting) {
+        toastManager.add({
+          type: "info",
+          title: "Context compaction is still running.",
+          description: "Your draft is preserved and can be sent when compaction finishes.",
+        });
+      }
       return;
     }
     if (activePendingProgress) {
@@ -6383,6 +6542,23 @@ function ChatViewContent(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
       persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
+    const activeProjectionRun = serverProjection?.runs.find(
+      (run) => run.id === activeLatestRun?.runId,
+    );
+    const changesActiveModelBoundary =
+      target === "current" &&
+      phase === "running" &&
+      activeProjectionRun !== undefined &&
+      (activeProjectionRun.modelSelection.instanceId !== ctxSelectedModelSelection.instanceId ||
+        activeProjectionRun.modelSelection.model !== ctxSelectedModelSelection.model);
+    if (changesActiveModelBoundary) {
+      toastManager.add({
+        type: "info",
+        title: "Wait for the active turn to finish.",
+        description: "Your model choice and draft are preserved for the next send.",
+      });
+      return;
+    }
     const composerImages =
       directAnnotation?.image &&
       !sendContextImages.some((image) => image.id === directAnnotation.image?.id)
@@ -7268,6 +7444,17 @@ function ChatViewContent(props: ChatViewProps) {
       )
         return;
 
+      const resumeCompactionDismissed = pendingUserInputs
+        .find((input) => input.requestId === requestId)
+        ?.questions.some(
+          (question) =>
+            isClaudeResumeCompactionQuestion(question.question) &&
+            answers[question.id] === CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
+        );
+      if (resumeCompactionDismissed) {
+        setResumeCompactionPermanentlyDismissed(true);
+      }
+
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
@@ -7289,7 +7476,14 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, pendingUserInputs, respondToThreadUserInput, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      pendingUserInputs,
+      respondToThreadUserInput,
+      setResumeCompactionPermanentlyDismissed,
+      setThreadError,
+    ],
   );
 
   const setActivePendingUserInputQuestionIndex = useCallback(
@@ -8395,6 +8589,7 @@ function ChatViewContent(props: ChatViewProps) {
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             composerControlsLocked={composerControlsLocked}
+                            contextCompactionInProgress={isContextCompacting}
                             lockedProvider={modelPickerLockedProvider}
                             providerCatalogLoaded={serverConfig !== null}
                             providerStatuses={providerStatuses as ServerProvider[]}
@@ -8403,7 +8598,9 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             activeSubagentModelSelection={activeSubagentModelSelection}
                             activeThreadModelSelection={activeThread?.modelSelection}
-                            activeThreadVisibleTurnItems={presentedServerVisibleTurnItems}
+                            activeContextWindow={activeContextWindow}
+                            compactDisabled={compactDisabled}
+                            compactDisabledReason={compactDisabledReason}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

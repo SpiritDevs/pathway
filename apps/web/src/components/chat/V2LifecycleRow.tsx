@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import type {
   OrchestrationV2Run,
   OrchestrationV2Subagent,
@@ -13,6 +13,7 @@ import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
   BotIcon,
+  CheckIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
   GitCommitHorizontalIcon,
@@ -20,14 +21,17 @@ import {
   MessageSquareIcon,
   MessagesSquareIcon,
   MinusIcon,
+  CopyIcon,
   type LucideIcon,
   XIcon,
 } from "lucide-react";
 
 import { getProviderInstanceEntry } from "../../providerInstances";
 import { formatShortTimestamp } from "../../timestampFormat";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
@@ -117,17 +121,7 @@ export function V2LifecycleRow(props: {
     );
   }
   if (item.type === "compaction") {
-    const tokenDetail =
-      item.beforeTokenCount === undefined && item.afterTokenCount === undefined
-        ? null
-        : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
-    return (
-      <TimelineSystemDivider
-        label="Context compacted"
-        detail={item.summary ?? tokenDetail}
-        icon={MinusIcon}
-      />
-    );
+    return <CompactionLifecycleRow item={item} providerStatuses={props.providerStatuses} />;
   }
   if (item.type === "handoff") {
     // Items persisted before models were stamped only carry instance ids;
@@ -291,6 +285,100 @@ export function V2LifecycleRow(props: {
     );
   }
   return null;
+}
+
+function CompactionLifecycleRow(props: {
+  readonly item: Extract<OrchestrationV2TurnItem, { readonly type: "compaction" }>;
+  readonly providerStatuses: ReadonlyArray<ServerProvider>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<null>({
+    timeout: 1_500,
+    target: "compaction summary",
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy compaction summary",
+          description: error.message,
+        }),
+      );
+    },
+  });
+  const { item } = props;
+  const isRunning = item.status === "pending" || item.status === "running";
+  const tokenDetail =
+    item.beforeTokenCount === undefined && item.afterTokenCount === undefined
+      ? null
+      : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
+  const methodDetail =
+    item.method === "fallback"
+      ? "Deterministic fallback"
+      : item.method === "model"
+        ? "Model summary"
+        : item.method === "direct"
+          ? "Direct handoff"
+          : null;
+  const target =
+    item.kind === "model_switch" && item.toProviderInstanceId !== undefined ? (
+      <ProviderModelEndpoint
+        providers={props.providerStatuses}
+        instanceId={item.toProviderInstanceId}
+        model={item.toModel}
+      />
+    ) : null;
+  const label = isRunning
+    ? "Compacting context…"
+    : item.kind === "provider_native"
+      ? "Claude context compacted"
+      : "Context compacted";
+  const detail =
+    target === null ? (
+      (methodDetail ?? tokenDetail)
+    ) : (
+      <span className="inline-flex min-w-0 items-center gap-1.5">
+        {target}
+        {methodDetail ? <span>· {methodDetail}</span> : null}
+        {item.coveredRunOrdinals ? (
+          <span>
+            · runs {item.coveredRunOrdinals.from}–{item.coveredRunOrdinals.to}
+          </span>
+        ) : null}
+      </span>
+    );
+  return (
+    <div data-v2-item-type="compaction">
+      <TimelineSystemDivider
+        label={label}
+        detail={detail}
+        icon={MinusIcon}
+        {...(item.summary
+          ? {
+              actionLabel: expanded ? "Hide compaction summary" : "Show compaction summary",
+              onAction: () => setExpanded((value) => !value),
+            }
+          : {})}
+      />
+      {expanded && item.summary ? (
+        <div className="mx-auto mt-1 max-w-3xl rounded-lg border border-border/60 bg-muted/20 p-3 text-xs">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-medium text-muted-foreground">Compaction summary</span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => copyToClipboard(item.summary ?? "", null)}
+            >
+              {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans leading-relaxed text-foreground/90">
+            {item.summary}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function RelatedThreadCard(props: {

@@ -1,4 +1,9 @@
-import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@spiritdevs/contracts";
+import {
+  ProviderInstanceId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -47,5 +52,48 @@ describe("V2LifecycleRow", () => {
     expect(markup).toContain("abc1234");
     expect(markup).toContain('title="Commit abc1234567890"');
     expect(markup.match(/data-timeline-divider-separator/g)).toHaveLength(2);
+  });
+
+  it("renders model-switch compaction as an inspectable collapsed lifecycle row", () => {
+    const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+    const item: OrchestrationV2TurnItem = {
+      id: TurnItemId.make("turn-item-model-switch-compaction"),
+      threadId: ThreadId.make("thread-model-switch-compaction"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: "Context compaction",
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      type: "compaction",
+      driver: null,
+      kind: "model_switch",
+      method: "model",
+      toProviderInstanceId: ProviderInstanceId.make("codex"),
+      toModel: "gpt-5.6-sol",
+      summary: "## Current goal and latest user intent\n- Continue the feature.",
+    };
+
+    const markup = renderToStaticMarkup(
+      createElement(V2LifecycleRow, {
+        item,
+        createdAt: "2026-08-14T00:00:00.000Z",
+        timestampFormat: "locale",
+        providerStatuses: [],
+        runs: [],
+        subagents: [],
+        onOpenThread: () => {},
+      }),
+    );
+    expect(markup).toContain("Context compacted");
+    expect(markup).toContain("gpt-5.6-sol");
+    expect(markup).toContain("Show compaction summary");
+    expect(markup).not.toContain("Continue the feature");
   });
 });

@@ -123,6 +123,7 @@ const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
       providerSessionManagerProvided,
       runExecutionServiceProvided,
       runtimePolicyProvided,
+      TextGeneration.layer,
     ),
   ),
 );

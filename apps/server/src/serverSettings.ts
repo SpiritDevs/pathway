@@ -212,6 +212,14 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
   return fallback ? { ...settings, textGenerationModelSelection: fallback } : settings;
 }
 
+function resolveContextCompactionProvider(settings: ServerSettings): ServerSettings {
+  if (isModelSelectionProviderEnabled(settings, settings.contextCompactionModelSelection)) {
+    return settings;
+  }
+  const fallback = enabledProviderFallbackSelection(settings);
+  return fallback ? { ...settings, contextCompactionModelSelection: fallback } : settings;
+}
+
 /**
  * The same fallback for the enrichment selection. Resolved separately rather than deferred to
  * `textGenerationModelSelection`: the two are independent settings, and an enrichment model whose
@@ -230,7 +238,9 @@ function resolveIssueEnrichmentProvider(settings: ServerSettings): ServerSetting
  * reader has to remember that there is now more than one selection to resolve.
  */
 function resolveModelSelectionProviders(settings: ServerSettings): ServerSettings {
-  return resolveIssueEnrichmentProvider(resolveTextGenerationProvider(settings));
+  return resolveIssueEnrichmentProvider(
+    resolveContextCompactionProvider(resolveTextGenerationProvider(settings)),
+  );
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
@@ -240,6 +250,7 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
+  "contextCompactionModelSelection",
   "issueEnrichmentModelSelection",
   "issueAutomation",
 ]);

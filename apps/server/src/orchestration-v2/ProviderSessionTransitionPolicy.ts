@@ -56,12 +56,17 @@ export function decideProviderSessionTransition(input: {
   const runtimeChanged = current.runtimeMode !== target.runtimeMode;
   const workspaceChanged = current.workspace !== target.workspace;
   const selectionChanged = !modelSelectionsEqual(current.modelSelection, target.modelSelection);
+  const modelChanged = current.modelSelection.model !== target.modelSelection.model;
+  if (input.selectionTransition?.type === "reject") {
+    return { type: "reject", reason: input.selectionTransition.reason };
+  }
+  if (modelChanged) {
+    return { type: "create_with_handoff" };
+  }
   if (selectionChanged && !instanceChanged) {
     switch (input.selectionTransition?.type) {
       case "create_with_handoff":
         return { type: "create_with_handoff" };
-      case "reject":
-        return { type: "reject", reason: input.selectionTransition.reason };
       case undefined:
         return {
           type: "reject",
@@ -84,8 +89,6 @@ export function decideProviderSessionTransition(input: {
         return { type: "restart_and_resume" };
       case "create_with_handoff":
         return { type: "create_with_handoff" };
-      case "reject":
-        return { type: "reject", reason: input.selectionTransition.reason };
       case undefined:
         return { type: "restart_and_resume" };
     }

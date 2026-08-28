@@ -193,6 +193,32 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     });
   });
 
+  it("defaults context compaction to Sol at medium reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.contextCompactionModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "medium" }],
+    });
+  });
+
+  it("validates Claude's optional native auto-compaction window", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { autoCompactWindow: "300000" } },
+      }).providers?.claudeAgent?.autoCompactWindow,
+    ).toBe("300000");
+    expect(() =>
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { autoCompactWindow: "99999" } },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { autoCompactWindow: "1000001" } },
+      }),
+    ).toThrow();
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });

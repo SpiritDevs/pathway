@@ -385,6 +385,10 @@ export const CodexSettings = makeProviderSettingsSchema(
 );
 export type CodexSettings = typeof CodexSettings.Type;
 
+// Empty, or an integer from 100,000 to 1,000,000. Shared by the complete
+// settings schema and patch so invalid values fail at the update boundary.
+const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
+
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -422,9 +426,23 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    autoCompactWindow: TrimmedString.check(
+      Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN),
+    ).pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Auto-compact after",
+        description:
+          "Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default.",
+        providerSettingsForm: {
+          placeholder: "e.g. 300000",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -652,6 +670,12 @@ const DEFAULT_TEXT_GENERATION_MODEL_SELECTION = {
   ],
 };
 
+export const DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION: ModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.6-sol",
+  options: [{ id: "reasoningEffort", value: "medium" }],
+};
+
 export const ISSUE_AUTOMATION_MAX_ROUTING_RULES = 25;
 export const ISSUE_AUTOMATION_MAX_AUDIT_RULES = 25;
 export const ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE = 5;
@@ -776,6 +800,9 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
   ),
+  contextCompactionModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION)),
+  ),
   /**
    * What runs an issue enrichment investigation: a read-only one-shot in the project's directory,
    * beside commit-message and change-request generation rather than in the thread machinery.
@@ -890,6 +917,9 @@ const ClaudeSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
+  autoCompactWindow: Schema.optionalKey(
+    TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
+  ),
 });
 
 const CursorSettingsPatch = Schema.Struct({
@@ -931,6 +961,7 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  contextCompactionModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueEnrichmentModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueAutomation: Schema.optionalKey(IssueAutomationSettings),
   sourceControlWritingStyle: Schema.optionalKey(
