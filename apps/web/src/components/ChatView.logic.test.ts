@@ -37,6 +37,7 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveEditableV2UserMessageId,
+  resolveRetryableV2UserMessageId,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
@@ -297,6 +298,7 @@ function editableV2Projection(
     readonly files?: ReadonlyArray<{ readonly path: string }>;
     readonly interruptedBeforeProviderStart?: boolean;
     readonly rollbackCapable?: boolean;
+    readonly runStatus?: "completed" | "failed";
   } = {},
 ): OrchestrationV2ThreadProjection {
   const messageId = MessageId.make("message-editable");
@@ -315,7 +317,9 @@ function editableV2Projection(
         id: runId,
         ordinal: 1,
         activeAttemptId: "attempt-editable",
-        status: input.interruptedBeforeProviderStart ? "interrupted" : "completed",
+        status: input.interruptedBeforeProviderStart
+          ? "interrupted"
+          : (input.runStatus ?? "completed"),
         modelSelection: { instanceId: "codex", model: "gpt-5.4" },
         providerThreadId: "provider-thread-editable",
       },
@@ -387,6 +391,20 @@ describe("resolveEditableV2UserMessageId", () => {
         editableV2Projection({ interruptedBeforeProviderStart: true, rollbackCapable: false }),
       ),
     ).toBe("message-editable");
+  });
+});
+
+describe("resolveRetryableV2UserMessageId", () => {
+  it("offers retry only for a failed latest user message that can restart safely", () => {
+    expect(resolveRetryableV2UserMessageId(editableV2Projection({ runStatus: "failed" }))).toBe(
+      "message-editable",
+    );
+    expect(resolveRetryableV2UserMessageId(editableV2Projection())).toBeNull();
+    expect(
+      resolveRetryableV2UserMessageId(
+        editableV2Projection({ runStatus: "failed", files: [{ path: "src/app.ts" }] }),
+      ),
+    ).toBeNull();
   });
 });
 

@@ -64,6 +64,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   PencilIcon,
+  RefreshCwIcon,
   MinusIcon,
   Redo2Icon,
   SquarePenIcon,
@@ -184,6 +185,9 @@ interface TimelineRowSharedState {
   onChangeUserMessageEdit: (text: string) => void;
   onCancelUserMessageEdit: () => void;
   onSubmitUserMessageEdit: (messageId: MessageId, originalText: string) => void;
+  retryableUserMessageId: MessageId | null;
+  retryingUserMessageId: MessageId | null;
+  onRetryUserMessage: (messageId: MessageId, text: string) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
@@ -255,6 +259,8 @@ interface MessagesTimelineProps {
   canSubmitUserMessageEdit?: boolean;
   onRequestEditUserMessage?: (messageId: MessageId) => Promise<boolean>;
   onSubmitUserMessageEdit?: (messageId: MessageId, text: string) => Promise<boolean>;
+  retryableUserMessageId?: MessageId | null;
+  onRetryUserMessage?: (messageId: MessageId, text: string) => Promise<boolean>;
   routeThreadKey: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenFilePreview?: (relativePath: string, line?: number) => void;
@@ -329,6 +335,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   canSubmitUserMessageEdit = false,
   onRequestEditUserMessage = DEFAULT_ASYNC_FALSE,
   onSubmitUserMessageEdit = DEFAULT_ASYNC_FALSE,
+  retryableUserMessageId = null,
+  onRetryUserMessage = DEFAULT_ASYNC_FALSE,
   routeThreadKey,
   onOpenTurnDiff,
   onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
@@ -372,6 +380,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
   const [editingUserMessageDraft, setEditingUserMessageDraft] = useState("");
   const [isSubmittingUserMessageEdit, setIsSubmittingUserMessageEdit] = useState(false);
+  const [retryingUserMessageId, setRetryingUserMessageId] = useState<MessageId | null>(null);
   const [timestampNowMs, setTimestampNowMs] = useState(localDayStartTimestamp);
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
@@ -523,6 +532,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       editingUserMessageId,
       onSubmitUserMessageEdit,
     ],
+  );
+  const retryUserMessage = useCallback(
+    (messageId: MessageId, text: string) => {
+      if (messageId !== retryableUserMessageId || retryingUserMessageId !== null) return;
+      void (async () => {
+        setRetryingUserMessageId(messageId);
+        try {
+          await onRetryUserMessage(messageId, text);
+        } finally {
+          setRetryingUserMessageId(null);
+        }
+      })();
+    },
+    [onRetryUserMessage, retryableUserMessageId, retryingUserMessageId],
   );
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
@@ -711,6 +734,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onChangeUserMessageEdit: setEditingUserMessageDraft,
       onCancelUserMessageEdit,
       onSubmitUserMessageEdit: submitUserMessageEdit,
+      retryableUserMessageId,
+      retryingUserMessageId,
+      onRetryUserMessage: retryUserMessage,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -747,6 +773,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onBeginEditUserMessage,
       onCancelUserMessageEdit,
       submitUserMessageEdit,
+      retryableUserMessageId,
+      retryingUserMessageId,
+      retryUserMessage,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -1249,6 +1278,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     ctx.editableUserMessageId === row.message.id &&
     editableText.trim().length > 0;
   const isEditingMessage = ctx.editingUserMessageId === row.message.id;
+  const canRetryMessage =
+    row.message.createdBy === "user" &&
+    ctx.retryableUserMessageId === row.message.id &&
+    row.message.text.trim().length > 0;
 
   return (
     <div className="group flex flex-col items-end gap-1">
@@ -1394,7 +1427,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </span>
         </div>
       ) : null}
-      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+      <div
+        className={cn(
+          "flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100",
+          canRetryMessage ? "opacity-100" : "opacity-0",
+        )}
+      >
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -1409,6 +1447,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
+            {canRetryMessage && !isEditingMessage ? (
+              <RetryUserMessageButton messageId={row.message.id} text={row.message.text} />
+            ) : null}
             {canEditMessage && !isEditingMessage ? (
               <EditUserMessageButton messageId={row.message.id} text={row.message.text} />
             ) : null}
@@ -1420,6 +1461,31 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       </div>
     </div>
+  );
+}
+
+function RetryUserMessageButton({ messageId, text }: { messageId: MessageId; text: string }) {
+  const ctx = use(TimelineRowCtx);
+  const isRetrying = ctx.retryingUserMessageId === messageId;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={isRetrying}
+            onClick={() => ctx.onRetryUserMessage(messageId, text)}
+            aria-label={isRetrying ? "Retrying message" : "Retry message"}
+            data-user-message-retry="true"
+          />
+        }
+      >
+        <RefreshCwIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{isRetrying ? "Retrying…" : "Retry message"}</TooltipPopup>
+    </Tooltip>
   );
 }
 

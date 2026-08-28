@@ -389,6 +389,7 @@ import {
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveEditableV2UserMessageId,
+  resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
   resolveThreadMetadataUpdateForNextTurn,
   visibleTurnItemsForThreadPresentation,
@@ -3175,6 +3176,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const editableUserMessageId = useMemo(
     () => resolveEditableV2UserMessageId(serverProjection),
+    [serverProjection],
+  );
+  const retryableUserMessageId = useMemo(
+    () => resolveRetryableV2UserMessageId(serverProjection),
     [serverProjection],
   );
 
@@ -7197,7 +7202,7 @@ function ChatViewContent(props: ChatViewProps) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
           activeThread.id,
-          error instanceof Error ? error.message : "Failed to restart from the edited message.",
+          error instanceof Error ? error.message : "Failed to restart the message.",
         );
       }
       return false;
@@ -7211,6 +7216,14 @@ function ChatViewContent(props: ChatViewProps) {
       latestRunSettled,
       setThreadError,
     ],
+  );
+
+  const onRetryUserMessage = useCallback(
+    async (messageId: MessageId, text: string): Promise<boolean> => {
+      if (retryableUserMessageId !== messageId) return false;
+      return onSubmitUserMessageEdit(messageId, text);
+    },
+    [onSubmitUserMessageEdit, retryableUserMessageId],
   );
 
   const onRespondToApproval = useCallback(
@@ -8228,6 +8241,8 @@ function ChatViewContent(props: ChatViewProps) {
                 canSubmitUserMessageEdit={editableUserMessageId !== null && latestRunSettled}
                 onRequestEditUserMessage={onRequestEditUserMessage}
                 onSubmitUserMessageEdit={onSubmitUserMessageEdit}
+                retryableUserMessageId={retryableUserMessageId}
+                onRetryUserMessage={onRetryUserMessage}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
