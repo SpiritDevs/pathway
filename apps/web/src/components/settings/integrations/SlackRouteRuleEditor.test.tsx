@@ -26,7 +26,7 @@ const rule: SlackRoutingRule = {
 };
 
 const teams = [{ id: "team-1", name: "Platform" }];
-const projects = [{ id: "project-1", name: "Pathway" }];
+const projects = [{ id: "project-1", name: "Pathway", environmentIds: ["environment-1"] }];
 const statuses = [
   { id: "status-1", name: "In progress", teamId: "team-1" },
   { id: "status-2", name: "Done", teamId: "team-1" },

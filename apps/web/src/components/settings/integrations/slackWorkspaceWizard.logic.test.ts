@@ -1,3 +1,4 @@
+import { DEFAULT_ISSUE_AUTOMATION_SETTINGS } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,13 +7,17 @@ import {
   createEmptySlackWorkspaceDraft,
   normalizeSlackPrefix,
   normalizeSlackReaction,
+  nextSlackWizardStep,
   removeSlackConditionNode,
   resolveSlackWizardNavigation,
+  slackAutomationForOwner,
   SLACK_ROUTING_LIMITS,
+  slackCatalogForEnvironment,
   slackConditionNodeCount,
   slackRoutingRulesError,
   slackRuleError,
   slackWizardStepError,
+  slackWizardVisibleSteps,
   updateSlackConditionNode,
   type SlackConditionGroup,
   type SlackRoutingRule,
@@ -28,6 +33,8 @@ const connectedDraft = (rules: readonly SlackRoutingRule[]): SlackWorkspaceWizar
   channelName: "issues",
   watchId: "watch-1",
   watchRevision: 1,
+  preferredEnvironmentId: "environment-1",
+  backupEnvironmentIds: [],
   rules,
 });
 
@@ -43,33 +50,111 @@ const everyMessageRule = (): SlackRoutingRule => ({
 });
 
 describe("Slack workspace wizard navigation", () => {
+  it("rejects stale automation loads and saves after the workspace owner changes", () => {
+    const automation = {
+      ownerId: "company-1",
+      settings: DEFAULT_ISSUE_AUTOMATION_SETTINGS,
+      configured: true,
+      enabled: true,
+    };
+
+    expect(slackAutomationForOwner(automation, "company-1")).toBe(automation);
+    expect(slackAutomationForOwner(automation, "company-2")).toBeNull();
+  });
+
   it("returns users to the first incomplete step when they jump ahead", () => {
-    expect(resolveSlackWizardNavigation(0, 2, createEmptySlackWorkspaceDraft())).toEqual({
+    expect(resolveSlackWizardNavigation(0, 4, createEmptySlackWorkspaceDraft())).toEqual({
       step: 0,
       error: "Choose who owns this Slack workspace.",
     });
 
-    expect(resolveSlackWizardNavigation(2, 0, connectedDraft([everyMessageRule()]))).toEqual({
+    expect(resolveSlackWizardNavigation(4, 0, connectedDraft([everyMessageRule()]))).toEqual({
       step: 0,
       error: null,
     });
   });
 
-  it("allows a connected workspace with a channel and valid route to reach activation", () => {
-    expect(resolveSlackWizardNavigation(0, 2, connectedDraft([everyMessageRule()]))).toEqual({
-      step: 2,
+  it("requires a primary listener and rejects an invalid backup", () => {
+    const draft = connectedDraft([everyMessageRule()]);
+    expect(
+      slackWizardStepError(
+        0,
+        { ...draft, preferredEnvironmentId: null },
+        {
+          environmentIds: new Set(["environment-1", "environment-2"]),
+        },
+      ),
+    ).toBe("Choose the primary environment that will run this Slack listener.");
+    expect(
+      slackWizardStepError(
+        0,
+        { ...draft, backupEnvironmentIds: ["environment-1"] },
+        { environmentIds: new Set(["environment-1", "environment-2"]) },
+      ),
+    ).toBe("Choose a different available backup environment.");
+  });
+
+  it("skips issue automation setup when no route uses it", () => {
+    expect(slackWizardVisibleSteps([everyMessageRule()])).toEqual([0, 1, 2, 4]);
+    expect(nextSlackWizardStep(2, [everyMessageRule()])).toBe(4);
+    expect(resolveSlackWizardNavigation(0, 4, connectedDraft([everyMessageRule()]))).toEqual({
+      step: 4,
+      error: null,
+    });
+  });
+
+  it("requires issue automation settings for routes that investigate or assign", () => {
+    const automatedRule: SlackRoutingRule = {
+      ...everyMessageRule(),
+      projectId: "project-1",
+      investigation: { kind: "immediate", successStatusId: null },
+    };
+    const draft = connectedDraft([automatedRule]);
+
+    expect(slackWizardVisibleSteps(draft.rules)).toEqual([0, 1, 2, 3, 4]);
+    expect(nextSlackWizardStep(2, draft.rules)).toBe(3);
+    expect(resolveSlackWizardNavigation(0, 4, draft)).toEqual({
+      step: 3,
+      error: "Save issue automation settings before continuing.",
+    });
+    expect(resolveSlackWizardNavigation(0, 4, draft, { automationConfigured: true })).toEqual({
+      step: 4,
       error: null,
     });
   });
 
   it("blocks activation when a readiness check is blocked", () => {
     expect(
-      slackWizardStepError(2, connectedDraft([everyMessageRule()]), {
+      slackWizardStepError(4, connectedDraft([everyMessageRule()]), {
         readiness: [
           { id: "controller", label: "Controller", state: "blocked", detail: "None online" },
         ],
       }),
     ).toBe("Resolve the blocked activation checks before activating.");
+  });
+});
+
+describe("Slack environment project catalog", () => {
+  const catalog = {
+    environments: [
+      { id: "environment-1", name: "Primary" },
+      { id: "environment-2", name: "Remote" },
+    ],
+    teams: [],
+    statuses: [],
+    projects: [
+      { id: "project-1", name: "Primary only", environmentIds: ["environment-1"] },
+      { id: "project-2", name: "Remote only", environmentIds: ["environment-2"] },
+      { id: "project-3", name: "Shared", environmentIds: ["environment-1", "environment-2"] },
+    ],
+    cycles: [],
+  };
+
+  it("shows only projects checked out on the primary listener environment", () => {
+    expect(
+      slackCatalogForEnvironment(catalog, "environment-1").projects.map((project) => project.id),
+    ).toEqual(["project-1", "project-3"]);
+    expect(slackCatalogForEnvironment(catalog, null).projects).toEqual([]);
   });
 });
 

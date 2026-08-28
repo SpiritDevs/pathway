@@ -76,6 +76,7 @@ import {
 import {
   SlackWorkspaceWizardSheet,
   type SlackWorkspaceActivationResult,
+  type SlackWizardAutomationContext,
 } from "./SlackWorkspaceWizardSheet";
 
 type SheetState =
@@ -332,6 +333,8 @@ function draftFromIntegration(
     channelName: definition?.channelName ?? null,
     watchId: definition?.id ?? null,
     watchRevision: definition?.revision ?? null,
+    preferredEnvironmentId: integration.preferredEnvironmentId,
+    backupEnvironmentIds: integration.backupEnvironmentIds,
     rules:
       definition === null
         ? []
@@ -349,6 +352,9 @@ function SlackWorkspaceWizardController({
   client,
   ownerId,
   integrationId,
+  automation,
+  automationFallback,
+  canManage,
   owners,
   ownerCatalogs,
   ownerEnvironmentIds,
@@ -358,6 +364,9 @@ function SlackWorkspaceWizardController({
   readonly client: CompanyIntegrationsClient;
   readonly ownerId: CompanyId;
   readonly integrationId: string | null;
+  readonly automation: CompanyAutomationSettingsSummary | null;
+  readonly automationFallback: IssueAutomationSettings;
+  readonly canManage: boolean;
   readonly owners: readonly SlackOwnerOption[];
   readonly ownerCatalogs: ReadonlyMap<string, SlackOwnerCatalog>;
   readonly ownerEnvironmentIds: ReadonlyMap<string, readonly string[]>;
@@ -409,11 +418,23 @@ function SlackWorkspaceWizardController({
       if (draft.channelId === null || draft.channelName === null) {
         throw new Error("Choose a Slack channel before saving routing rules.");
       }
+      if (draft.preferredEnvironmentId === null) {
+        throw new Error("Choose the primary environment that will run this Slack listener.");
+      }
       const companyId = CompanyId.make(draft.ownerId);
+      const saveControllerPool = () =>
+        client.setControllerPool({
+          companyId,
+          integrationId: draft.integrationId!,
+          preferredEnvironmentId: draft.preferredEnvironmentId,
+          backupEnvironmentIds: draft.backupEnvironmentIds,
+        });
       if (draft.watchId === null) {
         const definitions = await client.listWatchDefinitions(companyId, draft.integrationId);
         const existing = definitions.find((definition) => definition.channelId === draft.channelId);
         if (existing !== undefined) {
+          await saveControllerPool();
+          await onChanged(companyId);
           return {
             ...draft,
             channelName: existing.channelName,
@@ -435,6 +456,7 @@ function SlackWorkspaceWizardController({
         rules: draft.rules.map(ruleToContract),
         expectedRevision: draft.watchRevision,
       });
+      await saveControllerPool();
       const nextDraft = {
         ...draft,
         watchId: saved.id,
@@ -444,6 +466,48 @@ function SlackWorkspaceWizardController({
       return nextDraft;
     },
     [client, onChanged],
+  );
+
+  const loadAutomation = useCallback(
+    async (selectedOwnerId: string): Promise<SlackWizardAutomationContext> => {
+      const selectedCompanyId = CompanyId.make(selectedOwnerId);
+      const summary = await client.getAutomation(selectedCompanyId);
+      return {
+        ownerId: selectedOwnerId,
+        settings: summary?.settings ?? automationFallback,
+        configured: summary !== null,
+        enabled: summary?.enabled ?? false,
+      };
+    },
+    [automationFallback, client],
+  );
+
+  const saveAutomation = useCallback(
+    async (
+      selectedOwnerId: string,
+      settings: IssueAutomationSettings,
+    ): Promise<SlackWizardAutomationContext> => {
+      if (!canManage) {
+        throw new Error(
+          "The integrations.manage permission is required to configure issue automation.",
+        );
+      }
+      const selectedCompanyId = CompanyId.make(selectedOwnerId);
+      const current = await client.getAutomation(selectedCompanyId);
+      const saved = await client.saveAutomation({
+        companyId: selectedCompanyId,
+        settings,
+        expectedRevision: current?.revision ?? null,
+      });
+      await onChanged(selectedCompanyId);
+      return {
+        ownerId: selectedOwnerId,
+        settings: saved.settings,
+        configured: true,
+        enabled: saved.enabled,
+      };
+    },
+    [canManage, client, onChanged],
   );
 
   if (initialDraft === null) {
@@ -471,9 +535,21 @@ function SlackWorkspaceWizardController({
   return (
     <SlackWorkspaceWizardSheet
       getOwnerCatalog={(selectedOwnerId) =>
-        ownerCatalogs.get(selectedOwnerId) ?? { teams: [], statuses: [], projects: [], cycles: [] }
+        ownerCatalogs.get(selectedOwnerId) ?? {
+          environments: [],
+          teams: [],
+          statuses: [],
+          projects: [],
+          cycles: [],
+        }
       }
       initialDraft={initialDraft}
+      initialAutomation={{
+        ownerId,
+        settings: automation?.settings ?? automationFallback,
+        configured: automation !== null,
+        enabled: automation?.enabled ?? false,
+      }}
       mode={
         integrationState === "active" ? "active" : integrationState === "draft" ? "draft" : "new"
       }
@@ -486,22 +562,25 @@ function SlackWorkspaceWizardController({
         const selectedOwnerId = CompanyId.make(saved.ownerId!);
         const integration = await client.getIntegration(selectedOwnerId, saved.integrationId!);
         if (integration === null) throw new Error("The Slack integration no longer exists.");
-        reportProgress("controller", "running", "Selecting a healthy Pathway environment.");
+        reportProgress("controller", "running", "Confirming the listener environments.");
         const candidates = ownerEnvironmentIds.get(selectedOwnerId) ?? [];
-        const preferred =
-          integration.preferredEnvironmentId !== null &&
-          candidates.includes(integration.preferredEnvironmentId)
-            ? integration.preferredEnvironmentId
-            : (candidates[0] ?? null);
-        if (preferred === null)
-          throw new Error("No connected Pathway environment can control Slack.");
-        await client.setControllerPool({
-          companyId: selectedOwnerId,
-          integrationId: saved.integrationId,
-          preferredEnvironmentId: preferred,
-          backupEnvironmentIds: [],
-        });
-        reportProgress("controller", "complete", "Controller selected.");
+        const selectedControllers = [
+          saved.preferredEnvironmentId,
+          ...saved.backupEnvironmentIds,
+        ].filter((environmentId): environmentId is string => environmentId !== null);
+        if (
+          saved.preferredEnvironmentId === null ||
+          selectedControllers.some((environmentId) => !candidates.includes(environmentId))
+        ) {
+          throw new Error("One or more selected listener environments are no longer connected.");
+        }
+        reportProgress(
+          "controller",
+          "complete",
+          saved.backupEnvironmentIds.length === 0
+            ? "Primary listener confirmed."
+            : "Primary and backup listeners confirmed.",
+        );
         await client.activate({
           companyId: selectedOwnerId,
           integrationId: saved.integrationId!,
@@ -540,13 +619,24 @@ function SlackWorkspaceWizardController({
         const automationRules = draft.rules.filter(
           (rule) => rule.investigation.kind !== "off" || rule.assignment !== "off",
         );
+        const preferredEnvironmentId = draft.preferredEnvironmentId;
         const unavailableProjects = automationRules.filter((rule) => {
           const project = catalog?.projects.find((candidate) => candidate.id === rule.projectId);
-          return project?.ready !== true;
+          return (
+            project?.ready !== true ||
+            preferredEnvironmentId === null ||
+            !project.environmentIds.includes(preferredEnvironmentId)
+          );
         });
-        const automation =
+        const checkedAutomation =
           automationRules.length === 0 ? null : await client.getAutomation(selectedOwnerId);
         const environments = ownerEnvironmentIds.get(selectedOwnerId) ?? [];
+        const selectedControllers = [preferredEnvironmentId, ...draft.backupEnvironmentIds].filter(
+          (environmentId): environmentId is string => environmentId !== null,
+        );
+        const controllersReady =
+          preferredEnvironmentId !== null &&
+          selectedControllers.every((environmentId) => environments.includes(environmentId));
         return [
           {
             id: "projects",
@@ -561,31 +651,37 @@ function SlackWorkspaceWizardController({
             id: "automation",
             label: "Issue automation",
             state:
-              automationRules.length === 0 || automation?.enabled === true
+              automationRules.length === 0 || checkedAutomation?.enabled === true
                 ? "ready"
-                : automation === null
+                : checkedAutomation === null
                   ? "blocked"
                   : "warning",
             detail:
               automationRules.length === 0
                 ? "No route requires investigation or assignment."
-                : automation === null
+                : checkedAutomation === null
                   ? "Configure issue automation before activating these routes."
-                  : automation.enabled
+                  : checkedAutomation.enabled
                     ? "Issue automation is enabled."
                     : "Issue automation will be enabled during activation.",
           },
           {
             id: "controller",
-            label: "Pathway controller",
-            state: environments.length > 0 ? "ready" : "blocked",
+            label: "Listener environments",
+            state: controllersReady ? "ready" : "blocked",
             detail:
-              environments.length > 0
-                ? `${environments.length} connected environment${environments.length === 1 ? " is" : "s are"} available for validation.`
-                : "Connect a Pathway environment before activating Slack intake.",
+              preferredEnvironmentId === null
+                ? "Choose the primary environment that will poll Slack."
+                : controllersReady
+                  ? draft.backupEnvironmentIds.length === 0
+                    ? "The primary listener is connected."
+                    : "The primary and backup listeners are connected."
+                  : "A selected listener environment is no longer connected.",
           },
         ];
       }}
+      onLoadAutomation={loadAutomation}
+      onSaveAutomation={saveAutomation}
       onComplete={(draft) => {
         if (draft.ownerId !== null) void onChanged(CompanyId.make(draft.ownerId));
       }}
@@ -1670,9 +1766,19 @@ export function IntegrationsSettingsPanel() {
             : (directory.company?.owners.some((entry) => entry.membershipId === membershipId) ??
               false),
       });
-      const environmentIds = environmentRegistrationsFromReplicaValues(ownerValues)
+      const environments = environmentRegistrationsFromReplicaValues(ownerValues)
         .filter((row) => row.state === "active")
-        .map((row) => row.environmentId);
+        .map((row) => ({
+          id: row.environmentId,
+          name:
+            typeof row.descriptor === "object" &&
+            row.descriptor !== null &&
+            "name" in row.descriptor &&
+            typeof row.descriptor.name === "string"
+              ? row.descriptor.name
+              : row.environmentId,
+        }));
+      const environmentIds = environments.map((environment) => environment.id);
       const activeEnvironmentIds = new Set(environmentIds);
       const activeBindings = ownerValues
         .filter(isBinding)
@@ -1680,6 +1786,12 @@ export function IntegrationsSettingsPanel() {
           (binding) =>
             binding.status === "active" && activeEnvironmentIds.has(binding.environmentId),
         );
+      const environmentIdsByProject = new Map<string, string[]>();
+      for (const binding of activeBindings) {
+        const current = environmentIdsByProject.get(binding.cloudProjectId) ?? [];
+        current.push(binding.environmentId);
+        environmentIdsByProject.set(binding.cloudProjectId, current);
+      }
       const teams = ownerValues
         .filter(isTeam)
         .filter((team) => team.archivedAt === null)
@@ -1722,6 +1834,7 @@ export function IntegrationsSettingsPanel() {
       );
       contexts.set(owner.id, {
         catalog: {
+          environments,
           teams,
           statuses: [
             ...baseStatuses.map((status) => ({
@@ -1736,16 +1849,19 @@ export function IntegrationsSettingsPanel() {
           projects: ownerValues
             .filter(isProject)
             .filter((project) => project.archivedAt === null)
-            .map((project) => ({
-              id: project.id,
-              name: project.name,
-              ready: activeBindings.some((binding) => binding.cloudProjectId === project.id),
-              readinessDetail: activeBindings.some(
-                (binding) => binding.cloudProjectId === project.id,
-              )
-                ? "An active checkout is available."
-                : "No connected environment has an active checkout.",
-            })),
+            .map((project) => {
+              const projectEnvironmentIds = environmentIdsByProject.get(project.id) ?? [];
+              return {
+                id: project.id,
+                name: project.name,
+                environmentIds: projectEnvironmentIds,
+                ready: projectEnvironmentIds.length > 0,
+                readinessDetail:
+                  projectEnvironmentIds.length > 0
+                    ? "An active checkout is available."
+                    : "No connected environment has an active checkout.",
+              };
+            }),
           cycles: ownerValues
             .filter(isCycle)
             .filter((cycle) => cycle.completedAt === null)
@@ -1801,14 +1917,26 @@ export function IntegrationsSettingsPanel() {
         })),
     [values],
   );
-  const projects = useMemo(
-    () =>
-      [...values]
-        .filter(isProject)
-        .filter((row) => row.archivedAt === null)
-        .map((row) => ({ id: row.id, name: row.name })),
-    [values],
-  );
+  const projects = useMemo(() => {
+    const activeEnvironmentIds = new Set(
+      environments.map((environment) => environment.environmentId),
+    );
+    const environmentIdsByProject = new Map<string, string[]>();
+    for (const binding of values.filter(isBinding)) {
+      if (binding.status !== "active" || !activeEnvironmentIds.has(binding.environmentId)) continue;
+      const current = environmentIdsByProject.get(binding.cloudProjectId) ?? [];
+      current.push(binding.environmentId);
+      environmentIdsByProject.set(binding.cloudProjectId, current);
+    }
+    return values
+      .filter(isProject)
+      .filter((row) => row.archivedAt === null)
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        environmentIds: environmentIdsByProject.get(row.id) ?? [],
+      }));
+  }, [environments, values]);
   const cycles = useMemo(
     () =>
       [...values]
@@ -2124,6 +2252,9 @@ export function IntegrationsSettingsPanel() {
         <>
           {sheet?.kind === "add" ? (
             <SlackWorkspaceWizardController
+              automation={visibleAutomation}
+              automationFallback={localSettings.issueAutomation}
+              canManage={manageGate.enabled}
               client={client}
               integrationId={sheet.integrationId}
               onChanged={async (ownerId) => {
@@ -2142,7 +2273,11 @@ export function IntegrationsSettingsPanel() {
               companyId={filteredCompanyId}
               integration={selected}
               environments={environments}
-              projects={projects}
+              projects={projects.filter(
+                (project) =>
+                  selected.preferredEnvironmentId !== null &&
+                  project.environmentIds.includes(selected.preferredEnvironmentId),
+              )}
               cycles={cycles}
               canManage={manageGate.enabled}
               state={sheet}

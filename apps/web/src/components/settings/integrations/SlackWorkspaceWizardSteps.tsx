@@ -11,6 +11,7 @@ export interface SlackWorkspaceWizardStepsProps {
   readonly currentStep: SlackWorkspaceWizardStep;
   readonly completedThrough: number;
   readonly summaries: readonly (string | null)[];
+  readonly steps: readonly SlackWorkspaceWizardStep[];
   readonly onStepSelect: (step: SlackWorkspaceWizardStep) => void;
 }
 
@@ -18,22 +19,24 @@ export function SlackWorkspaceWizardSteps({
   currentStep,
   completedThrough,
   summaries,
+  steps,
   onStepSelect,
 }: SlackWorkspaceWizardStepsProps) {
   return (
     <nav aria-label="Slack workspace setup progress">
       <ol
-        className="grid grid-cols-3 gap-1 rounded-xl bg-zinc-25 p-1 ring-1 ring-black/5 dark:bg-white/4 dark:ring-white/5"
+        className="grid gap-1 rounded-xl bg-zinc-25 p-1 ring-1 ring-black/5 dark:bg-white/4 dark:ring-white/5"
         role="list"
+        style={{ gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}
       >
-        {SLACK_WORKSPACE_WIZARD_STEPS.map((label, index) => {
-          const step = index as SlackWorkspaceWizardStep;
-          const complete = index <= completedThrough && index !== currentStep;
+        {steps.map((step, index) => {
+          const label = SLACK_WORKSPACE_WIZARD_STEPS[step];
+          const complete = step <= completedThrough && step !== currentStep;
           return (
             <li className="min-w-0" key={label}>
               <button
                 aria-current={currentStep === step ? "step" : undefined}
-                aria-label={`${label}, step ${index + 1}${complete && summaries[index] ? `, ${summaries[index]}` : ""}`}
+                aria-label={`${label}, step ${index + 1}${complete && summaries[step] ? `, ${summaries[step]}` : ""}`}
                 className={cn(
                   "flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-card focus-visible:ring-2 focus-visible:ring-ring max-sm:justify-center max-sm:px-2",
                   currentStep === step &&
