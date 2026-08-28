@@ -929,9 +929,21 @@ function deriveTimelineMinimapItems(
   rows: ReadonlyArray<MessagesTimelineRow>,
 ): TimelineMinimapItem[] {
   const items: TimelineMinimapItem[] = [];
-  for (let index = 0; index < rows.length; index += 1) {
+  let finalAssistantText: string | null = null;
+  let hasFinalAssistantMessage = false;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
-    if (row?.kind !== "message" || row.message.role !== "user") {
+    if (row?.kind !== "message") {
+      continue;
+    }
+    if (row.message.role === "assistant") {
+      if (!hasFinalAssistantMessage) {
+        finalAssistantText = row.message.text ?? null;
+        hasFinalAssistantMessage = true;
+      }
+      continue;
+    }
+    if (row.message.role !== "user") {
       continue;
     }
 
@@ -939,34 +951,16 @@ function deriveTimelineMinimapItems(
       id: row.id,
       rowIndex: index,
       userText: compactMinimapPreview(row.message.text),
-      assistantText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
+      assistantText: compactMinimapPreview(finalAssistantText),
     });
+    finalAssistantText = null;
+    hasFinalAssistantMessage = false;
   }
-  return items;
-}
-
-function resolveFinalAssistantTextForTurn(
-  rows: ReadonlyArray<MessagesTimelineRow>,
-  userRowIndex: number,
-) {
-  let finalAssistantText: string | null = null;
-  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row?.kind !== "message") {
-      continue;
-    }
-    if (row.message.role === "user") {
-      break;
-    }
-    if (row.message.role === "assistant") {
-      finalAssistantText = row.message.text ?? null;
-    }
-  }
-  return finalAssistantText;
+  return items.reverse();
 }
 
 function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
+  const compact = text?.slice(0, 500).replace(/\s+/g, " ").trim() ?? "";
   return compact.length > 0 ? compact : null;
 }
 
@@ -1243,22 +1237,46 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
-  const issueContextState = extractTrailingIssueContexts(row.message.text);
-  const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
-  const terminalContexts = displayedUserMessage.contexts;
-  const previewAnnotations: ParsedPreviewAnnotation[] = [];
-  let visibleText = displayedUserMessage.visibleText;
-  while (true) {
-    const extracted = extractTrailingPreviewAnnotation(visibleText);
-    if (!extracted.annotation) break;
-    previewAnnotations.unshift(extracted.annotation);
-    visibleText = extracted.promptText;
-  }
-  const elementContextState = extractTrailingElementContexts(visibleText);
-  const elementContexts = [
-    ...displayedUserMessage.elementContexts,
-    ...elementContextState.contexts,
-  ];
+  const {
+    issueContextState,
+    displayedUserMessage,
+    terminalContexts,
+    previewAnnotations,
+    elementContextState,
+    elementContexts,
+    editableText,
+    hasEditableText,
+    hasMessageText,
+  } = useMemo(() => {
+    const issueContextState = extractTrailingIssueContexts(row.message.text);
+    const displayedUserMessage = deriveDisplayedUserMessageState(issueContextState.promptText);
+    const terminalContexts = displayedUserMessage.contexts;
+    const previewAnnotations: ParsedPreviewAnnotation[] = [];
+    let visibleText = displayedUserMessage.visibleText;
+    while (true) {
+      const extracted = extractTrailingPreviewAnnotation(visibleText);
+      if (!extracted.annotation) break;
+      previewAnnotations.unshift(extracted.annotation);
+      visibleText = extracted.promptText;
+    }
+    const elementContextState = extractTrailingElementContexts(visibleText);
+    const elementContexts = [
+      ...displayedUserMessage.elementContexts,
+      ...elementContextState.contexts,
+    ];
+    const editableText = splitEditableUserMessageText(row.message.text).editableText;
+    return {
+      issueContextState,
+      displayedUserMessage,
+      terminalContexts,
+      previewAnnotations,
+      elementContextState,
+      elementContexts,
+      editableText,
+      hasEditableText: editableText.trim().length > 0,
+      hasMessageText: row.message.text.trim().length > 0,
+    };
+  }, [row.message.text]);
   const previewImages = userAttachments.filter(
     (attachment) =>
       attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
@@ -1272,16 +1290,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     (attachment) => attachment.type !== "image" && attachment.type !== "file",
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
-  const editableText = splitEditableUserMessageText(row.message.text).editableText;
   const canEditMessage =
     row.message.createdBy === "user" &&
     ctx.editableUserMessageId === row.message.id &&
-    editableText.trim().length > 0;
+    hasEditableText;
   const isEditingMessage = ctx.editingUserMessageId === row.message.id;
   const canRetryMessage =
     row.message.createdBy === "user" &&
     ctx.retryableUserMessageId === row.message.id &&
-    row.message.text.trim().length > 0;
+    hasMessageText;
 
   return (
     <div className="group flex flex-col items-end gap-1">
@@ -1691,6 +1708,10 @@ function AttemptFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "at
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const preserveLineBreaks = useMemo(
+    () => shouldPreserveAssistantLineBreaks(messageText),
+    [messageText],
+  );
 
   return (
     <>
@@ -1702,7 +1723,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenFilePreview={ctx.onOpenFilePreview}
           onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           isStreaming={Boolean(row.message.streaming)}
-          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+          lineBreaks={preserveLineBreaks}
           skills={ctx.skills}
         />
         <AssistantChangedFilesSection
@@ -1918,6 +1939,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
   const activity = use(TimelineRowActivityCtx);
   const inspectorId = useId();
   const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const { item, visibility, sourceThreadId } = row.projectedItem;
   if (isV2LifecycleItem(item)) {
     return (
@@ -1946,6 +1968,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         data-v2-item-type={item.type}
         data-v2-item-visibility={visibility}
         data-v2-event-disclosure="true"
+        onToggle={(event) => setErrorDetailsOpen(event.currentTarget.open)}
       >
         <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-xs [&::-webkit-details-marker]:hidden">
           <Icon
@@ -2023,17 +2046,20 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               />
             </div>
           ) : null}
-          <div className={presentation.detail ? "mt-2" : undefined}>
-            <V2ItemInspector
-              projectedItem={row.projectedItem}
-              environmentId={ctx.activeThreadEnvironmentId}
-              cwd={ctx.markdownCwd}
-              workspaceRoot={ctx.workspaceRoot}
-              onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
-              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
-            />
-          </div>
+          {/* The inspector serialises the whole item payload, so it waits for the disclosure. */}
+          {errorDetailsOpen ? (
+            <div className={presentation.detail ? "mt-2" : undefined}>
+              <V2ItemInspector
+                projectedItem={row.projectedItem}
+                environmentId={ctx.activeThreadEnvironmentId}
+                cwd={ctx.markdownCwd}
+                workspaceRoot={ctx.workspaceRoot}
+                onOpenThread={ctx.onOpenThread}
+                onOpenTurnDiff={ctx.onOpenTurnDiff}
+                onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+              />
+            </div>
+          ) : null}
           <div className="mt-2 flex justify-end border-t border-border/45 pt-2">
             <MessageCopyButton
               text={buildOrchestrationErrorFixPrompt(item)}
@@ -2221,17 +2247,24 @@ const WorkGroupSection = memo(function WorkGroupSection({
   const [isExpanded, setIsExpanded] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   const anchorBottomBeforeToggleRef = useRef<number | null>(null);
-  const nonEmptyEntries = useMemo(
-    () => groupedEntries.filter((entry) => !workEntryIndicatesToolNeutralStatus(entry)),
-    [groupedEntries],
+  const { nonEmptyEntries, hasOverflow, onlyToolEntries } = useMemo(() => {
+    const nonEmptyEntries = groupedEntries.filter(
+      (entry) => !workEntryIndicatesToolNeutralStatus(entry),
+    );
+    return {
+      nonEmptyEntries,
+      hasOverflow: nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES,
+      onlyToolEntries: nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry)),
+    };
+  }, [groupedEntries]);
+  const visibleEntries = useMemo(
+    () =>
+      hasOverflow && !isExpanded
+        ? nonEmptyEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
+        : nonEmptyEntries,
+    [hasOverflow, isExpanded, nonEmptyEntries],
   );
-  const hasOverflow = nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
-  const visibleEntries =
-    hasOverflow && !isExpanded
-      ? nonEmptyEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
-      : nonEmptyEntries;
   const hiddenCount = nonEmptyEntries.length - visibleEntries.length;
-  const onlyToolEntries = nonEmptyEntries.every((entry) => workLogEntryIsToolLike(entry));
   const groupLabel = onlyToolEntries
     ? nonEmptyEntries.length === 1
       ? "1 tool call"
@@ -3030,9 +3063,9 @@ function workEntryPreview(
 ) {
   // Prefer stdout/detail so completed shell/monitor results are visible collapsed
   // (command alone hid ls listings behind expand-only inspector JSON).
-  if (workEntry.detail?.trim()) {
-    const lines = workEntry.detail
-      .trim()
+  const boundedDetail = workEntry.detail?.slice(0, 4_096).trim();
+  if (boundedDetail) {
+    const lines = boundedDetail
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line.length > 0);
@@ -3100,6 +3133,19 @@ function buildToolCallExpandedBody(
     }
   }
   return blocks.length > 0 ? blocks.join("\n\n") : null;
+}
+
+function workEntryHasExpandedBody(workEntry: TimelineWorkEntry): boolean {
+  const boundedTextHasContent = (text: string | undefined) =>
+    Boolean(text && (text.length > 4_096 || text.trim().length > 0));
+  return (
+    (workEntry.itemType === "dynamic_tool" && workEntry.toolData !== undefined) ||
+    (Boolean(workEntry.command) &&
+      (boundedTextHasContent(workEntry.rawCommand) || boundedTextHasContent(workEntry.command))) ||
+    boundedTextHasContent(workEntry.detail) ||
+    (workEntry.changedFiles?.length ?? 0) > 0 ||
+    workEntry.structuredPayload !== undefined
+  );
 }
 
 export const toolCallExpandedBodyClassName =
@@ -3170,8 +3216,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
+  const canExpand = workEntry.projectedItem !== undefined || workEntryHasExpandedBody(workEntry);
+  const expandedBody = useMemo(
+    () =>
+      expanded && workEntry.projectedItem === undefined
+        ? buildToolCallExpandedBody(workEntry, workspaceRoot)
+        : null,
+    [expanded, workEntry, workspaceRoot],
+  );
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
